@@ -10,6 +10,6 @@ name = "wyn"
 path = "src/main.rs"
 
 [dependencies]
-wyn-compiler = { path = "../compiler" }
+wyn-core = { path = "../wyn-core" }
 clap.workspace = true
 thiserror.workspace = true

@@ -1,5 +1,5 @@
 [package]
-name = "wyn-compiler"
+name = "wyn-core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

@@ -1,5 +1,5 @@
 [workspace]
-members = ["compiler", "driver"]
+members = ["wyn-core", "wyn"]
 resolver = "2"
 
 [workspace.package]

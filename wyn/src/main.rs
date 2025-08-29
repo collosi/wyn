@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use wyn_compiler::Compiler;
+use wyn_core::Compiler;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -48,7 +48,7 @@ enum DriverError {
     IoError(#[from] std::io::Error),
     
     #[error("Compilation error: {0}")]
-    CompilationError(#[from] wyn_compiler::error::CompilerError),
+    CompilationError(#[from] wyn_core::error::CompilerError),
 }
 
 fn main() -> Result<(), DriverError> {
