@@ -3,7 +3,6 @@ use crate::error::{CompilerError, Result};
 use crate::lexer::tokenize;
 use crate::parser::Parser;
 use std::collections::HashMap;
-use std::fs;
 
 pub struct TypeChecker {
     env: HashMap<String, Type>,
@@ -26,22 +25,8 @@ impl TypeChecker {
     }
     
     fn load_builtins(&mut self) -> Result<()> {
-        let builtin_paths = vec![
-            "builtins.wyn",           // Current directory
-            "../builtins.wyn",        // Parent directory (for tests)
-            "../../builtins.wyn",     // Two levels up (for nested tests)
-        ];
-        
-        let mut builtin_content = None;
-        for path in builtin_paths {
-            if let Ok(content) = fs::read_to_string(path) {
-                builtin_content = Some(content);
-                break;
-            }
-        }
-        
-        let content = builtin_content.ok_or_else(|| 
-            CompilerError::ParseError("Could not find builtins.wyn file".to_string()))?;
+        // Embed builtins.wyn content at compile time
+        let content = include_str!("../builtins.wyn");
         
         let tokens = tokenize(&content).map_err(|e| 
             CompilerError::ParseError(format!("Failed to tokenize builtins: {}", e)))?;
