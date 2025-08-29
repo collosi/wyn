@@ -1,0 +1,16 @@
+[package]
+name = "runic-compiler"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+nom.workspace = true
+polytype.workspace = true
+rspirv.workspace = true
+spirv.workspace = true
+
+[dev-dependencies]
+naga = { version = "22.0", features = ["spv-in"] }

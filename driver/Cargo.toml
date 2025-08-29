@@ -1,0 +1,15 @@
+[package]
+name = "runic"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "runic"
+path = "src/main.rs"
+
+[dependencies]
+runic-compiler = { path = "../compiler" }
+clap.workspace = true
+thiserror.workspace = true
