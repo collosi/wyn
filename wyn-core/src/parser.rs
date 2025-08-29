@@ -72,10 +72,12 @@ impl Parser {
         let mut params = Vec::new();
         if !self.check(&Token::RightParen) {
             loop {
+                let param_attributes = self.parse_attributes()?;
                 let param_name = self.expect_identifier()?;
                 self.expect(Token::Colon)?;
                 let param_ty = self.parse_type()?;
                 params.push(Parameter {
+                    attributes: param_attributes,
                     name: param_name,
                     ty: param_ty,
                 });
@@ -89,7 +91,11 @@ impl Parser {
 
         self.expect(Token::RightParen)?;
         self.expect(Token::Colon)?;
-        let return_type = self.parse_type()?;
+        let return_type_attributes = self.parse_attributes()?;
+        let return_type = AttributedType {
+            attributes: return_type_attributes,
+            ty: self.parse_type()?,
+        };
         self.expect(Token::Assign)?;
         let body = self.parse_expression()?;
 
@@ -157,12 +163,47 @@ impl Parser {
         while self.check(&Token::AttributeStart) {
             self.advance(); // consume '#['
             let attr_name = self.expect_identifier()?;
-            self.expect(Token::RightBracket)?;
             
-            attributes.push(Attribute {
-                name: attr_name,
-                args: vec![], // For now, we'll only support simple attributes
-            });
+            let attribute = match attr_name.as_str() {
+                "vertex" => {
+                    self.expect(Token::RightBracket)?;
+                    Attribute::Vertex
+                }
+                "fragment" => {
+                    self.expect(Token::RightBracket)?;
+                    Attribute::Fragment
+                }
+                "builtin" => {
+                    self.expect(Token::LeftParen)?;
+                    let builtin_name = self.expect_identifier()?;
+                    self.expect(Token::RightParen)?;
+                    self.expect(Token::RightBracket)?;
+                    
+                    let builtin = match builtin_name.as_str() {
+                        "position" => spirv::BuiltIn::Position,
+                        "vertex_index" => spirv::BuiltIn::VertexIndex,
+                        "instance_index" => spirv::BuiltIn::InstanceIndex,
+                        "front_facing" => spirv::BuiltIn::FrontFacing,
+                        "frag_depth" => spirv::BuiltIn::FragDepth,
+                        _ => return Err(CompilerError::ParseError(format!("Unknown builtin: {}", builtin_name))),
+                    };
+                    Attribute::BuiltIn(builtin)
+                }
+                "location" => {
+                    self.expect(Token::LeftParen)?;
+                    let location = if let Some(Token::IntLiteral(location)) = self.advance() {
+                        *location as u32
+                    } else {
+                        return Err(CompilerError::ParseError("Expected location number".to_string()));
+                    };
+                    self.expect(Token::RightParen)?;
+                    self.expect(Token::RightBracket)?;
+                    Attribute::Location(location)
+                }
+                _ => return Err(CompilerError::ParseError(format!("Unknown attribute: {}", attr_name))),
+            };
+            
+            attributes.push(attribute);
         }
         
         Ok(attributes)
@@ -491,9 +532,12 @@ mod tests {
                 assert_eq!(decl.params.len(), 2);
                 assert_eq!(decl.params[0].name, "x");
                 assert_eq!(decl.params[0].ty, Type::I32);
+                assert_eq!(decl.params[0].attributes, vec![]);
                 assert_eq!(decl.params[1].name, "y");
                 assert_eq!(decl.params[1].ty, Type::F32);
-                assert_eq!(decl.return_type, Type::Array(Box::new(Type::F32), vec![4]));
+                assert_eq!(decl.params[1].attributes, vec![]);
+                assert_eq!(decl.return_type.ty, Type::Array(Box::new(Type::F32), vec![4]));
+                assert_eq!(decl.return_type.attributes, vec![]);
             }
             _ => panic!("Expected Entry declaration"),
         }
@@ -534,6 +578,141 @@ mod tests {
                 _ => panic!("Expected BinaryOp expression"),
             },
             _ => panic!("Expected Let declaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_vertex_attribute() {
+        let input = "#[vertex] entry main(): vec4f32 = result";
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        assert_eq!(program.declarations.len(), 1);
+        match &program.declarations[0] {
+            Declaration::Entry(decl) => {
+                assert_eq!(decl.attributes, vec![Attribute::Vertex]);
+                assert_eq!(decl.name, "main");
+            }
+            _ => panic!("Expected Entry declaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_fragment_attribute() {
+        let input = "#[fragment] entry frag(): [4]f32 = result";
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        assert_eq!(program.declarations.len(), 1);
+        match &program.declarations[0] {
+            Declaration::Entry(decl) => {
+                assert_eq!(decl.attributes, vec![Attribute::Fragment]);
+                assert_eq!(decl.name, "frag");
+            }
+            _ => panic!("Expected Entry declaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_builtin_attribute_on_return_type() {
+        let input = "#[vertex] entry main(): #[builtin(position)] vec4f32 = result";
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        assert_eq!(program.declarations.len(), 1);
+        match &program.declarations[0] {
+            Declaration::Entry(decl) => {
+                assert_eq!(decl.attributes, vec![Attribute::Vertex]);
+                assert_eq!(decl.return_type.attributes, vec![Attribute::BuiltIn(spirv::BuiltIn::Position)]);
+                assert_eq!(decl.return_type.ty, Type::Vec4F32);
+            }
+            _ => panic!("Expected Entry declaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_location_attribute_on_return_type() {
+        let input = "#[fragment] entry frag(): #[location(0)] [4]f32 = result";
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        assert_eq!(program.declarations.len(), 1);
+        match &program.declarations[0] {
+            Declaration::Entry(decl) => {
+                assert_eq!(decl.attributes, vec![Attribute::Fragment]);
+                assert_eq!(decl.return_type.attributes, vec![Attribute::Location(0)]);
+                assert_eq!(decl.return_type.ty, Type::Array(Box::new(Type::F32), vec![4]));
+            }
+            _ => panic!("Expected Entry declaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_parameter_with_builtin_attribute() {
+        let input = "#[vertex] entry main(#[builtin(vertex_index)] vid: i32): vec4f32 = result";
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        assert_eq!(program.declarations.len(), 1);
+        match &program.declarations[0] {
+            Declaration::Entry(decl) => {
+                assert_eq!(decl.params.len(), 1);
+                assert_eq!(decl.params[0].name, "vid");
+                assert_eq!(decl.params[0].ty, Type::I32);
+                assert_eq!(decl.params[0].attributes, vec![Attribute::BuiltIn(spirv::BuiltIn::VertexIndex)]);
+            }
+            _ => panic!("Expected Entry declaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_parameter_with_location_attribute() {
+        let input = "#[fragment] entry frag(#[location(1)] color: [3]f32): [4]f32 = result";
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        assert_eq!(program.declarations.len(), 1);
+        match &program.declarations[0] {
+            Declaration::Entry(decl) => {
+                assert_eq!(decl.params.len(), 1);
+                assert_eq!(decl.params[0].name, "color");
+                assert_eq!(decl.params[0].ty, Type::Array(Box::new(Type::F32), vec![3]));
+                assert_eq!(decl.params[0].attributes, vec![Attribute::Location(1)]);
+            }
+            _ => panic!("Expected Entry declaration"),
+        }
+    }
+
+    #[test] 
+    fn test_parse_multiple_builtin_types() {
+        let input = "#[vertex] entry main(#[builtin(vertex_index)] vid: i32, #[builtin(instance_index)] iid: i32): #[builtin(position)] vec4f32 = result";
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        assert_eq!(program.declarations.len(), 1);
+        match &program.declarations[0] {
+            Declaration::Entry(decl) => {
+                assert_eq!(decl.params.len(), 2);
+                
+                // First parameter
+                assert_eq!(decl.params[0].name, "vid");
+                assert_eq!(decl.params[0].attributes, vec![Attribute::BuiltIn(spirv::BuiltIn::VertexIndex)]);
+                
+                // Second parameter
+                assert_eq!(decl.params[1].name, "iid");
+                assert_eq!(decl.params[1].attributes, vec![Attribute::BuiltIn(spirv::BuiltIn::InstanceIndex)]);
+                
+                // Return type
+                assert_eq!(decl.return_type.attributes, vec![Attribute::BuiltIn(spirv::BuiltIn::Position)]);
+            }
+            _ => panic!("Expected Entry declaration"),
         }
     }
 }

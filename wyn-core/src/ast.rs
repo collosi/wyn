@@ -1,3 +1,5 @@
+pub use spirv;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub declarations: Vec<Declaration>,
@@ -12,9 +14,17 @@ pub enum Declaration {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Attribute {
-    pub name: String,
-    pub args: Vec<Attribute>, // For compound attributes like foo(bar, baz)
+pub enum Attribute {
+    BuiltIn(spirv::BuiltIn),
+    Location(u32),
+    Vertex,
+    Fragment,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttributedType {
+    pub attributes: Vec<Attribute>,
+    pub ty: Type,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,12 +40,13 @@ pub struct EntryDecl {
     pub attributes: Vec<Attribute>,
     pub name: String,
     pub params: Vec<Parameter>,
-    pub return_type: Type,
+    pub return_type: AttributedType,
     pub body: Expression,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
+    pub attributes: Vec<Attribute>,
     pub name: String,
     pub ty: Type,
 }

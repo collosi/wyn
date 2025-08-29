@@ -105,10 +105,10 @@ impl TypeChecker {
         let body_type = self.infer_expression(&decl.body)?;
         self.env = prev_env;
         
-        if !self.types_match(&body_type, &decl.return_type) {
+        if !self.types_match(&body_type, &decl.return_type.ty) {
             return Err(CompilerError::TypeError(format!(
                 "Return type mismatch: expected {:?}, got {:?}",
-                decl.return_type, body_type
+                decl.return_type.ty, body_type
             )));
         }
         

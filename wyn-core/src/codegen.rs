@@ -5,6 +5,9 @@ use rspirv::dr::Builder;
 use spirv::Word;
 use std::collections::HashMap;
 
+// Re-export SPIR-V enums for easier access
+pub use spirv::BuiltIn;
+
 #[derive(Debug, Clone)]
 enum OutputDecoration {
     BuiltIn(spirv::BuiltIn),
@@ -133,9 +136,9 @@ impl CodeGenerator {
     
     fn generate_entry_decl(&mut self, decl: &EntryDecl) -> Result<()> {
         // Determine execution model based on attributes
-        let exec_model = if decl.attributes.iter().any(|attr| attr.name == "vertex") {
+        let exec_model = if decl.attributes.iter().any(|attr| matches!(attr, Attribute::Vertex)) {
             spirv::ExecutionModel::Vertex
-        } else if decl.attributes.iter().any(|attr| attr.name == "fragment") {
+        } else if decl.attributes.iter().any(|attr| matches!(attr, Attribute::Fragment)) {
             spirv::ExecutionModel::Fragment
         } else {
             return Err(CompilerError::SpirvError(
@@ -153,7 +156,7 @@ impl CodeGenerator {
         
         // Create output variable for the return value
         let decoration = self.get_output_decoration(exec_model, &decl.return_type);
-        let output_type_id = self.get_or_create_type(&decl.return_type)?;
+        let output_type_id = self.get_or_create_type(&decl.return_type.ty)?;
         
         let output_ptr_type_id = self.builder.type_pointer(
             None,
@@ -545,10 +548,20 @@ impl CodeGenerator {
     }
 
     /// Determine the appropriate decoration for shader outputs based on semantic mappings
-    fn get_output_decoration(&self, exec_model: spirv::ExecutionModel, return_type: &Type) -> OutputDecoration {
+    fn get_output_decoration(&self, exec_model: spirv::ExecutionModel, return_type: &AttributedType) -> OutputDecoration {
+        // First check attributes for explicit decorations
+        for attr in &return_type.attributes {
+            match attr {
+                Attribute::BuiltIn(builtin) => return OutputDecoration::BuiltIn(*builtin),
+                Attribute::Location(location) => return OutputDecoration::Location(*location),
+                _ => {}
+            }
+        }
+        
+        // Fall back to type-based decoration if no explicit attributes
         match exec_model {
             spirv::ExecutionModel::Vertex => {
-                match return_type {
+                match &return_type.ty {
                     Type::Array(elem_ty, dims) if matches!(elem_ty.as_ref(), Type::F32) && dims == &vec![4] => {
                         // [4]f32 from vertex shader = gl_Position
                         OutputDecoration::BuiltIn(spirv::BuiltIn::Position)
