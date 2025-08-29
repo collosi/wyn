@@ -1203,95 +1203,102 @@ open import "file"
 ### Grammar
 
 ```ebnf
-attr ::= name
-         | decimal
-         | name "(" [attr ("," attr)* [","]] ")"
+attr ::= "vertex" | "fragment"
+         | "builtin" "(" builtin_name ")"
+         | "location" "(" decimal ")"
+
+builtin_name ::= "position" | "vertex_index" | "instance_index" 
+               | "front_facing" | "frag_depth"
 ```
 
-An expression, declaration, pattern, or module type spec can be prefixed with an attribute, written as `#[attr]`. This may affect how it is treated by the compiler or other tools. In no case will attributes affect or change the semantics of a program, but it may affect how well it compiles and runs (or in some cases, whether it compiles or runs at all). Unknown attributes are silently ignored. Most have no effect in the interpreter. An attribute can be either an atom, written as an identifier or number, or compound, consisting of an identifier and a comma-separated sequence of attributes. The latter is used for grouping and encoding of more complex information.
+Wyn supports an attribute system for shader interface specification. Attributes are written as `#[attr]` and can be applied to:
 
-### Expression Attributes
+- **Entry point declarations** for shader identification
+- **Function parameters** for input interface specification  
+- **Return types** for output interface specification
 
-Many expression attributes affect second-order array combinators (SOACS). These must be applied to a fully saturated function application or they will have no effect. If two SOACs with contradictory attributes are combined through fusion, it is unspecified which attributes take precedence.
+### Shader Interface Attributes
 
-The following expression attributes are supported.
+Wyn uses attributes to define the interface between vertex and fragment shaders, using SPIR-V builtin names for GPU built-in variables.
 
-#### blank
-Indicates that the value computed by the expression does not matter, and that the expression can be replaced with an arbitrary other expression of the same type. This is useful for constructing arrays that will eventually be filled with scatter or similar operations. Note that this can subvert type-based invariants safety if the blank value is used, but it cannot subvert memory safety. \[Reserved but not implemented\]
+#### Shader Identification
 
-#### trace
-Print the value produced by the attributed expression. Used for debugging. Somewhat unreliable outside of the interpreter, and in particular does not work for GPU device code. \[Reserved but not implemented\]
+**`#[vertex]`** - Marks an entry point as a vertex shader
+```wyn
+#[vertex] entry vs_main(): #[builtin(position)] vec4f32 = result
+```
 
-#### trace(tag)
-Like `trace`, but prefix output with `tag`, which must lexically be an identifier. \[Reserved but not implemented\]
+**`#[fragment]`** - Marks an entry point as a fragment shader
+```wyn
+#[fragment] entry fs_main(): #[location(0)] [4]f32 = result
+```
 
-#### break
-In the interpreter, pause execution before evaluating the expression. No effect for compiled code. \[Reserved but not implemented\]
+#### Built-in Variables
 
-#### opaque
-The compiler will treat the attributed expression as a black box. This is used to work around optimisation deficiencies (or bugs), although it should hopefully rarely be necessary. \[Reserved but not implemented\]
+**`#[builtin(builtin_name)]`** - Maps parameters and return values to GPU built-in variables
 
-#### incremental_flattening(no_outer)
-When using incremental flattening, do not generate the "only outer parallelism" version for the attributed SOACs. \[Reserved but not implemented\]
+**Vertex Shader Built-ins:**
+- `#[builtin(vertex_index)]` - Vertex index (SPIR-V: `VertexIndex`)
+- `#[builtin(instance_index)]` - Instance index (SPIR-V: `InstanceIndex`) 
+- `#[builtin(position)]` - Output position (SPIR-V: `Position`)
 
-#### incremental_flattening(no_intra)
-When using incremental flattening, do not generate the "intra-block parallelism" version for the attributed SOACs. \[Reserved but not implemented\]
+**Fragment Shader Built-ins:**
+- `#[builtin(front_facing)]` - Front-facing status (SPIR-V: `FrontFacing`)
+- `#[builtin(frag_depth)]` - Fragment depth output (SPIR-V: `FragDepth`)
 
-#### incremental_flattening(only_intra)
-When using incremental flattening, only generate the "intra-block parallelism" version of the attributed SOACs. Beware: the resulting program will fail to run if the inner parallelism does not fit on the device. \[Reserved but not implemented\]
+#### Location-based Interface
 
-#### incremental_flattening(only_inner)
-When using incremental flattening, do not generate multiple versions for this SOAC, but do exploit inner parallelism (which may give rise to multiple versions at deeper levels). \[Reserved but not implemented\]
+**`#[location(n)]`** - Maps parameters and return values to location-based interface variables for communication between shader stages.
 
-#### noinline
-Do not inline the attributed function application. If used within a parallel construct (e.g. `map`), this will likely prevent the GPU backends from generating working code. \[Reserved but not implemented\]
+```wyn
+#[vertex] entry vs(
+    #[builtin(vertex_index)] vid: i32,
+    #[location(0)] pos: [3]f32
+): #[location(1)] [3]f32 = result
 
-#### scratch
-Like `blank`, but the resulting values (if arrays) will comprise initialised memory. Reading from such arrays is potentially dangerous, as the elements are completely undefined until they are updated with a scatter or similar. \[Reserved but not implemented\]
+#[fragment] entry fs(
+    #[location(1)] color: [3]f32  
+): #[location(0)] [4]f32 = result
+```
 
-#### sequential
-Fully sequentialise the attributed SOAC. \[Reserved but not implemented\]
+### Attribute Examples
 
-#### sequential_outer
-Turn the outer parallelism in the attributed SOAC sequential, but preserve any inner parallelism. \[Reserved but not implemented\]
+#### Complete Vertex Shader Interface
+```wyn
+#[vertex] entry vertex_main(
+    #[builtin(vertex_index)] vertex_id: i32,
+    #[builtin(instance_index)] instance_id: i32,
+    #[location(0)] position: [3]f32,
+    #[location(1)] normal: [3]f32
+): #[builtin(position)] vec4f32 = 
+    transform_position(position, vertex_id)
+```
 
-#### sequential_inner
-Exploit only outer parallelism in the attributed SOAC. \[Reserved but not implemented\]
+#### Complete Fragment Shader Interface  
+```wyn
+#[fragment] entry fragment_main(
+    #[location(0)] world_pos: [3]f32,
+    #[location(1)] normal: [3]f32,
+    #[builtin(front_facing)] is_front: bool
+): #[location(0)] [4]f32 =
+    compute_color(world_pos, normal, is_front)
+```
 
-#### unroll
-Fully unroll the attributed loop. If the compiler cannot determine the exact number of iterations (possibly after other optimisations and simplifications have taken place), then this attribute has no code generation effect, but instead results in a warning. Be very careful with this attribute: it can massively increase program size (possibly crashing the compiler) if the loop has a huge number of iterations. \[Reserved but not implemented\]
+### Implementation Details
 
-#### unsafe
-Do not perform any dynamic safety checks (such as bound checks) during execution of the attributed expression. \[Reserved but not implemented\]
+- Attributes are parsed directly into SPIR-V enum values for type safety
+- Built-in names follow SPIR-V specification (e.g., `VertexIndex`, `Position`)
+- Location numbers must be non-negative integers
+- Each shader stage has specific allowed built-ins
+- The compiler automatically generates appropriate SPIR-V decorations
 
-#### warn(safety_checks)
-Make the compiler issue a warning if the attributed expression (or its subexpressions) requires safety checks (such as bounds checking) at run-time. This is used for performance-critical code where you want to be told when the compiler is unable to statically verify the safety of all operations. \[Reserved but not implemented\]
+### Type Safety
 
-### Declaration Attributes
-
-The following declaration attributes are supported.
-
-#### vertex
-
-This function represents a vertex shader.
-
-#### fragment
-
-This function represents a fragment shader.
-
-#### noinline
-Do not inline any calls to this function. If the function is then used within a parallel construct (e.g. `map`), this will likely prevent the GPU backends from generating working code. \[Reserved but not implemented\]
-
-#### inline
-Always inline calls to this function. \[Reserved but not implemented\]
-
-### Pattern Attributes
-
-No pattern attributes are currently supported by the compiler itself, although they are syntactically permitted and may be used by other tools.
-
-### Spec Attributes
-
-No spec attributes are currently supported by the compiler itself, although they are syntactically permitted and may be used by other tools.
+The attribute system is statically type-checked:
+- Built-in attributes must be applied to compatible types
+- Location attributes can be used with any serializable type
+- Shader stage compatibility is verified at compile time
+- Interface matching between vertex and fragment shaders is validated
 
 ---
 
