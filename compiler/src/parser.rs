@@ -286,11 +286,21 @@ impl Parser {
                 // Collect arguments until we hit an operator or end of expression
                 while self.peek().is_some() && !matches!(self.peek(), 
                     Some(Token::Divide) | Some(Token::Comma) | Some(Token::RightBracket) | 
-                    Some(Token::RightParen) | Some(Token::LeftBracket)) {
+                    Some(Token::RightParen)) {
                     
-                    // If we see an identifier, it's an argument
+                    // If we see an identifier, parse it as an argument (with potential postfix operations)
                     if let Some(Token::Identifier(_)) = self.peek() {
-                        args.push(self.parse_primary_expression()?);
+                        let mut arg = self.parse_primary_expression()?;
+                        
+                        // Handle array indexing on arguments
+                        while let Some(Token::LeftBracket) = self.peek() {
+                            self.advance();
+                            let index = self.parse_expression()?;
+                            self.expect(Token::RightBracket)?;
+                            arg = Expression::ArrayIndex(Box::new(arg), Box::new(index));
+                        }
+                        
+                        args.push(arg);
                     } else {
                         break;
                     }

@@ -101,8 +101,9 @@ impl TypeChecker {
             }
         }
         
-        // Add to environment
-        self.env.insert(decl.name.clone(), expr_type);
+        // Add to environment - use declared type if available, otherwise inferred type
+        let stored_type = decl.ty.as_ref().unwrap_or(&expr_type).clone();
+        self.env.insert(decl.name.clone(), stored_type);
         
         Ok(())
     }
@@ -201,7 +202,7 @@ impl TypeChecker {
                 match array_type {
                     Type::Array(elem_type, _) => Ok(*elem_type),
                     _ => Err(CompilerError::TypeError(
-                        "Cannot index non-array type".to_string(),
+                        format!("Cannot index non-array type: got {:?}", array_type),
                     )),
                 }
             }

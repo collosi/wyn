@@ -739,4 +739,49 @@ mod tests {
             }
         }
     }
+    
+    #[test]
+    fn test_simple_array_indexing_with_parameter() {
+        let input = r#"
+            let arr: [2]i32 = [1, 2]
+            let pos: [4]f32 = [0.0f32, 0.0f32, 0.0f32, 1.0f32]
+            
+            entry vertex_main (vertex_id: i32) : vec4f32 =
+              to_vec4_f32 pos
+        "#;
+        
+        // Test that simple arrays work (this should pass)
+        match compile_and_validate_with_naga(input) {
+            Ok(_module) => {
+                println!("Simple array test passed!");
+            }
+            Err(e) => {
+                println!("Simple array test failed: {}", e);
+                panic!("Expected simple array to work, but got error: {}", e);
+            }
+        }
+    }
+    
+    #[test]
+    fn test_multidimensional_array_indexing() {
+        let input = r#"
+            let positions: [2][4]f32 = 
+              [[0.0f32, 0.0f32, 0.0f32, 1.0f32],
+               [1.0f32, 1.0f32, 0.0f32, 1.0f32]]
+            
+            entry vertex_main (vertex_id: i32) : vec4f32 =
+              to_vec4_f32 positions[vertex_id]
+        "#;
+        
+        // Test multi-dimensional array indexing
+        match compile_and_validate_with_naga(input) {
+            Ok(_module) => {
+                println!("Multi-dimensional array indexing validated successfully!");
+            }
+            Err(e) => {
+                println!("Multi-dimensional array indexing failed: {}", e);
+                panic!("Expected multi-dimensional array indexing to work, but got error: {}", e);
+            }
+        }
+    }
 }
