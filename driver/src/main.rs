@@ -1,12 +1,12 @@
 use clap::{Parser, Subcommand};
-use runic_compiler::Compiler;
+use wyn_compiler::Compiler;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Parser)]
-#[command(name = "runic")]
+#[command(name = "wyn")]
 #[command(about = "A minimal Futhark-like language compiler targeting SPIR-V", long_about = None)]
 struct Cli {
     #[command(subcommand)]
@@ -48,7 +48,7 @@ enum DriverError {
     IoError(#[from] std::io::Error),
     
     #[error("Compilation error: {0}")]
-    CompilationError(#[from] runic_compiler::error::CompilerError),
+    CompilationError(#[from] wyn_compiler::error::CompilerError),
 }
 
 fn main() -> Result<(), DriverError> {

@@ -1,5 +1,5 @@
 [package]
-name = "runic-compiler"
+name = "wyn-compiler"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

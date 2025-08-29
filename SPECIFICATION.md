@@ -1,8 +1,8 @@
-# Runic Language Specification
+# Wyn Language Specification
 
 ## Introduction
 
-Runic is a minimal functional programming language designed for GPU shader programming. It generates SPIR-V code for use with modern graphics APIs like Vulkan and WebGPU. The language draws inspiration from Futhark's array-oriented programming model while maintaining simplicity and focusing specifically on shader development.
+Wyn is a minimal functional programming language designed for GPU shader programming. It generates SPIR-V code for use with modern graphics APIs like Vulkan and WebGPU. The language draws inspiration from Futhark's array-oriented programming model while maintaining simplicity and focusing specifically on shader development.
 
 ### Design Goals
 
@@ -24,7 +24,7 @@ Runic is a minimal functional programming language designed for GPU shader progr
 
 ### Language Overview
 
-Runic programs consist of:
+Wyn programs consist of:
 - **Global declarations**: Constants and arrays defined with `let`
 - **Built-in function signatures**: Polymorphic functions defined with `val`
 - **Entry points**: Shader entry functions defined with `entry`
@@ -65,11 +65,11 @@ constructor  ::= "#" name
 
 ### Description
 
-Many elements in Runic are named. When defining something, we give it an unqualified name (`name`). When referencing something inside a module, we use a qualified name (`qualname`). We can also use symbols (`symbol`, `qualsymbol`), which are treated as infix operators by the grammar.
+Many elements in Wyn are named. When defining something, we give it an unqualified name (`name`). When referencing something inside a module, we use a qualified name (`qualname`). We can also use symbols (`symbol`, `qualsymbol`), which are treated as infix operators by the grammar.
 
 Constructor names of sum types are identifiers prefixed with `#`, with no space afterwards. Record fields are named with `fieldid` - note that a `fieldid` can be a decimal number.
 
-Runic has three distinct namespaces:
+Wyn has three distinct namespaces:
 - **Terms**: Variables, functions, and modules
 - **Module types**: Module type definitions
 - **Types**: Type names and type constructors
@@ -125,7 +125,7 @@ bindigit ::= "0" | "1"
 
 ### Description
 
-Boolean literals are written `true` and `false`. The primitive types in Runic are:
+Boolean literals are written `true` and `false`. The primitive types in Wyn are:
 - **Signed integer types**: `i8`, `i16`, `i32`, `i64`
 - **Unsigned integer types**: `u8`, `u16`, `u32`, `u64`
 - **Floating-point types**: `f16`, `f32`, `f64`
@@ -186,7 +186,7 @@ existential_size ::= "?" ("[" name "]")+ "." type
 
 ### Description
 
-Compound types can be constructed based on the primitive types. The Runic type system is entirely structural, and type abbreviations are merely shorthands. The only exception is abstract types whose definition has been hidden via the module system.
+Compound types can be constructed based on the primitive types. The Wyn type system is entirely structural, and type abbreviations are merely shorthands. The only exception is abstract types whose definition has been hidden via the module system.
 
 #### Tuple Types
 
@@ -196,13 +196,13 @@ A tuple value or type is written as a sequence of comma-separated values or type
 
 An array value is written as a sequence of zero or more comma-separated values enclosed in square brackets: `[1, 2, 3]`. An array type is written as `[d]t`, where `t` is the element type of the array, and `d` is an expression of type `i64` indicating the number of elements in the array. We can elide `d` and write just `[]` (an anonymous size), in which case the size will be inferred.
 
-As an example, an array of three integers could be written as `[1, 2, 3]`, and has type `[3]i32`. An empty array is written as `[]`, and its type is inferred from its use. When writing Runic values for testing purposes, empty arrays are written `empty([0]t)` for an empty array of type `[0]t`.
+As an example, an array of three integers could be written as `[1, 2, 3]`, and has type `[3]i32`. An empty array is written as `[]`, and its type is inferred from its use. When writing Wyn values for testing purposes, empty arrays are written `empty([0]t)` for an empty array of type `[0]t`.
 
-**Multi-dimensional arrays** are supported in Runic, but they must be regular, meaning that all inner arrays must have the same shape. For example, `[[1,2], [3,4], [5,6]]` is a valid array of type `[3][2]i32`, but `[[1,2], [3,4,5], [6,7]]` is not, because we cannot come up with integers `m` and `n` such that `[m][n]i32` describes the array. The restriction to regular arrays is rooted in low-level concerns about efficient compilation.
+**Multi-dimensional arrays** are supported in Wyn, but they must be regular, meaning that all inner arrays must have the same shape. For example, `[[1,2], [3,4], [5,6]]` is a valid array of type `[3][2]i32`, but `[[1,2], [3,4,5], [6,7]]` is not, because we cannot come up with integers `m` and `n` such that `[m][n]i32` describes the array. The restriction to regular arrays is rooted in low-level concerns about efficient compilation.
 
 #### Sum Types
 
-Sum types are anonymous in Runic, and are written as the constructors separated by vertical bars. Each constructor consists of a `#`-prefixed name, followed by zero or more types, called its payload.
+Sum types are anonymous in Wyn, and are written as the constructors separated by vertical bars. Each constructor consists of a `#`-prefixed name, followed by zero or more types, called its payload.
 
 **Note:** The current implementation of sum types is fairly inefficient, in that all possible constructors of a sum-typed value will be resident in memory. Avoid using sum types where multiple constructors have large payloads.
 
@@ -216,7 +216,7 @@ Functions are classified via function types, but they are not fully first class.
 
 #### String and Character Literals
 
-String literals are supported, but only as syntactic sugar for UTF-8 encoded arrays of `u8` values. There is no character type in Runic, but character literals are interpreted as integers of the corresponding Unicode code point.
+String literals are supported, but only as syntactic sugar for UTF-8 encoded arrays of `u8` values. There is no character type in Wyn, but character literals are interpreted as integers of the corresponding Unicode code point.
 
 #### Existential Size Quantifiers
 
@@ -238,7 +238,7 @@ dec ::= val_bind | type_bind | mod_bind | mod_type_bind
 
 ### Description
 
-A Runic module consists of a sequence of declarations. Files are also modules. Each declaration is processed in order, and a declaration can only refer to names bound by preceding declarations.
+A Wyn module consists of a sequence of declarations. Files are also modules. Each declaration is processed in order, and a declaration can only refer to names bound by preceding declarations.
 
 Any names defined by a declaration inside a module are by default visible to users of that module (see Modules).
 
@@ -267,7 +267,7 @@ val_bind ::= ("def" | "entry" | "let") (name | "(" symbol ")") type_param* pat* 
 
 Functions and constants must be defined before they are used. A function declaration must specify the name, parameters, and body of the function:
 
-```runic
+```wyn
 def name params...: rettype = body
 ```
 
@@ -279,13 +279,13 @@ Hindley-Milner-style type inference is supported. A parameter may be given a typ
 
 A function can be polymorphic by using type parameters, in the same way as for Type Abbreviations:
 
-```runic
+```wyn
 def reverse [n] 't (xs: [n]t): [n]t = xs[::-1]
 ```
 
 Type parameters for a function do not need to cover the types of all parameters. The type checker will add more if necessary. For example, the following is well typed:
 
-```runic
+```wyn
 def pair 'a (x: a) y = (x, y)
 ```
 
@@ -295,7 +295,7 @@ A new type variable will be invented for the parameter `y`.
 
 Shape and type parameters are not passed explicitly when calling functions, but are automatically derived. If an array value `v` is passed for a type parameter `t`, all other arguments passed of type `t` must have the same shape as `v`. For example, consider the following definition:
 
-```runic
+```wyn
 def pair 't (x: t) (y: t) = (x, y)
 ```
 
@@ -311,12 +311,12 @@ To simplify the handling of in-place updates (see In-place Updates), the value r
 
 #### Entry Points
 
-Apart from declaring a function with the keyword `def`, it can also be declared with `entry`. When the Runic program is compiled, any top-level function declared with `entry` in the single file passed directly to the Runic compiler will be exposed as an entry point. This means that any functions defined with `entry` in a file that is accessed via `import` are not considered entry points, but they are still usable as normal functions.
+Apart from declaring a function with the keyword `def`, it can also be declared with `entry`. When the Wyn program is compiled, any top-level function declared with `entry` in the single file passed directly to the Wyn compiler will be exposed as an entry point. This means that any functions defined with `entry` in a file that is accessed via `import` are not considered entry points, but they are still usable as normal functions.
 
 Any top-level function named `main` is treated as if it had been defined with `entry`.
 
 **Entry Point Naming Restrictions:**
-The name of an entry point must not contain an apostrophe (`'`), even though that is normally permitted in Runic identifiers.
+The name of an entry point must not contain an apostrophe (`'`), even though that is normally permitted in Wyn identifiers.
 
 ---
 
@@ -326,7 +326,7 @@ The name of an entry point must not contain an apostrophe (`'`), even though tha
 
 A named value/constant can be declared as follows:
 
-```runic
+```wyn
 def name: type = definition
 ```
 
@@ -363,7 +363,7 @@ A type abbreviation can have zero or more parameters:
 
 A type parameter enclosed with square brackets is a size parameter, and can be used in the definition as an array size, or as a size argument to other type abbreviations. When passing an argument for a shape parameter, it must be enclosed in square brackets:
 
-```runic
+```wyn
 type two_intvecs [n] = ([n]i32, [n]i32)
 
 def x: two_intvecs [2] = (iota 2, replicate 2 0)
@@ -375,7 +375,7 @@ When referencing a type abbreviation, size parameters work much like array sizes
 
 A type parameter prefixed with a single quote is a type parameter. It is in scope as a type in the definition of the type abbreviation. Whenever the type abbreviation is used in a type expression, a type argument must be passed for the parameter. Type arguments need not be prefixed with single quotes:
 
-```runic
+```wyn
 type two_vecs [n] 't = ([n]t, [n]t)
 type two_intvecs [n] = two_vecs [n] i32
 def x: two_vecs [2] i32 = (iota 2, replicate 2 0)
@@ -396,19 +396,19 @@ These have the same rules and restrictions as lifted type abbreviations.
 
 Infix operators are defined much like functions:
 
-```runic
+```wyn
 def (p1: t1) op (p2: t2): rt = ...
 ```
 
 For example:
 
-```runic
+```wyn
 def (a:i32,b:i32) +^ (c:i32,d:i32) = (a+c, b+d)
 ```
 
 We can also define operators by enclosing the operator name in parentheses and suffixing the parameters, as an ordinary function:
 
-```runic
+```wyn
 def (+^) (a:i32,b:i32) (c:i32,d:i32) = (a+c, b+d)
 ```
 
@@ -430,7 +430,7 @@ A built-in operator can be shadowed (i.e. a new `+` can be defined). This will r
 
 An infix operator can also be defined with prefix notation, like an ordinary function, by enclosing it in parentheses:
 
-```runic
+```wyn
 def (+) (x: i32) (y: i32) = x - y
 ```
 
@@ -809,14 +809,14 @@ Futhark supports a system of size-dependent types that statically checks that th
 
 Whenever a pattern occurs (in `let`, `loop`, and function parameters), as well as in return types, the types of the bindings express invariants about the shapes of arrays that are accepted or produced by the function. For example:
 
-```runic
+```wyn
 def f [n] (a: [n]i32) (b: [n]i32): [n]i32 =
   map2 (+) a b
 ```
 
 We use a size parameter, `[n]`, to explicitly quantify a size. The `[n]` parameter is not explicitly passed when calling `f`. Rather, its value is implicitly deduced from the arguments passed for the value parameters. An array type can contain anonymous sizes, e.g. `[]i32`, for which the type checker will invent fresh size parameters, which ensures that all arrays have a size. On the right-hand side of a function arrow ("return types"), this results in an existential size that is not known until the function is fully applied, e.g:
 
-```runic
+```wyn
 val filter [n] 'a : (p: a -> bool) -> (as: [n]a) -> ?[k].[k]a
 ```
 
@@ -824,7 +824,7 @@ Sizes can be any expression of type `i64` that does not consume any free variabl
 
 Size-dependent types are supported, as the names of parameters can be used in the return type of a function:
 
-```runic
+```wyn
 def replicate 't (n: i64) (x: t): [n]t = ...
 ```
 
@@ -836,7 +836,7 @@ Whenever we write a type `[e]t`, `e` must be a well-typed expression of type `i6
 
 There are cases where the type checker cannot assign a precise size to the result of some operation. For example, the type of `filter` is:
 
-```runic
+```wyn
 val filter [n] 'a : (a -> bool) -> [n]t -> ?[m].[m]t
 ```
 
@@ -850,7 +850,7 @@ Generally, unknown sizes are constructed whenever the true size cannot be expres
 
 An unknown size is created in some cases when the a type references a name that has gone out of scope:
 
-```runic
+```wyn
 match ...
 case #some c -> replicate c 0
 ```
@@ -879,7 +879,7 @@ Whenever the result of a function application has an existential size, that size
 
 For example, `filter` has the following type:
 
-```runic
+```wyn
 val filter [n] 'a : (p: a -> bool) -> (as: [n]a) -> ?[k].[k]a
 ```
 
@@ -889,7 +889,7 @@ For an application `filter f xs`, the type checker invents a fresh unknown size 
 
 When an `if` (or `match`) expression has branches that returns array of different sizes, the differing sizes will be replaced with fresh unknown sizes. For example:
 
-```runic
+```wyn
 if b then [[1,2], [3,4]]
      else [[5,6]]
 ```
@@ -902,7 +902,7 @@ This expression will have type `[k][2]i32`, for some fresh `k`.
 
 If the size of some loop parameter is not maintained across a loop iteration, the final result of the loop will contain unknown sizes. For example:
 
-```runic
+```wyn
 loop xs = [1] for i < n do xs ++ xs
 ```
 
@@ -912,7 +912,7 @@ Similar to conditionals, the type checker may sometimes be too cautious in assum
 
 Size coercion, written with `:>`, can be used to perform a runtime-checked coercion of one size to another. This can be useful as an escape hatch in the size type system:
 
-```runic
+```wyn
 def concat_to 'a (m: i32) (a: []a) (b: []a) : [m]a =
   a ++ b :> [m]a
 ```
@@ -921,13 +921,13 @@ def concat_to 'a (m: i32) (a: []a) (b: []a) : [m]a =
 
 Conceptually, size parameters are assigned their value by reading the sizes of concrete values passed along as parameters. This means that any size parameter must be used as the size of some parameter. This is an error:
 
-```runic
+```wyn
 def f [n] (x: i32) = n
 ```
 
 The following is not an error:
 
-```runic
+```wyn
 def f [n] (g: [n]i32 -> [n]i32) = ...
 ```
 
@@ -935,7 +935,7 @@ However, using this function comes with a constraint: whenever an application `f
 
 The causality restriction only occurs when a function has size parameters whose first use is not as a concrete array size. For example, it does not apply to uses of the following function:
 
-```runic
+```wyn
 def f [n] (arr: [n]i32) (g: [n]i32 -> [n]i32) = ...
 ```
 
@@ -945,7 +945,7 @@ This is because the proper value of `n` can be read directly from the actual siz
 
 Just as with size-polymorphic functions, when constructing an empty array, we must know the exact size of the (missing) elements. For example, in the following program we are forcing the elements of `a` to be the same as the elements of `b`, but the size of the elements of `b` are not known at the time `a` is constructed:
 
-```runic
+```wyn
 def main (b: bool) (xs: []i32) =
   let a = [] : [][]i32
   let b = [filter (>0) xs]
@@ -958,7 +958,7 @@ The result is a type error.
 
 When constructing a value of a sum type, the compiler must still be able to determine the size of the constructors that are not used. This is illegal:
 
-```runic
+```wyn
 type sum = #foo ([]i32) | #bar ([]i32)
 
 def main (xs: *[]i32) =
@@ -970,7 +970,7 @@ def main (xs: *[]i32) =
 
 When matching a module with a module type (see Modules), a non-lifted abstract type (i.e. one that is declared with `type` rather than `type^`) may not be implemented by a type abbreviation that contains any existential sizes. This is to ensure that if we have the following:
 
-```runic
+```wyn
 module m : { type t } = ...
 ```
 
@@ -980,13 +980,13 @@ Then we can construct an array of values of type `m.t` without worrying about co
 
 When a higher-order function takes a functional argument whose return type is a non-lifted type parameter, any instantiation of that type parameter must have a non-existential size. If the return type is a lifted type parameter, then the instantiation may contain existential sizes. This is why the type of `map` guarantees regular arrays:
 
-```runic
+```wyn
 val map [n] 'a 'b : (a -> b) -> [n]a -> [n]b
 ```
 
 The type parameter `b` can only be replaced with a type that has non-existential sizes, which means they must be the same for every application of the function. In contrast, this is the type of the pipeline operator:
 
-```runic
+```wyn
 val (|>) '^a -> '^b : a -> (a -> b) -> b
 ```
 
@@ -996,7 +996,7 @@ The provided function can return something with an existential size (such as `fi
 
 If a function (named or anonymous) is inferred to have a return type that contains an unknown size variable created within the function body, that size variable will be replaced with an existential size. In most cases this is not important, but it means that an expression like the following is ill-typed:
 
-```runic
+```wyn
 map (\xs -> iota (length xs)) (xss : [n][m]i32)
 ```
 
@@ -1012,7 +1012,7 @@ The `a with [i] = v` language construct, and derived forms, performs an in-place
 
 When defining a function parameter we can mark it as consuming by prefixing it with an asterisk. For a return type, we can mark it as alias-free by prefixing it with an asterisk. For example:
 
-```runic
+```wyn
 def modify (a: *[]i32) (i: i32) (x: i32): *[]i32 =
   a with [i] = a[i] + x
 ```
@@ -1021,13 +1021,13 @@ A parameter that is not consuming is called observing. In the parameter declarat
 
 If an asterisk is present at any point inside a tuple parameter type, the parameter as a whole is considered consuming. For example:
 
-```runic
+```wyn
 def consumes_both ((a,b): (*[]i32,[]i32)) = ...
 ```
 
 This is usually not desirable behaviour. Use multiple parameters instead:
 
-```runic
+```wyn
 def consumes_first_arg (a: *[]i32) (b: []i32) = ...
 ```
 
@@ -1144,19 +1144,19 @@ A module type expression can be the name of another module type, or a sequence o
 
 In a value spec, sizes in types on the left-hand side of a function arrow must not be anonymous. For example, this is forbidden:
 
-```runic
+```wyn
 val sum: []t -> t
 ```
 
 Instead write:
 
-```runic
+```wyn
 val sum [n]: [n]t -> t
 ```
 
 But this is allowed, because the empty size is not to the left of a function arrow:
 
-```runic
+```wyn
 val evens [n]: [n]i32 -> []i32
 ```
 
@@ -1164,7 +1164,7 @@ val evens [n]: [n]i32 -> []i32
 
 You can refer to external files in a Futhark file like this:
 
-```runic
+```wyn
 import "file"
 ```
 
@@ -1172,7 +1172,7 @@ The above will include all non-local top-level definitions from `file.fut` is an
 
 You can also include files from subdirectories:
 
-```runic
+```wyn
 import "path/to/a/file"
 ```
 
@@ -1180,19 +1180,19 @@ The above will include the file `path/to/a/file.fut` relative to the including f
 
 Qualified imports are also possible, where a module is created for the file:
 
-```runic
+```wyn
 module M = import "file"
 ```
 
 In fact, a plain `import "file"` is equivalent to:
 
-```runic
+```wyn
 local open import "file"
 ```
 
 To re-export names from another file in the current module, use:
 
-```runic
+```wyn
 open import "file"
 ```
 
@@ -1295,4 +1295,4 @@ No spec attributes are currently supported by the compiler itself, although they
 
 ---
 
-*This specification describes the current implementation of Runic. The language is under active development and this specification may evolve.*
+*This specification describes the current implementation of Wyn. The language is under active development and this specification may evolve.*

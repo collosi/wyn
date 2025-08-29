@@ -1,4 +1,4 @@
--- Built-in function signatures for Runic compiler
+-- Built-in function signatures for Wyn compiler
 -- These follow Futhark syntax for polymorphic functions with size and type parameters
 
 -- zip: combines two arrays element-wise into tuples

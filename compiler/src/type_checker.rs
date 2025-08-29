@@ -17,7 +17,7 @@ impl TypeChecker {
             next_var: 0,
         };
         
-        // Load built-in functions from builtins.runic file
+        // Load built-in functions from builtins.wyn file
         if let Err(e) = checker.load_builtins() {
             eprintln!("Warning: Could not load builtins: {}", e);
         }
@@ -27,9 +27,9 @@ impl TypeChecker {
     
     fn load_builtins(&mut self) -> Result<()> {
         let builtin_paths = vec![
-            "builtins.runic",           // Current directory
-            "../builtins.runic",        // Parent directory (for tests)
-            "../../builtins.runic",     // Two levels up (for nested tests)
+            "builtins.wyn",           // Current directory
+            "../builtins.wyn",        // Parent directory (for tests)
+            "../../builtins.wyn",     // Two levels up (for nested tests)
         ];
         
         let mut builtin_content = None;
@@ -41,7 +41,7 @@ impl TypeChecker {
         }
         
         let content = builtin_content.ok_or_else(|| 
-            CompilerError::ParseError("Could not find builtins.runic file".to_string()))?;
+            CompilerError::ParseError("Could not find builtins.wyn file".to_string()))?;
         
         let tokens = tokenize(&content).map_err(|e| 
             CompilerError::ParseError(format!("Failed to tokenize builtins: {}", e)))?;

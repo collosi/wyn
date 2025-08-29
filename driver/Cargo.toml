@@ -1,15 +1,15 @@
 [package]
-name = "runic"
+name = "wyn"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "runic"
+name = "wyn"
 path = "src/main.rs"
 
 [dependencies]
-runic-compiler = { path = "../compiler" }
+wyn-compiler = { path = "../compiler" }
 clap.workspace = true
 thiserror.workspace = true
