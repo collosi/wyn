@@ -39,6 +39,9 @@ pub enum Token {
     Colon,
     Comma,
     
+    // Attributes
+    AttributeStart, // #[
+    
     // Comments (to be skipped)
     Comment(String),
 }
@@ -120,6 +123,7 @@ fn parse_operator(input: &str) -> IResult<&str, Token> {
 
 fn parse_delimiter(input: &str) -> IResult<&str, Token> {
     alt((
+        value(Token::AttributeStart, tag("#[")),
         value(Token::LeftParen, char('(')),
         value(Token::RightParen, char(')')),
         value(Token::LeftBracket, char('[')),
@@ -248,6 +252,17 @@ mod tests {
             Token::FloatLiteral(135.0),
             Token::Divide,
             Token::FloatLiteral(255.0),
+        ]);
+    }
+    
+    #[test]
+    fn test_tokenize_attributes() {
+        let input = "#[vertex]";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(tokens, vec![
+            Token::AttributeStart,
+            Token::Identifier("vertex".to_string()),
+            Token::RightBracket,
         ]);
     }
 }

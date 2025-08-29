@@ -12,7 +12,14 @@ pub enum Declaration {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Attribute {
+    pub name: String,
+    pub args: Vec<Attribute>, // For compound attributes like foo(bar, baz)
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct LetDecl {
+    pub attributes: Vec<Attribute>,
     pub name: String,
     pub ty: Option<Type>,
     pub value: Expression,
@@ -20,6 +27,7 @@ pub struct LetDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EntryDecl {
+    pub attributes: Vec<Attribute>,
     pub name: String,
     pub params: Vec<Parameter>,
     pub return_type: Type,
@@ -34,6 +42,7 @@ pub struct Parameter {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DefDecl {
+    pub attributes: Vec<Attribute>,
     pub name: String,
     pub params: Vec<String>, // Parameter names without explicit types (for inference)
     pub body: Expression,
@@ -41,6 +50,7 @@ pub struct DefDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValDecl {
+    pub attributes: Vec<Attribute>,
     pub name: String,
     pub size_params: Vec<String>,    // Size parameters: [n], [m]
     pub type_params: Vec<String>,    // Type parameters: 'a, 'b

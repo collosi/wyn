@@ -132,14 +132,14 @@ impl CodeGenerator {
     }
     
     fn generate_entry_decl(&mut self, decl: &EntryDecl) -> Result<()> {
-        // Determine execution model based on function name
-        let exec_model = if decl.name.contains("vertex") {
+        // Determine execution model based on attributes
+        let exec_model = if decl.attributes.iter().any(|attr| attr.name == "vertex") {
             spirv::ExecutionModel::Vertex
-        } else if decl.name.contains("fragment") {
+        } else if decl.attributes.iter().any(|attr| attr.name == "fragment") {
             spirv::ExecutionModel::Fragment
         } else {
             return Err(CompilerError::SpirvError(
-                "Entry point must contain 'vertex' or 'fragment' in name".to_string()
+                "Entry point must have either #[vertex] or #[fragment] attribute".to_string()
             ));
         };
         
@@ -637,6 +637,7 @@ mod tests {
     fn test_generate_simple_vertex_shader() {
         let input = r#"
             let pos: [4]f32 = [0.0f32, 0.0f32, 0.0f32, 1.0f32]
+            #[vertex]
             entry vertex_main(): [4]f32 = pos
         "#;
         
@@ -659,6 +660,7 @@ mod tests {
     fn test_generate_simple_fragment_shader() {
         let input = r#"
             let color: [4]f32 = [1.0f32, 0.0f32, 0.0f32, 1.0f32]
+            #[fragment]
             entry fragment_main(): [4]f32 = color
         "#;
         
@@ -681,6 +683,7 @@ mod tests {
         let input = r#"
             let pos: [4]f32 = [-1.0f32, -1.0f32, 0.0f32, 1.0f32]
             
+            #[vertex]
             entry vertex_main (vertex_id: i32) : vec4f32 =
               to_vec4_f32 pos
         "#;
@@ -705,6 +708,7 @@ mod tests {
             let SKY_RGBA: [4]f32 =
               [135f32/255f32, 206f32/255f32, 235f32/255f32, 1.0f32]
             
+            #[fragment]
             entry fragment_main () : vec4f32 =
               to_vec4_f32 SKY_RGBA
         "#;
@@ -724,6 +728,7 @@ mod tests {
     #[test]
     fn test_minimal_fragment_with_naga() {
         let input = r#"
+            #[fragment]
             entry fragment_main () : f32 =
               1.0f32
         "#;
@@ -746,6 +751,7 @@ mod tests {
             let arr: [2]i32 = [1, 2]
             let pos: [4]f32 = [0.0f32, 0.0f32, 0.0f32, 1.0f32]
             
+            #[vertex]
             entry vertex_main (vertex_id: i32) : vec4f32 =
               to_vec4_f32 pos
         "#;
@@ -769,6 +775,7 @@ mod tests {
               [[0.0f32, 0.0f32, 0.0f32, 1.0f32],
                [1.0f32, 1.0f32, 0.0f32, 1.0f32]]
             
+            #[vertex]
             entry vertex_main (vertex_id: i32) : vec4f32 =
               to_vec4_f32 positions[vertex_id]
         "#;

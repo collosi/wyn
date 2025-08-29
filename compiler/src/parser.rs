@@ -23,11 +23,30 @@ impl Parser {
     }
 
     fn parse_declaration(&mut self) -> Result<Declaration> {
+        // Parse optional attributes
+        let attributes = self.parse_attributes()?;
+        
         match self.peek() {
-            Some(Token::Let) => Ok(Declaration::Let(self.parse_let_decl()?)),
-            Some(Token::Entry) => Ok(Declaration::Entry(self.parse_entry_decl()?)),
-            Some(Token::Def) => Ok(Declaration::Def(self.parse_def_decl()?)),
-            Some(Token::Val) => Ok(Declaration::Val(self.parse_val_decl()?)),
+            Some(Token::Let) => {
+                let mut decl = self.parse_let_decl()?;
+                decl.attributes = attributes;
+                Ok(Declaration::Let(decl))
+            },
+            Some(Token::Entry) => {
+                let mut decl = self.parse_entry_decl()?;
+                decl.attributes = attributes;
+                Ok(Declaration::Entry(decl))
+            },
+            Some(Token::Def) => {
+                let mut decl = self.parse_def_decl()?;
+                decl.attributes = attributes;
+                Ok(Declaration::Def(decl))
+            },
+            Some(Token::Val) => {
+                let mut decl = self.parse_val_decl()?;
+                decl.attributes = attributes;
+                Ok(Declaration::Val(decl))
+            },
             _ => Err(CompilerError::ParseError(
                 "Expected 'let', 'entry', 'def', or 'val' declaration".to_string(),
             )),
@@ -42,7 +61,7 @@ impl Parser {
         self.expect(Token::Assign)?;
         let value = self.parse_expression()?;
 
-        Ok(LetDecl { name, ty, value })
+        Ok(LetDecl { attributes: vec![], name, ty, value })
     }
 
     fn parse_entry_decl(&mut self) -> Result<EntryDecl> {
@@ -75,6 +94,7 @@ impl Parser {
         let body = self.parse_expression()?;
 
         Ok(EntryDecl {
+            attributes: vec![],
             name,
             params,
             return_type,
@@ -95,7 +115,7 @@ impl Parser {
         self.expect(Token::Assign)?;
         let body = self.parse_expression()?;
 
-        Ok(DefDecl { name, params, body })
+        Ok(DefDecl { attributes: vec![], name, params, body })
     }
 
     fn parse_val_decl(&mut self) -> Result<ValDecl> {
@@ -123,11 +143,29 @@ impl Parser {
         let ty = self.parse_type()?;
 
         Ok(ValDecl {
+            attributes: vec![],
             name,
             size_params,
             type_params,
             ty,
         })
+    }
+    
+    fn parse_attributes(&mut self) -> Result<Vec<Attribute>> {
+        let mut attributes = Vec::new();
+        
+        while self.check(&Token::AttributeStart) {
+            self.advance(); // consume '#['
+            let attr_name = self.expect_identifier()?;
+            self.expect(Token::RightBracket)?;
+            
+            attributes.push(Attribute {
+                name: attr_name,
+                args: vec![], // For now, we'll only support simple attributes
+            });
+        }
+        
+        Ok(attributes)
     }
 
     fn check_type_variable(&self) -> bool {
