@@ -51,6 +51,7 @@ pub struct ValDecl {
 pub enum Type {
     I32,
     F32,
+    Vec4F32, // 4-component vector for SPIR-V gl_Position
     Array(Box<Type>, Vec<usize>),
     Tuple(Vec<Type>),
     Var(String), // Type variable for inference

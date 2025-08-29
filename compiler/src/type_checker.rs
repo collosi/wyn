@@ -271,6 +271,7 @@ impl TypeChecker {
         match (t1, t2) {
             (Type::I32, Type::I32) => true,
             (Type::F32, Type::F32) => true,
+            (Type::Vec4F32, Type::Vec4F32) => true,
             (Type::Array(elem1, dims1), Type::Array(elem2, dims2)) => {
                 dims1 == dims2 && self.types_match(elem1, elem2)
             }

@@ -24,6 +24,7 @@ pub enum Token {
     // Types
     I32Type,
     F32Type,
+    Vec4F32Type,
     
     // Operators
     Assign,
@@ -60,6 +61,7 @@ fn parse_keyword(input: &str) -> IResult<&str, Token> {
 
 fn parse_type(input: &str) -> IResult<&str, Token> {
     alt((
+        value(Token::Vec4F32Type, tag("vec4f32")),
         value(Token::I32Type, tag("i32")),
         value(Token::F32Type, tag("f32")),
     ))(input)

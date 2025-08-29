@@ -203,6 +203,10 @@ impl Parser {
                 self.advance();
                 Ok(Type::F32)
             }
+            Some(Token::Vec4F32Type) => {
+                self.advance();
+                Ok(Type::Vec4F32)
+            }
             Some(Token::Identifier(name)) if name.starts_with('\'') => {
                 // Type variable like 't1, 't2
                 let type_var = self.parse_type_variable()?;

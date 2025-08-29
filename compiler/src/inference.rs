@@ -14,6 +14,7 @@ impl fmt::Display for Type {
         match self {
             Type::I32 => write!(f, "i32"),
             Type::F32 => write!(f, "f32"),
+            Type::Vec4F32 => write!(f, "vec4f32"),
             Type::Array(elem_ty, dims) => {
                 let dim_str = dims.iter()
                     .map(|d| format!("[{}]", d))
