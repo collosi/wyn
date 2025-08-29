@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::Compiler;
-    
+
     #[test]
     fn test_full_example_program() {
         let source = r#"
@@ -22,21 +22,21 @@ let SKY_RGBA : [4]f32 =
 entry fragment_main () : [4]f32 =
   SKY_RGBA
 "#;
-        
+
         let compiler = Compiler::new();
         let result = compiler.compile(source);
-        
+
         assert!(result.is_ok(), "Compilation failed: {:?}", result.err());
-        
+
         let spirv = result.unwrap();
         assert!(!spirv.is_empty());
         assert_eq!(spirv[0], spirv::MAGIC_NUMBER);
-        
+
         // The SPIR-V should be reasonably sized for this simple program
         assert!(spirv.len() > 50, "SPIR-V too small, likely incomplete");
         assert!(spirv.len() < 1000, "SPIR-V too large, likely has issues");
     }
-    
+
     #[test]
     fn test_vertex_shader_only() {
         let source = r#"
@@ -45,33 +45,33 @@ let positions: [3][4]f32 =
    [-0.5f32, -0.5f32, 0.0f32, 1.0f32],
    [0.5f32, -0.5f32, 0.0f32, 1.0f32]]
 
-entry vertex_main(idx: i32): [4]f32 = positions[idx]
+entry vertex_main(vertex_id: i32): [4]f32 = positions[vertex_id]
 "#;
-        
+
         let compiler = Compiler::new();
         let result = compiler.compile(source);
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "{result:?}");
     }
-    
+
     #[test]
     fn test_fragment_shader_only() {
         let source = r#"
 let red: [4]f32 = [1.0f32, 0.0f32, 0.0f32, 1.0f32]
 entry fragment_main(): [4]f32 = red
 "#;
-        
+
         let compiler = Compiler::new();
         let result = compiler.compile(source);
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_division_in_array() {
         let source = r#"
 let normalized_color: [3]f32 = [128f32/255f32, 64f32/255f32, 32f32/255f32]
 entry fragment_color(): [4]f32 = [normalized_color[0], normalized_color[1], normalized_color[2], 1.0f32]
 "#;
-        
+
         let compiler = Compiler::new();
         let result = compiler.compile(source);
         // Note: This test will fail with current implementation as we don't support

@@ -11,17 +11,17 @@ impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
         Parser { tokens, current: 0 }
     }
-    
+
     pub fn parse(&mut self) -> Result<Program> {
         let mut declarations = Vec::new();
-        
+
         while !self.is_at_end() {
             declarations.push(self.parse_declaration()?);
         }
-        
+
         Ok(Program { declarations })
     }
-    
+
     fn parse_declaration(&mut self) -> Result<Declaration> {
         match self.peek() {
             Some(Token::Let) => Ok(Declaration::Let(self.parse_let_decl()?)),
@@ -33,7 +33,7 @@ impl Parser {
             )),
         }
     }
-    
+
     fn parse_let_decl(&mut self) -> Result<LetDecl> {
         self.expect(Token::Let)?;
         let name = self.expect_identifier()?;
@@ -41,15 +41,15 @@ impl Parser {
         let ty = Some(self.parse_type()?);
         self.expect(Token::Assign)?;
         let value = self.parse_expression()?;
-        
+
         Ok(LetDecl { name, ty, value })
     }
-    
+
     fn parse_entry_decl(&mut self) -> Result<EntryDecl> {
         self.expect(Token::Entry)?;
         let name = self.expect_identifier()?;
         self.expect(Token::LeftParen)?;
-        
+
         let mut params = Vec::new();
         if !self.check(&Token::RightParen) {
             loop {
@@ -60,20 +60,20 @@ impl Parser {
                     name: param_name,
                     ty: param_ty,
                 });
-                
+
                 if !self.check(&Token::Comma) {
                     break;
                 }
                 self.advance();
             }
         }
-        
+
         self.expect(Token::RightParen)?;
         self.expect(Token::Colon)?;
         let return_type = self.parse_type()?;
         self.expect(Token::Assign)?;
         let body = self.parse_expression()?;
-        
+
         Ok(EntryDecl {
             name,
             params,
@@ -81,27 +81,27 @@ impl Parser {
             body,
         })
     }
-    
+
     fn parse_def_decl(&mut self) -> Result<DefDecl> {
         self.expect(Token::Def)?;
         let name = self.expect_identifier()?;
-        
+
         // Parse parameter names (without types for inference)
         let mut params = Vec::new();
         while !self.check(&Token::Assign) && !self.is_at_end() {
             params.push(self.expect_identifier()?);
         }
-        
+
         self.expect(Token::Assign)?;
         let body = self.parse_expression()?;
-        
+
         Ok(DefDecl { name, params, body })
     }
-    
+
     fn parse_val_decl(&mut self) -> Result<ValDecl> {
         self.expect(Token::Val)?;
         let name = self.expect_identifier()?;
-        
+
         // Parse size parameters: [n] [m] ...
         let mut size_params = Vec::new();
         while self.check(&Token::LeftBracket) {
@@ -110,7 +110,7 @@ impl Parser {
             size_params.push(size_param);
             self.expect(Token::RightBracket)?;
         }
-        
+
         // Parse type parameters: 'a 'b ...
         let mut type_params = Vec::new();
         while self.check_type_variable() {
@@ -118,10 +118,10 @@ impl Parser {
             let type_param = self.parse_type_variable()?;
             type_params.push(type_param);
         }
-        
+
         self.expect(Token::Colon)?;
         let ty = self.parse_type()?;
-        
+
         Ok(ValDecl {
             name,
             size_params,
@@ -129,7 +129,7 @@ impl Parser {
             ty,
         })
     }
-    
+
     fn check_type_variable(&self) -> bool {
         // Check if current token is an apostrophe (we'll need to add this to lexer)
         // For now, we'll use a simplified approach
@@ -138,7 +138,7 @@ impl Parser {
             _ => false,
         }
     }
-    
+
     fn parse_type_variable(&mut self) -> Result<String> {
         match self.advance() {
             Some(Token::Identifier(name)) if name.starts_with('\'') => {
@@ -149,29 +149,30 @@ impl Parser {
             )),
         }
     }
-    
+
     fn parse_type(&mut self) -> Result<Type> {
         self.parse_function_type()
     }
-    
+
     fn parse_function_type(&mut self) -> Result<Type> {
         let mut left = self.parse_array_or_base_type()?;
-        
+
         // Handle function arrows: T1 -> T2 -> T3
-        while self.check(&Token::Arrow) { // We'll need to add Arrow token
+        while self.check(&Token::Arrow) {
+            // We'll need to add Arrow token
             self.advance();
             let right = self.parse_array_or_base_type()?;
             left = Type::Function(Box::new(left), Box::new(right));
         }
-        
+
         Ok(left)
     }
-    
+
     fn parse_array_or_base_type(&mut self) -> Result<Type> {
         // Check for array type [dim]baseType (Futhark style)
         if self.check(&Token::LeftBracket) {
             self.advance(); // consume '['
-            
+
             // Parse dimension - could be integer literal or identifier (size variable)
             if let Some(Token::IntLiteral(n)) = self.peek() {
                 let n = *n as usize;
@@ -184,15 +185,15 @@ impl Parser {
                 let _size_var = self.expect_identifier()?;
                 self.expect(Token::RightBracket)?;
                 let elem_type = self.parse_array_or_base_type()?; // Allow nested arrays
-                // For now, we'll represent size variables as arrays with size 0 as a placeholder
-                // In a proper implementation, we'd need to track size variables differently
+                                                                  // For now, we'll represent size variables as arrays with size 0 as a placeholder
+                                                                  // In a proper implementation, we'd need to track size variables differently
                 Ok(Type::Array(Box::new(elem_type), vec![0])) // placeholder for size variables
             }
         } else {
             self.parse_base_type()
         }
     }
-    
+
     fn parse_base_type(&mut self) -> Result<Type> {
         match self.peek() {
             Some(Token::I32Type) => {
@@ -216,7 +217,7 @@ impl Parser {
                 // Tuple type (T1, T2, T3)
                 self.advance(); // consume '('
                 let mut types = Vec::new();
-                
+
                 if !self.check(&Token::RightParen) {
                     loop {
                         types.push(self.parse_type()?);
@@ -226,43 +227,43 @@ impl Parser {
                         self.advance(); // consume ','
                     }
                 }
-                
+
                 self.expect(Token::RightParen)?;
                 Ok(Type::Tuple(types))
             }
             _ => Err(CompilerError::ParseError("Expected type".to_string())),
         }
     }
-    
+
     fn parse_expression(&mut self) -> Result<Expression> {
         self.parse_binary_expression()
     }
-    
+
     fn parse_binary_expression(&mut self) -> Result<Expression> {
         let mut left = self.parse_postfix_expression()?;
-        
+
         while let Some(Token::Divide) = self.peek() {
             self.advance();
             let right = self.parse_postfix_expression()?;
             left = Expression::BinaryOp(BinaryOp::Divide, Box::new(left), Box::new(right));
         }
-        
+
         Ok(left)
     }
-    
+
     fn parse_postfix_expression(&mut self) -> Result<Expression> {
         let mut expr = self.parse_primary_expression()?;
-        
+
         while let Some(Token::LeftBracket) = self.peek() {
             self.advance();
             let index = self.parse_expression()?;
             self.expect(Token::RightBracket)?;
             expr = Expression::ArrayIndex(Box::new(expr), Box::new(index));
         }
-        
+
         Ok(expr)
     }
-    
+
     fn parse_primary_expression(&mut self) -> Result<Expression> {
         match self.peek() {
             Some(Token::IntLiteral(n)) => {
@@ -278,20 +279,25 @@ impl Parser {
             Some(Token::Identifier(name)) => {
                 let name = name.clone();
                 self.advance();
-                
+
                 // Check if this is a function call (identifier followed by arguments)
                 // For simplicity, we'll parse function calls without parentheses like "zip xs ys"
                 let mut args = Vec::new();
-                
+
                 // Collect arguments until we hit an operator or end of expression
-                while self.peek().is_some() && !matches!(self.peek(), 
-                    Some(Token::Divide) | Some(Token::Comma) | Some(Token::RightBracket) | 
-                    Some(Token::RightParen)) {
-                    
+                while self.peek().is_some()
+                    && !matches!(
+                        self.peek(),
+                        Some(Token::Divide)
+                            | Some(Token::Comma)
+                            | Some(Token::RightBracket)
+                            | Some(Token::RightParen)
+                    )
+                {
                     // If we see an identifier, parse it as an argument (with potential postfix operations)
                     if let Some(Token::Identifier(_)) = self.peek() {
                         let mut arg = self.parse_primary_expression()?;
-                        
+
                         // Handle array indexing on arguments
                         while let Some(Token::LeftBracket) = self.peek() {
                             self.advance();
@@ -299,13 +305,13 @@ impl Parser {
                             self.expect(Token::RightBracket)?;
                             arg = Expression::ArrayIndex(Box::new(arg), Box::new(index));
                         }
-                        
+
                         args.push(arg);
                     } else {
                         break;
                     }
                 }
-                
+
                 if !args.is_empty() {
                     Ok(Expression::FunctionCall(name, args))
                 } else {
@@ -316,10 +322,10 @@ impl Parser {
             _ => Err(CompilerError::ParseError("Expected expression".to_string())),
         }
     }
-    
+
     fn parse_array_literal(&mut self) -> Result<Expression> {
         self.expect(Token::LeftBracket)?;
-        
+
         let mut elements = Vec::new();
         if !self.check(&Token::RightBracket) {
             loop {
@@ -330,16 +336,16 @@ impl Parser {
                 self.advance();
             }
         }
-        
+
         self.expect(Token::RightBracket)?;
         Ok(Expression::ArrayLiteral(elements))
     }
-    
+
     // Helper methods
     fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.current)
     }
-    
+
     fn advance(&mut self) -> Option<&Token> {
         if !self.is_at_end() {
             self.current += 1;
@@ -348,7 +354,7 @@ impl Parser {
             None
         }
     }
-    
+
     fn check(&self, token: &Token) -> bool {
         if let Some(t) = self.peek() {
             std::mem::discriminant(t) == std::mem::discriminant(token)
@@ -356,7 +362,7 @@ impl Parser {
             false
         }
     }
-    
+
     fn expect(&mut self, token: Token) -> Result<()> {
         if self.check(&token) {
             self.advance();
@@ -369,16 +375,14 @@ impl Parser {
             )))
         }
     }
-    
+
     fn expect_identifier(&mut self) -> Result<String> {
         match self.advance() {
             Some(Token::Identifier(name)) => Ok(name.clone()),
-            _ => Err(CompilerError::ParseError(
-                "Expected identifier".to_string(),
-            )),
+            _ => Err(CompilerError::ParseError("Expected identifier".to_string())),
         }
     }
-    
+
     fn is_at_end(&self) -> bool {
         self.current >= self.tokens.len()
     }
@@ -388,14 +392,14 @@ impl Parser {
 mod tests {
     use super::*;
     use crate::lexer::tokenize;
-    
+
     #[test]
     fn test_parse_let_decl() {
         let input = "let x: i32 = 42";
         let tokens = tokenize(input).unwrap();
         let mut parser = Parser::new(tokens);
         let program = parser.parse().unwrap();
-        
+
         assert_eq!(program.declarations.len(), 1);
         match &program.declarations[0] {
             Declaration::Let(decl) => {
@@ -406,14 +410,14 @@ mod tests {
             _ => panic!("Expected Let declaration"),
         }
     }
-    
+
     #[test]
     fn test_parse_array_type() {
         let input = "let arr: [3][4]f32 = [[1.0f32, 2.0f32], [3.0f32, 4.0f32]]";
         let tokens = tokenize(input).unwrap();
         let mut parser = Parser::new(tokens);
         let program = parser.parse().unwrap();
-        
+
         match &program.declarations[0] {
             Declaration::Let(decl) => {
                 assert_eq!(decl.name, "arr");
@@ -435,14 +439,14 @@ mod tests {
             _ => panic!("Expected Let declaration"),
         }
     }
-    
+
     #[test]
     fn test_parse_entry_decl() {
         let input = "entry main(x: i32, y: f32): [4]f32 = result";
         let tokens = tokenize(input).unwrap();
         let mut parser = Parser::new(tokens);
         let program = parser.parse().unwrap();
-        
+
         match &program.declarations[0] {
             Declaration::Entry(decl) => {
                 assert_eq!(decl.name, "main");
@@ -456,45 +460,41 @@ mod tests {
             _ => panic!("Expected Entry declaration"),
         }
     }
-    
+
     #[test]
     fn test_parse_array_index() {
         let input = "let x: f32 = arr[0]";
         let tokens = tokenize(input).unwrap();
         let mut parser = Parser::new(tokens);
         let program = parser.parse().unwrap();
-        
+
         match &program.declarations[0] {
-            Declaration::Let(decl) => {
-                match &decl.value {
-                    Expression::ArrayIndex(arr, idx) => {
-                        assert_eq!(**arr, Expression::Identifier("arr".to_string()));
-                        assert_eq!(**idx, Expression::IntLiteral(0));
-                    }
-                    _ => panic!("Expected ArrayIndex expression"),
+            Declaration::Let(decl) => match &decl.value {
+                Expression::ArrayIndex(arr, idx) => {
+                    assert_eq!(**arr, Expression::Identifier("arr".to_string()));
+                    assert_eq!(**idx, Expression::IntLiteral(0));
                 }
-            }
+                _ => panic!("Expected ArrayIndex expression"),
+            },
             _ => panic!("Expected Let declaration"),
         }
     }
-    
+
     #[test]
     fn test_parse_division() {
         let input = "let x: f32 = 135f32/255f32";
         let tokens = tokenize(input).unwrap();
         let mut parser = Parser::new(tokens);
         let program = parser.parse().unwrap();
-        
+
         match &program.declarations[0] {
-            Declaration::Let(decl) => {
-                match &decl.value {
-                    Expression::BinaryOp(BinaryOp::Divide, left, right) => {
-                        assert_eq!(**left, Expression::FloatLiteral(135.0));
-                        assert_eq!(**right, Expression::FloatLiteral(255.0));
-                    }
-                    _ => panic!("Expected BinaryOp expression"),
+            Declaration::Let(decl) => match &decl.value {
+                Expression::BinaryOp(BinaryOp::Divide, left, right) => {
+                    assert_eq!(**left, Expression::FloatLiteral(135.0));
+                    assert_eq!(**right, Expression::FloatLiteral(255.0));
                 }
-            }
+                _ => panic!("Expected BinaryOp expression"),
+            },
             _ => panic!("Expected Let declaration"),
         }
     }
