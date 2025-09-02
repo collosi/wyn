@@ -3,17 +3,22 @@ use crate::error::{CompilerError, Result};
 use crate::lexer::tokenize;
 use crate::parser::Parser;
 use crate::scope::ScopeStack;
+use polytype::{ptp, tp, Context, Type, TypeScheme};
 
 pub struct TypeChecker {
-    scope_stack: ScopeStack<Type>,
-    next_var: usize,
+    scope_stack: ScopeStack<TypeScheme>, // Store polymorphic types
+    context: Context, // Polytype unification context
 }
 
 impl TypeChecker {
+    /// Create binary arithmetic operator type scheme: ∀t. t -> t -> t
+    fn binary_arithmetic_scheme() -> TypeScheme {
+        ptp!(0; @arrow[tp!(0), tp!(0), tp!(0)]) // ∀t0. t0 -> t0 -> t0
+    }
     pub fn new() -> Self {
         let mut checker = TypeChecker {
             scope_stack: ScopeStack::new(),
-            next_var: 0,
+            context: Context::default(),
         };
 
         // Load built-in functions from builtins.wyn file
@@ -39,8 +44,10 @@ impl TypeChecker {
         // Process only val declarations from builtins
         for decl in &program.declarations {
             if let Declaration::Val(val_decl) = decl {
+                // Convert the parsed type to a monomorphic TypeScheme
+                let type_scheme = TypeScheme::Monotype(val_decl.ty.clone());
                 self.scope_stack
-                    .insert(val_decl.name.clone(), val_decl.ty.clone());
+                    .insert(val_decl.name.clone(), type_scheme);
             }
         }
 
@@ -53,8 +60,9 @@ impl TypeChecker {
             match decl {
                 Declaration::Def(def_decl) => {
                     // Create a placeholder type for this function
-                    let func_type = self.fresh_var();
-                    self.scope_stack.insert(def_decl.name.clone(), func_type);
+                    let func_type = self.context.new_variable();
+                    let type_scheme = TypeScheme::Monotype(func_type);
+                    self.scope_stack.insert(def_decl.name.clone(), type_scheme);
                 }
                 _ => {}
             }
@@ -91,7 +99,8 @@ impl TypeChecker {
 
         // Add to both environments - use declared type if available, otherwise inferred type
         let stored_type = decl.ty.as_ref().unwrap_or(&expr_type).clone();
-        self.scope_stack.insert(decl.name.clone(), stored_type);
+        let type_scheme = TypeScheme::Monotype(stored_type);
+        self.scope_stack.insert(decl.name.clone(), type_scheme);
 
         Ok(())
     }
@@ -102,8 +111,8 @@ impl TypeChecker {
 
         // Add parameters to scope
         for param in &decl.params {
-            self.scope_stack
-                .insert(param.name.clone(), param.ty.clone());
+            let type_scheme = TypeScheme::Monotype(param.ty.clone());
+            self.scope_stack.insert(param.name.clone(), type_scheme);
         }
 
         // Check body with parameters in scope
@@ -124,15 +133,15 @@ impl TypeChecker {
 
     fn check_def_decl(&mut self, decl: &DefDecl) -> Result<()> {
         // Create type variables for parameters
-        let param_types: Vec<Type> = decl.params.iter().map(|_| self.fresh_var()).collect();
+        let param_types: Vec<Type> = decl.params.iter().map(|_| self.context.new_variable()).collect();
 
         // Push new scope for function parameters
         self.scope_stack.push_scope();
 
         // Add parameters to scope
         for (param_name, param_type) in decl.params.iter().zip(param_types.iter()) {
-            self.scope_stack
-                .insert(param_name.clone(), param_type.clone());
+            let type_scheme = TypeScheme::Monotype(param_type.clone());
+            self.scope_stack.insert(param_name.clone(), type_scheme);
         }
 
         // Infer body type
@@ -146,12 +155,12 @@ impl TypeChecker {
             .into_iter()
             .rev()
             .fold(body_type, |acc, param_ty| {
-                Type::Function(Box::new(param_ty), Box::new(acc))
+                types::function(param_ty, acc)
             });
 
         // Update scope with inferred type
-        self.scope_stack
-            .insert(decl.name.clone(), func_type.clone());
+        let type_scheme = TypeScheme::Monotype(func_type.clone());
+        self.scope_stack.insert(decl.name.clone(), type_scheme);
 
         println!("Inferred type for {}: {}", decl.name, func_type);
 
@@ -160,19 +169,21 @@ impl TypeChecker {
 
     fn check_val_decl(&mut self, decl: &ValDecl) -> Result<()> {
         // Val declarations are just type signatures - register them in scope
-        self.scope_stack.insert(decl.name.clone(), decl.ty.clone());
+        let type_scheme = TypeScheme::Monotype(decl.ty.clone());
+        self.scope_stack.insert(decl.name.clone(), type_scheme);
         Ok(())
     }
 
     fn infer_expression(&mut self, expr: &Expression) -> Result<Type> {
         match expr {
-            Expression::IntLiteral(_) => Ok(Type::I32),
-            Expression::FloatLiteral(_) => Ok(Type::F32),
+            Expression::IntLiteral(_) => Ok(types::i32()),
+            Expression::FloatLiteral(_) => Ok(types::f32()),
             Expression::Identifier(name) => {
-                self.scope_stack
+                let type_scheme = self.scope_stack
                     .lookup(name)
-                    .cloned()
-                    .ok_or_else(|| CompilerError::UndefinedVariable(name.clone()))
+                    .ok_or_else(|| CompilerError::UndefinedVariable(name.clone()))?;
+                // Instantiate the type scheme to get a concrete type
+                Ok(type_scheme.instantiate(&mut self.context))
             }
             Expression::ArrayLiteral(elements) => {
                 if elements.is_empty() {
@@ -191,72 +202,78 @@ impl TypeChecker {
                     }
                 }
 
-                Ok(Type::Array(Box::new(first_type), vec![elements.len()]))
+                Ok(types::array(first_type))
             }
             Expression::ArrayIndex(array_expr, _index_expr) => {
                 let array_type = self.infer_expression(array_expr)?;
-                match array_type {
-                    Type::Array(elem_type, _) => Ok(*elem_type),
-                    _ => Err(CompilerError::TypeError(format!(
+                Ok(match array_type {
+                    Type::Constructed(name, args) if name == "array" => {
+                        args.into_iter().next().unwrap_or_else(|| types::i32())
+                    }
+                    _ => return Err(CompilerError::TypeError(format!(
                         "Cannot index non-array type: got {:?}",
                         array_type
                     ))),
-                }
+                })
             }
             Expression::BinaryOp(op, left, right) => {
                 let left_type = self.infer_expression(left)?;
                 let right_type = self.infer_expression(right)?;
 
                 match op {
-                    BinaryOp::Divide => {
-                        // Division is only valid for numeric types
-                        match (&left_type, &right_type) {
-                            (Type::F32, Type::F32) => Ok(Type::F32),
-                            (Type::I32, Type::I32) => Ok(Type::I32),
-                            _ => Err(CompilerError::TypeError(format!(
-                                "Cannot divide {:?} by {:?}",
-                                left_type, right_type
-                            ))),
-                        }
+                    BinaryOp::Add | BinaryOp::Divide => {
+                        // Arithmetic operators have type: ∀t. t -> t -> t
+                        let arith_scheme = Self::binary_arithmetic_scheme();
+                        let arith_type = arith_scheme.instantiate(&mut self.context);
+                        
+                        // Create fresh type variable for result
+                        let result_type = self.context.new_variable();
+                        
+                        // Unify: arith_type ~ (left_type -> right_type -> result_type)
+                        let expected_type = tp!(@arrow[
+                            left_type.clone(),
+                            tp!(@arrow[right_type.clone(), result_type.clone()])
+                        ]);
+                        
+                        let op_name = match op {
+                            BinaryOp::Add => "add",
+                            BinaryOp::Divide => "divide",
+                        };
+                        
+                        self.context.unify(&arith_type, &expected_type)
+                            .map_err(|e| CompilerError::TypeError(format!(
+                                "Cannot {} {:?} and {:?}: {}", 
+                                op_name, left_type, right_type, e
+                            )))?;
+                        
+                        // Apply substitutions to get concrete result type
+                        Ok(result_type.apply(&self.context))
                     }
-                    BinaryOp::Add => {
-                        // Addition requires matching numeric operands
-                        match (&left_type, &right_type) {
-                            (Type::F32, Type::F32) => Ok(Type::F32),
-                            (Type::I32, Type::I32) => Ok(Type::I32),
-                            _ => Err(CompilerError::TypeError(format!(
-                                "Cannot add {:?} and {:?}",
-                                left_type, right_type
-                            ))),
-                        }
-                    }
+                    // Future operators like comparisons would go here with different type schemes
                 }
             }
             Expression::FunctionCall(func_name, args) => {
-                // Get function type
-                let mut func_type = self
+                // Get function type scheme and instantiate it
+                let type_scheme = self
                     .scope_stack
                     .lookup(func_name)
-                    .ok_or_else(|| CompilerError::UndefinedVariable(func_name.clone()))?
-                    .clone();
+                    .ok_or_else(|| CompilerError::UndefinedVariable(func_name.clone()))?;
+                let mut func_type = type_scheme.instantiate(&mut self.context);
 
                 // Apply function to each argument
                 for arg in args {
                     let _arg_type = self.infer_expression(arg)?;
 
                     match func_type {
-                        Type::Function(_param_ty, result_ty) => {
+                        Type::Constructed("->", args) if args.len() == 2 => {
+                            // Function type: arg -> result
                             // For simplified type checking, we'll accept any arguments
-                            // A full implementation would unify types properly
-                            func_type = *result_ty;
+                            func_type = args[1].clone();
                         }
-                        Type::Var(_) => {
+                        Type::Variable(_) => {
                             // If we have a type variable, assume it's a function that returns the built-in result
                             // This is a simplified approach for our demo
-                            func_type = Type::Array(
-                                Box::new(Type::Tuple(vec![Type::I32, Type::I32])),
-                                vec![1],
-                            );
+                            func_type = types::array(types::tuple(vec![types::i32(), types::i32()]));
                         }
                         _ => {
                             return Err(CompilerError::TypeError(format!(
@@ -273,20 +290,19 @@ impl TypeChecker {
                 let elem_types: Result<Vec<Type>> =
                     elements.iter().map(|e| self.infer_expression(e)).collect();
 
-                Ok(Type::Tuple(elem_types?))
+                Ok(types::tuple(elem_types?))
             }
             Expression::Lambda(lambda) => {
                 // Push new scope for lambda parameters
                 self.scope_stack.push_scope();
 
-                // Add parameters to scope with their types (or type variables)
+                // Add parameters to scope with their types (or fresh type variables)
                 for param in &lambda.params {
                     let param_type = param.ty.clone().unwrap_or_else(|| {
-                        let var = Type::Var(format!("param_{}", self.next_var));
-                        self.next_var += 1;
-                        var
+                        self.context.new_variable()  // Use polytype's context to create fresh variables
                     });
-                    self.scope_stack.insert(param.name.clone(), param_type);
+                    let type_scheme = TypeScheme::Monotype(param_type);
+                    self.scope_stack.insert(param.name.clone(), type_scheme);
                 }
 
                 // Type check the lambda body with parameters in scope
@@ -300,11 +316,9 @@ impl TypeChecker {
                 let mut func_type = return_type;
                 for param in lambda.params.iter().rev() {
                     let param_type = param.ty.clone().unwrap_or_else(|| {
-                        let var = Type::Var(format!("param_{}", self.next_var));
-                        self.next_var += 1;
-                        var
+                        self.context.new_variable()
                     });
-                    func_type = Type::Function(Box::new(param_type), Box::new(func_type));
+                    func_type = types::function(param_type, func_type);
                 }
 
                 Ok(func_type)
@@ -315,7 +329,9 @@ impl TypeChecker {
                 // For now, assume the function type matches the arguments
                 // In a full implementation, we'd check argument types against parameters
                 match func_type {
-                    Type::Function(_, return_type) => Ok(*return_type),
+                    Type::Constructed("->", args) if args.len() == 2 => {
+                        Ok(args[1].clone()) // Return the result type
+                    }
                     _ => Err(CompilerError::TypeError(
                         "Cannot apply non-function type".to_string(),
                     )),
@@ -324,34 +340,11 @@ impl TypeChecker {
         }
     }
 
-    fn fresh_var(&mut self) -> Type {
-        let var = format!("t{}", self.next_var);
-        self.next_var += 1;
-        Type::Var(var)
-    }
+    // Removed: fresh_var - now using polytype's context.new_variable()
 
-    fn types_match(&self, t1: &Type, t2: &Type) -> bool {
-        match (t1, t2) {
-            (Type::I32, Type::I32) => true,
-            (Type::F32, Type::F32) => true,
-            (Type::Vec4F32, Type::Vec4F32) => true,
-            (Type::Array(elem1, dims1), Type::Array(elem2, dims2)) => {
-                dims1 == dims2 && self.types_match(elem1, elem2)
-            }
-            (Type::Tuple(types1), Type::Tuple(types2)) => {
-                types1.len() == types2.len()
-                    && types1
-                        .iter()
-                        .zip(types2.iter())
-                        .all(|(t1, t2)| self.types_match(t1, t2))
-            }
-            (Type::Function(arg1, ret1), Type::Function(arg2, ret2)) => {
-                self.types_match(arg1, arg2) && self.types_match(ret1, ret2)
-            }
-            (Type::Var(_), _) => true, // Type variables match anything for now
-            (_, Type::Var(_)) => true,
-            _ => false,
-        }
+    fn types_match(&mut self, t1: &Type, t2: &Type) -> bool {
+        // Use polytype's unification for proper type matching
+        self.context.unify(t1, t2).is_ok()
     }
 }
 

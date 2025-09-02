@@ -1,3 +1,4 @@
+pub use polytype::{Type, TypeScheme};
 pub use spirv;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,17 +69,7 @@ pub struct ValDecl {
     pub ty: Type,                 // The function type signature
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Type {
-    I32,
-    F32,
-    Vec4F32, // 4-component vector for SPIR-V gl_Position
-    Array(Box<Type>, Vec<usize>),
-    Tuple(Vec<Type>),
-    Var(String),                    // Type variable for inference
-    Function(Box<Type>, Box<Type>), // Function type: arg -> result
-    SizeVar(String),                // Size variable for array dimensions
-}
+// We now use polytype::Type instead of our own Type enum
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
@@ -113,18 +104,31 @@ pub enum BinaryOp {
     Add,
 }
 
-impl Type {
-    pub fn element_type(&self) -> Option<Type> {
-        match self {
-            Type::Array(elem_ty, _) => Some(elem_ty.as_ref().clone()),
-            _ => None,
-        }
+// Helper module for creating common polytype Types
+pub mod types {
+    use polytype::Type;
+
+    pub fn i32() -> Type {
+        Type::Constructed("int", vec![])
     }
 
-    pub fn dimensions(&self) -> Vec<usize> {
-        match self {
-            Type::Array(_, dims) => dims.clone(),
-            _ => vec![],
-        }
+    pub fn f32() -> Type {
+        Type::Constructed("float", vec![])
+    }
+
+    pub fn vec4f32() -> Type {
+        Type::Constructed("vec4f32", vec![])
+    }
+
+    pub fn array(elem_type: Type) -> Type {
+        Type::Constructed("array", vec![elem_type])
+    }
+
+    pub fn tuple(types: Vec<Type>) -> Type {
+        Type::Constructed("tuple", types)
+    }
+
+    pub fn function(arg: Type, ret: Type) -> Type {
+        Type::arrow(arg, ret)
     }
 }

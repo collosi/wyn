@@ -1,6 +1,7 @@
 use crate::ast::*;
 use crate::error::{CompilerError, Result};
 use crate::scope::ScopeStack;
+use polytype::Type;
 use std::collections::{HashMap, HashSet};
 
 /// Static values for defunctionalization, as described in the Futhark paper
@@ -124,10 +125,10 @@ impl Defunctionalizer {
     fn defunctionalize_expression(&mut self, expr: &Expression, scope_stack: &mut ScopeStack<StaticValue>) -> Result<(Expression, StaticValue)> {
         match expr {
             Expression::IntLiteral(n) => {
-                Ok((Expression::IntLiteral(*n), StaticValue::Dyn(Type::I32)))
+                Ok((Expression::IntLiteral(*n), StaticValue::Dyn(types::i32())))
             }
             Expression::FloatLiteral(f) => {
-                Ok((Expression::FloatLiteral(*f), StaticValue::Dyn(Type::F32)))
+                Ok((Expression::FloatLiteral(*f), StaticValue::Dyn(types::f32())))
             }
             Expression::Identifier(name) => {
                 if let Some(sv) = scope_stack.lookup(name) {
@@ -150,8 +151,8 @@ impl Defunctionalizer {
                         }
                     }
                 } else {
-                    // Unknown variable - assume dynamic
-                    Ok((Expression::Identifier(name.clone()), StaticValue::Dyn(Type::Var("unknown".to_string()))))
+                    // Unknown variable - assume dynamic with type variable
+                    Ok((Expression::Identifier(name.clone()), StaticValue::Dyn(polytype::Type::Variable(0))))
                 }
             }
             Expression::Lambda(lambda) => {
@@ -174,7 +175,7 @@ impl Defunctionalizer {
                     }
                 }
                 
-                let array_sv = StaticValue::Arr(Box::new(element_sv.unwrap_or(StaticValue::Dyn(Type::I32))));
+                let array_sv = StaticValue::Arr(Box::new(element_sv.unwrap_or(StaticValue::Dyn(types::i32()))));
                 Ok((Expression::ArrayLiteral(transformed_elements), array_sv))
             }
             Expression::ArrayIndex(array, index) => {
@@ -184,7 +185,7 @@ impl Defunctionalizer {
                 // Result type depends on array element type - for now, assume dynamic
                 Ok((
                     Expression::ArrayIndex(Box::new(transformed_array), Box::new(transformed_index)),
-                    StaticValue::Dyn(Type::Var("element".to_string()))
+                    StaticValue::Dyn(polytype::Type::Variable(1))
                 ))
             }
             Expression::BinaryOp(op, left, right) => {
@@ -192,8 +193,8 @@ impl Defunctionalizer {
                 let (transformed_right, _right_sv) = self.defunctionalize_expression(right, scope_stack)?;
                 
                 let result_type = match op {
-                    BinaryOp::Divide => Type::F32, // Division typically results in float
-                    BinaryOp::Add => Type::I32,    // Addition can be int or float, assume int for now
+                    BinaryOp::Divide => types::f32(), // Division typically results in float
+                    BinaryOp::Add => types::i32(),    // Addition can be int or float, assume int for now
                 };
                 
                 Ok((
@@ -211,7 +212,7 @@ impl Defunctionalizer {
                 
                 Ok((
                     Expression::FunctionCall(name.clone(), transformed_args),
-                    StaticValue::Dyn(Type::Var("result".to_string()))
+                    StaticValue::Dyn(polytype::Type::Variable(2))
                 ))
             }
             Expression::Tuple(elements) => {
@@ -225,14 +226,14 @@ impl Defunctionalizer {
                     // Extract type from static value
                     let elem_type = match sv {
                         StaticValue::Dyn(ty) => ty,
-                        _ => Type::Var("tuple_elem".to_string()),
+                        _ => polytype::Type::Variable(3),
                     };
                     element_types.push(elem_type);
                 }
                 
                 Ok((
                     Expression::Tuple(transformed_elements),
-                    StaticValue::Dyn(Type::Tuple(element_types))
+                    StaticValue::Dyn(types::tuple(element_types))
                 ))
             }
         }
@@ -258,14 +259,14 @@ impl Defunctionalizer {
         let mut func_params = vec![Parameter {
             attributes: vec![],
             name: "__closure".to_string(),
-            ty: Type::Var("closure".to_string()), // Will be refined later
+            ty: polytype::Type::Variable(4), // Will be refined later
         }];
         
         for param in &lambda.params {
             func_params.push(Parameter {
                 attributes: vec![],
                 name: param.name.clone(),
-                ty: param.ty.clone().unwrap_or(Type::Var("param".to_string())),
+                ty: param.ty.clone().unwrap_or(polytype::Type::Variable(5)),
             });
         }
         
@@ -273,7 +274,7 @@ impl Defunctionalizer {
         scope_stack.push_scope();
         for param in &lambda.params {
             scope_stack.insert(param.name.clone(), StaticValue::Dyn(
-                param.ty.clone().unwrap_or(Type::Var("param".to_string()))
+                param.ty.clone().unwrap_or(polytype::Type::Variable(6))
             ));
         }
         
@@ -283,7 +284,7 @@ impl Defunctionalizer {
         scope_stack.pop_scope();
         
         // Create the generated function
-        let return_type = lambda.return_type.clone().unwrap_or(Type::Var("return".to_string()));
+        let return_type = lambda.return_type.clone().unwrap_or(polytype::Type::Variable(7));
         let generated_func = DefunctionalizedFunction {
             name: func_name.clone(),
             params: func_params,
@@ -328,7 +329,7 @@ impl Defunctionalizer {
                         // Function call without closure
                         Ok((
                             Expression::FunctionCall(func_name, transformed_args),
-                            StaticValue::Dyn(Type::Var("result".to_string()))
+                            StaticValue::Dyn(polytype::Type::Variable(2))
                         ))
                     }
                     _ => {
@@ -352,7 +353,7 @@ impl Defunctionalizer {
                     Expression::Identifier(func_name) => {
                         Ok((
                             Expression::FunctionCall(func_name, transformed_args),
-                            StaticValue::Dyn(Type::Var("result".to_string()))
+                            StaticValue::Dyn(polytype::Type::Variable(2))
                         ))
                     }
                     _ => {

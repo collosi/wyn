@@ -263,7 +263,7 @@ impl Parser {
             // We'll need to add Arrow token
             self.advance();
             let right = self.parse_array_or_base_type()?;
-            left = Type::Function(Box::new(left), Box::new(right));
+            left = types::function(left, right);
         }
 
         Ok(left)
@@ -280,7 +280,7 @@ impl Parser {
                 self.advance();
                 self.expect(Token::RightBracket)?;
                 let elem_type = self.parse_array_or_base_type()?; // Allow nested arrays
-                Ok(Type::Array(Box::new(elem_type), vec![n]))
+                Ok(types::array(elem_type))
             } else {
                 // Size variable like 'n'
                 let _size_var = self.expect_identifier()?;
@@ -288,7 +288,7 @@ impl Parser {
                 let elem_type = self.parse_array_or_base_type()?; // Allow nested arrays
                                                                   // For now, we'll represent size variables as arrays with size 0 as a placeholder
                                                                   // In a proper implementation, we'd need to track size variables differently
-                Ok(Type::Array(Box::new(elem_type), vec![0])) // placeholder for size variables
+                Ok(types::array(elem_type)) // simplified: ignore size variables for now
             }
         } else {
             self.parse_base_type()
@@ -299,29 +299,31 @@ impl Parser {
         match self.peek() {
             Some(Token::I32Type) => {
                 self.advance();
-                Ok(Type::I32)
+                Ok(types::i32())
             }
             Some(Token::F32Type) => {
                 self.advance();
-                Ok(Type::F32)
+                Ok(types::f32())
             }
             Some(Token::Vec4F32Type) => {
                 self.advance();
-                Ok(Type::Vec4F32)
+                Ok(types::vec4f32())
             }
             Some(Token::Identifier(name)) if name.starts_with('\'') => {
                 // Type variable like 't1, 't2
                 let type_var = self.parse_type_variable()?;
-                Ok(Type::Var(type_var))
+                // For now, create a simple variable ID from the hash of the variable name
+                let var_id = type_var.chars().map(|c| c as usize).sum::<usize>();
+                Ok(polytype::Type::Variable(var_id))
             }
             Some(Token::LeftParen) => {
                 // Tuple type (T1, T2, T3)
                 self.advance(); // consume '('
-                let mut types = Vec::new();
+                let mut tuple_types = Vec::new();
 
                 if !self.check(&Token::RightParen) {
                     loop {
-                        types.push(self.parse_type()?);
+                        tuple_types.push(self.parse_type()?);
                         if !self.check(&Token::Comma) {
                             break;
                         }
@@ -330,7 +332,7 @@ impl Parser {
                 }
 
                 self.expect(Token::RightParen)?;
-                Ok(Type::Tuple(types))
+                Ok(types::tuple(tuple_types))
             }
             _ => Err(CompilerError::ParseError("Expected type".to_string())),
         }

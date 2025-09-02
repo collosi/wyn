@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::error::{CompilerError, Result};
+use polytype::Type;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
@@ -279,7 +280,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .clone();
 
                 let element_type = match &array_type {
-                    Type::Array(elem_ty, _dims) => elem_ty.as_ref().clone(),
+                    Type::Constructed(name, args) if *name == "array" => {
+                        args.first().cloned().unwrap_or_else(|| types::i32())
+                    }
                     _ => {
                         return Err(CompilerError::SpirvError(
                             "Cannot index non-array type".to_string(),
@@ -399,7 +402,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         elements: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>> {
         match ty {
-            Type::Array(elem_ty, _dims) => {
+            Type::Constructed(name, args) if *name == "array" => {
+                let elem_ty = args.first().ok_or_else(|| {
+                    CompilerError::SpirvError("Array type missing element type".to_string())
+                })?;
                 let mut const_values = Vec::new();
 
                 for elem in elements {
@@ -537,38 +543,47 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
 
         let llvm_type = match ty {
-            Type::I32 => BasicTypeEnum::IntType(self.context.i32_type()),
-            Type::F32 => BasicTypeEnum::FloatType(self.context.f32_type()),
-            Type::Vec4F32 => {
-                let f32_type = self.context.f32_type();
-                BasicTypeEnum::VectorType(f32_type.vec_type(4))
-            }
-            Type::Array(elem_ty, dims) => {
-                let elem_type = self.get_or_create_type(elem_ty)?;
-
-                // Build multi-dimensional arrays from innermost to outermost
-                let mut current_type = elem_type;
-                for dim in dims.iter().rev() {
-                    current_type = match current_type {
-                        BasicTypeEnum::ArrayType(arr) => arr.array_type(*dim as u32).into(),
-                        BasicTypeEnum::FloatType(float) => float.array_type(*dim as u32).into(),
-                        BasicTypeEnum::IntType(int) => int.array_type(*dim as u32).into(),
-                        BasicTypeEnum::VectorType(vec) => vec.array_type(*dim as u32).into(),
-                        _ => {
-                            return Err(CompilerError::SpirvError(
-                                "Unsupported array element type".to_string(),
-                            ))
+            Type::Constructed(name, args) => {
+                match *name {
+                    "int" => BasicTypeEnum::IntType(self.context.i32_type()),
+                    "float" => BasicTypeEnum::FloatType(self.context.f32_type()),
+                    "vec4f32" => {
+                        let f32_type = self.context.f32_type();
+                        BasicTypeEnum::VectorType(f32_type.vec_type(4))
+                    }
+                    "array" => {
+                        let elem_ty = args.first().ok_or_else(|| {
+                            CompilerError::SpirvError("Array type missing element type".to_string())
+                        })?;
+                        let elem_type = self.get_or_create_type(elem_ty)?;
+                        
+                        // For now, create single-dimensional arrays with default size
+                        match elem_type {
+                            BasicTypeEnum::ArrayType(arr) => arr.array_type(1).into(),
+                            BasicTypeEnum::FloatType(float) => float.array_type(1).into(),
+                            BasicTypeEnum::IntType(int) => int.array_type(1).into(),
+                            BasicTypeEnum::VectorType(vec) => vec.array_type(1).into(),
+                            _ => {
+                                return Err(CompilerError::SpirvError(
+                                    "Unsupported array element type".to_string(),
+                                ))
+                            }
                         }
-                    };
+                    }
+                    "tuple" => {
+                        return Err(CompilerError::SpirvError(
+                            "Tuple types not supported in LLVM generation".to_string(),
+                        ));
+                    }
+                    _ => {
+                        return Err(CompilerError::SpirvError(format!(
+                            "Unknown type constructor: {}",
+                            name
+                        )));
+                    }
                 }
-                current_type
             }
-            Type::Tuple(_) => {
-                return Err(CompilerError::SpirvError(
-                    "Tuple types not supported in LLVM generation".to_string(),
-                ));
-            }
-            Type::Var(_) | Type::Function(_, _) | Type::SizeVar(_) => {
+            _ => {
                 return Err(CompilerError::SpirvError(format!(
                     "Type {:?} not supported in LLVM generation",
                     ty
