@@ -316,23 +316,54 @@ impl<'ctx> CodeGenerator<'ctx> {
             Expression::ArrayLiteral(_) => Err(CompilerError::SpirvError(
                 "Array literals only supported in let declarations".to_string(),
             )),
-            Expression::BinaryOp(BinaryOp::Divide, left, right) => {
+            Expression::BinaryOp(op, left, right) => {
                 let left_val = self.generate_expression(left)?;
                 let right_val = self.generate_expression(right)?;
 
-                // Assuming float division
-                let result = self
-                    .builder
-                    .build_float_div(
-                        left_val.into_float_value(),
-                        right_val.into_float_value(),
-                        "div",
-                    )
-                    .map_err(|e| {
-                        CompilerError::SpirvError(format!("Failed to build division: {}", e))
-                    })?;
-
-                Ok(result.into())
+                match op {
+                    BinaryOp::Divide => {
+                        // Assuming float division
+                        let result = self
+                            .builder
+                            .build_float_div(
+                                left_val.into_float_value(),
+                                right_val.into_float_value(),
+                                "div",
+                            )
+                            .map_err(|e| {
+                                CompilerError::SpirvError(format!("Failed to build division: {}", e))
+                            })?;
+                        Ok(result.into())
+                    }
+                    BinaryOp::Add => {
+                        // Check the type of the operands to determine whether to use int or float addition
+                        match (left_val, right_val) {
+                            (BasicValueEnum::IntValue(left_int), BasicValueEnum::IntValue(right_int)) => {
+                                let result = self
+                                    .builder
+                                    .build_int_add(left_int, right_int, "add")
+                                    .map_err(|e| {
+                                        CompilerError::SpirvError(format!("Failed to build int addition: {}", e))
+                                    })?;
+                                Ok(result.into())
+                            }
+                            (BasicValueEnum::FloatValue(left_float), BasicValueEnum::FloatValue(right_float)) => {
+                                let result = self
+                                    .builder
+                                    .build_float_add(left_float, right_float, "add")
+                                    .map_err(|e| {
+                                        CompilerError::SpirvError(format!("Failed to build float addition: {}", e))
+                                    })?;
+                                Ok(result.into())
+                            }
+                            _ => {
+                                return Err(CompilerError::SpirvError(
+                                    "Type mismatch in addition: operands must be both int or both float".to_string()
+                                ));
+                            }
+                        }
+                    }
+                }
             }
             Expression::FunctionCall(func_name, args) => match func_name.as_str() {
                 "to_vec4_f32" => {
@@ -352,6 +383,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             },
             Expression::Tuple(_) => Err(CompilerError::SpirvError(
                 "Tuples not supported in LLVM generation".to_string(),
+            )),
+            Expression::Lambda(_) => Err(CompilerError::SpirvError(
+                "Lambda expressions require defunctionalization before LLVM generation".to_string(),
+            )),
+            Expression::Application(_, _) => Err(CompilerError::SpirvError(
+                "Function applications require defunctionalization before LLVM generation".to_string(),
             )),
         }
     }

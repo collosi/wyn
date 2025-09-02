@@ -90,11 +90,27 @@ pub enum Expression {
     BinaryOp(BinaryOp, Box<Expression>, Box<Expression>),
     FunctionCall(String, Vec<Expression>),
     Tuple(Vec<Expression>),
+    Lambda(LambdaExpr),
+    Application(Box<Expression>, Vec<Expression>), // Function application
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct LambdaParam {
+    pub name: String,
+    pub ty: Option<Type>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LambdaExpr {
+    pub params: Vec<LambdaParam>,
+    pub return_type: Option<Type>,
+    pub body: Box<Expression>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BinaryOp {
     Divide,
+    Add,
 }
 
 impl Type {

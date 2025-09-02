@@ -29,7 +29,9 @@ pub enum Token {
     // Operators
     Assign,
     Divide,
+    Add,
     Arrow,
+    Backslash, // \ for lambda expressions
 
     // Delimiters
     LeftParen,
@@ -116,6 +118,8 @@ fn parse_operator(input: &str) -> IResult<&str, Token> {
         value(Token::Arrow, tag("->")),
         value(Token::Assign, tag("=")),
         value(Token::Divide, tag("/")),
+        value(Token::Add, char('+')),
+        value(Token::Backslash, char('\\')),
     ))(input)
 }
 

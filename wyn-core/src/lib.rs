@@ -1,9 +1,11 @@
 pub mod ast;
 pub mod codegen;
+pub mod defunctionalization;
 pub mod error;
 pub mod inference;
 pub mod lexer;
 pub mod parser;
+pub mod scope;
 pub mod type_checker;
 
 #[cfg(test)]
@@ -32,9 +34,13 @@ impl Compiler {
         let mut type_checker = type_checker::TypeChecker::new();
         type_checker.check_program(&program)?;
 
+        // Defunctionalization (convert higher-order functions to first-order)
+        let mut defunctionalizer = defunctionalization::Defunctionalizer::new();
+        let defunctionalized_program = defunctionalizer.defunctionalize_program(&program)?;
+
         // Generate SPIR-V using LLVM/Inkwell
         let context = Context::create();
         let codegen = codegen::CodeGenerator::new(&context, "wyn_module");
-        codegen.generate(&program)
+        codegen.generate(&defunctionalized_program)
     }
 }

@@ -343,10 +343,15 @@ impl Parser {
     fn parse_binary_expression(&mut self) -> Result<Expression> {
         let mut left = self.parse_postfix_expression()?;
 
-        while let Some(Token::Divide) = self.peek() {
+        while let Some(token) = self.peek() {
+            let op = match token {
+                Token::Divide => BinaryOp::Divide,
+                Token::Add => BinaryOp::Add,
+                _ => break,
+            };
             self.advance();
             let right = self.parse_postfix_expression()?;
-            left = Expression::BinaryOp(BinaryOp::Divide, Box::new(left), Box::new(right));
+            left = Expression::BinaryOp(op, Box::new(left), Box::new(right));
         }
 
         Ok(left)
@@ -355,11 +360,35 @@ impl Parser {
     fn parse_postfix_expression(&mut self) -> Result<Expression> {
         let mut expr = self.parse_primary_expression()?;
 
-        while let Some(Token::LeftBracket) = self.peek() {
-            self.advance();
-            let index = self.parse_expression()?;
-            self.expect(Token::RightBracket)?;
-            expr = Expression::ArrayIndex(Box::new(expr), Box::new(index));
+        loop {
+            match self.peek() {
+                Some(Token::LeftBracket) => {
+                    // Array indexing
+                    self.advance();
+                    let index = self.parse_expression()?;
+                    self.expect(Token::RightBracket)?;
+                    expr = Expression::ArrayIndex(Box::new(expr), Box::new(index));
+                }
+                Some(Token::LeftParen) => {
+                    // Function application with parentheses: f(arg1, arg2)
+                    self.advance();
+                    let mut args = Vec::new();
+                    
+                    if !self.check(&Token::RightParen) {
+                        loop {
+                            args.push(self.parse_expression()?);
+                            if !self.check(&Token::Comma) {
+                                break;
+                            }
+                            self.advance();
+                        }
+                    }
+                    
+                    self.expect(Token::RightParen)?;
+                    expr = Expression::Application(Box::new(expr), args);
+                }
+                _ => break,
+            }
         }
 
         Ok(expr)
@@ -390,6 +419,7 @@ impl Parser {
                     && !matches!(
                         self.peek(),
                         Some(Token::Divide)
+                            | Some(Token::Add)
                             | Some(Token::Comma)
                             | Some(Token::RightBracket)
                             | Some(Token::RightParen)
@@ -420,6 +450,7 @@ impl Parser {
                 }
             }
             Some(Token::LeftBracket) => self.parse_array_literal(),
+            Some(Token::Backslash) => self.parse_lambda(),
             _ => Err(CompilerError::ParseError("Expected expression".to_string())),
         }
     }
@@ -440,6 +471,54 @@ impl Parser {
 
         self.expect(Token::RightBracket)?;
         Ok(Expression::ArrayLiteral(elements))
+    }
+
+    fn parse_lambda(&mut self) -> Result<Expression> {
+        self.expect(Token::Backslash)?;
+        
+        // Parse parameter list: \x y z: t -> e (Futhark syntax)
+        // Parameters are untyped, optional return type after all params
+        let mut params = Vec::new();
+        
+        // Parse parameters (identifiers only)
+        while let Some(Token::Identifier(name)) = self.peek() {
+            let param_name = name.clone();
+            self.advance();
+            
+            params.push(LambdaParam {
+                name: param_name,
+                ty: None, // Parameters are untyped in Futhark lambdas
+            });
+            
+            // If we see a colon or arrow, we're done with parameters
+            if self.check(&Token::Colon) || self.check(&Token::Arrow) {
+                break;
+            }
+        }
+        
+        if params.is_empty() {
+            return Err(CompilerError::ParseError("Lambda must have at least one parameter".to_string()));
+        }
+        
+        // Parse optional return type annotation: \x y z: t ->
+        let return_type = if self.check(&Token::Colon) {
+            self.advance(); // consume ':'
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        
+        // Parse arrow
+        self.expect(Token::Arrow)?;
+        
+        // Parse body expression
+        let body = Box::new(self.parse_expression()?);
+        
+        Ok(Expression::Lambda(LambdaExpr {
+            params,
+            return_type,
+            body,
+        }))
     }
 
     // Helper methods
@@ -756,6 +835,123 @@ mod tests {
                 );
             }
             _ => panic!("Expected Entry declaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_simple_lambda() {
+        let input = r#"let f: i32 -> i32 = \x -> x"#;
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        assert_eq!(program.declarations.len(), 1);
+        match &program.declarations[0] {
+            Declaration::Let(decl) => {
+                assert_eq!(decl.name, "f");
+                match &decl.value {
+                    Expression::Lambda(lambda) => {
+                        assert_eq!(lambda.params.len(), 1);
+                        assert_eq!(lambda.params[0].name, "x");
+                        assert_eq!(lambda.params[0].ty, None);
+                        assert_eq!(lambda.return_type, None);
+                        match lambda.body.as_ref() {
+                            Expression::Identifier(name) => assert_eq!(name, "x"),
+                            _ => panic!("Expected identifier in lambda body"),
+                        }
+                    }
+                    _ => panic!("Expected lambda expression"),
+                }
+            }
+            _ => panic!("Expected Let declaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_lambda_with_type_annotation() {
+        let input = r#"let f: f32 -> f32 = \x -> x"#;
+        let tokens = tokenize(input).expect("Failed to tokenize");
+        println!("Tokens: {:?}", tokens);
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().expect("Failed to parse");
+
+        assert_eq!(program.declarations.len(), 1);
+        match &program.declarations[0] {
+            Declaration::Let(decl) => {
+                match &decl.value {
+                    Expression::Lambda(lambda) => {
+                        assert_eq!(lambda.params.len(), 1);
+                        assert_eq!(lambda.params[0].name, "x");
+                        assert_eq!(lambda.params[0].ty, None); // Parameters are untyped
+                        assert_eq!(lambda.return_type, None); // No return type annotation in lambda
+                        match lambda.body.as_ref() {
+                            Expression::Identifier(name) => assert_eq!(name, "x"),
+                            _ => panic!("Expected identifier in lambda body"),
+                        }
+                    }
+                    _ => panic!("Expected lambda expression"),
+                }
+            }
+            _ => panic!("Expected Let declaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_lambda_with_multiple_params() {
+        let input = r#"let add: i32 -> i32 -> i32 = \x y -> x"#;
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        assert_eq!(program.declarations.len(), 1);
+        match &program.declarations[0] {
+            Declaration::Let(decl) => {
+                match &decl.value {
+                    Expression::Lambda(lambda) => {
+                        assert_eq!(lambda.params.len(), 2);
+                        assert_eq!(lambda.params[0].name, "x");
+                        assert_eq!(lambda.params[0].ty, None);
+                        assert_eq!(lambda.params[1].name, "y");
+                        assert_eq!(lambda.params[1].ty, None);
+                        assert_eq!(lambda.return_type, None);
+                    }
+                    _ => panic!("Expected lambda expression"),
+                }
+            }
+            _ => panic!("Expected Let declaration"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_application() {
+        let input = r#"let result: i32 = f(42, 24)"#;
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        assert_eq!(program.declarations.len(), 1);
+        match &program.declarations[0] {
+            Declaration::Let(decl) => {
+                match &decl.value {
+                    Expression::Application(func, args) => {
+                        match func.as_ref() {
+                            Expression::Identifier(name) => assert_eq!(name, "f"),
+                            _ => panic!("Expected function identifier"),
+                        }
+                        assert_eq!(args.len(), 2);
+                        match &args[0] {
+                            Expression::IntLiteral(n) => assert_eq!(*n, 42),
+                            _ => panic!("Expected int literal"),
+                        }
+                        match &args[1] {
+                            Expression::IntLiteral(n) => assert_eq!(*n, 24),
+                            _ => panic!("Expected int literal"),
+                        }
+                    }
+                    _ => panic!("Expected function application"),
+                }
+            }
+            _ => panic!("Expected Let declaration"),
         }
     }
 }

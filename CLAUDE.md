@@ -10,22 +10,22 @@ Wyn is a minimal compiler for a Futhark-like language that generates SPIR-V code
 
 Build the project:
 ```bash
-cargo build
+LLVM_SYS_180_PREFIX=/usr/local/opt/llvm@18 cargo build
 ```
 
 Run tests:
 ```bash
-cargo test
+LLVM_SYS_180_PREFIX=/usr/local/opt/llvm@18 cargo test
 ```
 
 Compile a Wyn source file:
 ```bash
-cargo run --bin wyn -- compile test.wyn -o test.spv
+LLVM_SYS_180_PREFIX=/usr/local/opt/llvm@18 cargo run --bin wyn -- compile test.wyn -o test.spv
 ```
 
 Check a source file without generating output:
 ```bash
-cargo run --bin wyn -- check test.wyn
+LLVM_SYS_180_PREFIX=/usr/local/opt/llvm@18 cargo run --bin wyn -- check test.wyn
 ```
 
 ## Architecture
