@@ -63,9 +63,9 @@ pub struct DefDecl {
 pub struct ValDecl {
     pub attributes: Vec<Attribute>,
     pub name: String,
-    pub size_params: Vec<String>,    // Size parameters: [n], [m]
-    pub type_params: Vec<String>,    // Type parameters: 'a, 'b
-    pub ty: Type,                    // The function type signature
+    pub size_params: Vec<String>, // Size parameters: [n], [m]
+    pub type_params: Vec<String>, // Type parameters: 'a, 'b
+    pub ty: Type,                 // The function type signature
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -75,9 +75,9 @@ pub enum Type {
     Vec4F32, // 4-component vector for SPIR-V gl_Position
     Array(Box<Type>, Vec<usize>),
     Tuple(Vec<Type>),
-    Var(String), // Type variable for inference
+    Var(String),                    // Type variable for inference
     Function(Box<Type>, Box<Type>), // Function type: arg -> result
-    SizeVar(String), // Size variable for array dimensions
+    SizeVar(String),                // Size variable for array dimensions
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -104,7 +104,7 @@ impl Type {
             _ => None,
         }
     }
-    
+
     pub fn dimensions(&self) -> Vec<usize> {
         match self {
             Type::Array(_, dims) => dims.clone(),

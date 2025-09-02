@@ -15,22 +15,22 @@ pub enum Token {
     Entry,
     Def,
     Val,
-    
+
     // Identifiers and literals
     Identifier(String),
     IntLiteral(i32),
     FloatLiteral(f32),
-    
+
     // Types
     I32Type,
     F32Type,
     Vec4F32Type,
-    
+
     // Operators
     Assign,
     Divide,
     Arrow,
-    
+
     // Delimiters
     LeftParen,
     RightParen,
@@ -38,19 +38,18 @@ pub enum Token {
     RightBracket,
     Colon,
     Comma,
-    
+
     // Attributes
     AttributeStart, // #[
-    
+
     // Comments (to be skipped)
     Comment(String),
 }
 
 fn parse_comment(input: &str) -> IResult<&str, Token> {
-    map(
-        preceded(tag("--"), take_until("\n")),
-        |s: &str| Token::Comment(s.to_string()),
-    )(input)
+    map(preceded(tag("--"), take_until("\n")), |s: &str| {
+        Token::Comment(s.to_string())
+    })(input)
 }
 
 fn parse_keyword(input: &str) -> IResult<&str, Token> {
@@ -107,10 +106,9 @@ fn parse_float_literal(input: &str) -> IResult<&str, Token> {
 }
 
 fn parse_int_literal(input: &str) -> IResult<&str, Token> {
-    map(
-        recognize(pair(opt(char('-')), digit1)),
-        |s: &str| Token::IntLiteral(s.parse().unwrap_or(0)),
-    )(input)
+    map(recognize(pair(opt(char('-')), digit1)), |s: &str| {
+        Token::IntLiteral(s.parse().unwrap_or(0))
+    })(input)
 }
 
 fn parse_operator(input: &str) -> IResult<&str, Token> {
@@ -153,14 +151,14 @@ fn parse_token(input: &str) -> IResult<&str, Token> {
 pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
     let mut remaining = input;
     let mut tokens = Vec::new();
-    
+
     while !remaining.is_empty() {
         // Skip leading whitespace
         if let Ok((rest, _)) = multispace1::<&str, nom::error::Error<&str>>(remaining) {
             remaining = rest;
             continue;
         }
-        
+
         match parse_token(remaining) {
             Ok((rest, token)) => {
                 // Skip comments
@@ -173,96 +171,114 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
             Err(e) => return Err(format!("Tokenization error: {:?}", e)),
         }
     }
-    
+
     Ok(tokens)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_tokenize_keywords() {
         let input = "let entry";
         let tokens = tokenize(input).unwrap();
         assert_eq!(tokens, vec![Token::Let, Token::Entry]);
     }
-    
+
     #[test]
     fn test_tokenize_types() {
         let input = "i32 f32";
         let tokens = tokenize(input).unwrap();
         assert_eq!(tokens, vec![Token::I32Type, Token::F32Type]);
     }
-    
+
     #[test]
     fn test_tokenize_identifiers() {
         let input = "vertex_main SKY_RGBA verts";
         let tokens = tokenize(input).unwrap();
-        assert_eq!(tokens, vec![
-            Token::Identifier("vertex_main".to_string()),
-            Token::Identifier("SKY_RGBA".to_string()),
-            Token::Identifier("verts".to_string()),
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("vertex_main".to_string()),
+                Token::Identifier("SKY_RGBA".to_string()),
+                Token::Identifier("verts".to_string()),
+            ]
+        );
     }
-    
+
     #[test]
     fn test_tokenize_literals() {
         let input = "-1.0f32 42 3.14f32";
         let tokens = tokenize(input).unwrap();
-        assert_eq!(tokens, vec![
-            Token::FloatLiteral(-1.0),
-            Token::IntLiteral(42),
-            Token::FloatLiteral(3.14),
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::FloatLiteral(-1.0),
+                Token::IntLiteral(42),
+                Token::FloatLiteral(3.14),
+            ]
+        );
     }
-    
+
     #[test]
     fn test_tokenize_with_comments() {
         let input = "-- This is a comment\nlet x = 42";
         let tokens = tokenize(input).unwrap();
-        assert_eq!(tokens, vec![
-            Token::Let,
-            Token::Identifier("x".to_string()),
-            Token::Assign,
-            Token::IntLiteral(42),
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Let,
+                Token::Identifier("x".to_string()),
+                Token::Assign,
+                Token::IntLiteral(42),
+            ]
+        );
     }
-    
+
     #[test]
     fn test_tokenize_array_syntax() {
         let input = "[3][4]f32";
         let tokens = tokenize(input).unwrap();
-        assert_eq!(tokens, vec![
-            Token::LeftBracket,
-            Token::IntLiteral(3),
-            Token::RightBracket,
-            Token::LeftBracket,
-            Token::IntLiteral(4),
-            Token::RightBracket,
-            Token::F32Type,
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::LeftBracket,
+                Token::IntLiteral(3),
+                Token::RightBracket,
+                Token::LeftBracket,
+                Token::IntLiteral(4),
+                Token::RightBracket,
+                Token::F32Type,
+            ]
+        );
     }
-    
+
     #[test]
     fn test_tokenize_division() {
         let input = "135f32/255f32";
         let tokens = tokenize(input).unwrap();
-        assert_eq!(tokens, vec![
-            Token::FloatLiteral(135.0),
-            Token::Divide,
-            Token::FloatLiteral(255.0),
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::FloatLiteral(135.0),
+                Token::Divide,
+                Token::FloatLiteral(255.0),
+            ]
+        );
     }
-    
+
     #[test]
     fn test_tokenize_attributes() {
         let input = "#[vertex]";
         let tokens = tokenize(input).unwrap();
-        assert_eq!(tokens, vec![
-            Token::AttributeStart,
-            Token::Identifier("vertex".to_string()),
-            Token::RightBracket,
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::AttributeStart,
+                Token::Identifier("vertex".to_string()),
+                Token::RightBracket,
+            ]
+        );
     }
 }
