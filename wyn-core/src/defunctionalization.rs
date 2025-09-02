@@ -7,10 +7,10 @@ use std::collections::{HashMap, HashSet};
 /// Static values for defunctionalization, as described in the Futhark paper
 #[derive(Debug, Clone, PartialEq)]
 pub enum StaticValue {
-    Dyn(Type),                                // Dynamic value with type
-    Lam(String, Expression, Environment),    // Lambda: param name, body, environment
-    Rcd(HashMap<String, StaticValue>),       // Record of static values
-    Arr(Box<StaticValue>),                   // Array of static values
+    Dyn(Type),                            // Dynamic value with type
+    Lam(String, Expression, Environment), // Lambda: param name, body, environment
+    Rcd(HashMap<String, StaticValue>),    // Record of static values
+    Arr(Box<StaticValue>),                // Array of static values
 }
 
 /// Translation environment mapping variables to static values
@@ -29,7 +29,12 @@ pub struct DefunctionalizedFunction {
 pub struct Defunctionalizer {
     next_function_id: usize,
     generated_functions: Vec<DefunctionalizedFunction>,
-    closure_types: HashMap<String, Type>, // Maps closure constructor names to their types
+}
+
+impl Default for Defunctionalizer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Defunctionalizer {
@@ -37,23 +42,24 @@ impl Defunctionalizer {
         Defunctionalizer {
             next_function_id: 0,
             generated_functions: Vec::new(),
-            closure_types: HashMap::new(),
         }
     }
-    
+
     pub fn defunctionalize_program(&mut self, program: &Program) -> Result<Program> {
         let mut new_declarations = Vec::new();
         let mut scope_stack = ScopeStack::new();
-        
+
         // First pass: collect all declarations and transform them
         for decl in &program.declarations {
             match decl {
                 Declaration::Let(let_decl) => {
-                    let (transformed_decl, _sv) = self.defunctionalize_let_decl(let_decl, &mut scope_stack)?;
+                    let (transformed_decl, _sv) =
+                        self.defunctionalize_let_decl(let_decl, &mut scope_stack)?;
                     new_declarations.push(transformed_decl);
                 }
                 Declaration::Entry(entry_decl) => {
-                    let transformed_decl = self.defunctionalize_entry_decl(entry_decl, &mut scope_stack)?;
+                    let transformed_decl =
+                        self.defunctionalize_entry_decl(entry_decl, &mut scope_stack)?;
                     new_declarations.push(transformed_decl);
                 }
                 Declaration::Def(def_decl) => {
@@ -66,7 +72,7 @@ impl Defunctionalizer {
                 }
             }
         }
-        
+
         // Add generated functions as def declarations
         for func in &self.generated_functions {
             new_declarations.push(Declaration::Def(DefDecl {
@@ -76,43 +82,51 @@ impl Defunctionalizer {
                 body: func.body.clone(),
             }));
         }
-        
+
         Ok(Program {
             declarations: new_declarations,
         })
     }
-    
-    fn defunctionalize_let_decl(&mut self, decl: &LetDecl, scope_stack: &mut ScopeStack<StaticValue>) -> Result<(Declaration, StaticValue)> {
+
+    fn defunctionalize_let_decl(
+        &mut self,
+        decl: &LetDecl,
+        scope_stack: &mut ScopeStack<StaticValue>,
+    ) -> Result<(Declaration, StaticValue)> {
         let (transformed_expr, sv) = self.defunctionalize_expression(&decl.value, scope_stack)?;
-        
+
         // Add the let binding to the current scope
         scope_stack.insert(decl.name.clone(), sv.clone());
-        
+
         let transformed_decl = Declaration::Let(LetDecl {
             attributes: decl.attributes.clone(),
             name: decl.name.clone(),
             ty: decl.ty.clone(),
             value: transformed_expr,
         });
-        
+
         Ok((transformed_decl, sv))
     }
-    
-    fn defunctionalize_entry_decl(&mut self, decl: &EntryDecl, scope_stack: &mut ScopeStack<StaticValue>) -> Result<Declaration> {
+
+    fn defunctionalize_entry_decl(
+        &mut self,
+        decl: &EntryDecl,
+        scope_stack: &mut ScopeStack<StaticValue>,
+    ) -> Result<Declaration> {
         // Create a new scope for the entry point parameters
         scope_stack.push_scope();
-        
+
         // Add parameters to scope
         for param in &decl.params {
             scope_stack.insert(param.name.clone(), StaticValue::Dyn(param.ty.clone()));
         }
-        
+
         // Entry points should not contain higher-order functions after defunctionalization
         let (transformed_body, _sv) = self.defunctionalize_expression(&decl.body, scope_stack)?;
-        
+
         // Pop the parameter scope
         scope_stack.pop_scope();
-        
+
         Ok(Declaration::Entry(EntryDecl {
             attributes: decl.attributes.clone(),
             name: decl.name.clone(),
@@ -121,8 +135,12 @@ impl Defunctionalizer {
             body: transformed_body,
         }))
     }
-    
-    fn defunctionalize_expression(&mut self, expr: &Expression, scope_stack: &mut ScopeStack<StaticValue>) -> Result<(Expression, StaticValue)> {
+
+    fn defunctionalize_expression(
+        &mut self,
+        expr: &Expression,
+        scope_stack: &mut ScopeStack<StaticValue>,
+    ) -> Result<(Expression, StaticValue)> {
         match expr {
             Expression::IntLiteral(n) => {
                 Ok((Expression::IntLiteral(*n), StaticValue::Dyn(types::i32())))
@@ -152,77 +170,94 @@ impl Defunctionalizer {
                     }
                 } else {
                     // Unknown variable - assume dynamic with type variable
-                    Ok((Expression::Identifier(name.clone()), StaticValue::Dyn(polytype::Type::Variable(0))))
+                    Ok((
+                        Expression::Identifier(name.clone()),
+                        StaticValue::Dyn(polytype::Type::Variable(0)),
+                    ))
                 }
             }
-            Expression::Lambda(lambda) => {
-                self.defunctionalize_lambda(lambda, scope_stack)
-            }
+            Expression::Lambda(lambda) => self.defunctionalize_lambda(lambda, scope_stack),
             Expression::Application(func, args) => {
                 self.defunctionalize_application(func, args, scope_stack)
             }
             Expression::ArrayLiteral(elements) => {
                 let mut transformed_elements = Vec::new();
                 let mut element_sv = None;
-                
+
                 for elem in elements {
-                    let (transformed_elem, sv) = self.defunctionalize_expression(elem, scope_stack)?;
+                    let (transformed_elem, sv) =
+                        self.defunctionalize_expression(elem, scope_stack)?;
                     transformed_elements.push(transformed_elem);
-                    
+
                     // All elements should have the same static value structure
                     if element_sv.is_none() {
                         element_sv = Some(sv);
                     }
                 }
-                
-                let array_sv = StaticValue::Arr(Box::new(element_sv.unwrap_or(StaticValue::Dyn(types::i32()))));
+
+                let array_sv = StaticValue::Arr(Box::new(
+                    element_sv.unwrap_or(StaticValue::Dyn(types::i32())),
+                ));
                 Ok((Expression::ArrayLiteral(transformed_elements), array_sv))
             }
             Expression::ArrayIndex(array, index) => {
-                let (transformed_array, _array_sv) = self.defunctionalize_expression(array, scope_stack)?;
-                let (transformed_index, _index_sv) = self.defunctionalize_expression(index, scope_stack)?;
-                
+                let (transformed_array, _array_sv) =
+                    self.defunctionalize_expression(array, scope_stack)?;
+                let (transformed_index, _index_sv) =
+                    self.defunctionalize_expression(index, scope_stack)?;
+
                 // Result type depends on array element type - for now, assume dynamic
                 Ok((
-                    Expression::ArrayIndex(Box::new(transformed_array), Box::new(transformed_index)),
-                    StaticValue::Dyn(polytype::Type::Variable(1))
+                    Expression::ArrayIndex(
+                        Box::new(transformed_array),
+                        Box::new(transformed_index),
+                    ),
+                    StaticValue::Dyn(polytype::Type::Variable(1)),
                 ))
             }
             Expression::BinaryOp(op, left, right) => {
-                let (transformed_left, _left_sv) = self.defunctionalize_expression(left, scope_stack)?;
-                let (transformed_right, _right_sv) = self.defunctionalize_expression(right, scope_stack)?;
-                
+                let (transformed_left, _left_sv) =
+                    self.defunctionalize_expression(left, scope_stack)?;
+                let (transformed_right, _right_sv) =
+                    self.defunctionalize_expression(right, scope_stack)?;
+
                 let result_type = match op {
                     BinaryOp::Divide => types::f32(), // Division typically results in float
-                    BinaryOp::Add => types::i32(),    // Addition can be int or float, assume int for now
+                    BinaryOp::Add => types::i32(), // Addition can be int or float, assume int for now
                 };
-                
+
                 Ok((
-                    Expression::BinaryOp(*op, Box::new(transformed_left), Box::new(transformed_right)),
-                    StaticValue::Dyn(result_type)
+                    Expression::BinaryOp(
+                        *op,
+                        Box::new(transformed_left),
+                        Box::new(transformed_right),
+                    ),
+                    StaticValue::Dyn(result_type),
                 ))
             }
             Expression::FunctionCall(name, args) => {
                 // Regular function calls (first-order) remain unchanged
                 let mut transformed_args = Vec::new();
                 for arg in args {
-                    let (transformed_arg, _sv) = self.defunctionalize_expression(arg, scope_stack)?;
+                    let (transformed_arg, _sv) =
+                        self.defunctionalize_expression(arg, scope_stack)?;
                     transformed_args.push(transformed_arg);
                 }
-                
+
                 Ok((
                     Expression::FunctionCall(name.clone(), transformed_args),
-                    StaticValue::Dyn(polytype::Type::Variable(2))
+                    StaticValue::Dyn(polytype::Type::Variable(2)),
                 ))
             }
             Expression::Tuple(elements) => {
                 let mut transformed_elements = Vec::new();
                 let mut element_types = Vec::new();
-                
+
                 for elem in elements {
-                    let (transformed_elem, sv) = self.defunctionalize_expression(elem, scope_stack)?;
+                    let (transformed_elem, sv) =
+                        self.defunctionalize_expression(elem, scope_stack)?;
                     transformed_elements.push(transformed_elem);
-                    
+
                     // Extract type from static value
                     let elem_type = match sv {
                         StaticValue::Dyn(ty) => ty,
@@ -230,19 +265,26 @@ impl Defunctionalizer {
                     };
                     element_types.push(elem_type);
                 }
-                
+
                 Ok((
                     Expression::Tuple(transformed_elements),
-                    StaticValue::Dyn(types::tuple(element_types))
+                    StaticValue::Dyn(types::tuple(element_types)),
                 ))
             }
         }
     }
-    
-    fn defunctionalize_lambda(&mut self, lambda: &LambdaExpr, scope_stack: &mut ScopeStack<StaticValue>) -> Result<(Expression, StaticValue)> {
+
+    fn defunctionalize_lambda(
+        &mut self,
+        lambda: &LambdaExpr,
+        scope_stack: &mut ScopeStack<StaticValue>,
+    ) -> Result<(Expression, StaticValue)> {
         // Find free variables in the lambda body
-        let free_vars = self.find_free_variables(&lambda.body, &lambda.params.iter().map(|p| p.name.clone()).collect())?;
-        
+        let free_vars = self.find_free_variables(
+            &lambda.body,
+            &lambda.params.iter().map(|p| p.name.clone()).collect(),
+        )?;
+
         // Create a closure record with free variables
         let mut closure_fields = HashMap::new();
         for var in &free_vars {
@@ -250,18 +292,18 @@ impl Defunctionalizer {
                 closure_fields.insert(var.clone(), sv.clone());
             }
         }
-        
+
         // Generate a unique function name
         let func_name = format!("__lambda_{}", self.next_function_id);
         self.next_function_id += 1;
-        
+
         // Create parameters: closure record + lambda parameters
         let mut func_params = vec![Parameter {
             attributes: vec![],
             name: "__closure".to_string(),
             ty: polytype::Type::Variable(4), // Will be refined later
         }];
-        
+
         for param in &lambda.params {
             func_params.push(Parameter {
                 attributes: vec![],
@@ -269,57 +311,68 @@ impl Defunctionalizer {
                 ty: param.ty.clone().unwrap_or(polytype::Type::Variable(5)),
             });
         }
-        
+
         // Transform lambda body with parameter scope
         scope_stack.push_scope();
         for param in &lambda.params {
-            scope_stack.insert(param.name.clone(), StaticValue::Dyn(
-                param.ty.clone().unwrap_or(polytype::Type::Variable(6))
-            ));
+            scope_stack.insert(
+                param.name.clone(),
+                StaticValue::Dyn(param.ty.clone().unwrap_or(polytype::Type::Variable(6))),
+            );
         }
-        
-        let (transformed_body, _body_sv) = self.defunctionalize_expression(&lambda.body, scope_stack)?;
-        
+
+        let (transformed_body, _body_sv) =
+            self.defunctionalize_expression(&lambda.body, scope_stack)?;
+
         // Pop parameter scope
         scope_stack.pop_scope();
-        
+
         // Create the generated function
-        let return_type = lambda.return_type.clone().unwrap_or(polytype::Type::Variable(7));
+        let return_type = lambda
+            .return_type
+            .clone()
+            .unwrap_or(polytype::Type::Variable(7));
         let generated_func = DefunctionalizedFunction {
             name: func_name.clone(),
             params: func_params,
             return_type,
             body: transformed_body,
         };
-        
+
         self.generated_functions.push(generated_func);
-        
+
         // Create closure constructor expression
         if free_vars.is_empty() {
             // No free variables - just return function name
             Ok((
                 Expression::Identifier(func_name),
-                StaticValue::Lam("__unused".to_string(), (*lambda.body).clone(), HashMap::new())
+                StaticValue::Lam(
+                    "__unused".to_string(),
+                    (*lambda.body).clone(),
+                    HashMap::new(),
+                ),
             ))
         } else {
             // Create closure record
             let closure_record = self.create_closure_record(&func_name, &free_vars)?;
-            Ok((
-                closure_record,
-                StaticValue::Rcd(closure_fields)
-            ))
+            Ok((closure_record, StaticValue::Rcd(closure_fields)))
         }
     }
-    
-    fn defunctionalize_application(&mut self, func: &Expression, args: &[Expression], scope_stack: &mut ScopeStack<StaticValue>) -> Result<(Expression, StaticValue)> {
+
+    fn defunctionalize_application(
+        &mut self,
+        func: &Expression,
+        args: &[Expression],
+        scope_stack: &mut ScopeStack<StaticValue>,
+    ) -> Result<(Expression, StaticValue)> {
         let (transformed_func, func_sv) = self.defunctionalize_expression(func, scope_stack)?;
-        
+
         let mut transformed_args = Vec::new();
         for arg in args {
             let (transformed_arg, _arg_sv) = self.defunctionalize_expression(arg, scope_stack)?;
             transformed_args.push(transformed_arg);
         }
-        
+
         match func_sv {
             StaticValue::Lam(_param, _body, _closure_env) => {
                 // Direct lambda application - inline if simple enough
@@ -329,14 +382,15 @@ impl Defunctionalizer {
                         // Function call without closure
                         Ok((
                             Expression::FunctionCall(func_name, transformed_args),
-                            StaticValue::Dyn(polytype::Type::Variable(2))
+                            StaticValue::Dyn(polytype::Type::Variable(2)),
                         ))
                     }
                     _ => {
                         // More complex case - would need closure unpacking
                         // For now, return error
                         Err(CompilerError::SpirvError(
-                            "Complex function application not yet supported in defunctionalization".to_string()
+                            "Complex function application not yet supported in defunctionalization"
+                                .to_string(),
                         ))
                     }
                 }
@@ -344,35 +398,41 @@ impl Defunctionalizer {
             StaticValue::Rcd(_) => {
                 // Closure application - would need to unpack closure and call function
                 Err(CompilerError::SpirvError(
-                    "Closure application not yet implemented in defunctionalization".to_string()
+                    "Closure application not yet implemented in defunctionalization".to_string(),
                 ))
             }
             _ => {
                 // Regular function call
                 match transformed_func {
-                    Expression::Identifier(func_name) => {
-                        Ok((
-                            Expression::FunctionCall(func_name, transformed_args),
-                            StaticValue::Dyn(polytype::Type::Variable(2))
-                        ))
-                    }
-                    _ => {
-                        Err(CompilerError::SpirvError(
-                            "Invalid function in application".to_string()
-                        ))
-                    }
+                    Expression::Identifier(func_name) => Ok((
+                        Expression::FunctionCall(func_name, transformed_args),
+                        StaticValue::Dyn(polytype::Type::Variable(2)),
+                    )),
+                    _ => Err(CompilerError::SpirvError(
+                        "Invalid function in application".to_string(),
+                    )),
                 }
             }
         }
     }
-    
-    fn find_free_variables(&self, expr: &Expression, bound_vars: &HashSet<String>) -> Result<HashSet<String>> {
+
+    fn find_free_variables(
+        &self,
+        expr: &Expression,
+        bound_vars: &HashSet<String>,
+    ) -> Result<HashSet<String>> {
         let mut free_vars = HashSet::new();
         self.collect_free_variables(expr, bound_vars, &mut free_vars)?;
         Ok(free_vars)
     }
-    
-    fn collect_free_variables(&self, expr: &Expression, bound_vars: &HashSet<String>, free_vars: &mut HashSet<String>) -> Result<()> {
+
+    #[allow(clippy::only_used_in_recursion)]
+    fn collect_free_variables(
+        &self,
+        expr: &Expression,
+        bound_vars: &HashSet<String>,
+        free_vars: &mut HashSet<String>,
+    ) -> Result<()> {
         match expr {
             Expression::Identifier(name) => {
                 if !bound_vars.contains(name) {
@@ -421,18 +481,22 @@ impl Defunctionalizer {
         }
         Ok(())
     }
-    
-    fn create_closure_record(&self, func_name: &str, free_vars: &HashSet<String>) -> Result<Expression> {
+
+    fn create_closure_record(
+        &self,
+        func_name: &str,
+        free_vars: &HashSet<String>,
+    ) -> Result<Expression> {
         // For now, create a simple record-like structure
         // In a full implementation, this would create a proper record expression
         // For SPIR-V compatibility, we might need to represent this as an array or struct
-        
+
         // Create a tuple with function name and free variables
         let mut elements = vec![Expression::Identifier(func_name.to_string())];
         for var in free_vars {
             elements.push(Expression::Identifier(var.clone()));
         }
-        
+
         Ok(Expression::Tuple(elements))
     }
 }
@@ -455,7 +519,7 @@ mod tests {
 
         // Should have generated a new function
         assert!(defunc.generated_functions.len() > 0);
-        
+
         // The let declaration should be transformed
         assert_eq!(result.declarations.len(), 2); // original let + generated function
     }

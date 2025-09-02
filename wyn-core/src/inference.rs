@@ -1,4 +1,4 @@
-use crate::ast::{Type, TypeScheme, types};
+use crate::ast::{types, Type, TypeScheme};
 
 // Helper function to create monomorphic type schemes
 pub fn monotype(ty: Type) -> TypeScheme {
@@ -11,12 +11,9 @@ pub fn builtin_zip_type() -> TypeScheme {
     let arr_i32 = types::array(types::i32());
     let tuple_i32_i32 = types::tuple(vec![types::i32(), types::i32()]);
     let arr_tuple = types::array(tuple_i32_i32);
-    
+
     // arr_i32 -> arr_i32 -> arr_tuple
-    let func_type = types::function(
-        arr_i32.clone(),
-        types::function(arr_i32, arr_tuple)
-    );
+    let func_type = types::function(arr_i32.clone(), types::function(arr_i32, arr_tuple));
 
     TypeScheme::Monotype(func_type)
 }

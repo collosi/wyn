@@ -1,6 +1,5 @@
 use crate::ast::*;
 use crate::error::{CompilerError, Result};
-use polytype::Type;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
@@ -8,6 +7,7 @@ use inkwell::targets::{InitializationConfig, Target, TargetTriple};
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::AddressSpace;
+use polytype::Type;
 use std::collections::HashMap;
 
 pub struct CodeGenerator<'ctx> {
@@ -54,7 +54,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Add SPIR-V specific metadata for entry points
         for (name, exec_model) in &entry_points {
-            self.add_spirv_entry_point_metadata(&name, exec_model)?;
+            self.add_spirv_entry_point_metadata(name, exec_model)?;
         }
 
         // Verify the module
@@ -148,7 +148,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .iter()
             .map(|param| {
                 self.get_or_create_type(&param.ty)
-                    .map(|t| BasicMetadataTypeEnum::from(t))
+                    .map(BasicMetadataTypeEnum::from)
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -334,7 +334,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                                 "div",
                             )
                             .map_err(|e| {
-                                CompilerError::SpirvError(format!("Failed to build division: {}", e))
+                                CompilerError::SpirvError(format!(
+                                    "Failed to build division: {}",
+                                    e
+                                ))
                             })?;
                         Ok(result.into())
                     }
@@ -360,9 +363,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                                 Ok(result.into())
                             }
                             _ => {
-                                return Err(CompilerError::SpirvError(
+                                Err(CompilerError::SpirvError(
                                     "Type mismatch in addition: operands must be both int or both float".to_string()
-                                ));
+                                ))
                             }
                         }
                     }
@@ -391,7 +394,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 "Lambda expressions require defunctionalization before LLVM generation".to_string(),
             )),
             Expression::Application(_, _) => Err(CompilerError::SpirvError(
-                "Function applications require defunctionalization before LLVM generation".to_string(),
+                "Function applications require defunctionalization before LLVM generation"
+                    .to_string(),
             )),
         }
     }
@@ -556,7 +560,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                             CompilerError::SpirvError("Array type missing element type".to_string())
                         })?;
                         let elem_type = self.get_or_create_type(elem_ty)?;
-                        
+
                         // For now, create single-dimensional arrays with default size
                         match elem_type {
                             BasicTypeEnum::ArrayType(arr) => arr.array_type(1).into(),

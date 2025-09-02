@@ -234,10 +234,7 @@ impl Parser {
     fn check_type_variable(&self) -> bool {
         // Check if current token is an apostrophe (we'll need to add this to lexer)
         // For now, we'll use a simplified approach
-        match self.peek() {
-            Some(Token::Identifier(name)) if name.starts_with('\'') => true,
-            _ => false,
-        }
+        matches!(self.peek(), Some(Token::Identifier(name)) if name.starts_with('\''))
     }
 
     fn parse_type_variable(&mut self) -> Result<String> {
@@ -275,8 +272,7 @@ impl Parser {
             self.advance(); // consume '['
 
             // Parse dimension - could be integer literal or identifier (size variable)
-            if let Some(Token::IntLiteral(n)) = self.peek() {
-                let n = *n as usize;
+            if let Some(Token::IntLiteral(_)) = self.peek() {
                 self.advance();
                 self.expect(Token::RightBracket)?;
                 let elem_type = self.parse_array_or_base_type()?; // Allow nested arrays
@@ -375,7 +371,7 @@ impl Parser {
                     // Function application with parentheses: f(arg1, arg2)
                     self.advance();
                     let mut args = Vec::new();
-                    
+
                     if !self.check(&Token::RightParen) {
                         loop {
                             args.push(self.parse_expression()?);
@@ -385,7 +381,7 @@ impl Parser {
                             self.advance();
                         }
                     }
-                    
+
                     self.expect(Token::RightParen)?;
                     expr = Expression::Application(Box::new(expr), args);
                 }
@@ -477,31 +473,33 @@ impl Parser {
 
     fn parse_lambda(&mut self) -> Result<Expression> {
         self.expect(Token::Backslash)?;
-        
+
         // Parse parameter list: \x y z: t -> e (Futhark syntax)
         // Parameters are untyped, optional return type after all params
         let mut params = Vec::new();
-        
+
         // Parse parameters (identifiers only)
         while let Some(Token::Identifier(name)) = self.peek() {
             let param_name = name.clone();
             self.advance();
-            
+
             params.push(LambdaParam {
                 name: param_name,
                 ty: None, // Parameters are untyped in Futhark lambdas
             });
-            
+
             // If we see a colon or arrow, we're done with parameters
             if self.check(&Token::Colon) || self.check(&Token::Arrow) {
                 break;
             }
         }
-        
+
         if params.is_empty() {
-            return Err(CompilerError::ParseError("Lambda must have at least one parameter".to_string()));
+            return Err(CompilerError::ParseError(
+                "Lambda must have at least one parameter".to_string(),
+            ));
         }
-        
+
         // Parse optional return type annotation: \x y z: t ->
         let return_type = if self.check(&Token::Colon) {
             self.advance(); // consume ':'
@@ -509,13 +507,13 @@ impl Parser {
         } else {
             None
         };
-        
+
         // Parse arrow
         self.expect(Token::Arrow)?;
-        
+
         // Parse body expression
         let body = Box::new(self.parse_expression()?);
-        
+
         Ok(Expression::Lambda(LambdaExpr {
             params,
             return_type,
@@ -907,19 +905,17 @@ mod tests {
 
         assert_eq!(program.declarations.len(), 1);
         match &program.declarations[0] {
-            Declaration::Let(decl) => {
-                match &decl.value {
-                    Expression::Lambda(lambda) => {
-                        assert_eq!(lambda.params.len(), 2);
-                        assert_eq!(lambda.params[0].name, "x");
-                        assert_eq!(lambda.params[0].ty, None);
-                        assert_eq!(lambda.params[1].name, "y");
-                        assert_eq!(lambda.params[1].ty, None);
-                        assert_eq!(lambda.return_type, None);
-                    }
-                    _ => panic!("Expected lambda expression"),
+            Declaration::Let(decl) => match &decl.value {
+                Expression::Lambda(lambda) => {
+                    assert_eq!(lambda.params.len(), 2);
+                    assert_eq!(lambda.params[0].name, "x");
+                    assert_eq!(lambda.params[0].ty, None);
+                    assert_eq!(lambda.params[1].name, "y");
+                    assert_eq!(lambda.params[1].ty, None);
+                    assert_eq!(lambda.return_type, None);
                 }
-            }
+                _ => panic!("Expected lambda expression"),
+            },
             _ => panic!("Expected Let declaration"),
         }
     }
@@ -933,26 +929,24 @@ mod tests {
 
         assert_eq!(program.declarations.len(), 1);
         match &program.declarations[0] {
-            Declaration::Let(decl) => {
-                match &decl.value {
-                    Expression::Application(func, args) => {
-                        match func.as_ref() {
-                            Expression::Identifier(name) => assert_eq!(name, "f"),
-                            _ => panic!("Expected function identifier"),
-                        }
-                        assert_eq!(args.len(), 2);
-                        match &args[0] {
-                            Expression::IntLiteral(n) => assert_eq!(*n, 42),
-                            _ => panic!("Expected int literal"),
-                        }
-                        match &args[1] {
-                            Expression::IntLiteral(n) => assert_eq!(*n, 24),
-                            _ => panic!("Expected int literal"),
-                        }
+            Declaration::Let(decl) => match &decl.value {
+                Expression::Application(func, args) => {
+                    match func.as_ref() {
+                        Expression::Identifier(name) => assert_eq!(name, "f"),
+                        _ => panic!("Expected function identifier"),
                     }
-                    _ => panic!("Expected function application"),
+                    assert_eq!(args.len(), 2);
+                    match &args[0] {
+                        Expression::IntLiteral(n) => assert_eq!(*n, 42),
+                        _ => panic!("Expected int literal"),
+                    }
+                    match &args[1] {
+                        Expression::IntLiteral(n) => assert_eq!(*n, 24),
+                        _ => panic!("Expected int literal"),
+                    }
                 }
-            }
+                _ => panic!("Expected function application"),
+            },
             _ => panic!("Expected Let declaration"),
         }
     }

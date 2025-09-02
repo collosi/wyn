@@ -15,6 +15,12 @@ use error::Result;
 
 pub struct Compiler;
 
+impl Default for Compiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Compiler {
     pub fn new() -> Self {
         Compiler
@@ -24,7 +30,7 @@ impl Compiler {
         use inkwell::context::Context;
 
         // Tokenize
-        let tokens = lexer::tokenize(source).map_err(|e| error::CompilerError::ParseError(e))?;
+        let tokens = lexer::tokenize(source).map_err(error::CompilerError::ParseError)?;
 
         // Parse
         let mut parser = parser::Parser::new(tokens);
