@@ -72,13 +72,19 @@ wyn check input.wyn
 
 ## Building
 
+This project requires LLVM 18. If you installed LLVM via Homebrew, you'll need to set the LLVM_SYS_180_PREFIX environment variable:
+
 ```bash
+export LLVM_SYS_180_PREFIX=/usr/local/Cellar/llvm@18/18.1.8
 cargo build --release
 ```
+
+For other LLVM installations, set LLVM_SYS_180_PREFIX to your LLVM installation path.
 
 ## Testing
 
 ```bash
+export LLVM_SYS_180_PREFIX=/usr/local/Cellar/llvm@18/18.1.8
 cargo test
 ```
 

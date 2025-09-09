@@ -11,6 +11,7 @@ nom.workspace = true
 polytype.workspace = true
 spirv.workspace = true
 inkwell.workspace = true
+nemo = { git = "https://github.com/knowsys/nemo", tag = "v0.8.0" }
 
 [dev-dependencies]
 naga = { version = "22.0", features = ["spv-in"] }

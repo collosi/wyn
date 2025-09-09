@@ -3,7 +3,7 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use thiserror::Error;
-use wyn_core::Compiler;
+use wyn_core::{annotator::CodeAnnotator, cfg_nemo::CfgNemoExtractor, lexer, parser::Parser as WynParser, Compiler};
 
 #[derive(Parser)]
 #[command(name = "wyn")]
@@ -25,6 +25,14 @@ enum Commands {
         #[arg(short, long, value_name = "FILE")]
         output: Option<PathBuf>,
 
+        /// Output annotated source code with block IDs and locations
+        #[arg(long, value_name = "FILE")]
+        output_annotated: Option<PathBuf>,
+
+        /// Output Nemo/Datalog facts for basic block analysis
+        #[arg(long, value_name = "FILE")]
+        output_nemo: Option<PathBuf>,
+
         /// Print verbose output
         #[arg(short, long)]
         verbose: bool,
@@ -35,6 +43,14 @@ enum Commands {
         /// Input source file
         #[arg(value_name = "FILE")]
         input: PathBuf,
+
+        /// Output annotated source code with block IDs and locations
+        #[arg(long, value_name = "FILE")]
+        output_annotated: Option<PathBuf>,
+
+        /// Output Nemo/Datalog facts for basic block analysis
+        #[arg(long, value_name = "FILE")]
+        output_nemo: Option<PathBuf>,
 
         /// Print verbose output
         #[arg(short, long)]
@@ -58,25 +74,37 @@ fn main() -> Result<(), DriverError> {
         Commands::Compile {
             input,
             output,
+            output_annotated,
+            output_nemo,
             verbose,
         } => {
-            compile_file(input, output, verbose)?;
+            compile_file(input, output, output_annotated, output_nemo, verbose)?;
         }
-        Commands::Check { input, verbose } => {
-            check_file(input, verbose)?;
+        Commands::Check { input, output_annotated, output_nemo, verbose } => {
+            check_file(input, output_annotated, output_nemo, verbose)?;
         }
     }
 
     Ok(())
 }
 
-fn compile_file(input: PathBuf, output: Option<PathBuf>, verbose: bool) -> Result<(), DriverError> {
+fn compile_file(input: PathBuf, output: Option<PathBuf>, output_annotated: Option<PathBuf>, output_nemo: Option<PathBuf>, verbose: bool) -> Result<(), DriverError> {
     if verbose {
         println!("Compiling {}...", input.display());
     }
 
     // Read source file
     let source = fs::read_to_string(&input)?;
+
+    // Generate annotated source if requested
+    if let Some(ref annotated_path) = output_annotated {
+        generate_annotated_source(&source, annotated_path, verbose)?;
+    }
+
+    // Generate Nemo facts if requested
+    if let Some(ref nemo_path) = output_nemo {
+        generate_nemo_facts(&source, nemo_path, verbose)?;
+    }
 
     // Compile to SPIR-V
     let compiler = Compiler::new();
@@ -104,13 +132,23 @@ fn compile_file(input: PathBuf, output: Option<PathBuf>, verbose: bool) -> Resul
     Ok(())
 }
 
-fn check_file(input: PathBuf, verbose: bool) -> Result<(), DriverError> {
+fn check_file(input: PathBuf, output_annotated: Option<PathBuf>, output_nemo: Option<PathBuf>, verbose: bool) -> Result<(), DriverError> {
     if verbose {
         println!("Checking {}...", input.display());
     }
 
     // Read source file
     let source = fs::read_to_string(&input)?;
+
+    // Generate annotated source if requested
+    if let Some(ref annotated_path) = output_annotated {
+        generate_annotated_source(&source, annotated_path, verbose)?;
+    }
+
+    // Generate Nemo facts if requested
+    if let Some(ref nemo_path) = output_nemo {
+        generate_nemo_facts(&source, nemo_path, verbose)?;
+    }
 
     // Compile but don't write output
     let compiler = Compiler::new();
@@ -120,5 +158,43 @@ fn check_file(input: PathBuf, verbose: bool) -> Result<(), DriverError> {
         println!("✓ {} is valid", input.display());
     }
 
+    Ok(())
+}
+
+fn generate_annotated_source(source: &str, output_path: &PathBuf, verbose: bool) -> Result<(), DriverError> {
+    // Parse the source to get the AST
+    let tokens = lexer::tokenize(source).map_err(wyn_core::error::CompilerError::ParseError)?;
+    let mut parser = WynParser::new(tokens);
+    let program = parser.parse()?;
+    
+    // Generate annotated code
+    let mut annotator = CodeAnnotator::new();
+    let annotated = annotator.annotate_program(&program);
+    
+    // Write annotated source
+    fs::write(output_path, annotated)?;
+    
+    if verbose {
+        println!("Generated annotated source: {}", output_path.display());
+    }
+    
+    Ok(())
+}
+
+fn generate_nemo_facts(source: &str, output_path: &PathBuf, verbose: bool) -> Result<(), DriverError> {
+    // Parse the source to get the AST
+    let tokens = lexer::tokenize(source).map_err(wyn_core::error::CompilerError::ParseError)?;
+    let mut parser = WynParser::new(tokens);
+    let program = parser.parse()?;
+    
+    // Generate Nemo facts
+    let mut file = fs::File::create(output_path)?;
+    let extractor = CfgNemoExtractor::new(&mut file, verbose);
+    extractor.extract_cfg(&program)?;
+    
+    if verbose {
+        println!("Generated Nemo facts: {}", output_path.display());
+    }
+    
     Ok(())
 }
