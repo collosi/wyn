@@ -69,6 +69,34 @@ impl<W: Write> NemoFactWriter<W> {
         Ok(())
     }
 
+    /// Write lifetime start fact: lifetime_start(LifetimeId, LocationId, VarName).
+    pub fn write_lifetime_start_fact(&mut self, lifetime_id: usize, location_id: usize, var_name: &str) -> Result<(), std::io::Error> {
+        writeln!(self.writer, "lifetime_start({}, {}, \"{}\").", lifetime_id, location_id, var_name)?;
+        if self.debug {
+            eprintln!("DEBUG: Added lifetime_start fact: lifetime_start({}, {}, \"{}\")", lifetime_id, location_id, var_name);
+        }
+        Ok(())
+    }
+
+    /// Write borrow fact: borrow(BorrowId, LocationId, VarName, LifetimeId).
+    pub fn write_borrow_fact(&mut self, borrow_id: usize, location_id: usize, var_name: &str, lifetime_id: usize) -> Result<(), std::io::Error> {
+        writeln!(self.writer, "borrow({}, {}, \"{}\", {}).", borrow_id, location_id, var_name, lifetime_id)?;
+        if self.debug {
+            eprintln!("DEBUG: Added borrow fact: borrow({}, {}, \"{}\", {})", borrow_id, location_id, var_name, lifetime_id);
+        }
+        Ok(())
+    }
+
+    /// Write function call fact: call(LocationId, FuncName, Args).
+    pub fn write_call_fact(&mut self, location_id: usize, func_name: &str, args: &[&str]) -> Result<(), std::io::Error> {
+        let args_str = args.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<_>>().join(", ");
+        writeln!(self.writer, "call({}, \"{}\", [{}]).", location_id, func_name, args_str)?;
+        if self.debug {
+            eprintln!("DEBUG: Added call fact: call({}, \"{}\", [{}])", location_id, func_name, args_str);
+        }
+        Ok(())
+    }
+
     /// Write a comment header for the facts file
     pub fn write_header(&mut self) -> Result<(), std::io::Error> {
         writeln!(self.writer, "% Nemo/Datalog facts for Wyn basic block analysis")?;
