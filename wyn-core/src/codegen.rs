@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::builtins::BuiltinManager;
 use crate::error::{CompilerError, Result};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -14,6 +15,7 @@ pub struct CodeGenerator<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
     builder: Builder<'ctx>,
+    builtin_manager: BuiltinManager<'ctx>,
     variable_cache: HashMap<String, PointerValue<'ctx>>,
     variable_types: HashMap<String, Type>,
     function_cache: HashMap<String, FunctionValue<'ctx>>,
@@ -30,10 +32,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Set up SPIR-V target triple
         module.set_triple(&TargetTriple::create("spirv64-unknown-unknown"));
 
+        let builtin_manager = BuiltinManager::new(context);
+        
         CodeGenerator {
             context,
             module,
             builder,
+            builtin_manager,
             variable_cache: HashMap::new(),
             variable_types: HashMap::new(),
             function_cache: HashMap::new(),
@@ -44,6 +49,9 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     pub fn generate(mut self, program: &Program) -> Result<Vec<u32>> {
+        // Load builtin functions into the module
+        self.builtin_manager.load_builtins_into_module(&self.module)?;
+        
         // Process all declarations
         for decl in &program.declarations {
             self.generate_declaration(decl)?;
@@ -371,22 +379,36 @@ impl<'ctx> CodeGenerator<'ctx> {
                     }
                 }
             }
-            Expression::FunctionCall(func_name, args) => match func_name.as_str() {
-                "to_vec4_f32" => {
-                    if args.len() != 1 {
-                        return Err(CompilerError::SpirvError(
-                            "to_vec4_f32 requires exactly one argument".to_string(),
-                        ));
+            Expression::FunctionCall(func_name, args) => {
+                // Check if it's a builtin function
+                if self.builtin_manager.is_builtin(func_name) {
+                    // Generate arguments first
+                    let mut arg_values = Vec::new();
+                    for arg in args {
+                        arg_values.push(self.generate_expression(arg)?);
                     }
+                    
+                    // Call the builtin through the manager
+                    self.builtin_manager.generate_builtin_call(&self.module, &self.builder, func_name, &arg_values)
+                } else {
+                    match func_name.as_str() {
+                        "to_vec4_f32" => {
+                            if args.len() != 1 {
+                                return Err(CompilerError::SpirvError(
+                                    "to_vec4_f32 requires exactly one argument".to_string(),
+                                ));
+                            }
 
-                    let array_val = self.generate_expression(&args[0])?;
-                    self.convert_array_to_vec4(array_val)
+                            let array_val = self.generate_expression(&args[0])?;
+                            self.convert_array_to_vec4(array_val)
+                        }
+                        _ => Err(CompilerError::SpirvError(format!(
+                            "Function call '{}' not supported",
+                            func_name
+                        ))),
+                    }
                 }
-                _ => Err(CompilerError::SpirvError(format!(
-                    "Function call '{}' not supported",
-                    func_name
-                ))),
-            },
+            }
             Expression::Tuple(_) => Err(CompilerError::SpirvError(
                 "Tuples not supported in LLVM generation".to_string(),
             )),

@@ -1,7 +1,5 @@
 use crate::ast::*;
 use crate::error::{CompilerError, Result};
-use crate::lexer::tokenize;
-use crate::parser::Parser;
 use crate::scope::ScopeStack;
 use polytype::{ptp, tp, Context, Type, TypeScheme};
 
@@ -36,26 +34,35 @@ impl TypeChecker {
     }
 
     fn load_builtins(&mut self) -> Result<()> {
-        // Embed builtins.wyn content at compile time
-        let content = include_str!("../builtins.wyn");
-
-        let tokens = tokenize(content).map_err(|e| {
-            CompilerError::ParseError(format!("Failed to tokenize builtins: {}", e))
-        })?;
-        let mut parser = Parser::new(tokens);
-        let program = parser
-            .parse()
-            .map_err(|e| CompilerError::ParseError(format!("Failed to parse builtins: {:?}", e)))?;
-
-        // Process only val declarations from builtins
-        for decl in &program.declarations {
-            if let Declaration::Val(val_decl) = decl {
-                // Convert the parsed type to a monomorphic TypeScheme
-                let type_scheme = TypeScheme::Monotype(val_decl.ty.clone());
-                self.scope_stack.insert(val_decl.name.clone(), type_scheme);
-            }
-        }
-
+        // Add builtin function types directly using manual construction
+        
+        // length: ∀a. [a] -> int
+        let array_type = Type::Constructed("array", vec![Type::Variable(0)]);
+        let int_type = Type::Constructed("int", vec![]);
+        let length_body = Type::arrow(array_type, int_type);
+        let length_scheme = TypeScheme::Polytype {
+            variable: 0,
+            body: Box::new(TypeScheme::Monotype(length_body)),
+        };
+        self.scope_stack.insert("length".to_string(), length_scheme);
+        
+        // map: ∀a b. (a -> b) -> [a] -> [b]
+        let var_a = Type::Variable(0);
+        let var_b = Type::Variable(1);
+        let func_type = Type::arrow(var_a.clone(), var_b.clone());
+        let input_array_type = Type::Constructed("array", vec![var_a]);
+        let output_array_type = Type::Constructed("array", vec![var_b]);
+        let map_arrow1 = Type::arrow(input_array_type, output_array_type);
+        let map_body = Type::arrow(func_type, map_arrow1);
+        let map_scheme = TypeScheme::Polytype {
+            variable: 0,
+            body: Box::new(TypeScheme::Polytype {
+                variable: 1,
+                body: Box::new(TypeScheme::Monotype(map_body)),
+            }),
+        };
+        self.scope_stack.insert("map".to_string(), map_scheme);
+        
         Ok(())
     }
 
@@ -269,32 +276,25 @@ impl TypeChecker {
                     .ok_or_else(|| CompilerError::UndefinedVariable(func_name.clone()))?;
                 let mut func_type = type_scheme.instantiate(&mut self.context);
 
-                // Apply function to each argument
+                // Apply function to each argument using unification
                 for arg in args {
-                    let _arg_type = self.infer_expression(arg)?;
-
-                    match func_type {
-                        Type::Constructed("->", args) if args.len() == 2 => {
-                            // Function type: arg -> result
-                            // For simplified type checking, we'll accept any arguments
-                            func_type = args[1].clone();
-                        }
-                        Type::Variable(_) => {
-                            // If we have a type variable, assume it's a function that returns the built-in result
-                            // This is a simplified approach for our demo
-                            func_type =
-                                types::array(types::tuple(vec![types::i32(), types::i32()]));
-                        }
-                        _ => {
-                            return Err(CompilerError::TypeError(format!(
-                                "Cannot apply arguments to non-function type: {:?}",
-                                func_type
-                            )));
-                        }
-                    }
+                    let arg_type = self.infer_expression(arg)?;
+                    
+                    // Create a fresh result type variable
+                    let result_type = self.context.new_variable();
+                    
+                    // Expected function type: arg_type -> result_type
+                    let expected_func_type = Type::arrow(arg_type, result_type.clone());
+                    
+                    // Unify the function type with expected
+                    self.context.unify(&func_type, &expected_func_type)
+                        .map_err(|e| CompilerError::TypeError(format!("Function call type error: {:?}", e)))?;
+                    
+                    // Update func_type to result_type for the next argument (currying)
+                    func_type = result_type;
                 }
 
-                Ok(func_type)
+                Ok(func_type.apply(&self.context))
             }
             Expression::Tuple(elements) => {
                 let elem_types: Result<Vec<Type>> =
@@ -334,19 +334,28 @@ impl TypeChecker {
 
                 Ok(func_type)
             }
-            Expression::Application(func, _args) => {
-                let func_type = self.infer_expression(func)?;
+            Expression::Application(func, args) => {
+                let mut func_type = self.infer_expression(func)?;
 
-                // For now, assume the function type matches the arguments
-                // In a full implementation, we'd check argument types against parameters
-                match func_type {
-                    Type::Constructed("->", args) if args.len() == 2 => {
-                        Ok(args[1].clone()) // Return the result type
-                    }
-                    _ => Err(CompilerError::TypeError(
-                        "Cannot apply non-function type".to_string(),
-                    )),
+                // Apply function to each argument
+                for arg in args {
+                    let arg_type = self.infer_expression(arg)?;
+                    
+                    // Create a fresh result type variable
+                    let result_type = self.context.new_variable();
+                    
+                    // Expected function type: arg_type -> result_type
+                    let expected_func_type = Type::arrow(arg_type, result_type.clone());
+                    
+                    // Unify the function type with expected
+                    self.context.unify(&func_type, &expected_func_type)
+                        .map_err(|e| CompilerError::TypeError(format!("Function application type error: {:?}", e)))?;
+                    
+                    // Update func_type to result_type for the next argument (currying)
+                    func_type = result_type;
                 }
+
+                Ok(func_type.apply(&self.context))
             }
         }
     }
