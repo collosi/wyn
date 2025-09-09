@@ -17,6 +17,11 @@ pub struct Location {
 }
 
 /// Control flow graph extractor
+/// 
+/// **DEPRECATED**: This CFG extractor is being replaced by CfgNemoExtractor.
+/// New code should use `CfgNemoExtractor` from the `cfg_nemo` module instead.
+/// This is kept for backward compatibility and existing tests.
+#[deprecated(note = "Use CfgNemoExtractor instead")]
 pub struct CfgExtractor<W: Write> {
     writer: W,
     next_block_id: usize,

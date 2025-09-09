@@ -3,15 +3,10 @@
 
 use crate::ast::*;
 use crate::cfg::{BlockId, Location};
-use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
-
-/// Maps AST nodes to their location information
-pub type LocationMap = HashMap<*const Expression, Location>;
 
 /// Annotated code formatter
 pub struct CodeAnnotator {
-    location_map: LocationMap,
     output: String,
     current_block: Option<BlockId>,
     current_index: usize,
@@ -21,7 +16,6 @@ pub struct CodeAnnotator {
 impl CodeAnnotator {
     pub fn new() -> Self {
         Self {
-            location_map: HashMap::new(),
             output: String::new(),
             current_block: None,
             current_index: 0,

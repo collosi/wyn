@@ -4,7 +4,6 @@ use crate::cfg::{BlockId, Location};
 use crate::error::{CompilerError, Result};
 use crate::nemo_facts::{NemoFactWriter, expr_type_name};
 use std::io::Write;
-use std::collections::HashMap;
 
 /// CFG extractor that can output both regular facts and Nemo facts
 pub struct CfgNemoExtractor<W: Write> {
@@ -13,7 +12,6 @@ pub struct CfgNemoExtractor<W: Write> {
     current_block: Option<BlockId>,
     current_index: usize,
     location_counter: usize,
-    location_map: HashMap<Expression, usize>, // Maps expressions to location IDs
     debug: bool,
 }
 
@@ -25,7 +23,6 @@ impl<W: Write> CfgNemoExtractor<W> {
             current_block: None,
             current_index: 0,
             location_counter: 1, // Start at 1 for cleaner fact IDs
-            location_map: HashMap::new(),
             debug,
         }
     }

@@ -278,7 +278,7 @@ impl BorrowChecker {
                         }
                         
                         // Parse the results for borrow check errors
-                        let mut errors = Vec::new();
+                        let errors = Vec::new();
                         
                         // Query for use-after-move errors
                         // Note: This would need proper result parsing from the Nemo engine
