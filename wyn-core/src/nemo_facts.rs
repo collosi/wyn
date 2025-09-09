@@ -127,6 +127,7 @@ pub fn expr_type_name(expr: &Expression) -> &'static str {
         Expression::Application(..) => "application",
         Expression::Tuple(_) => "tuple",
         Expression::Lambda(_) => "lambda",
+        Expression::LetIn(_) => "let_in",
     }
 }
 

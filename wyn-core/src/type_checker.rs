@@ -63,6 +63,24 @@ impl TypeChecker {
         };
         self.scope_stack.insert("map".to_string(), map_scheme);
         
+        // zip: ∀a b. [a] -> [b] -> [(a, b)]
+        let var_a = Type::Variable(0);
+        let var_b = Type::Variable(1);
+        let array_a_type = Type::Constructed("array", vec![var_a.clone()]);
+        let array_b_type = Type::Constructed("array", vec![var_b.clone()]);
+        let tuple_type = Type::Constructed("tuple", vec![var_a, var_b]);
+        let result_array_type = Type::Constructed("array", vec![tuple_type]);
+        let zip_arrow1 = Type::arrow(array_b_type, result_array_type);
+        let zip_body = Type::arrow(array_a_type, zip_arrow1);
+        let zip_scheme = TypeScheme::Polytype {
+            variable: 0,
+            body: Box::new(TypeScheme::Polytype {
+                variable: 1,
+                body: Box::new(TypeScheme::Monotype(zip_body)),
+            }),
+        };
+        self.scope_stack.insert("zip".to_string(), zip_scheme);
+        
         Ok(())
     }
 
@@ -333,6 +351,34 @@ impl TypeChecker {
                 }
 
                 Ok(func_type)
+            }
+            Expression::LetIn(let_in) => {
+                // Infer type of the value expression
+                let value_type = self.infer_expression(&let_in.value)?;
+                
+                // Check type annotation if present
+                if let Some(declared_type) = &let_in.ty {
+                    if !self.types_match(&value_type, declared_type) {
+                        return Err(CompilerError::TypeError(format!(
+                            "Type mismatch in let binding: expected {:?}, got {:?}",
+                            declared_type, value_type
+                        )));
+                    }
+                }
+                
+                // Push new scope and add binding
+                self.scope_stack.push_scope();
+                let bound_type = let_in.ty.as_ref().unwrap_or(&value_type).clone();
+                let type_scheme = TypeScheme::Monotype(bound_type);
+                self.scope_stack.insert(let_in.name.clone(), type_scheme);
+                
+                // Infer type of body expression
+                let body_type = self.infer_expression(&let_in.body)?;
+                
+                // Pop scope
+                self.scope_stack.pop_scope();
+                
+                Ok(body_type)
             }
             Expression::Application(func, args) => {
                 let mut func_type = self.infer_expression(func)?;

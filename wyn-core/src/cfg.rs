@@ -160,6 +160,15 @@ impl<W: Write> CfgExtractor<W> {
                 self.write_location_fact("apply_end", &loc, "")?;
             }
             
+            // Let-in expressions
+            Expression::LetIn(let_in) => {
+                self.write_location_fact("let", &loc, &let_in.name)?;
+                self.visit_expression(&let_in.value)?;
+                self.write_location_fact("in", &loc, &let_in.name)?;
+                self.visit_expression(&let_in.body)?;
+                self.advance_index();
+            }
+            
             // Lambda expressions create new basic blocks for their body
             Expression::Lambda(lambda) => {
                 self.write_location_fact("lambda", &loc, "")?;

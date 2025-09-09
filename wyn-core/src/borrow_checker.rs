@@ -205,6 +205,18 @@ impl BorrowChecker {
                 // Analyze lambda body
                 self.extract_expression_facts(fact_writer, &lambda.body, lambda_block, location_counter)?;
             }
+            Expression::LetIn(let_in) => {
+                // Let binding creates a lifetime
+                let lifetime_id = self.get_next_lifetime_id();
+                fact_writer.write_var_def_fact(location_id, &let_in.name).map_err(Self::io_error)?;
+                fact_writer.write_lifetime_start_fact(lifetime_id, location_id, &let_in.name).map_err(Self::io_error)?;
+                
+                // Analyze value expression
+                self.extract_expression_facts(fact_writer, &let_in.value, current_block, location_counter)?;
+                
+                // Analyze body expression
+                self.extract_expression_facts(fact_writer, &let_in.body, current_block, location_counter)?;
+            }
             // Literals don't create borrows or lifetimes
             Expression::IntLiteral(_) | Expression::FloatLiteral(_) => {}
         }

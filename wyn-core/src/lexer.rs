@@ -1,10 +1,10 @@
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_until},
-    character::complete::{alpha1, alphanumeric1, char, digit1, multispace0, multispace1},
-    combinator::{map, opt, recognize, value},
+    character::complete::{alpha1, alphanumeric1, char, digit1, multispace0, multispace1, one_of},
+    combinator::{eof, map, opt, peek, recognize, value},
     multi::many0,
-    sequence::{pair, preceded, tuple},
+    sequence::{pair, preceded, terminated, tuple},
     IResult,
 };
 
@@ -15,6 +15,7 @@ pub enum Token {
     Entry,
     Def,
     Val,
+    In,
 
     // Identifiers and literals
     Identifier(String),
@@ -55,11 +56,26 @@ fn parse_comment(input: &str) -> IResult<&str, Token> {
 }
 
 fn parse_keyword(input: &str) -> IResult<&str, Token> {
+    // Helper function to match a keyword with word boundaries
+    let keyword = |kw: &'static str, token: Token| {
+        map(
+            terminated(
+                tag(kw),
+                peek(alt((
+                    eof,
+                    recognize(one_of(" \t\n\r()[]{}=:,+-/*#<>")),
+                )))
+            ),
+            move |_| token.clone()
+        )
+    };
+    
     alt((
-        value(Token::Let, tag("let")),
-        value(Token::Entry, tag("entry")),
-        value(Token::Def, tag("def")),
-        value(Token::Val, tag("val")),
+        keyword("let", Token::Let),
+        keyword("entry", Token::Entry),
+        keyword("def", Token::Def),
+        keyword("val", Token::Val),
+        keyword("in", Token::In),
     ))(input)
 }
 

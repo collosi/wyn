@@ -15,6 +15,7 @@ pub struct CodeAnnotator {
     output: String,
     current_block: Option<BlockId>,
     current_index: usize,
+    next_block_id: usize,
 }
 
 impl CodeAnnotator {
@@ -24,6 +25,7 @@ impl CodeAnnotator {
             output: String::new(),
             current_block: None,
             current_index: 0,
+            next_block_id: 0,
         }
     }
     
@@ -225,6 +227,14 @@ impl CodeAnnotator {
                 self.current_index = saved_index;
                 self.advance_index();
             }
+            
+            Expression::LetIn(let_in) => {
+                write!(self.output, "#B{}.{} let {} = ", loc.block.0, loc.index, let_in.name).unwrap();
+                self.annotate_expression(&let_in.value);
+                self.output.push_str(" in ");
+                self.annotate_expression(&let_in.body);
+                self.advance_index();
+            }
         }
     }
     
@@ -249,12 +259,9 @@ impl CodeAnnotator {
     }
     
     fn new_block(&mut self) -> BlockId {
-        static mut NEXT_BLOCK_ID: usize = 0;
-        unsafe {
-            let id = BlockId(NEXT_BLOCK_ID);
-            NEXT_BLOCK_ID += 1;
-            id
-        }
+        let id = BlockId(self.next_block_id);
+        self.next_block_id += 1;
+        id
     }
     
     fn enter_block(&mut self, block: BlockId) {

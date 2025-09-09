@@ -419,6 +419,36 @@ impl<'ctx> CodeGenerator<'ctx> {
                 "Function applications require defunctionalization before LLVM generation"
                     .to_string(),
             )),
+            Expression::LetIn(let_in) => {
+                // Generate code for the value expression
+                let value = self.generate_expression(&let_in.value)?;
+                
+                // Store the value in a local variable
+                let var_type = self.get_or_create_type(&let_in.ty.clone().unwrap_or_else(|| {
+                    // For now, use i32 as default type if not specified
+                    crate::ast::types::i32()
+                }))?;
+                
+                let ptr = self.builder.build_alloca(var_type, &let_in.name)
+                    .map_err(|e| CompilerError::SpirvError(format!("Failed to build alloca: {:?}", e)))?;
+                
+                self.builder.build_store(ptr, value)
+                    .map_err(|e| CompilerError::SpirvError(format!("Failed to build store: {:?}", e)))?;
+                
+                // Store in variable cache
+                let ast_type = let_in.ty.clone().unwrap_or_else(|| crate::ast::types::i32());
+                self.variable_cache.insert(let_in.name.clone(), ptr);
+                self.variable_types.insert(let_in.name.clone(), ast_type);
+                
+                // Generate code for the body expression
+                let result = self.generate_expression(&let_in.body)?;
+                
+                // Clean up variable from cache
+                self.variable_cache.remove(&let_in.name);
+                self.variable_types.remove(&let_in.name);
+                
+                Ok(result)
+            }
         }
     }
 

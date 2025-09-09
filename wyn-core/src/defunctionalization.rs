@@ -271,6 +271,32 @@ impl Defunctionalizer {
                     StaticValue::Dyn(types::tuple(element_types)),
                 ))
             }
+            Expression::LetIn(let_in) => {
+                // Transform the value expression
+                let (transformed_value, value_sv) = 
+                    self.defunctionalize_expression(&let_in.value, scope_stack)?;
+                
+                // Push new scope and add binding
+                scope_stack.push_scope();
+                scope_stack.insert(let_in.name.clone(), value_sv);
+                
+                // Transform the body expression
+                let (transformed_body, body_sv) = 
+                    self.defunctionalize_expression(&let_in.body, scope_stack)?;
+                
+                // Pop scope
+                scope_stack.pop_scope();
+                
+                Ok((
+                    Expression::LetIn(crate::ast::LetInExpr {
+                        name: let_in.name.clone(),
+                        ty: let_in.ty.clone(),
+                        value: Box::new(transformed_value),
+                        body: Box::new(transformed_body),
+                    }),
+                    body_sv,
+                ))
+            }
         }
     }
 
@@ -474,6 +500,15 @@ impl Defunctionalizer {
                 for elem in elements {
                     self.collect_free_variables(elem, bound_vars, free_vars)?;
                 }
+            }
+            Expression::LetIn(let_in) => {
+                // Collect free variables from value expression
+                self.collect_free_variables(&let_in.value, bound_vars, free_vars)?;
+                
+                // Add let binding to bound variables and collect from body
+                let mut extended_bound = bound_vars.clone();
+                extended_bound.insert(let_in.name.clone());
+                self.collect_free_variables(&let_in.body, &extended_bound, free_vars)?;
             }
             Expression::IntLiteral(_) | Expression::FloatLiteral(_) => {
                 // No free variables in literals

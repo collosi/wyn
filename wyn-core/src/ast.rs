@@ -83,6 +83,7 @@ pub enum Expression {
     Tuple(Vec<Expression>),
     Lambda(LambdaExpr),
     Application(Box<Expression>, Vec<Expression>), // Function application
+    LetIn(LetInExpr),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -95,6 +96,14 @@ pub struct LambdaParam {
 pub struct LambdaExpr {
     pub params: Vec<LambdaParam>,
     pub return_type: Option<Type>,
+    pub body: Box<Expression>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LetInExpr {
+    pub name: String,
+    pub ty: Option<Type>,
+    pub value: Box<Expression>,
     pub body: Box<Expression>,
 }
 
@@ -116,9 +125,6 @@ pub mod types {
         Type::Constructed("float", vec![])
     }
 
-    pub fn vec4f32() -> Type {
-        Type::Constructed("vec4f32", vec![])
-    }
 
     pub fn array(elem_type: Type) -> Type {
         Type::Constructed("array", vec![elem_type])

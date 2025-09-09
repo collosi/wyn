@@ -118,11 +118,13 @@ impl<W: Write> CfgNemoExtractor<W> {
             }
             // Lambda expressions create new basic blocks for their body
             Expression::Lambda(lambda) => {
+                // Capture the current block BEFORE creating the new one
+                let parent_block = self.current_block;
                 let lambda_block = self.start_new_block()?;
                 
-                // Write edge from current block to lambda block
-                if let Some(current_block) = self.current_block {
-                    self.nemo_writer.write_edge_fact(current_block, lambda_block).map_err(Self::io_error)?;
+                // Write edge from parent block to lambda block
+                if let Some(parent) = parent_block {
+                    self.nemo_writer.write_edge_fact(parent, lambda_block).map_err(Self::io_error)?;
                 }
                 
                 // Process lambda parameters as variable definitions
@@ -144,6 +146,11 @@ impl<W: Write> CfgNemoExtractor<W> {
                 if self.debug {
                     eprintln!("DEBUG: Lambda created block {} for body", lambda_block.0);
                 }
+            }
+            // Let-in expressions  
+            Expression::LetIn(let_in) => {
+                self.extract_expression_cfg(&let_in.value)?;
+                self.extract_expression_cfg(&let_in.body)?;
             }
             // Literals don't require further processing
             Expression::IntLiteral(_) | Expression::FloatLiteral(_) => {}
