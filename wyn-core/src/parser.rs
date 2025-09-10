@@ -28,19 +28,19 @@ impl Parser {
 
         match self.peek() {
             Some(Token::Let) => {
-                let mut decl = self.parse_let_decl()?;
+                let mut decl = self.parse_decl("let")?;
                 decl.attributes = attributes;
-                Ok(Declaration::Let(decl))
+                Ok(Declaration::Decl(decl))
+            }
+            Some(Token::Def) => {
+                let mut decl = self.parse_decl("def")?;
+                decl.attributes = attributes;
+                Ok(Declaration::Decl(decl))
             }
             Some(Token::Entry) => {
                 let mut decl = self.parse_entry_decl()?;
                 decl.attributes = attributes;
                 Ok(Declaration::Entry(decl))
-            }
-            Some(Token::Def) => {
-                let mut decl = self.parse_def_decl()?;
-                decl.attributes = attributes;
-                Ok(Declaration::Def(decl))
             }
             Some(Token::Val) => {
                 let mut decl = self.parse_val_decl()?;
@@ -53,20 +53,51 @@ impl Parser {
         }
     }
 
-    fn parse_let_decl(&mut self) -> Result<LetDecl> {
-        self.expect(Token::Let)?;
+    fn parse_decl(&mut self, keyword: &'static str) -> Result<Decl> {
+        // Expect the keyword token (let or def)
+        match keyword {
+            "let" => self.expect(Token::Let)?,
+            "def" => self.expect(Token::Def)?,
+            _ => return Err(CompilerError::ParseError(format!("Invalid keyword: {}", keyword))),
+        }
+        
         let name = self.expect_identifier()?;
-        self.expect(Token::Colon)?;
-        let ty = Some(self.parse_type()?);
-        self.expect(Token::Assign)?;
-        let value = self.parse_expression()?;
 
-        Ok(LetDecl {
-            attributes: vec![],
-            name,
-            ty,
-            value,
-        })
+        // Check if this is a typed declaration (name: type = value) or function declaration (name param = body)
+        if self.check(&Token::Colon) {
+            // Typed declaration: let/def name: type = value
+            self.expect(Token::Colon)?;
+            let ty = Some(self.parse_type()?);
+            self.expect(Token::Assign)?;
+            let body = self.parse_expression()?;
+            
+            Ok(Decl {
+                keyword,
+                attributes: vec![],
+                name,
+                params: vec![], // No parameters for typed declarations
+                ty,
+                body,
+            })
+        } else {
+            // Function declaration: let/def name param1 param2 = body
+            // OR simple variable: let/def name = value
+            let mut params = Vec::new();
+            while !self.check(&Token::Assign) && !self.is_at_end() {
+                params.push(self.expect_identifier()?);
+            }
+            self.expect(Token::Assign)?;
+            let body = self.parse_expression()?;
+            
+            Ok(Decl {
+                keyword,
+                attributes: vec![],
+                name,
+                params,
+                ty: None, // No explicit type for untyped declarations
+                body,
+            })
+        }
     }
 
     fn parse_entry_decl(&mut self) -> Result<EntryDecl> {
@@ -113,41 +144,6 @@ impl Parser {
         })
     }
 
-    fn parse_def_decl(&mut self) -> Result<DefDecl> {
-        self.expect(Token::Def)?;
-        let name = self.expect_identifier()?;
-
-        // Check if this is a typed definition (def name: type = value) or function definition (def name param = body)
-        if self.check(&Token::Colon) {
-            // Typed definition: def name: type = value
-            self.expect(Token::Colon)?;
-            let ty = Some(self.parse_type()?);
-            self.expect(Token::Assign)?;
-            let body = self.parse_expression()?;
-            Ok(DefDecl {
-                attributes: vec![],
-                name,
-                params: vec![], // No parameters for typed definitions
-                ty,
-                body,
-            })
-        } else {
-            // Function definition: def name param1 param2 = body
-            let mut params = Vec::new();
-            while !self.check(&Token::Assign) && !self.is_at_end() {
-                params.push(self.expect_identifier()?);
-            }
-            self.expect(Token::Assign)?;
-            let body = self.parse_expression()?;
-            Ok(DefDecl {
-                attributes: vec![],
-                name,
-                params,
-                ty: None, // No explicit type for function definitions
-                body,
-            })
-        }
-    }
 
     fn parse_val_decl(&mut self) -> Result<ValDecl> {
         self.expect(Token::Val)?;
@@ -700,15 +696,15 @@ mod tests {
                 ));
             }
             match &declarations[0] {
-                Declaration::Let(decl) => {
+                Declaration::Decl(decl) => {
                     if decl.name != "x" {
                         return Err(format!("Expected name 'x', got '{}'", decl.name));
                     }
                     if decl.ty != Some(crate::ast::types::i32()) {
                         return Err(format!("Expected i32 type, got {:?}", decl.ty));
                     }
-                    if decl.value != Expression::IntLiteral(42) {
-                        return Err(format!("Expected IntLiteral(42), got {:?}", decl.value));
+                    if decl.body != Expression::IntLiteral(42) {
+                        return Err(format!("Expected IntLiteral(42), got {:?}", decl.body));
                     }
                     Ok(())
                 }
@@ -729,7 +725,7 @@ mod tests {
                     ));
                 }
                 match &declarations[0] {
-                    Declaration::Let(decl) => {
+                    Declaration::Decl(decl) => {
                         if decl.name != "arr" {
                             return Err(format!("Expected name 'arr', got '{}'", decl.name));
                         }
@@ -833,7 +829,7 @@ mod tests {
                 ));
             }
             match &declarations[0] {
-                Declaration::Let(decl) => match &decl.value {
+                Declaration::Decl(decl) => match &decl.body {
                     Expression::ArrayIndex(arr, idx) => {
                         if **arr != Expression::Identifier("arr".to_string()) {
                             return Err(format!(
@@ -848,7 +844,7 @@ mod tests {
                     }
                     _ => Err(format!(
                         "Expected ArrayIndex expression, got {:?}",
-                        decl.value
+                        decl.body
                     )),
                 },
                 _ => Err("Expected Let declaration".to_string()),
@@ -866,7 +862,7 @@ mod tests {
                 ));
             }
             match &declarations[0] {
-                Declaration::Let(decl) => match &decl.value {
+                Declaration::Decl(decl) => match &decl.body {
                     Expression::BinaryOp(BinaryOp::Divide, left, right) => {
                         if **left != Expression::FloatLiteral(135.0) {
                             return Err(format!("Expected left operand 135.0, got {:?}", **left));
@@ -878,7 +874,7 @@ mod tests {
                     }
                     _ => Err(format!(
                         "Expected BinaryOp expression, got {:?}",
-                        decl.value
+                        decl.body
                     )),
                 },
                 _ => Err("Expected Let declaration".to_string()),
@@ -1164,11 +1160,11 @@ mod tests {
                 ));
             }
             match &declarations[0] {
-                Declaration::Let(decl) => {
+                Declaration::Decl(decl) => {
                     if decl.name != "f" {
                         return Err(format!("Expected name 'f', got '{}'", decl.name));
                     }
-                    match &decl.value {
+                    match &decl.body {
                         Expression::Lambda(lambda) => {
                             if lambda.params.len() != 1 {
                                 return Err(format!(
@@ -1212,7 +1208,7 @@ mod tests {
                             }
                             Ok(())
                         }
-                        _ => Err(format!("Expected lambda expression, got {:?}", decl.value)),
+                        _ => Err(format!("Expected lambda expression, got {:?}", decl.body)),
                     }
                 }
                 _ => Err("Expected Let declaration".to_string()),
@@ -1230,7 +1226,7 @@ mod tests {
                 ));
             }
             match &declarations[0] {
-                Declaration::Let(decl) => match &decl.value {
+                Declaration::Decl(decl) => match &decl.body {
                     Expression::Lambda(lambda) => {
                         if lambda.params.len() != 1 {
                             return Err(format!(
@@ -1274,7 +1270,7 @@ mod tests {
                         }
                         Ok(())
                     }
-                    _ => Err(format!("Expected lambda expression, got {:?}", decl.value)),
+                    _ => Err(format!("Expected lambda expression, got {:?}", decl.body)),
                 },
                 _ => Err("Expected Let declaration".to_string()),
             }
@@ -1293,7 +1289,7 @@ mod tests {
                     ));
                 }
                 match &declarations[0] {
-                    Declaration::Let(decl) => match &decl.value {
+                    Declaration::Decl(decl) => match &decl.body {
                         Expression::Lambda(lambda) => {
                             if lambda.params.len() != 2 {
                                 return Err(format!(
@@ -1333,7 +1329,7 @@ mod tests {
                             }
                             Ok(())
                         }
-                        _ => Err(format!("Expected lambda expression, got {:?}", decl.value)),
+                        _ => Err(format!("Expected lambda expression, got {:?}", decl.body)),
                     },
                     _ => Err("Expected Let declaration".to_string()),
                 }
@@ -1351,7 +1347,7 @@ mod tests {
                 ));
             }
             match &declarations[0] {
-                Declaration::Let(decl) => match &decl.value {
+                Declaration::Decl(decl) => match &decl.body {
                     Expression::Application(func, args) => {
                         match func.as_ref() {
                             Expression::Identifier(name) => {
@@ -1399,7 +1395,7 @@ mod tests {
                     }
                     _ => Err(format!(
                         "Expected function application, got {:?}",
-                        decl.value
+                        decl.body
                     )),
                 },
                 _ => Err("Expected Let declaration".to_string()),
@@ -1487,7 +1483,7 @@ entry fragment_main(): [4]f32 = SKY_RGBA
             
             // First should be def verts
             match &declarations[0] {
-                Declaration::Def(decl) => {
+                Declaration::Decl(decl) if decl.keyword == "def" => {
                     if decl.name != "verts" {
                         return Err(format!("Expected first def to be 'verts', got '{}'", decl.name));
                     }
@@ -1507,7 +1503,7 @@ entry fragment_main(): [4]f32 = SKY_RGBA
             
             // Third should be def SKY_RGBA
             match &declarations[2] {
-                Declaration::Def(decl) => {
+                Declaration::Decl(decl) if decl.keyword == "def" => {
                     if decl.name != "SKY_RGBA" {
                         return Err(format!("Expected third def to be 'SKY_RGBA', got '{}'", decl.name));
                     }

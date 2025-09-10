@@ -51,19 +51,21 @@ impl Defunctionalizer {
         // First pass: collect all declarations and transform them
         for decl in &program.declarations {
             match decl {
-                Declaration::Let(let_decl) => {
-                    let (transformed_decl, _sv) =
-                        self.defunctionalize_let_decl(let_decl, &mut scope_stack)?;
-                    new_declarations.push(transformed_decl);
+                Declaration::Decl(decl_node) => {
+                    if decl_node.keyword == "let" && decl_node.params.is_empty() {
+                        // Let variable declaration - needs defunctionalization
+                        let (transformed_decl, _sv) =
+                            self.defunctionalize_decl(decl_node, &mut scope_stack)?;
+                        new_declarations.push(transformed_decl);
+                    } else {
+                        // Def declarations or function declarations - already first-order
+                        new_declarations.push(Declaration::Decl(decl_node.clone()));
+                    }
                 }
                 Declaration::Entry(entry_decl) => {
                     let transformed_decl =
                         self.defunctionalize_entry_decl(entry_decl, &mut scope_stack)?;
                     new_declarations.push(transformed_decl);
-                }
-                Declaration::Def(def_decl) => {
-                    // User-defined functions are already first-order
-                    new_declarations.push(Declaration::Def(def_decl.clone()));
                 }
                 Declaration::Val(val_decl) => {
                     // Type signatures only
@@ -74,7 +76,8 @@ impl Defunctionalizer {
 
         // Add generated functions as def declarations
         for func in &self.generated_functions {
-            new_declarations.push(Declaration::Def(DefDecl {
+            new_declarations.push(Declaration::Decl(Decl {
+                keyword: "def",
                 attributes: vec![],
                 name: func.name.clone(),
                 params: func.params.iter().map(|p| p.name.clone()).collect(),
@@ -88,21 +91,23 @@ impl Defunctionalizer {
         })
     }
 
-    fn defunctionalize_let_decl(
+    fn defunctionalize_decl(
         &mut self,
-        decl: &LetDecl,
+        decl: &Decl,
         scope_stack: &mut ScopeStack<StaticValue>,
     ) -> Result<(Declaration, StaticValue)> {
-        let (transformed_expr, sv) = self.defunctionalize_expression(&decl.value, scope_stack)?;
+        let (transformed_expr, sv) = self.defunctionalize_expression(&decl.body, scope_stack)?;
 
-        // Add the let binding to the current scope
+        // Add the binding to the current scope
         scope_stack.insert(decl.name.clone(), sv.clone());
 
-        let transformed_decl = Declaration::Let(LetDecl {
+        let transformed_decl = Declaration::Decl(Decl {
+            keyword: decl.keyword,
             attributes: decl.attributes.clone(),
             name: decl.name.clone(),
+            params: decl.params.clone(),
             ty: decl.ty.clone(),
-            value: transformed_expr,
+            body: transformed_expr,
         });
 
         Ok((transformed_decl, sv))

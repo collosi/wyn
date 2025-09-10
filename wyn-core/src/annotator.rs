@@ -47,17 +47,32 @@ impl CodeAnnotator {
 
     fn annotate_declaration(&mut self, decl: &Declaration) {
         match decl {
-            Declaration::Let(let_decl) => {
+            Declaration::Decl(decl_node) => {
                 let block = self.new_block();
                 self.enter_block(block);
 
-                write!(self.output, "#B{}.0 let {}", block.0, let_decl.name).unwrap();
-                if let Some(ref ty) = let_decl.ty {
+                write!(self.output, "#B{}.0 {} {}", block.0, decl_node.keyword, decl_node.name).unwrap();
+                
+                // Add parameters if this is a function
+                if !decl_node.params.is_empty() {
+                    self.output.push('(');
+                    for (i, param) in decl_node.params.iter().enumerate() {
+                        if i > 0 {
+                            self.output.push_str(", ");
+                        }
+                        write!(self.output, "{}", param).unwrap();
+                    }
+                    self.output.push(')');
+                }
+                
+                // Add type annotation if present
+                if let Some(ref ty) = decl_node.ty {
                     self.output.push_str(": ");
                     self.write_type(ty);
                 }
+                
                 self.output.push_str(" = ");
-                self.annotate_expression(&let_decl.value);
+                self.annotate_expression(&decl_node.body);
 
                 self.exit_block();
             }
@@ -81,26 +96,6 @@ impl CodeAnnotator {
                 self.output.push_str(" =\n    ");
 
                 self.annotate_expression(&entry.body);
-
-                self.exit_block();
-            }
-
-            Declaration::Def(def) => {
-                let block = self.new_block();
-                self.enter_block(block);
-
-                write!(self.output, "#B{}.0 def {}(", block.0, def.name).unwrap();
-
-                for (i, param) in def.params.iter().enumerate() {
-                    if i > 0 {
-                        self.output.push_str(", ");
-                    }
-                    write!(self.output, "{}", param).unwrap();
-                }
-
-                self.output.push_str(") = ");
-
-                self.annotate_expression(&def.body);
 
                 self.exit_block();
             }

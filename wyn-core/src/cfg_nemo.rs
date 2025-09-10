@@ -43,15 +43,18 @@ impl<W: Write> CfgNemoExtractor<W> {
                 self.start_new_block()?; // Entry points start new blocks
                 self.extract_expression_cfg(&entry_decl.body)?;
             }
-            Declaration::Let(let_decl) => {
-                if self.current_block.is_none() {
-                    self.start_new_block()?; // Start block if needed
+            Declaration::Decl(decl) => {
+                if decl.keyword == "let" && decl.params.is_empty() {
+                    // Let variable binding
+                    if self.current_block.is_none() {
+                        self.start_new_block()?; // Start block if needed
+                    }
+                    self.extract_expression_cfg(&decl.body)?;
+                } else {
+                    // Function declaration or def variable
+                    self.start_new_block()?; // Function definitions start new blocks
+                    self.extract_expression_cfg(&decl.body)?;
                 }
-                self.extract_expression_cfg(&let_decl.value)?;
-            }
-            Declaration::Def(def_decl) => {
-                self.start_new_block()?; // Function definitions start new blocks
-                self.extract_expression_cfg(&def_decl.body)?;
             }
             Declaration::Val(_val_decl) => {
                 // Val declarations are type signatures, no body to process

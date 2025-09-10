@@ -104,41 +104,43 @@ impl BorrowChecker {
                     location_counter,
                 )?;
             }
-            Declaration::Let(let_decl) => {
-                let block_id = BlockId(*block_counter);
-                *block_counter += 1;
-                fact_writer
-                    .write_block_fact(block_id)
-                    .map_err(Self::io_error)?;
+            Declaration::Decl(decl) => {
+                if decl.keyword == "let" && decl.params.is_empty() {
+                    // Let variable binding
+                    let block_id = BlockId(*block_counter);
+                    *block_counter += 1;
+                    fact_writer
+                        .write_block_fact(block_id)
+                        .map_err(Self::io_error)?;
 
-                // Let binding creates a lifetime
-                let lifetime_id = self.get_next_lifetime_id();
-                let location_id = *location_counter;
-                *location_counter += 1;
+                    // Let binding creates a lifetime
+                    let lifetime_id = self.get_next_lifetime_id();
+                    let location_id = *location_counter;
+                    *location_counter += 1;
 
-                let location = Location {
-                    block: block_id,
-                    index: 0,
-                };
-                fact_writer
-                    .write_location_fact(location_id, &location)
-                    .map_err(Self::io_error)?;
-                fact_writer
-                    .write_var_def_fact(location_id, &let_decl.name)
-                    .map_err(Self::io_error)?;
-                fact_writer
-                    .write_lifetime_start_fact(lifetime_id, location_id, &let_decl.name)
-                    .map_err(Self::io_error)?;
+                    let location = Location {
+                        block: block_id,
+                        index: 0,
+                    };
+                    fact_writer
+                        .write_location_fact(location_id, &location)
+                        .map_err(Self::io_error)?;
+                    fact_writer
+                        .write_var_def_fact(location_id, &decl.name)
+                        .map_err(Self::io_error)?;
+                    fact_writer
+                        .write_lifetime_start_fact(lifetime_id, location_id, &decl.name)
+                        .map_err(Self::io_error)?;
 
-                // Analyze value expression
-                self.extract_expression_facts(
-                    fact_writer,
-                    &let_decl.value,
-                    block_id,
-                    location_counter,
-                )?;
-            }
-            Declaration::Def(def_decl) => {
+                    // Analyze value expression
+                    self.extract_expression_facts(
+                        fact_writer,
+                        &decl.body,
+                        block_id,
+                        location_counter,
+                    )?;
+                } else {
+                    // Function declaration or def variable
                 let block_id = BlockId(*block_counter);
                 *block_counter += 1;
                 fact_writer
@@ -146,7 +148,7 @@ impl BorrowChecker {
                     .map_err(Self::io_error)?;
 
                 // Parameters create lifetimes
-                for param_name in &def_decl.params {
+                for param_name in &decl.params {
                     let lifetime_id = self.get_next_lifetime_id();
                     let location_id = *location_counter;
                     *location_counter += 1;
@@ -169,10 +171,11 @@ impl BorrowChecker {
                 // Analyze function body
                 self.extract_expression_facts(
                     fact_writer,
-                    &def_decl.body,
+                    &decl.body,
                     block_id,
                     location_counter,
                 )?;
+                }
             }
             Declaration::Val(_) => {
                 // Val declarations don't create runtime lifetimes

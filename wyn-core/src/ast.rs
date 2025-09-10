@@ -58,9 +58,8 @@ pub struct Program {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Declaration {
-    Let(LetDecl),
+    Decl(Decl),       // Unified let/def declarations
     Entry(EntryDecl),
-    Def(DefDecl),
     Val(ValDecl),
 }
 
@@ -79,11 +78,13 @@ pub struct AttributedType {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct LetDecl {
+pub struct Decl {
+    pub keyword: &'static str,   // Either "let" or "def"
     pub attributes: Vec<Attribute>,
     pub name: String,
-    pub ty: Option<Type>,
-    pub value: Expression,
+    pub params: Vec<String>,     // Empty for variable declarations, populated for function declarations
+    pub ty: Option<Type>,        // Type annotation for variable definitions
+    pub body: Expression,        // The value/expression for let/def declarations
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -100,15 +101,6 @@ pub struct Parameter {
     pub attributes: Vec<Attribute>,
     pub name: String,
     pub ty: Type,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct DefDecl {
-    pub attributes: Vec<Attribute>,
-    pub name: String,
-    pub params: Vec<String>, // Parameter names without explicit types (for inference)
-    pub ty: Option<Type>,    // Type annotation for variable definitions (def name: type = value)
-    pub body: Expression,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -80,25 +80,19 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     fn generate_declaration(&mut self, decl: &Declaration) -> Result<()> {
         match decl {
-            Declaration::Let(let_decl) => {
-                let ty = let_decl.ty.as_ref().ok_or_else(|| {
-                    CompilerError::SpirvError("Let declaration must have explicit type".to_string())
-                })?;
-                self.generate_declaration_helper(&let_decl.name, ty, &let_decl.value)
-            }
-            Declaration::Entry(entry_decl) => self.generate_entry_decl(entry_decl),
-            Declaration::Def(def_decl) => {
-                if def_decl.params.is_empty() {
-                    // Variable definition: def name: type = value (same as let)
-                    let ty = def_decl.ty.as_ref().ok_or_else(|| {
-                        CompilerError::SpirvError("Def variable declaration must have explicit type".to_string())
+            Declaration::Decl(decl_node) => {
+                if decl_node.params.is_empty() {
+                    // Variable declaration: let/def name: type = value or let/def name = value
+                    let ty = decl_node.ty.as_ref().ok_or_else(|| {
+                        CompilerError::SpirvError(format!("{} declaration must have explicit type", decl_node.keyword))
                     })?;
-                    self.generate_declaration_helper(&def_decl.name, ty, &def_decl.body)
+                    self.generate_declaration_helper(&decl_node.name, ty, &decl_node.body)
                 } else {
-                    // Function definition: def name param1 param2 = body (skip for now)
+                    // Function declaration: let/def name param1 param2 = body (skip for now)
                     Ok(())
                 }
             }
+            Declaration::Entry(entry_decl) => self.generate_entry_decl(entry_decl),
             Declaration::Val(_val_decl) => {
                 // Type signatures only
                 Ok(())
