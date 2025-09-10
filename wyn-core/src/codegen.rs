@@ -6,7 +6,7 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::targets::{InitializationConfig, Target, TargetTriple};
-use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, BasicType};
+use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::AddressSpace;
 use std::collections::HashMap;
@@ -80,12 +80,20 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     fn generate_declaration(&mut self, decl: &Declaration) -> Result<()> {
         match decl {
-            Declaration::Let(let_decl) => self.generate_let_decl(let_decl),
+            Declaration::Let(let_decl) => {
+                let ty = let_decl.ty.as_ref().ok_or_else(|| {
+                    CompilerError::SpirvError("Let declaration must have explicit type".to_string())
+                })?;
+                self.generate_declaration_helper(&let_decl.name, ty, &let_decl.value)
+            }
             Declaration::Entry(entry_decl) => self.generate_entry_decl(entry_decl),
             Declaration::Def(def_decl) => {
                 if def_decl.params.is_empty() {
                     // Variable definition: def name: type = value (same as let)
-                    self.generate_def_variable(def_decl)
+                    let ty = def_decl.ty.as_ref().ok_or_else(|| {
+                        CompilerError::SpirvError("Def variable declaration must have explicit type".to_string())
+                    })?;
+                    self.generate_declaration_helper(&def_decl.name, ty, &def_decl.body)
                 } else {
                     // Function definition: def name param1 param2 = body (skip for now)
                     Ok(())
@@ -98,43 +106,19 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
-    fn generate_let_decl(&mut self, decl: &LetDecl) -> Result<()> {
-        let ty = decl.ty.as_ref().ok_or_else(|| {
-            CompilerError::SpirvError("Let declaration must have explicit type".to_string())
-        })?;
-
+    fn generate_declaration_helper(&mut self, name: &str, ty: &Type, value_expr: &Expression) -> Result<()> {
         // Generate the expression value
-        let value = self.generate_expression(&decl.value)?;
+        let value = self.generate_expression(value_expr)?;
         
         // Create a global variable with the correct type
         let llvm_type = self.get_or_create_type(ty)?;
-        let global = self.module.add_global(llvm_type, Some(AddressSpace::default()), &decl.name);
+        let global = self.module.add_global(llvm_type, Some(AddressSpace::default()), name);
         global.set_initializer(&value);
         
         // Store in variable cache
-        self.variable_cache.insert(decl.name.clone(), global.as_pointer_value());
-        self.variable_types.insert(decl.name.clone(), ty.clone());
+        self.variable_cache.insert(name.to_string(), global.as_pointer_value());
+        self.variable_types.insert(name.to_string(), ty.clone());
 
-        Ok(())
-    }
-
-    fn generate_def_variable(&mut self, decl: &DefDecl) -> Result<()> {
-        let ty = decl.ty.as_ref().ok_or_else(|| {
-            CompilerError::SpirvError("Def variable declaration must have explicit type".to_string())
-        })?;
-
-        // Generate the expression value
-        let value = self.generate_expression(&decl.body)?;
-        
-        // Create a global variable with the correct type
-        let llvm_type = self.get_or_create_type(ty)?;
-        let global = self.module.add_global(llvm_type, Some(AddressSpace::default()), &decl.name);
-        global.set_initializer(&value);
-        
-        // Store in variable cache
-        self.variable_cache.insert(decl.name.clone(), global.as_pointer_value());
-        self.variable_types.insert(decl.name.clone(), ty.clone());
-        
         Ok(())
     }
 
@@ -509,117 +493,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
-    fn generate_constant_array(
-        &mut self,
-        ty: &Type,
-        elements: &[Expression],
-    ) -> Result<BasicValueEnum<'ctx>> {
-        match ty {
-            Type::Constructed(name, args)
-                if matches!(name, TypeName::Str("array") | TypeName::Array("array", _)) =>
-            {
-                let elem_ty = args.first().ok_or_else(|| {
-                    CompilerError::SpirvError("Array type missing element type".to_string())
-                })?;
-                let mut const_values = Vec::new();
-
-                for elem in elements {
-                    match elem {
-                        Expression::ArrayLiteral(inner) => {
-                            let inner_const = self.generate_constant_array(elem_ty, inner)?;
-                            const_values.push(inner_const);
-                        }
-                        Expression::FloatLiteral(f) => {
-                            let f32_type = self.context.f32_type();
-                            const_values.push(f32_type.const_float(*f as f64).into());
-                        }
-                        Expression::IntLiteral(n) => {
-                            let i32_type = self.context.i32_type();
-                            const_values.push(i32_type.const_int(*n as u64, true).into());
-                        }
-                        Expression::BinaryOp(BinaryOp::Divide, left, right) => {
-                            if let (Expression::FloatLiteral(l), Expression::FloatLiteral(r)) =
-                                (left.as_ref(), right.as_ref())
-                            {
-                                let result = l / r;
-                                let f32_type = self.context.f32_type();
-                                const_values.push(f32_type.const_float(result as f64).into());
-                            } else {
-                                return Err(CompilerError::SpirvError(
-                                    "Only constant float division supported in array literals"
-                                        .to_string(),
-                                ));
-                            }
-                        }
-                        _ => {
-                            return Err(CompilerError::SpirvError(
-                                "Only literals supported in constant arrays".to_string(),
-                            ));
-                        }
-                    }
-                }
-
-                // Create the array constant as a const_array directly from values
-                let array_type = self.get_or_create_type(ty)?;
-                match array_type {
-                    BasicTypeEnum::ArrayType(_arr_ty) => {
-                        // Handle both simple and nested arrays
-                        if const_values.is_empty() {
-                            return Err(CompilerError::SpirvError(
-                                "Empty array not supported".to_string(),
-                            ));
-                        }
-
-                        // Create array from the const values
-                        match const_values[0] {
-                            BasicValueEnum::FloatValue(_f) => {
-                                let float_values: Vec<_> =
-                                    const_values.iter().map(|v| v.into_float_value()).collect();
-                                let f32_type = self.context.f32_type();
-                                Ok(f32_type.const_array(&float_values).into())
-                            }
-                            BasicValueEnum::IntValue(_i) => {
-                                let int_values: Vec<_> =
-                                    const_values.iter().map(|v| v.into_int_value()).collect();
-                                let i32_type = self.context.i32_type();
-                                Ok(i32_type.const_array(&int_values).into())
-                            }
-                            BasicValueEnum::ArrayValue(_) => {
-                                // Handle nested arrays
-                                // For a type like [3][4]f32, we have:
-                                // - array_type is [3 x [4 x float]]
-                                // - array_values contains 3 values of type [4 x float]
-                                // We need to create a const array of type [3 x [4 x float]]
-
-                                let array_values: Vec<_> =
-                                    const_values.iter().map(|v| v.into_array_value()).collect();
-
-                                if array_values.is_empty() {
-                                    return Err(CompilerError::SpirvError(
-                                        "Empty nested array".to_string(),
-                                    ));
-                                }
-
-                                // Get the element type ([4 x float] in our example)
-                                let first_elem_type = array_values[0].get_type();
-
-                                // Create the const array using the element type
-                                // This creates [3 x [4 x float]] from 3 values of [4 x float]
-                                Ok(first_elem_type.const_array(&array_values).into())
-                            }
-                            _ => Err(CompilerError::SpirvError(
-                                "Unsupported array element type in constant".to_string(),
-                            )),
-                        }
-                    }
-                    _ => Err(CompilerError::SpirvError("Expected array type".to_string())),
-                }
-            }
-            _ => Err(CompilerError::SpirvError(
-                "Expected array type for array literal".to_string(),
-            )),
-        }
-    }
 
     fn convert_array_to_vec4(
         &mut self,
