@@ -121,13 +121,14 @@ impl Parser {
         if self.check(&Token::Colon) {
             // Typed definition: def name: type = value
             self.expect(Token::Colon)?;
-            let _ty = self.parse_type()?; // Parse type but don't store it for now
+            let ty = Some(self.parse_type()?);
             self.expect(Token::Assign)?;
             let body = self.parse_expression()?;
             Ok(DefDecl {
                 attributes: vec![],
                 name,
                 params: vec![], // No parameters for typed definitions
+                ty,
                 body,
             })
         } else {
@@ -142,6 +143,7 @@ impl Parser {
                 attributes: vec![],
                 name,
                 params,
+                ty: None, // No explicit type for function definitions
                 body,
             })
         }

@@ -98,10 +98,22 @@ impl TypeChecker {
 
     fn check_declaration(&mut self, decl: &Declaration) -> Result<()> {
         match decl {
-            Declaration::Let(let_decl) => self.check_let_decl(let_decl),
-            Declaration::Entry(entry_decl) => self.check_entry_decl(entry_decl),
-            Declaration::Def(def_decl) => self.check_def_decl(def_decl),
-            Declaration::Val(val_decl) => self.check_val_decl(val_decl),
+            Declaration::Let(let_decl) => {
+                println!("DEBUG: Checking Let declaration: {}", let_decl.name);
+                self.check_let_decl(let_decl)
+            }
+            Declaration::Entry(entry_decl) => {
+                println!("DEBUG: Checking Entry declaration: {}", entry_decl.name);
+                self.check_entry_decl(entry_decl)
+            }
+            Declaration::Def(def_decl) => {
+                println!("DEBUG: Checking Def declaration: {}", def_decl.name);
+                self.check_def_decl(def_decl)
+            }
+            Declaration::Val(val_decl) => {
+                println!("DEBUG: Checking Val declaration: {}", val_decl.name);
+                self.check_val_decl(val_decl)
+            }
         }
     }
 
@@ -136,7 +148,9 @@ impl TypeChecker {
         }
 
         // Check body with parameters in scope
+        println!("DEBUG: About to infer body type for entry '{}'", decl.name);
         let body_type = self.infer_expression(&decl.body)?;
+        println!("DEBUG: Successfully inferred body type for entry '{}'", decl.name);
 
         // Pop parameter scope
         self.scope_stack.pop_scope();
@@ -152,39 +166,49 @@ impl TypeChecker {
     }
 
     fn check_def_decl(&mut self, decl: &DefDecl) -> Result<()> {
-        // Create type variables for parameters
-        let param_types: Vec<Type> = decl
-            .params
-            .iter()
-            .map(|_| self.context.new_variable())
-            .collect();
+        if decl.params.is_empty() {
+            // Variable definition: def name: type = value
+            let body_type = self.infer_expression(&decl.body)?;
+            let type_scheme = TypeScheme::Monotype(body_type.clone());
+            println!("DEBUG: Inserting variable '{}' into scope", decl.name);
+            self.scope_stack.insert(decl.name.clone(), type_scheme);
+            println!("Inferred type for {}: {}", decl.name, body_type);
+        } else {
+            // Function definition: def name param1 param2 = body
+            // Create type variables for parameters
+            let param_types: Vec<Type> = decl
+                .params
+                .iter()
+                .map(|_| self.context.new_variable())
+                .collect();
 
-        // Push new scope for function parameters
-        self.scope_stack.push_scope();
+            // Push new scope for function parameters
+            self.scope_stack.push_scope();
 
-        // Add parameters to scope
-        for (param_name, param_type) in decl.params.iter().zip(param_types.iter()) {
-            let type_scheme = TypeScheme::Monotype(param_type.clone());
-            self.scope_stack.insert(param_name.clone(), type_scheme);
+            // Add parameters to scope
+            for (param_name, param_type) in decl.params.iter().zip(param_types.iter()) {
+                let type_scheme = TypeScheme::Monotype(param_type.clone());
+                self.scope_stack.insert(param_name.clone(), type_scheme);
+            }
+
+            // Infer body type
+            let body_type = self.infer_expression(&decl.body)?;
+
+            // Pop parameter scope
+            self.scope_stack.pop_scope();
+
+            // Build function type: param1 -> param2 -> ... -> body_type
+            let func_type = param_types
+                .into_iter()
+                .rev()
+                .fold(body_type, |acc, param_ty| types::function(param_ty, acc));
+
+            // Update scope with inferred type
+            let type_scheme = TypeScheme::Monotype(func_type.clone());
+            self.scope_stack.insert(decl.name.clone(), type_scheme);
+
+            println!("Inferred type for {}: {}", decl.name, func_type);
         }
-
-        // Infer body type
-        let body_type = self.infer_expression(&decl.body)?;
-
-        // Pop parameter scope
-        self.scope_stack.pop_scope();
-
-        // Build function type: param1 -> param2 -> ... -> body_type
-        let func_type = param_types
-            .into_iter()
-            .rev()
-            .fold(body_type, |acc, param_ty| types::function(param_ty, acc));
-
-        // Update scope with inferred type
-        let type_scheme = TypeScheme::Monotype(func_type.clone());
-        self.scope_stack.insert(decl.name.clone(), type_scheme);
-
-        println!("Inferred type for {}: {}", decl.name, func_type);
 
         Ok(())
     }
@@ -204,7 +228,10 @@ impl TypeChecker {
                 let type_scheme = self
                     .scope_stack
                     .lookup(name)
-                    .ok_or_else(|| CompilerError::UndefinedVariable(name.clone()))?;
+                    .ok_or_else(|| {
+                        println!("DEBUG: Variable lookup failed for '{}'", name);
+                        CompilerError::UndefinedVariable(name.clone())
+                    })?;
                 // Instantiate the type scheme to get a concrete type
                 Ok(type_scheme.instantiate(&mut self.context))
             }

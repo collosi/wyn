@@ -107,6 +107,7 @@ pub struct DefDecl {
     pub attributes: Vec<Attribute>,
     pub name: String,
     pub params: Vec<String>, // Parameter names without explicit types (for inference)
+    pub ty: Option<Type>,    // Type annotation for variable definitions (def name: type = value)
     pub body: Expression,
 }
 

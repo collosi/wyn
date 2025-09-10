@@ -78,6 +78,7 @@ impl Defunctionalizer {
                 attributes: vec![],
                 name: func.name.clone(),
                 params: func.params.iter().map(|p| p.name.clone()).collect(),
+                ty: None, // Function definitions don't have explicit type annotations
                 body: func.body.clone(),
             }));
         }
