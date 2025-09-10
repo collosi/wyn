@@ -9,5 +9,5 @@ pub struct BlockId(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Location {
     pub block: BlockId,
-    pub index: usize,  // Position within the block
+    pub index: usize, // Position within the block
 }

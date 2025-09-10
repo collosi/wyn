@@ -61,15 +61,12 @@ fn parse_keyword(input: &str) -> IResult<&str, Token> {
         map(
             terminated(
                 tag(kw),
-                peek(alt((
-                    eof,
-                    recognize(one_of(" \t\n\r()[]{}=:,+-/*#<>")),
-                )))
+                peek(alt((eof, recognize(one_of(" \t\n\r()[]{}=:,+-/*#<>"))))),
             ),
-            move |_| token.clone()
+            move |_| token.clone(),
         )
     };
-    
+
     alt((
         keyword("let", Token::Let),
         keyword("entry", Token::Entry),

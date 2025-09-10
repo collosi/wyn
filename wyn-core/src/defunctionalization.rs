@@ -1,7 +1,6 @@
 use crate::ast::*;
 use crate::error::{CompilerError, Result};
 use crate::scope::ScopeStack;
-use polytype::Type;
 use std::collections::{HashMap, HashSet};
 
 /// Static values for defunctionalization, as described in the Futhark paper
@@ -273,20 +272,20 @@ impl Defunctionalizer {
             }
             Expression::LetIn(let_in) => {
                 // Transform the value expression
-                let (transformed_value, value_sv) = 
+                let (transformed_value, value_sv) =
                     self.defunctionalize_expression(&let_in.value, scope_stack)?;
-                
+
                 // Push new scope and add binding
                 scope_stack.push_scope();
                 scope_stack.insert(let_in.name.clone(), value_sv);
-                
+
                 // Transform the body expression
-                let (transformed_body, body_sv) = 
+                let (transformed_body, body_sv) =
                     self.defunctionalize_expression(&let_in.body, scope_stack)?;
-                
+
                 // Pop scope
                 scope_stack.pop_scope();
-                
+
                 Ok((
                     Expression::LetIn(crate::ast::LetInExpr {
                         name: let_in.name.clone(),
@@ -504,7 +503,7 @@ impl Defunctionalizer {
             Expression::LetIn(let_in) => {
                 // Collect free variables from value expression
                 self.collect_free_variables(&let_in.value, bound_vars, free_vars)?;
-                
+
                 // Add let binding to bound variables and collect from body
                 let mut extended_bound = bound_vars.clone();
                 extended_bound.insert(let_in.name.clone());

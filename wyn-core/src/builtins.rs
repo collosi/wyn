@@ -1,8 +1,8 @@
+use crate::ast::{Type, TypeName};
 use crate::error::{CompilerError, Result};
 use inkwell::context::Context;
-use inkwell::module::Module;
 use inkwell::memory_buffer::MemoryBuffer;
-use polytype::Type;
+use inkwell::module::Module;
 use std::collections::HashMap;
 
 /// Manages builtin function implementations using LLVM IR templates
@@ -24,7 +24,7 @@ impl<'ctx> BuiltinManager<'ctx> {
         // Load basic length function (works for all array types)
         let length_ir = Self::generate_length_builtin();
         self.add_ir_to_module(module, &length_ir)?;
-        
+
         Ok(())
     }
 
@@ -36,7 +36,7 @@ impl<'ctx> BuiltinManager<'ctx> {
     ) -> Result<String> {
         let type_name = self.type_to_llvm_name(element_type)?;
         let function_name = format!("map_{}", type_name);
-        
+
         // Check if already generated
         if module.get_function(&function_name).is_some() {
             return Ok(function_name);
@@ -45,8 +45,9 @@ impl<'ctx> BuiltinManager<'ctx> {
         // Generate specialized IR
         let map_ir = self.generate_map_builtin_for_type(&type_name)?;
         self.add_ir_to_module(module, &map_ir)?;
-        
-        self.specialized_functions.insert(function_name.clone(), map_ir);
+
+        self.specialized_functions
+            .insert(function_name.clone(), map_ir);
         Ok(function_name)
     }
 
@@ -69,7 +70,8 @@ entry:
   
   ret i32 %length
 }
-        "#.to_string()
+        "#
+        .to_string()
     }
 
     /// Generate LLVM IR for map builtin specialized for a specific type
@@ -135,31 +137,40 @@ loop_exit:
     fn add_ir_to_module(&self, module: &Module<'ctx>, ir: &str) -> Result<()> {
         // Parse the IR and link it into the module
         let memory_buffer = MemoryBuffer::create_from_memory_range(ir.as_bytes(), "builtin_ir");
-        let temp_module = self.context
+        let temp_module = self
+            .context
             .create_module_from_ir(memory_buffer)
-            .map_err(|e| CompilerError::SpirvError(format!("Failed to parse builtin IR: {:?}", e)))?;
-            
-        module.link_in_module(temp_module)
-            .map_err(|e| CompilerError::SpirvError(format!("Failed to link builtin module: {:?}", e)))?;
-            
+            .map_err(|e| {
+                CompilerError::SpirvError(format!("Failed to parse builtin IR: {:?}", e))
+            })?;
+
+        module.link_in_module(temp_module).map_err(|e| {
+            CompilerError::SpirvError(format!("Failed to link builtin module: {:?}", e))
+        })?;
+
         Ok(())
     }
 
     /// Convert Wyn type to LLVM type name
     fn type_to_llvm_name(&self, ty: &Type) -> Result<String> {
         match ty {
-            Type::Constructed("int", _) => Ok("i32".to_string()),
-            Type::Constructed("float", _) => Ok("float".to_string()),
-            Type::Constructed("bool", _) => Ok("i1".to_string()),
+            Type::Constructed(TypeName::Str("int"), _) => Ok("i32".to_string()),
+            Type::Constructed(TypeName::Str("float"), _) => Ok("float".to_string()),
+            Type::Constructed(TypeName::Str("bool"), _) => Ok("i1".to_string()),
             Type::Variable(_) => Ok("i32".to_string()), // Default to i32 for type variables
-            Type::Constructed(name, _) => Err(CompilerError::TypeError(
-                format!("Unsupported type for LLVM builtin: {}", name)
-            )),
+            Type::Constructed(name, _) => Err(CompilerError::TypeError(format!(
+                "Unsupported type for LLVM builtin: {:?}",
+                name
+            ))),
         }
     }
 
     /// Get the function name for a builtin
-    pub fn get_builtin_function_name(&self, builtin: &str, element_type: Option<&Type>) -> Result<String> {
+    pub fn get_builtin_function_name(
+        &self,
+        builtin: &str,
+        element_type: Option<&Type>,
+    ) -> Result<String> {
         match builtin {
             "length" => Ok("length".to_string()),
             "map" => {
@@ -169,7 +180,10 @@ loop_exit:
                 let type_name = self.type_to_llvm_name(element_type)?;
                 Ok(format!("map_{}", type_name))
             }
-            _ => Err(CompilerError::TypeError(format!("Unknown builtin: {}", builtin))),
+            _ => Err(CompilerError::TypeError(format!(
+                "Unknown builtin: {}",
+                builtin
+            ))),
         }
     }
 
@@ -187,7 +201,7 @@ loop_exit:
         args: &[inkwell::values::BasicValueEnum<'ctx>],
     ) -> Result<inkwell::values::BasicValueEnum<'ctx>> {
         use inkwell::AddressSpace;
-        
+
         match func_name {
             "length" => {
                 if args.len() != 1 {
@@ -197,22 +211,33 @@ loop_exit:
                 }
 
                 // Get the length function
-                let length_fn = module.get_function("length")
-                    .ok_or_else(|| CompilerError::SpirvError("length builtin function not found".to_string()))?;
+                let length_fn = module.get_function("length").ok_or_else(|| {
+                    CompilerError::SpirvError("length builtin function not found".to_string())
+                })?;
 
                 // Convert array to i8* for the builtin call
                 let array_val = args[0];
                 let array_ptr = array_val.into_pointer_value();
                 let i8_ptr_type = self.context.ptr_type(AddressSpace::default());
-                let array_as_i8_ptr = builder.build_bit_cast(array_ptr, i8_ptr_type, "array_as_i8_ptr")
-                    .map_err(|e| CompilerError::SpirvError(format!("Failed to cast array for length call: {}", e)))?;
+                let array_as_i8_ptr = builder
+                    .build_bit_cast(array_ptr, i8_ptr_type, "array_as_i8_ptr")
+                    .map_err(|e| {
+                        CompilerError::SpirvError(format!(
+                            "Failed to cast array for length call: {}",
+                            e
+                        ))
+                    })?;
 
                 // Call the length function
-                let call_result = builder.build_call(length_fn, &[array_as_i8_ptr.into()], "length_result")
-                    .map_err(|e| CompilerError::SpirvError(format!("Failed to call length builtin: {}", e)))?;
+                let call_result = builder
+                    .build_call(length_fn, &[array_as_i8_ptr.into()], "length_result")
+                    .map_err(|e| {
+                        CompilerError::SpirvError(format!("Failed to call length builtin: {}", e))
+                    })?;
 
-                Ok(call_result.try_as_basic_value().left()
-                   .ok_or_else(|| CompilerError::SpirvError("length call returned void".to_string()))?)
+                Ok(call_result.try_as_basic_value().left().ok_or_else(|| {
+                    CompilerError::SpirvError("length call returned void".to_string())
+                })?)
             }
             "map" => {
                 if args.len() != 2 {
@@ -225,37 +250,53 @@ loop_exit:
                 let array_val = args[1];
 
                 // Determine element type (for now, assume i32)
-                let element_type = Type::Constructed("int", vec![]);
-                
+                let element_type = Type::Constructed(TypeName::Str("int"), vec![]);
+
                 // Generate or get the specialized map function
                 let map_fn_name = self.generate_map_specialization(module, &element_type)?;
-                
-                let map_fn = module.get_function(&map_fn_name)
-                    .ok_or_else(|| CompilerError::SpirvError(format!("map builtin function {} not found", map_fn_name)))?;
+
+                let map_fn = module.get_function(&map_fn_name).ok_or_else(|| {
+                    CompilerError::SpirvError(format!(
+                        "map builtin function {} not found",
+                        map_fn_name
+                    ))
+                })?;
 
                 // Convert arrays to i8* for the builtin call
                 let array_ptr = array_val.into_pointer_value();
                 let i8_ptr_type = self.context.ptr_type(AddressSpace::default());
-                let input_as_i8_ptr = builder.build_bit_cast(array_ptr, i8_ptr_type, "input_as_i8_ptr")
-                    .map_err(|e| CompilerError::SpirvError(format!("Failed to cast input array: {}", e)))?;
+                let input_as_i8_ptr = builder
+                    .build_bit_cast(array_ptr, i8_ptr_type, "input_as_i8_ptr")
+                    .map_err(|e| {
+                        CompilerError::SpirvError(format!("Failed to cast input array: {}", e))
+                    })?;
 
                 // Allocate output array (same type as input for now)
-                let output_array = builder.build_alloca(array_val.get_type(), "output_array")
-                    .map_err(|e| CompilerError::SpirvError(format!("Failed to allocate output array: {}", e)))?;
-                let output_as_i8_ptr = builder.build_bit_cast(output_array, i8_ptr_type, "output_as_i8_ptr")
-                    .map_err(|e| CompilerError::SpirvError(format!("Failed to cast output array: {}", e)))?;
+                let output_array = builder
+                    .build_alloca(array_val.get_type(), "output_array")
+                    .map_err(|e| {
+                        CompilerError::SpirvError(format!("Failed to allocate output array: {}", e))
+                    })?;
+                let output_as_i8_ptr = builder
+                    .build_bit_cast(output_array, i8_ptr_type, "output_as_i8_ptr")
+                    .map_err(|e| {
+                        CompilerError::SpirvError(format!("Failed to cast output array: {}", e))
+                    })?;
 
                 // Call the map function
-                let _call_result = builder.build_call(
-                    map_fn, 
-                    &[
-                        func_val.into(),
-                        input_as_i8_ptr.into(),
-                        output_as_i8_ptr.into()
-                    ], 
-                    "map_result"
-                )
-                .map_err(|e| CompilerError::SpirvError(format!("Failed to call map builtin: {}", e)))?;
+                let _call_result = builder
+                    .build_call(
+                        map_fn,
+                        &[
+                            func_val.into(),
+                            input_as_i8_ptr.into(),
+                            output_as_i8_ptr.into(),
+                        ],
+                        "map_result",
+                    )
+                    .map_err(|e| {
+                        CompilerError::SpirvError(format!("Failed to call map builtin: {}", e))
+                    })?;
 
                 // Return the output array
                 Ok(output_array.into())
@@ -268,12 +309,16 @@ loop_exit:
     }
 
     /// Get type signature for builtin functions
-    pub fn get_builtin_type_signature(&self, name: &str, element_type: Option<&Type>) -> Result<(Vec<Type>, Type)> {
+    pub fn get_builtin_type_signature(
+        &self,
+        name: &str,
+        element_type: Option<&Type>,
+    ) -> Result<(Vec<Type>, Type)> {
         match name {
             "length" => {
                 // length: [a] -> int
-                let array_type = Type::Constructed("array", vec![Type::Variable(0)]);
-                let int_type = Type::Constructed("int", vec![]);
+                let array_type = Type::Constructed(TypeName::Str("array"), vec![Type::Variable(0)]);
+                let int_type = Type::Constructed(TypeName::Str("int"), vec![]);
                 Ok((vec![array_type], int_type))
             }
             "map" => {
@@ -281,14 +326,19 @@ loop_exit:
                 let element_type = element_type.ok_or_else(|| {
                     CompilerError::TypeError("map requires element type context".to_string())
                 })?;
-                
+
                 let func_type = Type::arrow(element_type.clone(), element_type.clone());
-                let input_array_type = Type::Constructed("array", vec![element_type.clone()]);
-                let output_array_type = Type::Constructed("array", vec![element_type.clone()]);
-                
+                let input_array_type =
+                    Type::Constructed(TypeName::Str("array"), vec![element_type.clone()]);
+                let output_array_type =
+                    Type::Constructed(TypeName::Str("array"), vec![element_type.clone()]);
+
                 Ok((vec![func_type, input_array_type], output_array_type))
             }
-            _ => Err(CompilerError::TypeError(format!("Unknown builtin: {}", name))),
+            _ => Err(CompilerError::TypeError(format!(
+                "Unknown builtin: {}",
+                name
+            ))),
         }
     }
 }
@@ -302,7 +352,7 @@ mod tests {
     fn test_builtin_manager_creation() {
         let context = Context::create();
         let manager = BuiltinManager::new(&context);
-        
+
         assert!(manager.is_builtin("length"));
         assert!(manager.is_builtin("map"));
         assert!(!manager.is_builtin("unknown"));
@@ -312,11 +362,11 @@ mod tests {
     fn test_type_conversion() {
         let context = Context::create();
         let manager = BuiltinManager::new(&context);
-        
-        let int_type = Type::Constructed("int", vec![]);
+
+        let int_type = Type::Constructed(TypeName::Str("int"), vec![]);
         assert_eq!(manager.type_to_llvm_name(&int_type).unwrap(), "i32");
-        
-        let float_type = Type::Constructed("float", vec![]);
+
+        let float_type = Type::Constructed(TypeName::Str("float"), vec![]);
         assert_eq!(manager.type_to_llvm_name(&float_type).unwrap(), "float");
     }
 
@@ -324,15 +374,17 @@ mod tests {
     fn test_builtin_function_names() {
         let context = Context::create();
         let manager = BuiltinManager::new(&context);
-        
+
         assert_eq!(
             manager.get_builtin_function_name("length", None).unwrap(),
             "length"
         );
-        
-        let int_type = Type::Constructed("int", vec![]);
+
+        let int_type = Type::Constructed(TypeName::Str("int"), vec![]);
         assert_eq!(
-            manager.get_builtin_function_name("map", Some(&int_type)).unwrap(),
+            manager
+                .get_builtin_function_name("map", Some(&int_type))
+                .unwrap(),
             "map_i32"
         );
     }

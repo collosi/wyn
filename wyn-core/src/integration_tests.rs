@@ -6,7 +6,7 @@ mod tests {
     fn test_full_example_program() {
         let source = r#"
 -- Full-screen triangle in NDC (like classic shader demos).
-let verts: [3][4]f32 =
+def verts: [3][4]f32 =
   [[-1.0f32, -1.0f32, 0.0f32, 1.0f32],
    [ 3.0f32, -1.0f32, 0.0f32, 1.0f32],
    [-1.0f32,  3.0f32, 0.0f32, 1.0f32]]
@@ -17,7 +17,7 @@ entry vertex_main (vertex_id: i32) : [4]f32 =
   verts[vertex_id]
 
 -- Fragment stage: constant sky blue (#87CEEB).
-let SKY_RGBA : [4]f32 =
+def SKY_RGBA : [4]f32 =
   [135f32/255f32, 206f32/255f32, 235f32/255f32, 1.0f32]
 
 #[fragment]

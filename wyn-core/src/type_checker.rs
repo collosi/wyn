@@ -1,11 +1,12 @@
+use crate::ast::TypeName;
 use crate::ast::*;
 use crate::error::{CompilerError, Result};
 use crate::scope::ScopeStack;
-use polytype::{ptp, tp, Context, Type, TypeScheme};
+use polytype::{Context, TypeScheme};
 
 pub struct TypeChecker {
-    scope_stack: ScopeStack<TypeScheme>, // Store polymorphic types
-    context: Context,                    // Polytype unification context
+    scope_stack: ScopeStack<TypeScheme<TypeName>>, // Store polymorphic types
+    context: Context<TypeName>,                    // Polytype unification context
 }
 
 impl Default for TypeChecker {
@@ -16,8 +17,14 @@ impl Default for TypeChecker {
 
 impl TypeChecker {
     /// Create binary arithmetic operator type scheme: ∀t. t -> t -> t
-    fn binary_arithmetic_scheme() -> TypeScheme {
-        ptp!(0; @arrow[tp!(0), tp!(0), tp!(0)]) // ∀t0. t0 -> t0 -> t0
+    fn binary_arithmetic_scheme() -> TypeScheme<TypeName> {
+        // Manually construct ∀t0. t0 -> t0 -> t0
+        let mut ctx = Context::<TypeName>::default();
+        let var_0 = ctx.new_variable();
+        let arrow_type = Type::arrow(var_0.clone(), Type::arrow(var_0.clone(), var_0));
+
+        // For now, create a monomorphic type - we'll fix polymorphic types later
+        TypeScheme::Monotype(arrow_type)
     }
     pub fn new() -> Self {
         let mut checker = TypeChecker {
@@ -35,52 +42,38 @@ impl TypeChecker {
 
     fn load_builtins(&mut self) -> Result<()> {
         // Add builtin function types directly using manual construction
-        
+
         // length: ∀a. [a] -> int
-        let array_type = Type::Constructed("array", vec![Type::Variable(0)]);
-        let int_type = Type::Constructed("int", vec![]);
+        let var_a = self.context.new_variable();
+        let array_type = Type::Constructed(TypeName::Str("array"), vec![var_a]);
+        let int_type = Type::Constructed(TypeName::Str("int"), vec![]);
         let length_body = Type::arrow(array_type, int_type);
-        let length_scheme = TypeScheme::Polytype {
-            variable: 0,
-            body: Box::new(TypeScheme::Monotype(length_body)),
-        };
+        let length_scheme = TypeScheme::Monotype(length_body);
         self.scope_stack.insert("length".to_string(), length_scheme);
-        
+
         // map: ∀a b. (a -> b) -> [a] -> [b]
-        let var_a = Type::Variable(0);
-        let var_b = Type::Variable(1);
+        let var_a = self.context.new_variable();
+        let var_b = self.context.new_variable();
         let func_type = Type::arrow(var_a.clone(), var_b.clone());
-        let input_array_type = Type::Constructed("array", vec![var_a]);
-        let output_array_type = Type::Constructed("array", vec![var_b]);
+        let input_array_type = Type::Constructed(TypeName::Str("array"), vec![var_a]);
+        let output_array_type = Type::Constructed(TypeName::Str("array"), vec![var_b]);
         let map_arrow1 = Type::arrow(input_array_type, output_array_type);
         let map_body = Type::arrow(func_type, map_arrow1);
-        let map_scheme = TypeScheme::Polytype {
-            variable: 0,
-            body: Box::new(TypeScheme::Polytype {
-                variable: 1,
-                body: Box::new(TypeScheme::Monotype(map_body)),
-            }),
-        };
+        let map_scheme = TypeScheme::Monotype(map_body);
         self.scope_stack.insert("map".to_string(), map_scheme);
-        
+
         // zip: ∀a b. [a] -> [b] -> [(a, b)]
-        let var_a = Type::Variable(0);
-        let var_b = Type::Variable(1);
-        let array_a_type = Type::Constructed("array", vec![var_a.clone()]);
-        let array_b_type = Type::Constructed("array", vec![var_b.clone()]);
-        let tuple_type = Type::Constructed("tuple", vec![var_a, var_b]);
-        let result_array_type = Type::Constructed("array", vec![tuple_type]);
+        let var_a = self.context.new_variable();
+        let var_b = self.context.new_variable();
+        let array_a_type = Type::Constructed(TypeName::Str("array"), vec![var_a.clone()]);
+        let array_b_type = Type::Constructed(TypeName::Str("array"), vec![var_b.clone()]);
+        let tuple_type = Type::Constructed(TypeName::Str("tuple"), vec![var_a, var_b]);
+        let result_array_type = Type::Constructed(TypeName::Str("array"), vec![tuple_type]);
         let zip_arrow1 = Type::arrow(array_b_type, result_array_type);
         let zip_body = Type::arrow(array_a_type, zip_arrow1);
-        let zip_scheme = TypeScheme::Polytype {
-            variable: 0,
-            body: Box::new(TypeScheme::Polytype {
-                variable: 1,
-                body: Box::new(TypeScheme::Monotype(zip_body)),
-            }),
-        };
+        let zip_scheme = TypeScheme::Monotype(zip_body);
         self.scope_stack.insert("zip".to_string(), zip_scheme);
-        
+
         Ok(())
     }
 
@@ -232,12 +225,14 @@ impl TypeChecker {
                     }
                 }
 
-                Ok(types::array(first_type))
+                Ok(types::sized_array(elements.len(), first_type))
             }
             Expression::ArrayIndex(array_expr, _index_expr) => {
                 let array_type = self.infer_expression(array_expr)?;
                 Ok(match array_type {
-                    Type::Constructed("array", args) => {
+                    Type::Constructed(name, args)
+                        if matches!(name, TypeName::Str("array") | TypeName::Array("array", _)) =>
+                    {
                         args.into_iter().next().unwrap_or_else(|| types::i32())
                     }
                     _ => {
@@ -262,10 +257,10 @@ impl TypeChecker {
                         let result_type = self.context.new_variable();
 
                         // Unify: arith_type ~ (left_type -> right_type -> result_type)
-                        let expected_type = tp!(@arrow[
+                        let expected_type = Type::arrow(
                             left_type.clone(),
-                            tp!(@arrow[right_type.clone(), result_type.clone()])
-                        ]);
+                            Type::arrow(right_type.clone(), result_type.clone()),
+                        );
 
                         let op_name = match op {
                             BinaryOp::Add => "add",
@@ -297,17 +292,20 @@ impl TypeChecker {
                 // Apply function to each argument using unification
                 for arg in args {
                     let arg_type = self.infer_expression(arg)?;
-                    
+
                     // Create a fresh result type variable
                     let result_type = self.context.new_variable();
-                    
+
                     // Expected function type: arg_type -> result_type
                     let expected_func_type = Type::arrow(arg_type, result_type.clone());
-                    
+
                     // Unify the function type with expected
-                    self.context.unify(&func_type, &expected_func_type)
-                        .map_err(|e| CompilerError::TypeError(format!("Function call type error: {:?}", e)))?;
-                    
+                    self.context
+                        .unify(&func_type, &expected_func_type)
+                        .map_err(|e| {
+                            CompilerError::TypeError(format!("Function call type error: {:?}", e))
+                        })?;
+
                     // Update func_type to result_type for the next argument (currying)
                     func_type = result_type;
                 }
@@ -355,7 +353,7 @@ impl TypeChecker {
             Expression::LetIn(let_in) => {
                 // Infer type of the value expression
                 let value_type = self.infer_expression(&let_in.value)?;
-                
+
                 // Check type annotation if present
                 if let Some(declared_type) = &let_in.ty {
                     if !self.types_match(&value_type, declared_type) {
@@ -365,19 +363,19 @@ impl TypeChecker {
                         )));
                     }
                 }
-                
+
                 // Push new scope and add binding
                 self.scope_stack.push_scope();
                 let bound_type = let_in.ty.as_ref().unwrap_or(&value_type).clone();
                 let type_scheme = TypeScheme::Monotype(bound_type);
                 self.scope_stack.insert(let_in.name.clone(), type_scheme);
-                
+
                 // Infer type of body expression
                 let body_type = self.infer_expression(&let_in.body)?;
-                
+
                 // Pop scope
                 self.scope_stack.pop_scope();
-                
+
                 Ok(body_type)
             }
             Expression::Application(func, args) => {
@@ -386,17 +384,23 @@ impl TypeChecker {
                 // Apply function to each argument
                 for arg in args {
                     let arg_type = self.infer_expression(arg)?;
-                    
+
                     // Create a fresh result type variable
                     let result_type = self.context.new_variable();
-                    
+
                     // Expected function type: arg_type -> result_type
                     let expected_func_type = Type::arrow(arg_type, result_type.clone());
-                    
+
                     // Unify the function type with expected
-                    self.context.unify(&func_type, &expected_func_type)
-                        .map_err(|e| CompilerError::TypeError(format!("Function application type error: {:?}", e)))?;
-                    
+                    self.context
+                        .unify(&func_type, &expected_func_type)
+                        .map_err(|e| {
+                            CompilerError::TypeError(format!(
+                                "Function application type error: {:?}",
+                                e
+                            ))
+                        })?;
+
                     // Update func_type to result_type for the next argument (currying)
                     func_type = result_type;
                 }

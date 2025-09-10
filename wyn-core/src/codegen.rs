@@ -1,3 +1,4 @@
+use crate::ast::TypeName;
 use crate::ast::*;
 use crate::builtins::BuiltinManager;
 use crate::error::{CompilerError, Result};
@@ -8,7 +9,6 @@ use inkwell::targets::{InitializationConfig, Target, TargetTriple};
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::AddressSpace;
-use polytype::Type;
 use std::collections::HashMap;
 
 pub struct CodeGenerator<'ctx> {
@@ -33,7 +33,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         module.set_triple(&TargetTriple::create("spirv64-unknown-unknown"));
 
         let builtin_manager = BuiltinManager::new(context);
-        
+
         CodeGenerator {
             context,
             module,
@@ -50,8 +50,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     pub fn generate(mut self, program: &Program) -> Result<Vec<u32>> {
         // Load builtin functions into the module
-        self.builtin_manager.load_builtins_into_module(&self.module)?;
-        
+        self.builtin_manager
+            .load_builtins_into_module(&self.module)?;
+
         // Process all declarations
         for decl in &program.declarations {
             self.generate_declaration(decl)?;
@@ -97,17 +98,18 @@ impl<'ctx> CodeGenerator<'ctx> {
             CompilerError::SpirvError("Let declaration must have explicit type".to_string())
         })?;
 
-        let llvm_type = self.get_or_create_type(ty)?;
-
         match &decl.value {
             Expression::ArrayLiteral(elements) => {
-                // Create a global variable for the array
+                // Now that we have proper array sizes in the type system,
+                // we can create the correct LLVM type directly
+                let llvm_type = self.get_or_create_type(ty)?;
+                let const_array = self.generate_constant_array(ty, elements)?;
+
+                // Create a global variable with the correct array type
                 let global =
                     self.module
                         .add_global(llvm_type, Some(AddressSpace::default()), &decl.name);
 
-                // Generate the constant array value
-                let const_array = self.generate_constant_array(ty, elements)?;
                 global.set_initializer(&const_array);
 
                 // Store in variable cache
@@ -288,7 +290,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .clone();
 
                 let element_type = match &array_type {
-                    Type::Constructed(name, args) if *name == "array" => {
+                    Type::Constructed(name, args)
+                        if matches!(name, TypeName::Str("array") | TypeName::Array("array", _)) =>
+                    {
                         args.first().cloned().unwrap_or_else(|| types::i32())
                     }
                     _ => {
@@ -387,9 +391,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                     for arg in args {
                         arg_values.push(self.generate_expression(arg)?);
                     }
-                    
+
                     // Call the builtin through the manager
-                    self.builtin_manager.generate_builtin_call(&self.module, &self.builder, func_name, &arg_values)
+                    self.builtin_manager.generate_builtin_call(
+                        &self.module,
+                        &self.builder,
+                        func_name,
+                        &arg_values,
+                    )
                 } else {
                     match func_name.as_str() {
                         "to_vec4_f32" => {
@@ -422,31 +431,40 @@ impl<'ctx> CodeGenerator<'ctx> {
             Expression::LetIn(let_in) => {
                 // Generate code for the value expression
                 let value = self.generate_expression(&let_in.value)?;
-                
+
                 // Store the value in a local variable
-                let var_type = self.get_or_create_type(&let_in.ty.clone().unwrap_or_else(|| {
-                    // For now, use i32 as default type if not specified
-                    crate::ast::types::i32()
-                }))?;
-                
-                let ptr = self.builder.build_alloca(var_type, &let_in.name)
-                    .map_err(|e| CompilerError::SpirvError(format!("Failed to build alloca: {:?}", e)))?;
-                
-                self.builder.build_store(ptr, value)
-                    .map_err(|e| CompilerError::SpirvError(format!("Failed to build store: {:?}", e)))?;
-                
+                let var_type =
+                    self.get_or_create_type(&let_in.ty.clone().unwrap_or_else(|| {
+                        // For now, use i32 as default type if not specified
+                        crate::ast::types::i32()
+                    }))?;
+
+                let ptr = self
+                    .builder
+                    .build_alloca(var_type, &let_in.name)
+                    .map_err(|e| {
+                        CompilerError::SpirvError(format!("Failed to build alloca: {:?}", e))
+                    })?;
+
+                self.builder.build_store(ptr, value).map_err(|e| {
+                    CompilerError::SpirvError(format!("Failed to build store: {:?}", e))
+                })?;
+
                 // Store in variable cache
-                let ast_type = let_in.ty.clone().unwrap_or_else(|| crate::ast::types::i32());
+                let ast_type = let_in
+                    .ty
+                    .clone()
+                    .unwrap_or_else(|| crate::ast::types::i32());
                 self.variable_cache.insert(let_in.name.clone(), ptr);
                 self.variable_types.insert(let_in.name.clone(), ast_type);
-                
+
                 // Generate code for the body expression
                 let result = self.generate_expression(&let_in.body)?;
-                
+
                 // Clean up variable from cache
                 self.variable_cache.remove(&let_in.name);
                 self.variable_types.remove(&let_in.name);
-                
+
                 Ok(result)
             }
         }
@@ -458,7 +476,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         elements: &[Expression],
     ) -> Result<BasicValueEnum<'ctx>> {
         match ty {
-            Type::Constructed(name, args) if *name == "array" => {
+            Type::Constructed(name, args)
+                if matches!(name, TypeName::Str("array") | TypeName::Array("array", _)) =>
+            {
                 let elem_ty = args.first().ok_or_else(|| {
                     CompilerError::SpirvError("Array type missing element type".to_string())
                 })?;
@@ -527,15 +547,26 @@ impl<'ctx> CodeGenerator<'ctx> {
                             }
                             BasicValueEnum::ArrayValue(_) => {
                                 // Handle nested arrays
+                                // For a type like [3][4]f32, we have:
+                                // - array_type is [3 x [4 x float]]
+                                // - array_values contains 3 values of type [4 x float]
+                                // We need to create a const array of type [3 x [4 x float]]
+
                                 let array_values: Vec<_> =
                                     const_values.iter().map(|v| v.into_array_value()).collect();
-                                // Get the element type of the first inner array
-                                if let Some(first_elem) = array_values.first() {
-                                    let elem_type = first_elem.get_type();
-                                    Ok(elem_type.const_array(&array_values).into())
-                                } else {
-                                    Err(CompilerError::SpirvError("Empty nested array".to_string()))
+
+                                if array_values.is_empty() {
+                                    return Err(CompilerError::SpirvError(
+                                        "Empty nested array".to_string(),
+                                    ));
                                 }
+
+                                // Get the element type ([4 x float] in our example)
+                                let first_elem_type = array_values[0].get_type();
+
+                                // Create the const array using the element type
+                                // This creates [3 x [4 x float]] from 3 values of [4 x float]
+                                Ok(first_elem_type.const_array(&array_values).into())
                             }
                             _ => Err(CompilerError::SpirvError(
                                 "Unsupported array element type in constant".to_string(),
@@ -600,20 +631,20 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         let llvm_type = match ty {
             Type::Constructed(name, args) => {
-                match *name {
-                    "int" => BasicTypeEnum::IntType(self.context.i32_type()),
-                    "float" => BasicTypeEnum::FloatType(self.context.f32_type()),
-                    "vec4f32" => {
+                match name {
+                    TypeName::Str("int") => BasicTypeEnum::IntType(self.context.i32_type()),
+                    TypeName::Str("float") => BasicTypeEnum::FloatType(self.context.f32_type()),
+                    TypeName::Str("vec4f32") => {
                         let f32_type = self.context.f32_type();
                         BasicTypeEnum::VectorType(f32_type.vec_type(4))
                     }
-                    "array" => {
+                    TypeName::Str("array") => {
                         let elem_ty = args.first().ok_or_else(|| {
                             CompilerError::SpirvError("Array type missing element type".to_string())
                         })?;
                         let elem_type = self.get_or_create_type(elem_ty)?;
 
-                        // For now, create single-dimensional arrays with default size
+                        // For unsized arrays, use default size
                         match elem_type {
                             BasicTypeEnum::ArrayType(arr) => arr.array_type(1).into(),
                             BasicTypeEnum::FloatType(float) => float.array_type(1).into(),
@@ -626,14 +657,35 @@ impl<'ctx> CodeGenerator<'ctx> {
                             }
                         }
                     }
-                    "tuple" => {
+                    TypeName::Array("array", size) => {
+                        let elem_ty = args.first().ok_or_else(|| {
+                            CompilerError::SpirvError("Array type missing element type".to_string())
+                        })?;
+                        let elem_type = self.get_or_create_type(elem_ty)?;
+
+                        // Use the actual size from the type
+                        match elem_type {
+                            BasicTypeEnum::ArrayType(arr) => arr.array_type(*size as u32).into(),
+                            BasicTypeEnum::FloatType(float) => {
+                                float.array_type(*size as u32).into()
+                            }
+                            BasicTypeEnum::IntType(int) => int.array_type(*size as u32).into(),
+                            BasicTypeEnum::VectorType(vec) => vec.array_type(*size as u32).into(),
+                            _ => {
+                                return Err(CompilerError::SpirvError(
+                                    "Unsupported array element type".to_string(),
+                                ))
+                            }
+                        }
+                    }
+                    TypeName::Str("tuple") => {
                         return Err(CompilerError::SpirvError(
                             "Tuple types not supported in LLVM generation".to_string(),
                         ));
                     }
                     _ => {
                         return Err(CompilerError::SpirvError(format!(
-                            "Unknown type constructor: {}",
+                            "Unknown type constructor: {:?}",
                             name
                         )));
                     }

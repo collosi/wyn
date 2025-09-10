@@ -2,7 +2,7 @@
 use crate::ast::*;
 use crate::cfg::{BlockId, Location};
 use crate::error::{CompilerError, Result};
-use crate::nemo_facts::{NemoFactWriter, expr_type_name};
+use crate::nemo_facts::{expr_type_name, NemoFactWriter};
 use std::io::Write;
 
 /// CFG extractor that can output both regular facts and Nemo facts
@@ -26,17 +26,17 @@ impl<W: Write> CfgNemoExtractor<W> {
             debug,
         }
     }
-    
+
     pub fn extract_cfg(mut self, program: &Program) -> Result<()> {
         self.nemo_writer.write_header().map_err(Self::io_error)?;
-        
+
         for decl in &program.declarations {
             self.extract_declaration_cfg(decl)?;
         }
-        
+
         Ok(())
     }
-    
+
     fn extract_declaration_cfg(&mut self, decl: &Declaration) -> Result<()> {
         match decl {
             Declaration::Entry(entry_decl) => {
@@ -59,30 +59,36 @@ impl<W: Write> CfgNemoExtractor<W> {
         }
         Ok(())
     }
-    
+
     fn extract_expression_cfg(&mut self, expr: &Expression) -> Result<()> {
         let location_id = self.get_next_location_id();
-        
+
         if let Some(current_block) = self.current_block {
             let location = Location {
                 block: current_block,
                 index: self.current_index,
             };
-            
+
             // Write location fact
-            self.nemo_writer.write_location_fact(location_id, &location).map_err(Self::io_error)?;
-            
+            self.nemo_writer
+                .write_location_fact(location_id, &location)
+                .map_err(Self::io_error)?;
+
             // Write expression type fact
             let expr_type = expr_type_name(expr);
-            self.nemo_writer.write_expr_fact(location_id, expr_type).map_err(Self::io_error)?;
-            
+            self.nemo_writer
+                .write_expr_fact(location_id, expr_type)
+                .map_err(Self::io_error)?;
+
             self.current_index += 1;
         }
-        
+
         match expr {
             Expression::Identifier(name) => {
                 // Variable reference
-                self.nemo_writer.write_var_ref_fact(location_id, name).map_err(Self::io_error)?;
+                self.nemo_writer
+                    .write_var_ref_fact(location_id, name)
+                    .map_err(Self::io_error)?;
             }
             Expression::BinaryOp(_, left, right) => {
                 self.extract_expression_cfg(left)?;
@@ -118,12 +124,14 @@ impl<W: Write> CfgNemoExtractor<W> {
                 // Capture the current block BEFORE creating the new one
                 let parent_block = self.current_block;
                 let lambda_block = self.start_new_block()?;
-                
+
                 // Write edge from parent block to lambda block
                 if let Some(parent) = parent_block {
-                    self.nemo_writer.write_edge_fact(parent, lambda_block).map_err(Self::io_error)?;
+                    self.nemo_writer
+                        .write_edge_fact(parent, lambda_block)
+                        .map_err(Self::io_error)?;
                 }
-                
+
                 // Process lambda parameters as variable definitions
                 for param in &lambda.params {
                     let param_location_id = self.get_next_location_id();
@@ -131,20 +139,24 @@ impl<W: Write> CfgNemoExtractor<W> {
                         block: lambda_block,
                         index: self.current_index,
                     };
-                    
-                    self.nemo_writer.write_location_fact(param_location_id, &location).map_err(Self::io_error)?;
-                    self.nemo_writer.write_var_def_fact(param_location_id, &param.name).map_err(Self::io_error)?;
+
+                    self.nemo_writer
+                        .write_location_fact(param_location_id, &location)
+                        .map_err(Self::io_error)?;
+                    self.nemo_writer
+                        .write_var_def_fact(param_location_id, &param.name)
+                        .map_err(Self::io_error)?;
                     self.current_index += 1;
                 }
-                
+
                 // Process lambda body
                 self.extract_expression_cfg(&lambda.body)?;
-                
+
                 if self.debug {
                     eprintln!("DEBUG: Lambda created block {} for body", lambda_block.0);
                 }
             }
-            // Let-in expressions  
+            // Let-in expressions
             Expression::LetIn(let_in) => {
                 self.extract_expression_cfg(&let_in.value)?;
                 self.extract_expression_cfg(&let_in.body)?;
@@ -152,32 +164,34 @@ impl<W: Write> CfgNemoExtractor<W> {
             // Literals don't require further processing
             Expression::IntLiteral(_) | Expression::FloatLiteral(_) => {}
         }
-        
+
         Ok(())
     }
-    
+
     fn start_new_block(&mut self) -> Result<BlockId> {
         let block_id = BlockId(self.next_block_id);
         self.next_block_id += 1;
         self.current_block = Some(block_id);
         self.current_index = 0;
-        
+
         // Write block fact
-        self.nemo_writer.write_block_fact(block_id).map_err(Self::io_error)?;
-        
+        self.nemo_writer
+            .write_block_fact(block_id)
+            .map_err(Self::io_error)?;
+
         if self.debug {
             eprintln!("DEBUG: Started new block {}", block_id.0);
         }
-        
+
         Ok(block_id)
     }
-    
+
     fn get_next_location_id(&mut self) -> usize {
         let id = self.location_counter;
         self.location_counter += 1;
         id
     }
-    
+
     fn io_error(e: std::io::Error) -> CompilerError {
         CompilerError::SpirvError(format!("IO error during CFG extraction: {}", e))
     }
@@ -192,39 +206,39 @@ mod tests {
     #[test]
     fn test_nemo_cfg_extraction() {
         let source = r#"entry main(x: i32): i32 = x + 1"#;
-        
+
         let tokens = tokenize(source).unwrap();
         let mut parser = Parser::new(tokens);
         let program = parser.parse().unwrap();
-        
+
         let mut output = Vec::new();
         let extractor = CfgNemoExtractor::new(&mut output, true);
         extractor.extract_cfg(&program).unwrap();
-        
+
         let result = String::from_utf8(output).unwrap();
         println!("Nemo CFG output:\n{}", result);
-        
+
         // Should have block, location, and expression facts
         assert!(result.contains("block(0)."));
         assert!(result.contains("location("));
         assert!(result.contains("expr_at("));
     }
 
-    #[test] 
+    #[test]
     fn test_lambda_cfg_extraction() {
         let source = r#"let f: i32 -> i32 = \x -> x + 1"#;
-        
+
         let tokens = tokenize(source).unwrap();
         let mut parser = Parser::new(tokens);
         let program = parser.parse().unwrap();
-        
+
         let mut output = Vec::new();
         let extractor = CfgNemoExtractor::new(&mut output, true);
         extractor.extract_cfg(&program).unwrap();
-        
+
         let result = String::from_utf8(output).unwrap();
         println!("Lambda Nemo CFG output:\n{}", result);
-        
+
         // Should have multiple blocks and an edge between them
         assert!(result.contains("block(0)."));
         assert!(result.contains("block(1)."));

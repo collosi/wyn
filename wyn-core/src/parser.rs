@@ -117,21 +117,34 @@ impl Parser {
         self.expect(Token::Def)?;
         let name = self.expect_identifier()?;
 
-        // Parse parameter names (without types for inference)
-        let mut params = Vec::new();
-        while !self.check(&Token::Assign) && !self.is_at_end() {
-            params.push(self.expect_identifier()?);
+        // Check if this is a typed definition (def name: type = value) or function definition (def name param = body)
+        if self.check(&Token::Colon) {
+            // Typed definition: def name: type = value
+            self.expect(Token::Colon)?;
+            let _ty = self.parse_type()?; // Parse type but don't store it for now
+            self.expect(Token::Assign)?;
+            let body = self.parse_expression()?;
+            Ok(DefDecl {
+                attributes: vec![],
+                name,
+                params: vec![], // No parameters for typed definitions
+                body,
+            })
+        } else {
+            // Function definition: def name param1 param2 = body
+            let mut params = Vec::new();
+            while !self.check(&Token::Assign) && !self.is_at_end() {
+                params.push(self.expect_identifier()?);
+            }
+            self.expect(Token::Assign)?;
+            let body = self.parse_expression()?;
+            Ok(DefDecl {
+                attributes: vec![],
+                name,
+                params,
+                body,
+            })
         }
-
-        self.expect(Token::Assign)?;
-        let body = self.parse_expression()?;
-
-        Ok(DefDecl {
-            attributes: vec![],
-            name,
-            params,
-            body,
-        })
     }
 
     fn parse_val_decl(&mut self) -> Result<ValDecl> {
@@ -272,19 +285,15 @@ impl Parser {
             self.advance(); // consume '['
 
             // Parse dimension - could be integer literal or identifier (size variable)
-            if let Some(Token::IntLiteral(_)) = self.peek() {
+            if let Some(Token::IntLiteral(n)) = self.peek() {
+                let size = *n as usize;
                 self.advance();
                 self.expect(Token::RightBracket)?;
                 let elem_type = self.parse_array_or_base_type()?; // Allow nested arrays
-                Ok(types::array(elem_type))
+                Ok(types::sized_array(size, elem_type))
             } else {
-                // Size variable like 'n'
-                let _size_var = self.expect_identifier()?;
-                self.expect(Token::RightBracket)?;
-                let elem_type = self.parse_array_or_base_type()?; // Allow nested arrays
-                                                                  // For now, we'll represent size variables as arrays with size 0 as a placeholder
-                                                                  // In a proper implementation, we'd need to track size variables differently
-                Ok(types::array(elem_type)) // simplified: ignore size variables for now
+                // Size variables like [n] are not implemented yet
+                todo!("Size variables in array types not yet implemented")
             }
         } else {
             self.parse_base_type()
@@ -303,7 +312,7 @@ impl Parser {
             }
             Some(Token::Vec4F32Type) => {
                 self.advance();
-                Ok(types::array(types::f32()))
+                Ok(types::sized_array(4, types::f32()))
             }
             Some(Token::Identifier(name)) if name.starts_with('\'') => {
                 // Type variable like 't1, 't2
@@ -359,7 +368,7 @@ impl Parser {
     // Parses: f x y z, (f x) y, etc.
     fn parse_application_expression(&mut self) -> Result<Expression> {
         let mut expr = self.parse_postfix_expression()?;
-        
+
         // Keep collecting arguments while we see primary expressions
         // Stop at operators, commas, closing delimiters, etc.
         while self.peek().is_some() && self.can_start_primary_expression() {
@@ -368,15 +377,19 @@ impl Parser {
                 break;
             }
             // Don't consume expression terminators
-            if matches!(self.peek(), 
-                Some(Token::Comma) | Some(Token::RightParen) | Some(Token::RightBracket) | 
-                Some(Token::In) | Some(Token::Arrow)
+            if matches!(
+                self.peek(),
+                Some(Token::Comma)
+                    | Some(Token::RightParen)
+                    | Some(Token::RightBracket)
+                    | Some(Token::In)
+                    | Some(Token::Arrow)
             ) {
                 break;
             }
-            
+
             let arg = self.parse_postfix_expression()?;
-            
+
             // Convert to FunctionCall or Application
             match expr {
                 Expression::Identifier(name) => {
@@ -394,20 +407,21 @@ impl Parser {
                 }
             }
         }
-        
+
         Ok(expr)
     }
-    
+
     // Helper to check if current token can start a primary expression
     fn can_start_primary_expression(&self) -> bool {
-        matches!(self.peek(), 
+        matches!(
+            self.peek(),
             Some(Token::IntLiteral(_)) | 
             Some(Token::FloatLiteral(_)) |
             Some(Token::Identifier(_)) |
             Some(Token::LeftBracket) |  // array literal
             Some(Token::LeftParen) |    // parenthesized expression  
             Some(Token::Backslash) |    // lambda
-            Some(Token::Let)            // let..in
+            Some(Token::Let) // let..in
         )
     }
 
@@ -548,10 +562,10 @@ impl Parser {
 
     fn parse_let_in(&mut self) -> Result<Expression> {
         use crate::ast::LetInExpr;
-        
+
         self.expect(Token::Let)?;
         let name = self.expect_identifier()?;
-        
+
         // Optional type annotation
         let ty = if self.check(&Token::Colon) {
             self.advance(); // consume ':'
@@ -559,13 +573,12 @@ impl Parser {
         } else {
             None
         };
-        
+
         self.expect(Token::Assign)?;
         let value = Box::new(self.parse_expression()?);
-        
         self.expect(Token::In)?;
         let body = Box::new(self.parse_expression()?);
-        
+
         Ok(Expression::LetIn(LetInExpr {
             name,
             ty,
@@ -628,14 +641,21 @@ mod tests {
 
     /// Helper function that expects parsing to succeed and runs a check function on the declarations.
     /// If the check fails, outputs the parsed AST for debugging.
-    fn expect_parse<F>(input: &str, check_fn: F) 
-    where 
-        F: FnOnce(&[Declaration]) -> std::result::Result<(), String>
+    fn expect_parse<F>(input: &str, check_fn: F)
+    where
+        F: FnOnce(&[Declaration]) -> std::result::Result<(), String>,
     {
         let tokens = tokenize(input).expect("Failed to tokenize input");
-        let mut parser = Parser::new(tokens);
-        let program = parser.parse().expect("Failed to parse input");
-        
+        let mut parser = Parser::new(tokens.clone());
+        let program = match parser.parse() {
+            Ok(program) => program,
+            Err(e) => {
+                println!("Parse failed with error: {:?}", e);
+                println!("Tokens were: {:#?}", tokens);
+                panic!("Failed to parse input: {:?}", e);
+            }
+        };
+
         if let Err(msg) = check_fn(&program.declarations) {
             println!("Check failed: {}", msg);
             println!("Parsed AST: {:#?}", program);
@@ -647,11 +667,11 @@ mod tests {
     /// If parsing succeeds when it shouldn't, outputs the parsed AST.
     fn expect_parse_error<F>(input: &str, error_check: F)
     where
-        F: FnOnce(&CompilerError) -> std::result::Result<(), String>
+        F: FnOnce(&CompilerError) -> std::result::Result<(), String>,
     {
         let tokens = tokenize(input).expect("Failed to tokenize input");
         let mut parser = Parser::new(tokens);
-        
+
         match parser.parse() {
             Ok(program) => {
                 println!("Expected parse error, but parsing succeeded");
@@ -672,7 +692,10 @@ mod tests {
     fn test_parse_let_decl() {
         expect_parse("let x: i32 = 42", |declarations| {
             if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+                return Err(format!(
+                    "Expected 1 declaration, got {}",
+                    declarations.len()
+                ));
             }
             match &declarations[0] {
                 Declaration::Let(decl) => {
@@ -694,88 +717,137 @@ mod tests {
 
     #[test]
     fn test_parse_array_type() {
-        expect_parse("let arr: [3][4]f32 = [[1.0f32, 2.0f32], [3.0f32, 4.0f32]]", |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            match &declarations[0] {
-                Declaration::Let(decl) => {
-                    if decl.name != "arr" {
-                        return Err(format!("Expected name 'arr', got '{}'", decl.name));
-                    }
-                    if decl.ty.is_none() {
-                        return Err("Expected array type to be parsed".to_string());
-                    }
-                    Ok(())
+        expect_parse(
+            "let arr: [3][4]f32 = [[1.0f32, 2.0f32], [3.0f32, 4.0f32]]",
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!(
+                        "Expected 1 declaration, got {}",
+                        declarations.len()
+                    ));
                 }
-                _ => Err("Expected Let declaration".to_string()),
-            }
-        });
+                match &declarations[0] {
+                    Declaration::Let(decl) => {
+                        if decl.name != "arr" {
+                            return Err(format!("Expected name 'arr', got '{}'", decl.name));
+                        }
+                        if decl.ty.is_none() {
+                            return Err("Expected array type to be parsed".to_string());
+                        }
+                        Ok(())
+                    }
+                    _ => Err("Expected Let declaration".to_string()),
+                }
+            },
+        );
     }
 
     #[test]
     fn test_parse_entry_decl() {
-        expect_parse("entry main(x: i32, y: f32): [4]f32 = result", |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            match &declarations[0] {
-                Declaration::Entry(decl) => {
-                    if decl.name != "main" {
-                        return Err(format!("Expected name 'main', got '{}'", decl.name));
-                    }
-                    if decl.params.len() != 2 {
-                        return Err(format!("Expected 2 parameters, got {}", decl.params.len()));
-                    }
-                    if decl.params[0].name != "x" {
-                        return Err(format!("Expected first param name 'x', got '{}'", decl.params[0].name));
-                    }
-                    if decl.params[0].ty != crate::ast::types::i32() {
-                        return Err(format!("Expected i32 type for first param, got {:?}", decl.params[0].ty));
-                    }
-                    if !decl.params[0].attributes.is_empty() {
-                        return Err(format!("Expected no attributes for first param, got {:?}", decl.params[0].attributes));
-                    }
-                    if decl.params[1].name != "y" {
-                        return Err(format!("Expected second param name 'y', got '{}'", decl.params[1].name));
-                    }
-                    if decl.params[1].ty != crate::ast::types::f32() {
-                        return Err(format!("Expected f32 type for second param, got {:?}", decl.params[1].ty));
-                    }
-                    if !decl.params[1].attributes.is_empty() {
-                        return Err(format!("Expected no attributes for second param, got {:?}", decl.params[1].attributes));
-                    }
-                    if decl.return_type.ty != crate::ast::types::array(crate::ast::types::f32()) {
-                        return Err(format!("Expected [4]f32 return type, got {:?}", decl.return_type.ty));
-                    }
-                    if !decl.return_type.attributes.is_empty() {
-                        return Err(format!("Expected no attributes on return type, got {:?}", decl.return_type.attributes));
-                    }
-                    Ok(())
+        expect_parse(
+            "entry main(x: i32, y: f32): [4]f32 = result",
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!(
+                        "Expected 1 declaration, got {}",
+                        declarations.len()
+                    ));
                 }
-                _ => Err("Expected Entry declaration".to_string()),
-            }
-        });
+                match &declarations[0] {
+                    Declaration::Entry(decl) => {
+                        if decl.name != "main" {
+                            return Err(format!("Expected name 'main', got '{}'", decl.name));
+                        }
+                        if decl.params.len() != 2 {
+                            return Err(format!(
+                                "Expected 2 parameters, got {}",
+                                decl.params.len()
+                            ));
+                        }
+                        if decl.params[0].name != "x" {
+                            return Err(format!(
+                                "Expected first param name 'x', got '{}'",
+                                decl.params[0].name
+                            ));
+                        }
+                        if decl.params[0].ty != crate::ast::types::i32() {
+                            return Err(format!(
+                                "Expected i32 type for first param, got {:?}",
+                                decl.params[0].ty
+                            ));
+                        }
+                        if !decl.params[0].attributes.is_empty() {
+                            return Err(format!(
+                                "Expected no attributes for first param, got {:?}",
+                                decl.params[0].attributes
+                            ));
+                        }
+                        if decl.params[1].name != "y" {
+                            return Err(format!(
+                                "Expected second param name 'y', got '{}'",
+                                decl.params[1].name
+                            ));
+                        }
+                        if decl.params[1].ty != crate::ast::types::f32() {
+                            return Err(format!(
+                                "Expected f32 type for second param, got {:?}",
+                                decl.params[1].ty
+                            ));
+                        }
+                        if !decl.params[1].attributes.is_empty() {
+                            return Err(format!(
+                                "Expected no attributes for second param, got {:?}",
+                                decl.params[1].attributes
+                            ));
+                        }
+                        if decl.return_type.ty != crate::ast::types::sized_array(4, crate::ast::types::f32())
+                        {
+                            return Err(format!(
+                                "Expected [4]f32 return type, got {:?}",
+                                decl.return_type.ty
+                            ));
+                        }
+                        if !decl.return_type.attributes.is_empty() {
+                            return Err(format!(
+                                "Expected no attributes on return type, got {:?}",
+                                decl.return_type.attributes
+                            ));
+                        }
+                        Ok(())
+                    }
+                    _ => Err("Expected Entry declaration".to_string()),
+                }
+            },
+        );
     }
 
     #[test]
     fn test_parse_array_index() {
         expect_parse("let x: f32 = arr[0]", |declarations| {
             if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+                return Err(format!(
+                    "Expected 1 declaration, got {}",
+                    declarations.len()
+                ));
             }
             match &declarations[0] {
                 Declaration::Let(decl) => match &decl.value {
                     Expression::ArrayIndex(arr, idx) => {
                         if **arr != Expression::Identifier("arr".to_string()) {
-                            return Err(format!("Expected array identifier 'arr', got {:?}", **arr));
+                            return Err(format!(
+                                "Expected array identifier 'arr', got {:?}",
+                                **arr
+                            ));
                         }
                         if **idx != Expression::IntLiteral(0) {
                             return Err(format!("Expected index 0, got {:?}", **idx));
                         }
                         Ok(())
                     }
-                    _ => Err(format!("Expected ArrayIndex expression, got {:?}", decl.value)),
+                    _ => Err(format!(
+                        "Expected ArrayIndex expression, got {:?}",
+                        decl.value
+                    )),
                 },
                 _ => Err("Expected Let declaration".to_string()),
             }
@@ -786,7 +858,10 @@ mod tests {
     fn test_parse_division() {
         expect_parse("let x: f32 = 135f32/255f32", |declarations| {
             if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+                return Err(format!(
+                    "Expected 1 declaration, got {}",
+                    declarations.len()
+                ));
             }
             match &declarations[0] {
                 Declaration::Let(decl) => match &decl.value {
@@ -799,7 +874,10 @@ mod tests {
                         }
                         Ok(())
                     }
-                    _ => Err(format!("Expected BinaryOp expression, got {:?}", decl.value)),
+                    _ => Err(format!(
+                        "Expected BinaryOp expression, got {:?}",
+                        decl.value
+                    )),
                 },
                 _ => Err("Expected Let declaration".to_string()),
             }
@@ -810,12 +888,18 @@ mod tests {
     fn test_parse_vertex_attribute() {
         expect_parse("#[vertex] entry main(): vec4f32 = result", |declarations| {
             if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+                return Err(format!(
+                    "Expected 1 declaration, got {}",
+                    declarations.len()
+                ));
             }
             match &declarations[0] {
                 Declaration::Entry(decl) => {
                     if decl.attributes != vec![Attribute::Vertex] {
-                        return Err(format!("Expected Vertex attribute, got {:?}", decl.attributes));
+                        return Err(format!(
+                            "Expected Vertex attribute, got {:?}",
+                            decl.attributes
+                        ));
                     }
                     if decl.name != "main" {
                         return Err(format!("Expected name 'main', got '{}'", decl.name));
@@ -829,125 +913,200 @@ mod tests {
 
     #[test]
     fn test_parse_fragment_attribute() {
-        expect_parse("#[fragment] entry frag(): [4]f32 = result", |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            match &declarations[0] {
-                Declaration::Entry(decl) => {
-                    if decl.attributes != vec![Attribute::Fragment] {
-                        return Err(format!("Expected Fragment attribute, got {:?}", decl.attributes));
-                    }
-                    if decl.name != "frag" {
-                        return Err(format!("Expected name 'frag', got '{}'", decl.name));
-                    }
-                    Ok(())
+        expect_parse(
+            "#[fragment] entry frag(): [4]f32 = result",
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!(
+                        "Expected 1 declaration, got {}",
+                        declarations.len()
+                    ));
                 }
-                _ => Err("Expected Entry declaration".to_string()),
-            }
-        });
+                match &declarations[0] {
+                    Declaration::Entry(decl) => {
+                        if decl.attributes != vec![Attribute::Fragment] {
+                            return Err(format!(
+                                "Expected Fragment attribute, got {:?}",
+                                decl.attributes
+                            ));
+                        }
+                        if decl.name != "frag" {
+                            return Err(format!("Expected name 'frag', got '{}'", decl.name));
+                        }
+                        Ok(())
+                    }
+                    _ => Err("Expected Entry declaration".to_string()),
+                }
+            },
+        );
     }
 
     #[test]
     fn test_parse_builtin_attribute_on_return_type() {
-        expect_parse("#[vertex] entry main(): #[builtin(position)] vec4f32 = result", |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            match &declarations[0] {
-                Declaration::Entry(decl) => {
-                    if decl.attributes != vec![Attribute::Vertex] {
-                        return Err(format!("Expected Vertex attribute, got {:?}", decl.attributes));
-                    }
-                    if decl.return_type.attributes != vec![Attribute::BuiltIn(spirv::BuiltIn::Position)] {
-                        return Err(format!("Expected Position builtin on return type, got {:?}", decl.return_type.attributes));
-                    }
-                    if decl.return_type.ty != crate::ast::types::array(crate::ast::types::f32()) {
-                        return Err(format!("Expected vec4f32 return type, got {:?}", decl.return_type.ty));
-                    }
-                    Ok(())
+        expect_parse(
+            "#[vertex] entry main(): #[builtin(position)] vec4f32 = result",
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!(
+                        "Expected 1 declaration, got {}",
+                        declarations.len()
+                    ));
                 }
-                _ => Err("Expected Entry declaration".to_string()),
-            }
-        });
+                match &declarations[0] {
+                    Declaration::Entry(decl) => {
+                        if decl.attributes != vec![Attribute::Vertex] {
+                            return Err(format!(
+                                "Expected Vertex attribute, got {:?}",
+                                decl.attributes
+                            ));
+                        }
+                        if decl.return_type.attributes
+                            != vec![Attribute::BuiltIn(spirv::BuiltIn::Position)]
+                        {
+                            return Err(format!(
+                                "Expected Position builtin on return type, got {:?}",
+                                decl.return_type.attributes
+                            ));
+                        }
+                        if decl.return_type.ty != crate::ast::types::sized_array(4, crate::ast::types::f32())
+                        {
+                            return Err(format!(
+                                "Expected vec4f32 return type, got {:?}",
+                                decl.return_type.ty
+                            ));
+                        }
+                        Ok(())
+                    }
+                    _ => Err("Expected Entry declaration".to_string()),
+                }
+            },
+        );
     }
 
     #[test]
     fn test_parse_location_attribute_on_return_type() {
-        expect_parse("#[fragment] entry frag(): #[location(0)] [4]f32 = result", |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            match &declarations[0] {
-                Declaration::Entry(decl) => {
-                    if decl.attributes != vec![Attribute::Fragment] {
-                        return Err(format!("Expected Fragment attribute, got {:?}", decl.attributes));
-                    }
-                    if decl.return_type.attributes != vec![Attribute::Location(0)] {
-                        return Err(format!("Expected Location(0) attribute on return type, got {:?}", decl.return_type.attributes));
-                    }
-                    if decl.return_type.ty != crate::ast::types::array(crate::ast::types::f32()) {
-                        return Err(format!("Expected [4]f32 return type, got {:?}", decl.return_type.ty));
-                    }
-                    Ok(())
+        expect_parse(
+            "#[fragment] entry frag(): #[location(0)] [4]f32 = result",
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!(
+                        "Expected 1 declaration, got {}",
+                        declarations.len()
+                    ));
                 }
-                _ => Err("Expected Entry declaration".to_string()),
-            }
-        });
+                match &declarations[0] {
+                    Declaration::Entry(decl) => {
+                        if decl.attributes != vec![Attribute::Fragment] {
+                            return Err(format!(
+                                "Expected Fragment attribute, got {:?}",
+                                decl.attributes
+                            ));
+                        }
+                        if decl.return_type.attributes != vec![Attribute::Location(0)] {
+                            return Err(format!(
+                                "Expected Location(0) attribute on return type, got {:?}",
+                                decl.return_type.attributes
+                            ));
+                        }
+                        if decl.return_type.ty != crate::ast::types::sized_array(4, crate::ast::types::f32())
+                        {
+                            return Err(format!(
+                                "Expected [4]f32 return type, got {:?}",
+                                decl.return_type.ty
+                            ));
+                        }
+                        Ok(())
+                    }
+                    _ => Err("Expected Entry declaration".to_string()),
+                }
+            },
+        );
     }
 
     #[test]
     fn test_parse_parameter_with_builtin_attribute() {
-        expect_parse("#[vertex] entry main(#[builtin(vertex_index)] vid: i32): vec4f32 = result", |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            match &declarations[0] {
-                Declaration::Entry(decl) => {
-                    if decl.params.len() != 1 {
-                        return Err(format!("Expected 1 parameter, got {}", decl.params.len()));
-                    }
-                    if decl.params[0].name != "vid" {
-                        return Err(format!("Expected param name 'vid', got '{}'", decl.params[0].name));
-                    }
-                    if decl.params[0].ty != crate::ast::types::i32() {
-                        return Err(format!("Expected i32 param type, got {:?}", decl.params[0].ty));
-                    }
-                    if decl.params[0].attributes != vec![Attribute::BuiltIn(spirv::BuiltIn::VertexIndex)] {
-                        return Err(format!("Expected VertexIndex attribute, got {:?}", decl.params[0].attributes));
-                    }
-                    Ok(())
+        expect_parse(
+            "#[vertex] entry main(#[builtin(vertex_index)] vid: i32): vec4f32 = result",
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!(
+                        "Expected 1 declaration, got {}",
+                        declarations.len()
+                    ));
                 }
-                _ => Err("Expected Entry declaration".to_string()),
-            }
-        });
+                match &declarations[0] {
+                    Declaration::Entry(decl) => {
+                        if decl.params.len() != 1 {
+                            return Err(format!("Expected 1 parameter, got {}", decl.params.len()));
+                        }
+                        if decl.params[0].name != "vid" {
+                            return Err(format!(
+                                "Expected param name 'vid', got '{}'",
+                                decl.params[0].name
+                            ));
+                        }
+                        if decl.params[0].ty != crate::ast::types::i32() {
+                            return Err(format!(
+                                "Expected i32 param type, got {:?}",
+                                decl.params[0].ty
+                            ));
+                        }
+                        if decl.params[0].attributes
+                            != vec![Attribute::BuiltIn(spirv::BuiltIn::VertexIndex)]
+                        {
+                            return Err(format!(
+                                "Expected VertexIndex attribute, got {:?}",
+                                decl.params[0].attributes
+                            ));
+                        }
+                        Ok(())
+                    }
+                    _ => Err("Expected Entry declaration".to_string()),
+                }
+            },
+        );
     }
 
     #[test]
     fn test_parse_parameter_with_location_attribute() {
-        expect_parse("#[fragment] entry frag(#[location(1)] color: [3]f32): [4]f32 = result", |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            match &declarations[0] {
-                Declaration::Entry(decl) => {
-                    if decl.params.len() != 1 {
-                        return Err(format!("Expected 1 parameter, got {}", decl.params.len()));
-                    }
-                    if decl.params[0].name != "color" {
-                        return Err(format!("Expected param name 'color', got '{}'", decl.params[0].name));
-                    }
-                    if decl.params[0].ty != crate::ast::types::array(crate::ast::types::f32()) {
-                        return Err(format!("Expected [3]f32 param type, got {:?}", decl.params[0].ty));
-                    }
-                    if decl.params[0].attributes != vec![Attribute::Location(1)] {
-                        return Err(format!("Expected Location(1) attribute, got {:?}", decl.params[0].attributes));
-                    }
-                    Ok(())
+        expect_parse(
+            "#[fragment] entry frag(#[location(1)] color: [3]f32): [4]f32 = result",
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!(
+                        "Expected 1 declaration, got {}",
+                        declarations.len()
+                    ));
                 }
-                _ => Err("Expected Entry declaration".to_string()),
-            }
-        });
+                match &declarations[0] {
+                    Declaration::Entry(decl) => {
+                        if decl.params.len() != 1 {
+                            return Err(format!("Expected 1 parameter, got {}", decl.params.len()));
+                        }
+                        if decl.params[0].name != "color" {
+                            return Err(format!(
+                                "Expected param name 'color', got '{}'",
+                                decl.params[0].name
+                            ));
+                        }
+                        if decl.params[0].ty != crate::ast::types::sized_array(3, crate::ast::types::f32()) {
+                            return Err(format!(
+                                "Expected [3]f32 param type, got {:?}",
+                                decl.params[0].ty
+                            ));
+                        }
+                        if decl.params[0].attributes != vec![Attribute::Location(1)] {
+                            return Err(format!(
+                                "Expected Location(1) attribute, got {:?}",
+                                decl.params[0].attributes
+                            ));
+                        }
+                        Ok(())
+                    }
+                    _ => Err("Expected Entry declaration".to_string()),
+                }
+            },
+        );
     }
 
     #[test]
@@ -997,7 +1156,10 @@ mod tests {
     fn test_parse_simple_lambda() {
         expect_parse(r#"let f: i32 -> i32 = \x -> x"#, |declarations| {
             if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+                return Err(format!(
+                    "Expected 1 declaration, got {}",
+                    declarations.len()
+                ));
             }
             match &declarations[0] {
                 Declaration::Let(decl) => {
@@ -1007,24 +1169,44 @@ mod tests {
                     match &decl.value {
                         Expression::Lambda(lambda) => {
                             if lambda.params.len() != 1 {
-                                return Err(format!("Expected 1 lambda param, got {}", lambda.params.len()));
+                                return Err(format!(
+                                    "Expected 1 lambda param, got {}",
+                                    lambda.params.len()
+                                ));
                             }
                             if lambda.params[0].name != "x" {
-                                return Err(format!("Expected param name 'x', got '{}'", lambda.params[0].name));
+                                return Err(format!(
+                                    "Expected param name 'x', got '{}'",
+                                    lambda.params[0].name
+                                ));
                             }
                             if lambda.params[0].ty.is_some() {
-                                return Err(format!("Expected no param type, got {:?}", lambda.params[0].ty));
+                                return Err(format!(
+                                    "Expected no param type, got {:?}",
+                                    lambda.params[0].ty
+                                ));
                             }
                             if lambda.return_type.is_some() {
-                                return Err(format!("Expected no return type, got {:?}", lambda.return_type));
+                                return Err(format!(
+                                    "Expected no return type, got {:?}",
+                                    lambda.return_type
+                                ));
                             }
                             match lambda.body.as_ref() {
                                 Expression::Identifier(name) => {
                                     if name != "x" {
-                                        return Err(format!("Expected identifier 'x' in lambda body, got '{}'", name));
+                                        return Err(format!(
+                                            "Expected identifier 'x' in lambda body, got '{}'",
+                                            name
+                                        ));
                                     }
                                 }
-                                _ => return Err(format!("Expected identifier in lambda body, got {:?}", lambda.body)),
+                                _ => {
+                                    return Err(format!(
+                                        "Expected identifier in lambda body, got {:?}",
+                                        lambda.body
+                                    ))
+                                }
                             }
                             Ok(())
                         }
@@ -1040,68 +1222,53 @@ mod tests {
     fn test_parse_lambda_with_type_annotation() {
         expect_parse(r#"let f: f32 -> f32 = \x -> x"#, |declarations| {
             if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            match &declarations[0] {
-                Declaration::Let(decl) => {
-                    match &decl.value {
-                        Expression::Lambda(lambda) => {
-                            if lambda.params.len() != 1 {
-                                return Err(format!("Expected 1 lambda param, got {}", lambda.params.len()));
-                            }
-                            if lambda.params[0].name != "x" {
-                                return Err(format!("Expected param name 'x', got '{}'", lambda.params[0].name));
-                            }
-                            if lambda.params[0].ty.is_some() {
-                                return Err(format!("Expected no param type (parameters are untyped), got {:?}", lambda.params[0].ty));
-                            }
-                            if lambda.return_type.is_some() {
-                                return Err(format!("Expected no return type annotation in lambda, got {:?}", lambda.return_type));
-                            }
-                            match lambda.body.as_ref() {
-                                Expression::Identifier(name) => {
-                                    if name != "x" {
-                                        return Err(format!("Expected identifier 'x' in lambda body, got '{}'", name));
-                                    }
-                                }
-                                _ => return Err(format!("Expected identifier in lambda body, got {:?}", lambda.body)),
-                            }
-                            Ok(())
-                        }
-                        _ => Err(format!("Expected lambda expression, got {:?}", decl.value)),
-                    }
-                }
-                _ => Err("Expected Let declaration".to_string()),
-            }
-        });
-    }
-
-    #[test]
-    fn test_parse_lambda_with_multiple_params() {
-        expect_parse(r#"let add: i32 -> i32 -> i32 = \x y -> x"#, |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+                return Err(format!(
+                    "Expected 1 declaration, got {}",
+                    declarations.len()
+                ));
             }
             match &declarations[0] {
                 Declaration::Let(decl) => match &decl.value {
                     Expression::Lambda(lambda) => {
-                        if lambda.params.len() != 2 {
-                            return Err(format!("Expected 2 lambda params, got {}", lambda.params.len()));
+                        if lambda.params.len() != 1 {
+                            return Err(format!(
+                                "Expected 1 lambda param, got {}",
+                                lambda.params.len()
+                            ));
                         }
                         if lambda.params[0].name != "x" {
-                            return Err(format!("Expected first param name 'x', got '{}'", lambda.params[0].name));
+                            return Err(format!(
+                                "Expected param name 'x', got '{}'",
+                                lambda.params[0].name
+                            ));
                         }
                         if lambda.params[0].ty.is_some() {
-                            return Err(format!("Expected no type for first param, got {:?}", lambda.params[0].ty));
-                        }
-                        if lambda.params[1].name != "y" {
-                            return Err(format!("Expected second param name 'y', got '{}'", lambda.params[1].name));
-                        }
-                        if lambda.params[1].ty.is_some() {
-                            return Err(format!("Expected no type for second param, got {:?}", lambda.params[1].ty));
+                            return Err(format!(
+                                "Expected no param type (parameters are untyped), got {:?}",
+                                lambda.params[0].ty
+                            ));
                         }
                         if lambda.return_type.is_some() {
-                            return Err(format!("Expected no return type, got {:?}", lambda.return_type));
+                            return Err(format!(
+                                "Expected no return type annotation in lambda, got {:?}",
+                                lambda.return_type
+                            ));
+                        }
+                        match lambda.body.as_ref() {
+                            Expression::Identifier(name) => {
+                                if name != "x" {
+                                    return Err(format!(
+                                        "Expected identifier 'x' in lambda body, got '{}'",
+                                        name
+                                    ));
+                                }
+                            }
+                            _ => {
+                                return Err(format!(
+                                    "Expected identifier in lambda body, got {:?}",
+                                    lambda.body
+                                ))
+                            }
                         }
                         Ok(())
                     }
@@ -1113,10 +1280,73 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_lambda_with_multiple_params() {
+        expect_parse(
+            r#"let add: i32 -> i32 -> i32 = \x y -> x"#,
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!(
+                        "Expected 1 declaration, got {}",
+                        declarations.len()
+                    ));
+                }
+                match &declarations[0] {
+                    Declaration::Let(decl) => match &decl.value {
+                        Expression::Lambda(lambda) => {
+                            if lambda.params.len() != 2 {
+                                return Err(format!(
+                                    "Expected 2 lambda params, got {}",
+                                    lambda.params.len()
+                                ));
+                            }
+                            if lambda.params[0].name != "x" {
+                                return Err(format!(
+                                    "Expected first param name 'x', got '{}'",
+                                    lambda.params[0].name
+                                ));
+                            }
+                            if lambda.params[0].ty.is_some() {
+                                return Err(format!(
+                                    "Expected no type for first param, got {:?}",
+                                    lambda.params[0].ty
+                                ));
+                            }
+                            if lambda.params[1].name != "y" {
+                                return Err(format!(
+                                    "Expected second param name 'y', got '{}'",
+                                    lambda.params[1].name
+                                ));
+                            }
+                            if lambda.params[1].ty.is_some() {
+                                return Err(format!(
+                                    "Expected no type for second param, got {:?}",
+                                    lambda.params[1].ty
+                                ));
+                            }
+                            if lambda.return_type.is_some() {
+                                return Err(format!(
+                                    "Expected no return type, got {:?}",
+                                    lambda.return_type
+                                ));
+                            }
+                            Ok(())
+                        }
+                        _ => Err(format!("Expected lambda expression, got {:?}", decl.value)),
+                    },
+                    _ => Err("Expected Let declaration".to_string()),
+                }
+            },
+        );
+    }
+
+    #[test]
     fn test_parse_function_application() {
         expect_parse(r#"let result: i32 = f(42, 24)"#, |declarations| {
             if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+                return Err(format!(
+                    "Expected 1 declaration, got {}",
+                    declarations.len()
+                ));
             }
             match &declarations[0] {
                 Declaration::Let(decl) => match &decl.value {
@@ -1124,10 +1354,15 @@ mod tests {
                         match func.as_ref() {
                             Expression::Identifier(name) => {
                                 if name != "f" {
-                                    return Err(format!("Expected function identifier 'f', got '{}'", name));
+                                    return Err(format!(
+                                        "Expected function identifier 'f', got '{}'",
+                                        name
+                                    ));
                                 }
                             }
-                            _ => return Err(format!("Expected function identifier, got {:?}", func)),
+                            _ => {
+                                return Err(format!("Expected function identifier, got {:?}", func))
+                            }
                         }
                         if args.len() != 2 {
                             return Err(format!("Expected 2 arguments, got {}", args.len()));
@@ -1138,7 +1373,12 @@ mod tests {
                                     return Err(format!("Expected first argument 42, got {}", n));
                                 }
                             }
-                            _ => return Err(format!("Expected int literal for first argument, got {:?}", args[0])),
+                            _ => {
+                                return Err(format!(
+                                    "Expected int literal for first argument, got {:?}",
+                                    args[0]
+                                ))
+                            }
                         }
                         match &args[1] {
                             Expression::IntLiteral(n) => {
@@ -1146,11 +1386,19 @@ mod tests {
                                     return Err(format!("Expected second argument 24, got {}", n));
                                 }
                             }
-                            _ => return Err(format!("Expected int literal for second argument, got {:?}", args[1])),
+                            _ => {
+                                return Err(format!(
+                                    "Expected int literal for second argument, got {:?}",
+                                    args[1]
+                                ))
+                            }
                         }
                         Ok(())
                     }
-                    _ => Err(format!("Expected function application, got {:?}", decl.value)),
+                    _ => Err(format!(
+                        "Expected function application, got {:?}",
+                        decl.value
+                    )),
                 },
                 _ => Err("Expected Let declaration".to_string()),
             }
@@ -1159,39 +1407,122 @@ mod tests {
 
     #[test]
     fn test_parse_simple_let_in() {
-        expect_parse("entry main(x: i32): i32 = let y = 5 in y + x", |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            // Just verify it parses successfully - the structure is complex to validate in detail
-            Ok(())
-        });
+        expect_parse(
+            "entry main(x: i32): i32 = let y = 5 in y + x",
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!(
+                        "Expected 1 declaration, got {}",
+                        declarations.len()
+                    ));
+                }
+                // Just verify it parses successfully - the structure is complex to validate in detail
+                Ok(())
+            },
+        );
     }
 
-    #[test] 
+    #[test]
     fn test_parse_let_in_expression_only() {
         // Test parsing just the let..in expression by itself
         let input = r#"let f = \y -> y + x in f 10"#;
         let tokens = tokenize(input).expect("Failed to tokenize");
         let mut parser = Parser::new(tokens);
         let result = parser.parse_expression();
-        
+
         // Just verify it parses without error - this is a complex expression
         match result {
             Ok(_expr) => {
                 // Test passes if parsing succeeds
-            },
+            }
             Err(e) => panic!("Failed to parse let..in expression: {:?}", e),
         }
     }
-    
-    #[test] 
+
+    #[test]
     fn test_parse_let_in_with_lambda() {
-        expect_parse(r#"entry main(x: i32): i32 = let f = \y -> y + x in f 10"#, |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+        expect_parse(
+            r#"entry main(x: i32): i32 = let f = \y -> y + x in f 10"#,
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!(
+                        "Expected 1 declaration, got {}",
+                        declarations.len()
+                    ));
+                }
+                // Just verify it parses successfully - the lambda let..in structure is complex
+                Ok(())
+            },
+        );
+    }
+
+    #[test]
+    fn test_parse_multiple_top_level_lets_with_entry() {
+        // Test the failing case from integration tests: multiple let declarations with entry points
+        let input = r#"
+def verts: [3][4]f32 =
+  [[-1.0f32, -1.0f32, 0.0f32, 1.0f32],
+   [ 3.0f32, -1.0f32, 0.0f32, 1.0f32],
+   [-1.0f32,  3.0f32, 0.0f32, 1.0f32]]
+
+#[vertex]
+entry vertex_main(vertex_id: i32): [4]f32 = verts[vertex_id]
+
+def SKY_RGBA: [4]f32 =
+  [135f32/255f32, 206f32/255f32, 235f32/255f32, 1.0f32]
+
+#[fragment]
+entry fragment_main(): [4]f32 = SKY_RGBA
+"#;
+
+        expect_parse(input, |declarations| {
+            if declarations.len() != 4 {
+                return Err(format!(
+                    "Expected 4 declarations (2 lets + 2 entries), got {}",
+                    declarations.len()
+                ));
             }
-            // Just verify it parses successfully - the lambda let..in structure is complex
+            
+            // First should be def verts
+            match &declarations[0] {
+                Declaration::Def(decl) => {
+                    if decl.name != "verts" {
+                        return Err(format!("Expected first def to be 'verts', got '{}'", decl.name));
+                    }
+                }
+                _ => return Err("Expected first declaration to be Def".to_string()),
+            }
+            
+            // Second should be vertex entry
+            match &declarations[1] {
+                Declaration::Entry(decl) => {
+                    if decl.name != "vertex_main" {
+                        return Err(format!("Expected vertex entry to be 'vertex_main', got '{}'", decl.name));
+                    }
+                }
+                _ => return Err("Expected second declaration to be Entry".to_string()),
+            }
+            
+            // Third should be def SKY_RGBA
+            match &declarations[2] {
+                Declaration::Def(decl) => {
+                    if decl.name != "SKY_RGBA" {
+                        return Err(format!("Expected third def to be 'SKY_RGBA', got '{}'", decl.name));
+                    }
+                }
+                _ => return Err("Expected third declaration to be Def".to_string()),
+            }
+            
+            // Fourth should be fragment entry
+            match &declarations[3] {
+                Declaration::Entry(decl) => {
+                    if decl.name != "fragment_main" {
+                        return Err(format!("Expected fragment entry to be 'fragment_main', got '{}'", decl.name));
+                    }
+                }
+                _ => return Err("Expected fourth declaration to be Entry".to_string()),
+            }
+            
             Ok(())
         });
     }

@@ -1,5 +1,55 @@
-pub use polytype::{Type, TypeScheme};
+pub use polytype::TypeScheme;
 pub use spirv;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TypeName {
+    Str(&'static str),          // "int", "float", "tuple"
+    Array(&'static str, usize), // "array" with size
+}
+
+impl std::fmt::Display for TypeName {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            TypeName::Str(s) => write!(f, "{}", s),
+            TypeName::Array(s, size) => write!(f, "{}@{}", s, size),
+        }
+    }
+}
+
+impl std::str::FromStr for TypeName {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some(at_pos) = s.find('@') {
+            let (name, size_str) = s.split_at(at_pos);
+            let size_str = &size_str[1..]; // Skip the '@'
+            let size = size_str
+                .parse::<usize>()
+                .map_err(|_| format!("Invalid array size: {}", size_str))?;
+            // We need to leak the string to get &'static str for now
+            let leaked_name = Box::leak(name.to_string().into_boxed_str());
+            Ok(TypeName::Array(leaked_name, size))
+        } else {
+            // We need to leak the string to get &'static str for now
+            let leaked_str = Box::leak(s.to_string().into_boxed_str());
+            Ok(TypeName::Str(leaked_str))
+        }
+    }
+}
+
+impl polytype::Name for TypeName {
+    fn arrow() -> Self {
+        TypeName::Str("->")
+    }
+}
+
+impl From<&'static str> for TypeName {
+    fn from(s: &'static str) -> Self {
+        TypeName::Str(s)
+    }
+}
+
+pub type Type = polytype::Type<TypeName>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
@@ -115,23 +165,23 @@ pub enum BinaryOp {
 
 // Helper module for creating common polytype Types
 pub mod types {
-    use polytype::Type;
+    use super::{Type, TypeName};
 
     pub fn i32() -> Type {
-        Type::Constructed("int", vec![])
+        Type::Constructed(TypeName::Str("int"), vec![])
     }
 
     pub fn f32() -> Type {
-        Type::Constructed("float", vec![])
+        Type::Constructed(TypeName::Str("float"), vec![])
     }
 
 
-    pub fn array(elem_type: Type) -> Type {
-        Type::Constructed("array", vec![elem_type])
+    pub fn sized_array(size: usize, elem_type: Type) -> Type {
+        Type::Constructed(TypeName::Array("array", size), vec![elem_type])
     }
 
     pub fn tuple(types: Vec<Type>) -> Type {
-        Type::Constructed("tuple", types)
+        Type::Constructed(TypeName::Str("tuple"), types)
     }
 
     pub fn function(arg: Type, ret: Type) -> Type {
