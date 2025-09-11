@@ -1298,6 +1298,53 @@ def fragment_main(
     compute_color(world_pos, normal, is_front)
 ```
 
+## SPIR-V Compatibility Types
+
+In addition to arrays, Wyn provides vector types that directly correspond to SPIR-V/GLSL types. These are distinct types optimized for GPU operations and are required for certain shader interfaces and built-in variables.
+
+### Vector Types
+
+Wyn supports the following vector types:
+
+| Component Type | 2-component | 3-component | 4-component |
+|----------------|-------------|-------------|-------------|
+| `bool`         | `bvec2`     | `bvec3`     | `bvec4`     |
+| `i32` (signed) | `ivec2`     | `ivec3`     | `ivec4`     |
+| `u32` (unsigned) | `uvec2`   | `uvec3`     | `uvec4`     |
+| `f32` (32-bit float) | `vec2` | `vec3`     | `vec4`      |
+| `f64` (64-bit float) | `dvec2` | `dvec3`    | `dvec4`     |
+| `f16` (16-bit float) | `f16vec2` | `f16vec3` | `f16vec4`  |
+
+Vector types are distinct from array types and have different semantics:
+- **Vectors** are fixed-size, optimized for SIMD operations
+- **Arrays** are more general containers with runtime length operations
+
+Example usage:
+```wyn
+-- Vector types for graphics operations
+let position: vec3 = vec3(1.0f32, 2.0f32, 3.0f32)
+let color: vec4 = vec4(1.0f32, 0.0f32, 0.0f32, 1.0f32)
+
+-- Built-in variables often require vector types
+#[vertex]
+def vertex_main(): #[builtin(position)] vec4 = 
+  vec4(0.0f32, 0.0f32, 0.0f32, 1.0f32)
+```
+
+### Vector Constructors
+
+Vectors can be constructed using their type names as constructor functions:
+```wyn
+-- Scalar expansion
+let v1: vec3 = vec3(1.0f32)  -- Creates vec3(1.0, 1.0, 1.0)
+
+-- Component-wise construction
+let v2: vec4 = vec4(1.0f32, 2.0f32, 3.0f32, 4.0f32)
+
+-- Mixed construction (swizzling)
+let v3: vec4 = vec4(v2.xyz, 1.0f32)  -- Uses first 3 components of v2
+```
+
 ### Implementation Details
 
 - Attributes are parsed directly into SPIR-V enum values for type safety
