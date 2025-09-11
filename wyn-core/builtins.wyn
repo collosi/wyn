@@ -16,6 +16,6 @@ val iota [d0] : i32 -> [d0]i32
 -- length: returns the size of an array
 val length [d0] 't : [d0]'t -> i32
 
--- to_vec4_f32: converts a [4]f32 array to vec4<f32> for gl_Position
--- This is needed because SPIR-V gl_Position requires a vector type, not an array
-val to_vec4_f32 : [4]f32 -> vec4f32
+-- to_vec4_f32: identity function for [4]f32 arrays 
+-- This maintains compatibility with existing code while removing vec4f32 type
+val to_vec4_f32 : [4]f32 -> [4]f32

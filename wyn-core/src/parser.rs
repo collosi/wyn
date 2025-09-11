@@ -305,10 +305,6 @@ impl Parser {
                 self.advance();
                 Ok(types::f32())
             }
-            Some(Token::Vec4F32Type) => {
-                self.advance();
-                Ok(types::sized_array(4, types::f32()))
-            }
             Some(Token::Identifier(name)) if name.starts_with('\'') => {
                 // Type variable like 't1, 't2
                 let type_var = self.parse_type_variable()?;
@@ -900,7 +896,7 @@ mod tests {
 
     #[test]
     fn test_parse_vertex_attribute() {
-        expect_parse("#[vertex] def main(): vec4f32 = result", |declarations| {
+        expect_parse("#[vertex] def main(): [4]f32 = result", |declarations| {
             if declarations.len() != 1 {
                 return Err(format!(
                     "Expected 1 declaration, got {}",
@@ -958,7 +954,7 @@ mod tests {
     #[test]
     fn test_parse_builtin_attribute_on_return_type() {
         expect_parse(
-            "#[vertex] def main(): #[builtin(position)] vec4f32 = result",
+            "#[vertex] def main(): #[builtin(position)] [4]f32 = result",
             |declarations| {
                 if declarations.len() != 1 {
                     return Err(format!(
@@ -985,7 +981,7 @@ mod tests {
                         if let Some(ref ty) = decl.ty {
                             if *ty != crate::ast::types::sized_array(4, crate::ast::types::f32()) {
                                 return Err(format!(
-                                    "Expected vec4f32 return type, got {:?}",
+                                    "Expected [4]f32 return type, got {:?}",
                                     ty
                                 ));
                             }
@@ -1046,7 +1042,7 @@ mod tests {
     #[test]
     fn test_parse_parameter_with_builtin_attribute() {
         expect_parse(
-            "#[vertex] def main(#[builtin(vertex_index)] vid: i32): vec4f32 = result",
+            "#[vertex] def main(#[builtin(vertex_index)] vid: i32): [4]f32 = result",
             |declarations| {
                 if declarations.len() != 1 {
                     return Err(format!(
@@ -1142,7 +1138,7 @@ mod tests {
     #[test]
     fn test_parse_multiple_builtin_types() {
         expect_parse(
-            "#[vertex] def main(#[builtin(vertex_index)] vid: i32, #[builtin(instance_index)] iid: i32): #[builtin(position)] vec4f32 = result",
+            "#[vertex] def main(#[builtin(vertex_index)] vid: i32, #[builtin(instance_index)] iid: i32): #[builtin(position)] [4]f32 = result",
             |declarations| {
                 if declarations.len() != 1 {
                     return Err(format!("Expected 1 declaration, got {}", declarations.len()));

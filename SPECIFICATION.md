@@ -18,7 +18,7 @@ Wyn is a minimal functional programming language designed for GPU shader program
 - Multi-dimensional array types with literal syntax
 - Built-in functions for array-to-vector conversion (SPIR-V compatibility)
 - Entry point declarations for vertex and fragment shaders
-- Automatic semantic mapping (e.g., `vec4f32` → `gl_Position` for vertex shaders)
+- Automatic semantic mapping (e.g., `[4]f32` → `gl_Position` for vertex shaders)
 - Static type checking with type inference
 - Integration with GPU built-in variables (`gl_VertexIndex`, etc.)
 
@@ -315,7 +315,7 @@ Shader entry points are defined by annotating top-level `def` declarations with 
 
 ```wyn
 #[vertex]
-def vertex_main(): vec4f32 = ...
+def vertex_main(): [4]f32 = ...
 
 #[fragment] 
 def fragment_main(): [4]f32 = ...
@@ -1234,7 +1234,7 @@ Wyn uses attributes to define the interface between vertex and fragment shaders,
 **`#[vertex]`** - Marks a top-level `def` as a vertex shader entry point
 ```wyn
 #[vertex] 
-def vs_main(): #[builtin(position)] vec4f32 = result
+def vs_main(): #[builtin(position)] [4]f32 = result
 ```
 
 **`#[fragment]`** - Marks a top-level `def` as a fragment shader entry point
@@ -1283,7 +1283,7 @@ def vertex_main(
     #[builtin(instance_index)] instance_id: i32,
     #[location(0)] position: [3]f32,
     #[location(1)] normal: [3]f32
-): #[builtin(position)] vec4f32 = 
+): #[builtin(position)] [4]f32 = 
     transform_position(position, vertex_id)
 ```
 

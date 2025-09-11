@@ -562,10 +562,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                 match name {
                     TypeName::Str("int") => BasicTypeEnum::IntType(self.context.i32_type()),
                     TypeName::Str("float") => BasicTypeEnum::FloatType(self.context.f32_type()),
-                    TypeName::Str("vec4f32") => {
-                        let f32_type = self.context.f32_type();
-                        BasicTypeEnum::VectorType(f32_type.vec_type(4))
-                    }
                     TypeName::Str("array") => {
                         let elem_ty = args.first().ok_or_else(|| {
                             CompilerError::SpirvError("Array type missing element type".to_string())
