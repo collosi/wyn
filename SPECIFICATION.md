@@ -25,9 +25,9 @@ Wyn is a minimal functional programming language designed for GPU shader program
 ### Language Overview
 
 Wyn programs consist of:
-- **Global declarations**: Constants and arrays defined with `let`
+- **Global declarations**: Constants and arrays defined with `let` or `def`
 - **Built-in function signatures**: Polymorphic functions defined with `val`
-- **Entry points**: Shader entry functions defined with `entry`
+- **Shader entry points**: Functions annotated with `#[vertex]` or `#[fragment]` attributes
 
 The language uses Futhark-style syntax for types and function calls, with array-first semantics optimized for GPU programming patterns.
 
@@ -83,7 +83,7 @@ A reserved name or symbol may be used only when explicitly present in the gramma
 **Reserved identifiers:**
 ```
 true, false, if, then, else, def, let, loop, in, val, for, do, with, local, 
-open, include, import, type, entry, module, while, assert, match, case
+open, include, import, type, module, while, assert, match, case
 ```
 
 **Reserved symbols:**
@@ -259,8 +259,8 @@ Any names defined by a declaration inside a module are by default visible to use
 ### Grammar
 
 ```ebnf
-val_bind ::= ("def" | "entry" | "let") (name | "(" symbol ")") type_param* pat* [":" type] "=" exp
-           | ("def" | "entry" | "let") pat symbol pat [":" type] "=" exp
+val_bind ::= ["#[" attr "]"] ("def" | "let") (name | "(" symbol ")") type_param* pat* [":" type] "=" exp
+           | ["#[" attr "]"] ("def" | "let") pat symbol pat [":" type] "=" exp
 ```
 
 ### Description
@@ -309,11 +309,19 @@ To simplify the handling of in-place updates (see In-place Updates), the value r
 
 `let` may not be used to define top-level bindings.
 
-#### Entry Points
+#### Shader Entry Points
 
-Apart from declaring a function with the keyword `def`, it can also be declared with `entry`. When the Wyn program is compiled, any top-level function declared with `entry` in the single file passed directly to the Wyn compiler will be exposed as an entry point. This means that any functions defined with `entry` in a file that is accessed via `import` are not considered entry points, but they are still usable as normal functions.
+Shader entry points are defined by annotating top-level `def` declarations with either `#[vertex]` or `#[fragment]` attributes:
 
-Any top-level function named `main` is treated as if it had been defined with `entry`.
+```wyn
+#[vertex]
+def vertex_main(): vec4f32 = ...
+
+#[fragment] 
+def fragment_main(): [4]f32 = ...
+```
+
+When the Wyn program is compiled, any top-level function with a `#[vertex]` or `#[fragment]` attribute in the single file passed directly to the Wyn compiler will be exposed as a shader entry point. Functions with these attributes in files accessed via `import` are not considered entry points, but can still be called as normal functions.
 
 **Entry Point Naming Restrictions:**
 The name of an entry point must not contain an apostrophe (`'`), even though that is normally permitted in Wyn identifiers.
@@ -1213,7 +1221,7 @@ builtin_name ::= "position" | "vertex_index" | "instance_index"
 
 Wyn supports an attribute system for shader interface specification. Attributes are written as `#[attr]` and can be applied to:
 
-- **Entry point declarations** for shader identification
+- **Top-level `def` declarations** for shader identification
 - **Function parameters** for input interface specification  
 - **Return types** for output interface specification
 
@@ -1223,14 +1231,16 @@ Wyn uses attributes to define the interface between vertex and fragment shaders,
 
 #### Shader Identification
 
-**`#[vertex]`** - Marks an entry point as a vertex shader
+**`#[vertex]`** - Marks a top-level `def` as a vertex shader entry point
 ```wyn
-#[vertex] entry vs_main(): #[builtin(position)] vec4f32 = result
+#[vertex] 
+def vs_main(): #[builtin(position)] vec4f32 = result
 ```
 
-**`#[fragment]`** - Marks an entry point as a fragment shader
+**`#[fragment]`** - Marks a top-level `def` as a fragment shader entry point
 ```wyn
-#[fragment] entry fs_main(): #[location(0)] [4]f32 = result
+#[fragment] 
+def fs_main(): #[location(0)] [4]f32 = result
 ```
 
 #### Built-in Variables
@@ -1251,12 +1261,14 @@ Wyn uses attributes to define the interface between vertex and fragment shaders,
 **`#[location(n)]`** - Maps parameters and return values to location-based interface variables for communication between shader stages.
 
 ```wyn
-#[vertex] entry vs(
+#[vertex] 
+def vs(
     #[builtin(vertex_index)] vid: i32,
     #[location(0)] pos: [3]f32
 ): #[location(1)] [3]f32 = result
 
-#[fragment] entry fs(
+#[fragment] 
+def fs(
     #[location(1)] color: [3]f32  
 ): #[location(0)] [4]f32 = result
 ```
@@ -1265,7 +1277,8 @@ Wyn uses attributes to define the interface between vertex and fragment shaders,
 
 #### Complete Vertex Shader Interface
 ```wyn
-#[vertex] entry vertex_main(
+#[vertex] 
+def vertex_main(
     #[builtin(vertex_index)] vertex_id: i32,
     #[builtin(instance_index)] instance_id: i32,
     #[location(0)] position: [3]f32,
@@ -1276,7 +1289,8 @@ Wyn uses attributes to define the interface between vertex and fragment shaders,
 
 #### Complete Fragment Shader Interface  
 ```wyn
-#[fragment] entry fragment_main(
+#[fragment] 
+def fragment_main(
     #[location(0)] world_pos: [3]f32,
     #[location(1)] normal: [3]f32,
     #[builtin(front_facing)] is_front: bool

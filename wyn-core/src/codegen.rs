@@ -81,7 +81,14 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn generate_declaration(&mut self, decl: &Declaration) -> Result<()> {
         match decl {
             Declaration::Decl(decl_node) => {
-                if decl_node.params.is_empty() {
+                // Check if this is an entry point (has Vertex or Fragment attribute)
+                let is_entry_point = decl_node.attributes.iter().any(|attr| 
+                    matches!(attr, Attribute::Vertex | Attribute::Fragment)
+                );
+                
+                if is_entry_point {
+                    self.generate_entry_point(decl_node)
+                } else if decl_node.params.is_empty() {
                     // Variable declaration: let/def name: type = value or let/def name = value
                     let ty = decl_node.ty.as_ref().ok_or_else(|| {
                         CompilerError::SpirvError(format!("{} declaration must have explicit type", decl_node.keyword))
@@ -92,7 +99,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Ok(())
                 }
             }
-            Declaration::Entry(entry_decl) => self.generate_entry_decl(entry_decl),
             Declaration::Val(_val_decl) => {
                 // Type signatures only
                 Ok(())
@@ -116,7 +122,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
-    fn generate_entry_decl(&mut self, decl: &EntryDecl) -> Result<()> {
+    fn generate_entry_point(&mut self, decl: &Decl) -> Result<()> {
         // Determine execution model
         let exec_model = if decl
             .attributes
@@ -139,15 +145,22 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.entry_points.push((decl.name.clone(), exec_model));
 
         // Create function signature
-        let return_type = self.get_or_create_type(&decl.return_type.ty)?;
+        let return_type = self.get_or_create_type(decl.ty.as_ref().ok_or_else(|| {
+            CompilerError::SpirvError("Entry point must have return type".to_string())
+        })?)?;
 
         // Build parameter types
         let param_types: Vec<BasicMetadataTypeEnum> = decl
             .params
             .iter()
             .map(|param| {
-                self.get_or_create_type(&param.ty)
-                    .map(BasicMetadataTypeEnum::from)
+                match param {
+                    DeclParam::Typed(p) => self.get_or_create_type(&p.ty),
+                    DeclParam::Untyped(_) => Err(CompilerError::SpirvError(
+                        "Entry point parameters must have explicit types".to_string()
+                    )),
+                }
+                .map(BasicMetadataTypeEnum::from)
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -177,14 +190,23 @@ impl<'ctx> CodeGenerator<'ctx> {
             let param_value = function
                 .get_nth_param(i as u32)
                 .ok_or_else(|| CompilerError::SpirvError("Missing parameter".to_string()))?;
+            
+            let (param_name, param_type) = match param {
+                DeclParam::Typed(p) => (&p.name, &p.ty),
+                DeclParam::Untyped(_) => {
+                    return Err(CompilerError::SpirvError(
+                        "Entry point parameters must have explicit types".to_string()
+                    ))
+                }
+            };
 
-            // Get the parameter type
-            let param_type = self.get_or_create_type(&param.ty)?;
+            // Get the parameter type from LLVM
+            let llvm_param_type = self.get_or_create_type(param_type)?;
 
             // Create alloca for the parameter
             let alloca = self
                 .builder
-                .build_alloca(param_type, &param.name)
+                .build_alloca(llvm_param_type, param_name)
                 .map_err(|e| {
                     CompilerError::SpirvError(format!("Failed to create alloca: {}", e))
                 })?;
@@ -193,9 +215,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 CompilerError::SpirvError(format!("Failed to store parameter: {}", e))
             })?;
 
-            self.variable_cache.insert(param.name.clone(), alloca);
+            self.variable_cache.insert(param_name.clone(), alloca);
             self.variable_types
-                .insert(param.name.clone(), param.ty.clone());
+                .insert(param_name.clone(), param_type.clone());
         }
 
         // Generate function body

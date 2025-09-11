@@ -39,10 +39,6 @@ impl<W: Write> CfgNemoExtractor<W> {
 
     fn extract_declaration_cfg(&mut self, decl: &Declaration) -> Result<()> {
         match decl {
-            Declaration::Entry(entry_decl) => {
-                self.start_new_block()?; // Entry points start new blocks
-                self.extract_expression_cfg(&entry_decl.body)?;
-            }
             Declaration::Decl(decl) => {
                 if decl.keyword == "let" && decl.params.is_empty() {
                     // Let variable binding
@@ -208,7 +204,7 @@ mod tests {
 
     #[test]
     fn test_nemo_cfg_extraction() {
-        let source = r#"entry main(x: i32): i32 = x + 1"#;
+        let source = r#"#[vertex] def main(x: i32): i32 = x + 1"#;
 
         let tokens = tokenize(source).unwrap();
         let mut parser = Parser::new(tokens);

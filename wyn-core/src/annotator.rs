@@ -60,7 +60,10 @@ impl CodeAnnotator {
                         if i > 0 {
                             self.output.push_str(", ");
                         }
-                        write!(self.output, "{}", param).unwrap();
+                        match param {
+                            DeclParam::Untyped(name) => write!(self.output, "{}", name).unwrap(),
+                            DeclParam::Typed(p) => write!(self.output, "{}", p.name).unwrap(),
+                        }
                     }
                     self.output.push(')');
                 }
@@ -77,28 +80,6 @@ impl CodeAnnotator {
                 self.exit_block();
             }
 
-            Declaration::Entry(entry) => {
-                let block = self.new_block();
-                self.enter_block(block);
-
-                write!(self.output, "#B{}.0 entry {}(", block.0, entry.name).unwrap();
-
-                for (i, param) in entry.params.iter().enumerate() {
-                    if i > 0 {
-                        self.output.push_str(", ");
-                    }
-                    write!(self.output, "{}: ", param.name).unwrap();
-                    self.write_type(&param.ty);
-                }
-
-                self.output.push_str("): ");
-                self.write_type(&entry.return_type.ty);
-                self.output.push_str(" =\n    ");
-
-                self.annotate_expression(&entry.body);
-
-                self.exit_block();
-            }
 
             Declaration::Val(val) => {
                 write!(self.output, "val {}: ", val.name).unwrap();
@@ -318,7 +299,7 @@ mod tests {
 
     #[test]
     fn test_simple_annotation() {
-        let source = r#"entry main(x: i32): i32 = x + 1"#;
+        let source = r#"#[vertex] def main(x: i32): i32 = x + 1"#;
 
         // Parse the source
         let tokens = tokenize(source).unwrap();
@@ -334,13 +315,13 @@ mod tests {
 
         // Check that annotations are present
         assert!(annotated.contains("#B0.0"));
-        assert!(annotated.contains("entry main"));
+        assert!(annotated.contains("def main"));
         assert!(annotated.contains(" + "));
     }
 
     #[test]
     fn test_lambda_annotation() {
-        let source = r#"entry main(x: i32): i32 = 
+        let source = r#"#[vertex] def main(x: i32): i32 = 
             let f = \y -> y + x in
             f 10"#;
 
@@ -361,7 +342,7 @@ mod tests {
 
     #[test]
     fn test_complex_expression() {
-        let source = r#"entry main(arr: [4]i32): i32 = 
+        let source = r#"#[vertex] def main(arr: [4]i32): i32 = 
             arr[0] + arr[1]"#;
 
         let tokens = tokenize(source).unwrap();

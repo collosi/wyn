@@ -12,7 +12,6 @@ use nom::{
 pub enum Token {
     // Keywords
     Let,
-    Entry,
     Def,
     Val,
     In,
@@ -69,7 +68,6 @@ fn parse_keyword(input: &str) -> IResult<&str, Token> {
 
     alt((
         keyword("let", Token::Let),
-        keyword("entry", Token::Entry),
         keyword("def", Token::Def),
         keyword("val", Token::Val),
         keyword("in", Token::In),
@@ -198,9 +196,9 @@ mod tests {
 
     #[test]
     fn test_tokenize_keywords() {
-        let input = "let entry";
+        let input = "let def";
         let tokens = tokenize(input).unwrap();
-        assert_eq!(tokens, vec![Token::Let, Token::Entry]);
+        assert_eq!(tokens, vec![Token::Let, Token::Def]);
     }
 
     #[test]

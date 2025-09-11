@@ -68,42 +68,6 @@ impl BorrowChecker {
         block_counter: &mut usize,
     ) -> Result<()> {
         match decl {
-            Declaration::Entry(entry_decl) => {
-                let block_id = BlockId(*block_counter);
-                *block_counter += 1;
-                fact_writer
-                    .write_block_fact(block_id)
-                    .map_err(Self::io_error)?;
-
-                // Parameters create lifetimes
-                for param in &entry_decl.params {
-                    let lifetime_id = self.get_next_lifetime_id();
-                    let location_id = *location_counter;
-                    *location_counter += 1;
-
-                    let location = Location {
-                        block: block_id,
-                        index: 0,
-                    };
-                    fact_writer
-                        .write_location_fact(location_id, &location)
-                        .map_err(Self::io_error)?;
-                    fact_writer
-                        .write_var_def_fact(location_id, &param.name)
-                        .map_err(Self::io_error)?;
-                    fact_writer
-                        .write_lifetime_start_fact(lifetime_id, location_id, &param.name)
-                        .map_err(Self::io_error)?;
-                }
-
-                // Analyze function body
-                self.extract_expression_facts(
-                    fact_writer,
-                    &entry_decl.body,
-                    block_id,
-                    location_counter,
-                )?;
-            }
             Declaration::Decl(decl) => {
                 if decl.keyword == "let" && decl.params.is_empty() {
                     // Let variable binding
@@ -148,7 +112,11 @@ impl BorrowChecker {
                     .map_err(Self::io_error)?;
 
                 // Parameters create lifetimes
-                for param_name in &decl.params {
+                for param in &decl.params {
+                    let param_name = match param {
+                        DeclParam::Untyped(name) => name,
+                        DeclParam::Typed(p) => &p.name,
+                    };
                     let lifetime_id = self.get_next_lifetime_id();
                     let location_id = *location_counter;
                     *location_counter += 1;
@@ -528,7 +496,7 @@ mod tests {
 
     #[test]
     fn test_borrow_checker_basic() {
-        let source = r#"entry main(x: i32): i32 = x + 1"#;
+        let source = r#"#[vertex] def main(x: i32): i32 = x + 1"#;
 
         let tokens = tokenize(source).unwrap();
         let mut parser = Parser::new(tokens);

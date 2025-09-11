@@ -105,10 +105,6 @@ impl TypeChecker {
                 println!("DEBUG: Checking {} declaration: {}", decl_node.keyword, decl_node.name);
                 self.check_decl(decl_node)
             }
-            Declaration::Entry(entry_decl) => {
-                println!("DEBUG: Checking Entry declaration: {}", entry_decl.name);
-                self.check_entry_decl(entry_decl)
-            }
             Declaration::Val(val_decl) => {
                 println!("DEBUG: Checking Val declaration: {}", val_decl.name);
                 self.check_val_decl(val_decl)
@@ -138,19 +134,26 @@ impl TypeChecker {
             println!("Inferred type for {}: {}", decl.name, stored_type);
         } else {
             // Function declaration: let/def name param1 param2 = body
-            // Create type variables for parameters
+            // Create type variables or use explicit types for parameters
             let param_types: Vec<Type> = decl.params
                 .iter()
-                .map(|_| self.context.new_variable())
+                .map(|p| match p {
+                    DeclParam::Untyped(_) => self.context.new_variable(),
+                    DeclParam::Typed(param) => param.ty.clone(),
+                })
                 .collect();
 
             // Push new scope for function parameters
             self.scope_stack.push_scope();
 
             // Add parameters to scope
-            for (param_name, param_type) in decl.params.iter().zip(param_types.iter()) {
+            for (param, param_type) in decl.params.iter().zip(param_types.iter()) {
+                let param_name = match param {
+                    DeclParam::Untyped(name) => name.clone(),
+                    DeclParam::Typed(p) => p.name.clone(),
+                };
                 let type_scheme = TypeScheme::Monotype(param_type.clone());
-                self.scope_stack.insert(param_name.clone(), type_scheme);
+                self.scope_stack.insert(param_name, type_scheme);
             }
 
             // Infer body type
@@ -175,33 +178,6 @@ impl TypeChecker {
         Ok(())
     }
 
-    fn check_entry_decl(&mut self, decl: &EntryDecl) -> Result<()> {
-        // Push new scope for entry parameters
-        self.scope_stack.push_scope();
-
-        // Add parameters to scope
-        for param in &decl.params {
-            let type_scheme = TypeScheme::Monotype(param.ty.clone());
-            self.scope_stack.insert(param.name.clone(), type_scheme);
-        }
-
-        // Check body with parameters in scope
-        println!("DEBUG: About to infer body type for entry '{}'", decl.name);
-        let body_type = self.infer_expression(&decl.body)?;
-        println!("DEBUG: Successfully inferred body type for entry '{}'", decl.name);
-
-        // Pop parameter scope
-        self.scope_stack.pop_scope();
-
-        if !self.types_match(&body_type, &decl.return_type.ty) {
-            return Err(CompilerError::TypeError(format!(
-                "Return type mismatch: expected {:?}, got {:?}",
-                decl.return_type.ty, body_type
-            )));
-        }
-
-        Ok(())
-    }
 
 
     fn check_val_decl(&mut self, decl: &ValDecl) -> Result<()> {

@@ -1,0 +1,2 @@
+#[vertex] def main(input: [4]i32): i32 =
+    42

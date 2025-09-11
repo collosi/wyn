@@ -62,11 +62,6 @@ impl Defunctionalizer {
                         new_declarations.push(Declaration::Decl(decl_node.clone()));
                     }
                 }
-                Declaration::Entry(entry_decl) => {
-                    let transformed_decl =
-                        self.defunctionalize_entry_decl(entry_decl, &mut scope_stack)?;
-                    new_declarations.push(transformed_decl);
-                }
                 Declaration::Val(val_decl) => {
                     // Type signatures only
                     new_declarations.push(Declaration::Val(val_decl.clone()));
@@ -80,8 +75,9 @@ impl Defunctionalizer {
                 keyword: "def",
                 attributes: vec![],
                 name: func.name.clone(),
-                params: func.params.iter().map(|p| p.name.clone()).collect(),
+                params: func.params.iter().map(|p| DeclParam::Untyped(p.name.clone())).collect(),
                 ty: None, // Function definitions don't have explicit type annotations
+                return_attributes: vec![],
                 body: func.body.clone(),
             }));
         }
@@ -107,39 +103,13 @@ impl Defunctionalizer {
             name: decl.name.clone(),
             params: decl.params.clone(),
             ty: decl.ty.clone(),
+            return_attributes: decl.return_attributes.clone(),
             body: transformed_expr,
         });
 
         Ok((transformed_decl, sv))
     }
 
-    fn defunctionalize_entry_decl(
-        &mut self,
-        decl: &EntryDecl,
-        scope_stack: &mut ScopeStack<StaticValue>,
-    ) -> Result<Declaration> {
-        // Create a new scope for the entry point parameters
-        scope_stack.push_scope();
-
-        // Add parameters to scope
-        for param in &decl.params {
-            scope_stack.insert(param.name.clone(), StaticValue::Dyn(param.ty.clone()));
-        }
-
-        // Entry points should not contain higher-order functions after defunctionalization
-        let (transformed_body, _sv) = self.defunctionalize_expression(&decl.body, scope_stack)?;
-
-        // Pop the parameter scope
-        scope_stack.pop_scope();
-
-        Ok(Declaration::Entry(EntryDecl {
-            attributes: decl.attributes.clone(),
-            name: decl.name.clone(),
-            params: decl.params.clone(),
-            return_type: decl.return_type.clone(),
-            body: transformed_body,
-        }))
-    }
 
     fn defunctionalize_expression(
         &mut self,

@@ -3,7 +3,7 @@ let offset: i32 = 1
 let add_offset: i32 -> i32 = \x -> x + offset
 
 #[vertex]
-entry vertex_main (vertex_id: i32) : vec4f32 =
+def vertex_main (vertex_id: i32) : vec4f32 =
   to_vec4_f32 verts[add_offset(vertex_id)]
 
 let verts: [3][4]f32 =

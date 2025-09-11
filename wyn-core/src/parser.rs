@@ -37,18 +37,13 @@ impl Parser {
                 decl.attributes = attributes;
                 Ok(Declaration::Decl(decl))
             }
-            Some(Token::Entry) => {
-                let mut decl = self.parse_entry_decl()?;
-                decl.attributes = attributes;
-                Ok(Declaration::Entry(decl))
-            }
             Some(Token::Val) => {
                 let mut decl = self.parse_val_decl()?;
                 decl.attributes = attributes;
                 Ok(Declaration::Val(decl))
             }
             _ => Err(CompilerError::ParseError(
-                "Expected 'let', 'entry', 'def', or 'val' declaration".to_string(),
+                "Expected 'let', 'def', or 'val' declaration".to_string(),
             )),
         }
     }
@@ -63,8 +58,51 @@ impl Parser {
         
         let name = self.expect_identifier()?;
 
-        // Check if this is a typed declaration (name: type = value) or function declaration (name param = body)
-        if self.check(&Token::Colon) {
+        // Check if we have typed parameters (for entry points with parentheses)
+        if self.check(&Token::LeftParen) {
+            // Parse typed parameters for entry points
+            self.expect(Token::LeftParen)?;
+            let mut params = Vec::new();
+            if !self.check(&Token::RightParen) {
+                loop {
+                    let param_attributes = self.parse_attributes()?;
+                    let param_name = self.expect_identifier()?;
+                    self.expect(Token::Colon)?;
+                    let param_ty = self.parse_type()?;
+                    params.push(DeclParam::Typed(Parameter {
+                        attributes: param_attributes,
+                        name: param_name,
+                        ty: param_ty,
+                    }));
+                    
+                    if !self.check(&Token::Comma) {
+                        break;
+                    }
+                    self.advance();
+                }
+            }
+            self.expect(Token::RightParen)?;
+            self.expect(Token::Colon)?;
+            
+            // Parse return type with optional attributes
+            let return_attributes = self.parse_attributes()?;
+            let ty = Some(self.parse_type()?);
+            
+            self.expect(Token::Assign)?;
+            let body = self.parse_expression()?;
+            
+            Ok(Decl {
+                keyword,
+                attributes: vec![],
+                name,
+                params,
+                ty,
+                return_attributes,
+                body,
+            })
+        }
+        // Check if this is a typed declaration (name: type = value)
+        else if self.check(&Token::Colon) {
             // Typed declaration: let/def name: type = value
             self.expect(Token::Colon)?;
             let ty = Some(self.parse_type()?);
@@ -77,6 +115,7 @@ impl Parser {
                 name,
                 params: vec![], // No parameters for typed declarations
                 ty,
+                return_attributes: vec![],
                 body,
             })
         } else {
@@ -84,7 +123,7 @@ impl Parser {
             // OR simple variable: let/def name = value
             let mut params = Vec::new();
             while !self.check(&Token::Assign) && !self.is_at_end() {
-                params.push(self.expect_identifier()?);
+                params.push(DeclParam::Untyped(self.expect_identifier()?));
             }
             self.expect(Token::Assign)?;
             let body = self.parse_expression()?;
@@ -95,54 +134,12 @@ impl Parser {
                 name,
                 params,
                 ty: None, // No explicit type for untyped declarations
+                return_attributes: vec![],
                 body,
             })
         }
     }
 
-    fn parse_entry_decl(&mut self) -> Result<EntryDecl> {
-        self.expect(Token::Entry)?;
-        let name = self.expect_identifier()?;
-        self.expect(Token::LeftParen)?;
-
-        let mut params = Vec::new();
-        if !self.check(&Token::RightParen) {
-            loop {
-                let param_attributes = self.parse_attributes()?;
-                let param_name = self.expect_identifier()?;
-                self.expect(Token::Colon)?;
-                let param_ty = self.parse_type()?;
-                params.push(Parameter {
-                    attributes: param_attributes,
-                    name: param_name,
-                    ty: param_ty,
-                });
-
-                if !self.check(&Token::Comma) {
-                    break;
-                }
-                self.advance();
-            }
-        }
-
-        self.expect(Token::RightParen)?;
-        self.expect(Token::Colon)?;
-        let return_type_attributes = self.parse_attributes()?;
-        let return_type = AttributedType {
-            attributes: return_type_attributes,
-            ty: self.parse_type()?,
-        };
-        self.expect(Token::Assign)?;
-        let body = self.parse_expression()?;
-
-        Ok(EntryDecl {
-            attributes: vec![],
-            name,
-            params,
-            return_type,
-            body,
-        })
-    }
 
 
     fn parse_val_decl(&mut self) -> Result<ValDecl> {
@@ -741,9 +738,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_entry_decl() {
+    fn test_parse_entry_point_decl() {
         expect_parse(
-            "entry main(x: i32, y: f32): [4]f32 = result",
+            "#[vertex] def main(x: i32, y: f32): [4]f32 = result",
             |declarations| {
                 if declarations.len() != 1 {
                     return Err(format!(
@@ -752,9 +749,15 @@ mod tests {
                     ));
                 }
                 match &declarations[0] {
-                    Declaration::Entry(decl) => {
+                    Declaration::Decl(decl) => {
                         if decl.name != "main" {
                             return Err(format!("Expected name 'main', got '{}'", decl.name));
+                        }
+                        if decl.attributes != vec![Attribute::Vertex] {
+                            return Err(format!(
+                                "Expected Vertex attribute, got {:?}",
+                                decl.attributes
+                            ));
                         }
                         if decl.params.len() != 2 {
                             return Err(format!(
@@ -762,58 +765,71 @@ mod tests {
                                 decl.params.len()
                             ));
                         }
-                        if decl.params[0].name != "x" {
-                            return Err(format!(
-                                "Expected first param name 'x', got '{}'",
-                                decl.params[0].name
-                            ));
+                        match &decl.params[0] {
+                            DeclParam::Typed(param) => {
+                                if param.name != "x" {
+                                    return Err(format!(
+                                        "Expected first param name 'x', got '{}'",
+                                        param.name
+                                    ));
+                                }
+                                if param.ty != crate::ast::types::i32() {
+                                    return Err(format!(
+                                        "Expected i32 type for first param, got {:?}",
+                                        param.ty
+                                    ));
+                                }
+                                if !param.attributes.is_empty() {
+                                    return Err(format!(
+                                        "Expected no attributes for first param, got {:?}",
+                                        param.attributes
+                                    ));
+                                }
+                            }
+                            _ => return Err("Expected typed parameter".to_string()),
                         }
-                        if decl.params[0].ty != crate::ast::types::i32() {
-                            return Err(format!(
-                                "Expected i32 type for first param, got {:?}",
-                                decl.params[0].ty
-                            ));
+                        match &decl.params[1] {
+                            DeclParam::Typed(param) => {
+                                if param.name != "y" {
+                                    return Err(format!(
+                                        "Expected second param name 'y', got '{}'",
+                                        param.name
+                                    ));
+                                }
+                                if param.ty != crate::ast::types::f32() {
+                                    return Err(format!(
+                                        "Expected f32 type for second param, got {:?}",
+                                        param.ty
+                                    ));
+                                }
+                                if !param.attributes.is_empty() {
+                                    return Err(format!(
+                                        "Expected no attributes for second param, got {:?}",
+                                        param.attributes
+                                    ));
+                                }
+                            }
+                            _ => return Err("Expected typed parameter".to_string()),
                         }
-                        if !decl.params[0].attributes.is_empty() {
-                            return Err(format!(
-                                "Expected no attributes for first param, got {:?}",
-                                decl.params[0].attributes
-                            ));
+                        if let Some(ref ty) = decl.ty {
+                            if *ty != crate::ast::types::sized_array(4, crate::ast::types::f32()) {
+                                return Err(format!(
+                                    "Expected [4]f32 return type, got {:?}",
+                                    ty
+                                ));
+                            }
+                        } else {
+                            return Err("Expected return type".to_string());
                         }
-                        if decl.params[1].name != "y" {
-                            return Err(format!(
-                                "Expected second param name 'y', got '{}'",
-                                decl.params[1].name
-                            ));
-                        }
-                        if decl.params[1].ty != crate::ast::types::f32() {
-                            return Err(format!(
-                                "Expected f32 type for second param, got {:?}",
-                                decl.params[1].ty
-                            ));
-                        }
-                        if !decl.params[1].attributes.is_empty() {
-                            return Err(format!(
-                                "Expected no attributes for second param, got {:?}",
-                                decl.params[1].attributes
-                            ));
-                        }
-                        if decl.return_type.ty != crate::ast::types::sized_array(4, crate::ast::types::f32())
-                        {
-                            return Err(format!(
-                                "Expected [4]f32 return type, got {:?}",
-                                decl.return_type.ty
-                            ));
-                        }
-                        if !decl.return_type.attributes.is_empty() {
+                        if !decl.return_attributes.is_empty() {
                             return Err(format!(
                                 "Expected no attributes on return type, got {:?}",
-                                decl.return_type.attributes
+                                decl.return_attributes
                             ));
                         }
                         Ok(())
                     }
-                    _ => Err("Expected Entry declaration".to_string()),
+                    _ => Err("Expected Decl declaration".to_string()),
                 }
             },
         );
@@ -884,7 +900,7 @@ mod tests {
 
     #[test]
     fn test_parse_vertex_attribute() {
-        expect_parse("#[vertex] entry main(): vec4f32 = result", |declarations| {
+        expect_parse("#[vertex] def main(): vec4f32 = result", |declarations| {
             if declarations.len() != 1 {
                 return Err(format!(
                     "Expected 1 declaration, got {}",
@@ -892,7 +908,7 @@ mod tests {
                 ));
             }
             match &declarations[0] {
-                Declaration::Entry(decl) => {
+                Declaration::Decl(decl) => {
                     if decl.attributes != vec![Attribute::Vertex] {
                         return Err(format!(
                             "Expected Vertex attribute, got {:?}",
@@ -904,7 +920,7 @@ mod tests {
                     }
                     Ok(())
                 }
-                _ => Err("Expected Entry declaration".to_string()),
+                _ => Err("Expected Decl declaration".to_string()),
             }
         });
     }
@@ -912,7 +928,7 @@ mod tests {
     #[test]
     fn test_parse_fragment_attribute() {
         expect_parse(
-            "#[fragment] entry frag(): [4]f32 = result",
+            "#[fragment] def frag(): [4]f32 = result",
             |declarations| {
                 if declarations.len() != 1 {
                     return Err(format!(
@@ -921,7 +937,7 @@ mod tests {
                     ));
                 }
                 match &declarations[0] {
-                    Declaration::Entry(decl) => {
+                    Declaration::Decl(decl) => {
                         if decl.attributes != vec![Attribute::Fragment] {
                             return Err(format!(
                                 "Expected Fragment attribute, got {:?}",
@@ -933,7 +949,7 @@ mod tests {
                         }
                         Ok(())
                     }
-                    _ => Err("Expected Entry declaration".to_string()),
+                    _ => Err("Expected Decl declaration".to_string()),
                 }
             },
         );
@@ -942,7 +958,7 @@ mod tests {
     #[test]
     fn test_parse_builtin_attribute_on_return_type() {
         expect_parse(
-            "#[vertex] entry main(): #[builtin(position)] vec4f32 = result",
+            "#[vertex] def main(): #[builtin(position)] vec4f32 = result",
             |declarations| {
                 if declarations.len() != 1 {
                     return Err(format!(
@@ -951,31 +967,34 @@ mod tests {
                     ));
                 }
                 match &declarations[0] {
-                    Declaration::Entry(decl) => {
+                    Declaration::Decl(decl) => {
                         if decl.attributes != vec![Attribute::Vertex] {
                             return Err(format!(
                                 "Expected Vertex attribute, got {:?}",
                                 decl.attributes
                             ));
                         }
-                        if decl.return_type.attributes
+                        if decl.return_attributes
                             != vec![Attribute::BuiltIn(spirv::BuiltIn::Position)]
                         {
                             return Err(format!(
                                 "Expected Position builtin on return type, got {:?}",
-                                decl.return_type.attributes
+                                decl.return_attributes
                             ));
                         }
-                        if decl.return_type.ty != crate::ast::types::sized_array(4, crate::ast::types::f32())
-                        {
-                            return Err(format!(
-                                "Expected vec4f32 return type, got {:?}",
-                                decl.return_type.ty
-                            ));
+                        if let Some(ref ty) = decl.ty {
+                            if *ty != crate::ast::types::sized_array(4, crate::ast::types::f32()) {
+                                return Err(format!(
+                                    "Expected vec4f32 return type, got {:?}",
+                                    ty
+                                ));
+                            }
+                        } else {
+                            return Err("Expected return type".to_string());
                         }
                         Ok(())
                     }
-                    _ => Err("Expected Entry declaration".to_string()),
+                    _ => Err("Expected Decl declaration".to_string()),
                 }
             },
         );
@@ -984,7 +1003,7 @@ mod tests {
     #[test]
     fn test_parse_location_attribute_on_return_type() {
         expect_parse(
-            "#[fragment] entry frag(): #[location(0)] [4]f32 = result",
+            "#[fragment] def frag(): #[location(0)] [4]f32 = result",
             |declarations| {
                 if declarations.len() != 1 {
                     return Err(format!(
@@ -993,29 +1012,32 @@ mod tests {
                     ));
                 }
                 match &declarations[0] {
-                    Declaration::Entry(decl) => {
+                    Declaration::Decl(decl) => {
                         if decl.attributes != vec![Attribute::Fragment] {
                             return Err(format!(
                                 "Expected Fragment attribute, got {:?}",
                                 decl.attributes
                             ));
                         }
-                        if decl.return_type.attributes != vec![Attribute::Location(0)] {
+                        if decl.return_attributes != vec![Attribute::Location(0)] {
                             return Err(format!(
                                 "Expected Location(0) attribute on return type, got {:?}",
-                                decl.return_type.attributes
+                                decl.return_attributes
                             ));
                         }
-                        if decl.return_type.ty != crate::ast::types::sized_array(4, crate::ast::types::f32())
-                        {
-                            return Err(format!(
-                                "Expected [4]f32 return type, got {:?}",
-                                decl.return_type.ty
-                            ));
+                        if let Some(ref ty) = decl.ty {
+                            if *ty != crate::ast::types::sized_array(4, crate::ast::types::f32()) {
+                                return Err(format!(
+                                    "Expected [4]f32 return type, got {:?}",
+                                    ty
+                                ));
+                            }
+                        } else {
+                            return Err("Expected return type".to_string());
                         }
                         Ok(())
                     }
-                    _ => Err("Expected Entry declaration".to_string()),
+                    _ => Err("Expected Decl declaration".to_string()),
                 }
             },
         );
@@ -1024,7 +1046,7 @@ mod tests {
     #[test]
     fn test_parse_parameter_with_builtin_attribute() {
         expect_parse(
-            "#[vertex] entry main(#[builtin(vertex_index)] vid: i32): vec4f32 = result",
+            "#[vertex] def main(#[builtin(vertex_index)] vid: i32): vec4f32 = result",
             |declarations| {
                 if declarations.len() != 1 {
                     return Err(format!(
@@ -1033,33 +1055,38 @@ mod tests {
                     ));
                 }
                 match &declarations[0] {
-                    Declaration::Entry(decl) => {
+                    Declaration::Decl(decl) => {
                         if decl.params.len() != 1 {
                             return Err(format!("Expected 1 parameter, got {}", decl.params.len()));
                         }
-                        if decl.params[0].name != "vid" {
-                            return Err(format!(
-                                "Expected param name 'vid', got '{}'",
-                                decl.params[0].name
-                            ));
+                        match &decl.params[0] {
+                            DeclParam::Typed(param) => {
+                                if param.name != "vid" {
+                                    return Err(format!(
+                                        "Expected param name 'vid', got '{}'",
+                                        param.name
+                                    ));
+                                }
+                                if param.ty != crate::ast::types::i32() {
+                                    return Err(format!(
+                                        "Expected i32 param type, got {:?}",
+                                        param.ty
+                                    ));
+                                }
+                                if param.attributes
+                                    != vec![Attribute::BuiltIn(spirv::BuiltIn::VertexIndex)]
+                                {
+                                    return Err(format!(
+                                        "Expected VertexIndex attribute, got {:?}",
+                                        param.attributes
+                                    ));
+                                }
+                                Ok(())
+                            }
+                            _ => Err("Expected typed parameter".to_string()),
                         }
-                        if decl.params[0].ty != crate::ast::types::i32() {
-                            return Err(format!(
-                                "Expected i32 param type, got {:?}",
-                                decl.params[0].ty
-                            ));
-                        }
-                        if decl.params[0].attributes
-                            != vec![Attribute::BuiltIn(spirv::BuiltIn::VertexIndex)]
-                        {
-                            return Err(format!(
-                                "Expected VertexIndex attribute, got {:?}",
-                                decl.params[0].attributes
-                            ));
-                        }
-                        Ok(())
                     }
-                    _ => Err("Expected Entry declaration".to_string()),
+                    _ => Err("Expected Decl declaration".to_string()),
                 }
             },
         );
@@ -1068,7 +1095,7 @@ mod tests {
     #[test]
     fn test_parse_parameter_with_location_attribute() {
         expect_parse(
-            "#[fragment] entry frag(#[location(1)] color: [3]f32): [4]f32 = result",
+            "#[fragment] def frag(#[location(1)] color: [3]f32): [4]f32 = result",
             |declarations| {
                 if declarations.len() != 1 {
                     return Err(format!(
@@ -1077,31 +1104,36 @@ mod tests {
                     ));
                 }
                 match &declarations[0] {
-                    Declaration::Entry(decl) => {
+                    Declaration::Decl(decl) => {
                         if decl.params.len() != 1 {
                             return Err(format!("Expected 1 parameter, got {}", decl.params.len()));
                         }
-                        if decl.params[0].name != "color" {
-                            return Err(format!(
-                                "Expected param name 'color', got '{}'",
-                                decl.params[0].name
-                            ));
+                        match &decl.params[0] {
+                            DeclParam::Typed(param) => {
+                                if param.name != "color" {
+                                    return Err(format!(
+                                        "Expected param name 'color', got '{}'",
+                                        param.name
+                                    ));
+                                }
+                                if param.ty != crate::ast::types::sized_array(3, crate::ast::types::f32()) {
+                                    return Err(format!(
+                                        "Expected [3]f32 param type, got {:?}",
+                                        param.ty
+                                    ));
+                                }
+                                if param.attributes != vec![Attribute::Location(1)] {
+                                    return Err(format!(
+                                        "Expected Location(1) attribute, got {:?}",
+                                        param.attributes
+                                    ));
+                                }
+                                Ok(())
+                            }
+                            _ => Err("Expected typed parameter".to_string()),
                         }
-                        if decl.params[0].ty != crate::ast::types::sized_array(3, crate::ast::types::f32()) {
-                            return Err(format!(
-                                "Expected [3]f32 param type, got {:?}",
-                                decl.params[0].ty
-                            ));
-                        }
-                        if decl.params[0].attributes != vec![Attribute::Location(1)] {
-                            return Err(format!(
-                                "Expected Location(1) attribute, got {:?}",
-                                decl.params[0].attributes
-                            ));
-                        }
-                        Ok(())
                     }
-                    _ => Err("Expected Entry declaration".to_string()),
+                    _ => Err("Expected Decl declaration".to_string()),
                 }
             },
         );
@@ -1110,41 +1142,51 @@ mod tests {
     #[test]
     fn test_parse_multiple_builtin_types() {
         expect_parse(
-            "#[vertex] entry main(#[builtin(vertex_index)] vid: i32, #[builtin(instance_index)] iid: i32): #[builtin(position)] vec4f32 = result",
+            "#[vertex] def main(#[builtin(vertex_index)] vid: i32, #[builtin(instance_index)] iid: i32): #[builtin(position)] vec4f32 = result",
             |declarations| {
                 if declarations.len() != 1 {
                     return Err(format!("Expected 1 declaration, got {}", declarations.len()));
                 }
                 match &declarations[0] {
-                    Declaration::Entry(decl) => {
+                    Declaration::Decl(decl) => {
                         if decl.params.len() != 2 {
                             return Err(format!("Expected 2 parameters, got {}", decl.params.len()));
                         }
 
                         // First parameter
-                        if decl.params[0].name != "vid" {
-                            return Err(format!("Expected first param name 'vid', got '{}'", decl.params[0].name));
-                        }
-                        if decl.params[0].attributes != vec![Attribute::BuiltIn(spirv::BuiltIn::VertexIndex)] {
-                            return Err(format!("Expected VertexIndex attribute, got {:?}", decl.params[0].attributes));
+                        match &decl.params[0] {
+                            DeclParam::Typed(param) => {
+                                if param.name != "vid" {
+                                    return Err(format!("Expected first param name 'vid', got '{}'", param.name));
+                                }
+                                if param.attributes != vec![Attribute::BuiltIn(spirv::BuiltIn::VertexIndex)] {
+                                    return Err(format!("Expected VertexIndex attribute, got {:?}", param.attributes));
+                                }
+                            }
+                            _ => return Err("Expected typed parameter".to_string()),
                         }
 
                         // Second parameter
-                        if decl.params[1].name != "iid" {
-                            return Err(format!("Expected second param name 'iid', got '{}'", decl.params[1].name));
-                        }
-                        if decl.params[1].attributes != vec![Attribute::BuiltIn(spirv::BuiltIn::InstanceIndex)] {
-                            return Err(format!("Expected InstanceIndex attribute, got {:?}", decl.params[1].attributes));
+                        match &decl.params[1] {
+                            DeclParam::Typed(param) => {
+                                if param.name != "iid" {
+                                    return Err(format!("Expected second param name 'iid', got '{}'", param.name));
+                                }
+                                if param.attributes != vec![Attribute::BuiltIn(spirv::BuiltIn::InstanceIndex)] {
+                                    return Err(format!("Expected InstanceIndex attribute, got {:?}", param.attributes));
+                                }
+                            }
+                            _ => return Err("Expected typed parameter".to_string()),
                         }
 
                         // Return type
-                        if decl.return_type.attributes != vec![Attribute::BuiltIn(spirv::BuiltIn::Position)] {
-                            return Err(format!("Expected Position attribute on return type, got {:?}", decl.return_type.attributes));
+                        if decl.return_attributes != vec![Attribute::BuiltIn(spirv::BuiltIn::Position)] {
+                            return Err(format!("Expected Position attribute on return type, got {:?}", decl.return_attributes));
                         }
 
                         Ok(())
                     }
-                    _ => Err("Expected Entry declaration".to_string()),
+                    _ => Err("Expected Decl declaration".to_string()),
                 }
             }
         );
@@ -1406,7 +1448,7 @@ mod tests {
     #[test]
     fn test_parse_simple_let_in() {
         expect_parse(
-            "entry main(x: i32): i32 = let y = 5 in y + x",
+            "#[vertex] def main(x: i32): i32 = let y = 5 in y + x",
             |declarations| {
                 if declarations.len() != 1 {
                     return Err(format!(
@@ -1440,7 +1482,7 @@ mod tests {
     #[test]
     fn test_parse_let_in_with_lambda() {
         expect_parse(
-            r#"entry main(x: i32): i32 = let f = \y -> y + x in f 10"#,
+            r#"#[vertex] def main(x: i32): i32 = let f = \y -> y + x in f 10"#,
             |declarations| {
                 if declarations.len() != 1 {
                     return Err(format!(
@@ -1464,13 +1506,13 @@ def verts: [3][4]f32 =
    [-1.0f32,  3.0f32, 0.0f32, 1.0f32]]
 
 #[vertex]
-entry vertex_main(vertex_id: i32): [4]f32 = verts[vertex_id]
+def vertex_main(vertex_id: i32): [4]f32 = verts[vertex_id]
 
 def SKY_RGBA: [4]f32 =
   [135f32/255f32, 206f32/255f32, 235f32/255f32, 1.0f32]
 
 #[fragment]
-entry fragment_main(): [4]f32 = SKY_RGBA
+def fragment_main(): [4]f32 = SKY_RGBA
 "#;
 
         expect_parse(input, |declarations| {
@@ -1491,14 +1533,17 @@ entry fragment_main(): [4]f32 = SKY_RGBA
                 _ => return Err("Expected first declaration to be Def".to_string()),
             }
             
-            // Second should be vertex entry
+            // Second should be vertex entry point (now a Decl with vertex attribute)
             match &declarations[1] {
-                Declaration::Entry(decl) => {
+                Declaration::Decl(decl) => {
                     if decl.name != "vertex_main" {
                         return Err(format!("Expected vertex entry to be 'vertex_main', got '{}'", decl.name));
                     }
+                    if !decl.attributes.contains(&Attribute::Vertex) {
+                        return Err(format!("Expected vertex attribute on vertex_main, got {:?}", decl.attributes));
+                    }
                 }
-                _ => return Err("Expected second declaration to be Entry".to_string()),
+                _ => return Err("Expected second declaration to be Decl".to_string()),
             }
             
             // Third should be def SKY_RGBA
@@ -1511,14 +1556,17 @@ entry fragment_main(): [4]f32 = SKY_RGBA
                 _ => return Err("Expected third declaration to be Def".to_string()),
             }
             
-            // Fourth should be fragment entry
+            // Fourth should be fragment entry point (now a Decl with fragment attribute)
             match &declarations[3] {
-                Declaration::Entry(decl) => {
+                Declaration::Decl(decl) => {
                     if decl.name != "fragment_main" {
                         return Err(format!("Expected fragment entry to be 'fragment_main', got '{}'", decl.name));
                     }
+                    if !decl.attributes.contains(&Attribute::Fragment) {
+                        return Err(format!("Expected fragment attribute on fragment_main, got {:?}", decl.attributes));
+                    }
                 }
-                _ => return Err("Expected fourth declaration to be Entry".to_string()),
+                _ => return Err("Expected fourth declaration to be Decl".to_string()),
             }
             
             Ok(())

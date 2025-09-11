@@ -13,7 +13,7 @@ def verts: [3][4]f32 =
 
 -- Vertex stage: return clip-space position for a given vertex index.
 #[vertex]
-entry vertex_main (vertex_id: i32) : [4]f32 =
+def vertex_main (vertex_id: i32) : [4]f32 =
   verts[vertex_id]
 
 -- Fragment stage: constant sky blue (#87CEEB).
@@ -21,7 +21,7 @@ def SKY_RGBA : [4]f32 =
   [135f32/255f32, 206f32/255f32, 235f32/255f32, 1.0f32]
 
 #[fragment]
-entry fragment_main () : [4]f32 =
+def fragment_main () : [4]f32 =
   SKY_RGBA
 "#;
 
@@ -48,7 +48,7 @@ let positions: [3][4]f32 =
    [0.5f32, -0.5f32, 0.0f32, 1.0f32]]
 
 #[vertex]
-entry vertex_main(vertex_id: i32): [4]f32 = positions[vertex_id]
+def vertex_main(vertex_id: i32): [4]f32 = positions[vertex_id]
 "#;
 
         let compiler = Compiler::new();
@@ -61,7 +61,7 @@ entry vertex_main(vertex_id: i32): [4]f32 = positions[vertex_id]
         let source = r#"
 let red: [4]f32 = [1.0f32, 0.0f32, 0.0f32, 1.0f32]
 #[fragment]
-entry fragment_main(): [4]f32 = red
+def fragment_main(): [4]f32 = red
 "#;
 
         let compiler = Compiler::new();
