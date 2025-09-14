@@ -305,6 +305,84 @@ impl Parser {
                 self.advance();
                 Ok(types::f32())
             }
+            // f32 vectors
+            Some(Token::Vec2Type) => {
+                self.advance();
+                Ok(types::vec2())
+            }
+            Some(Token::Vec3Type) => {
+                self.advance();
+                Ok(types::vec3())
+            }
+            Some(Token::Vec4Type) => {
+                self.advance();
+                Ok(types::vec4())
+            }
+            // i32 vectors
+            Some(Token::IVec2Type) => {
+                self.advance();
+                Ok(types::ivec2())
+            }
+            Some(Token::IVec3Type) => {
+                self.advance();
+                Ok(types::ivec3())
+            }
+            Some(Token::IVec4Type) => {
+                self.advance();
+                Ok(types::ivec4())
+            }
+            // u32 vectors
+            Some(Token::UVec2Type) => {
+                self.advance();
+                Ok(types::uvec2())
+            }
+            Some(Token::UVec3Type) => {
+                self.advance();
+                Ok(types::uvec3())
+            }
+            Some(Token::UVec4Type) => {
+                self.advance();
+                Ok(types::uvec4())
+            }
+            // bool vectors
+            Some(Token::BVec2Type) => {
+                self.advance();
+                Ok(types::bvec2())
+            }
+            Some(Token::BVec3Type) => {
+                self.advance();
+                Ok(types::bvec3())
+            }
+            Some(Token::BVec4Type) => {
+                self.advance();
+                Ok(types::bvec4())
+            }
+            // f64 vectors
+            Some(Token::DVec2Type) => {
+                self.advance();
+                Ok(types::dvec2())
+            }
+            Some(Token::DVec3Type) => {
+                self.advance();
+                Ok(types::dvec3())
+            }
+            Some(Token::DVec4Type) => {
+                self.advance();
+                Ok(types::dvec4())
+            }
+            // f16 vectors
+            Some(Token::F16Vec2Type) => {
+                self.advance();
+                Ok(types::f16vec2())
+            }
+            Some(Token::F16Vec3Type) => {
+                self.advance();
+                Ok(types::f16vec3())
+            }
+            Some(Token::F16Vec4Type) => {
+                self.advance();
+                Ok(types::f16vec4())
+            }
             Some(Token::Identifier(name)) if name.starts_with('\'') => {
                 // Type variable like 't1, 't2
                 let type_var = self.parse_type_variable()?;

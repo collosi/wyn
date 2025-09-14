@@ -24,6 +24,32 @@ pub enum Token {
     // Types
     I32Type,
     F32Type,
+    
+    // Vector types
+    // f32 vectors
+    Vec2Type,
+    Vec3Type, 
+    Vec4Type,
+    // i32 vectors
+    IVec2Type,
+    IVec3Type,
+    IVec4Type,
+    // u32 vectors
+    UVec2Type,
+    UVec3Type,
+    UVec4Type,
+    // bool vectors
+    BVec2Type,
+    BVec3Type,
+    BVec4Type,
+    // f64 vectors
+    DVec2Type,
+    DVec3Type,
+    DVec4Type,
+    // f16 vectors
+    F16Vec2Type,
+    F16Vec3Type,
+    F16Vec4Type,
 
     // Operators
     Assign,
@@ -75,6 +101,37 @@ fn parse_keyword(input: &str) -> IResult<&str, Token> {
 
 fn parse_type(input: &str) -> IResult<&str, Token> {
     alt((
+        // f16 vectors (must come before f32 due to prefix matching)
+        value(Token::F16Vec4Type, tag("f16vec4")),
+        value(Token::F16Vec3Type, tag("f16vec3")),
+        value(Token::F16Vec2Type, tag("f16vec2")),
+        
+        // f64 vectors  
+        value(Token::DVec4Type, tag("dvec4")),
+        value(Token::DVec3Type, tag("dvec3")),
+        value(Token::DVec2Type, tag("dvec2")),
+        
+        // f32 vectors
+        value(Token::Vec4Type, tag("vec4")),
+        value(Token::Vec3Type, tag("vec3")),
+        value(Token::Vec2Type, tag("vec2")),
+        
+        // i32 vectors
+        value(Token::IVec4Type, tag("ivec4")),
+        value(Token::IVec3Type, tag("ivec3")),
+        value(Token::IVec2Type, tag("ivec2")),
+        
+        // u32 vectors
+        value(Token::UVec4Type, tag("uvec4")),
+        value(Token::UVec3Type, tag("uvec3")),
+        value(Token::UVec2Type, tag("uvec2")),
+        
+        // bool vectors
+        value(Token::BVec4Type, tag("bvec4")),
+        value(Token::BVec3Type, tag("bvec3")),
+        value(Token::BVec2Type, tag("bvec2")),
+        
+        // Base types
         value(Token::I32Type, tag("i32")),
         value(Token::F32Type, tag("f32")),
     ))(input)

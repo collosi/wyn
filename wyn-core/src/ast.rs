@@ -165,6 +165,83 @@ pub mod types {
         Type::Constructed(TypeName::Str("float"), vec![])
     }
 
+    // f32 vector types
+    pub fn vec2() -> Type {
+        Type::Constructed(TypeName::Str("vec2"), vec![])
+    }
+    
+    pub fn vec3() -> Type {
+        Type::Constructed(TypeName::Str("vec3"), vec![])
+    }
+    
+    pub fn vec4() -> Type {
+        Type::Constructed(TypeName::Str("vec4"), vec![])
+    }
+
+    // i32 vector types
+    pub fn ivec2() -> Type {
+        Type::Constructed(TypeName::Str("ivec2"), vec![])
+    }
+    
+    pub fn ivec3() -> Type {
+        Type::Constructed(TypeName::Str("ivec3"), vec![])
+    }
+    
+    pub fn ivec4() -> Type {
+        Type::Constructed(TypeName::Str("ivec4"), vec![])
+    }
+
+    // u32 vector types
+    pub fn uvec2() -> Type {
+        Type::Constructed(TypeName::Str("uvec2"), vec![])
+    }
+    
+    pub fn uvec3() -> Type {
+        Type::Constructed(TypeName::Str("uvec3"), vec![])
+    }
+    
+    pub fn uvec4() -> Type {
+        Type::Constructed(TypeName::Str("uvec4"), vec![])
+    }
+
+    // bool vector types
+    pub fn bvec2() -> Type {
+        Type::Constructed(TypeName::Str("bvec2"), vec![])
+    }
+    
+    pub fn bvec3() -> Type {
+        Type::Constructed(TypeName::Str("bvec3"), vec![])
+    }
+    
+    pub fn bvec4() -> Type {
+        Type::Constructed(TypeName::Str("bvec4"), vec![])
+    }
+
+    // f64 vector types  
+    pub fn dvec2() -> Type {
+        Type::Constructed(TypeName::Str("dvec2"), vec![])
+    }
+    
+    pub fn dvec3() -> Type {
+        Type::Constructed(TypeName::Str("dvec3"), vec![])
+    }
+    
+    pub fn dvec4() -> Type {
+        Type::Constructed(TypeName::Str("dvec4"), vec![])
+    }
+
+    // f16 vector types
+    pub fn f16vec2() -> Type {
+        Type::Constructed(TypeName::Str("f16vec2"), vec![])
+    }
+    
+    pub fn f16vec3() -> Type {
+        Type::Constructed(TypeName::Str("f16vec3"), vec![])
+    }
+    
+    pub fn f16vec4() -> Type {
+        Type::Constructed(TypeName::Str("f16vec4"), vec![])
+    }
 
     pub fn sized_array(size: usize, elem_type: Type) -> Type {
         Type::Constructed(TypeName::Array("array", size), vec![elem_type])
