@@ -450,6 +450,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                             let array_val = self.generate_expression(&args[0])?;
                             self.convert_array_to_vec4(array_val)
                         }
+                        // Vector constructors
+                        "vec2" => self.generate_vector_constructor(2, &args, self.context.f32_type().into()),
+                        "vec3" => self.generate_vector_constructor(3, &args, self.context.f32_type().into()),
+                        "vec4" => self.generate_vector_constructor(4, &args, self.context.f32_type().into()),
+                        "ivec2" => self.generate_vector_constructor(2, &args, self.context.i32_type().into()),
+                        "ivec3" => self.generate_vector_constructor(3, &args, self.context.i32_type().into()),
+                        "ivec4" => self.generate_vector_constructor(4, &args, self.context.i32_type().into()),
                         _ => Err(CompilerError::SpirvError(format!(
                             "Function call '{}' not supported",
                             func_name
@@ -510,6 +517,58 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
 
+    fn generate_vector_constructor(
+        &mut self,
+        size: u32,
+        args: &[Expression],
+        elem_type: BasicTypeEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        // Check argument count
+        if args.len() != size as usize {
+            return Err(CompilerError::SpirvError(format!(
+                "Vector constructor expects {} arguments, got {}",
+                size,
+                args.len()
+            )));
+        }
+
+        // Generate values for all arguments
+        let mut elements = Vec::new();
+        for arg in args {
+            let val = self.generate_expression(arg)?;
+            elements.push(val);
+        }
+
+        // Create the vector type
+        let vec_type = match elem_type {
+            BasicTypeEnum::FloatType(f) => f.vec_type(size),
+            BasicTypeEnum::IntType(i) => i.vec_type(size),
+            _ => {
+                return Err(CompilerError::SpirvError(
+                    "Invalid element type for vector".to_string(),
+                ))
+            }
+        };
+
+        // Build the vector
+        let mut vector = vec_type.get_undef();
+        for (i, elem) in elements.iter().enumerate() {
+            vector = self
+                .builder
+                .build_insert_element(
+                    vector,
+                    *elem,
+                    self.context.i32_type().const_int(i as u64, false),
+                    &format!("vec_elem_{}", i),
+                )
+                .map_err(|e| {
+                    CompilerError::SpirvError(format!("Failed to insert element: {}", e))
+                })?;
+        }
+
+        Ok(vector.into())
+    }
+
     fn convert_array_to_vec4(
         &mut self,
         array_val: BasicValueEnum<'ctx>,
@@ -562,6 +621,34 @@ impl<'ctx> CodeGenerator<'ctx> {
                 match name {
                     TypeName::Str("int") => BasicTypeEnum::IntType(self.context.i32_type()),
                     TypeName::Str("float") => BasicTypeEnum::FloatType(self.context.f32_type()),
+                    
+                    // f32 vector types
+                    TypeName::Str("vec2") => {
+                        let f32_type = self.context.f32_type();
+                        BasicTypeEnum::VectorType(f32_type.vec_type(2))
+                    }
+                    TypeName::Str("vec3") => {
+                        let f32_type = self.context.f32_type();
+                        BasicTypeEnum::VectorType(f32_type.vec_type(3))
+                    }
+                    TypeName::Str("vec4") => {
+                        let f32_type = self.context.f32_type();
+                        BasicTypeEnum::VectorType(f32_type.vec_type(4))
+                    }
+                    
+                    // i32 vector types
+                    TypeName::Str("ivec2") => {
+                        let i32_type = self.context.i32_type();
+                        BasicTypeEnum::VectorType(i32_type.vec_type(2))
+                    }
+                    TypeName::Str("ivec3") => {
+                        let i32_type = self.context.i32_type();
+                        BasicTypeEnum::VectorType(i32_type.vec_type(3))
+                    }
+                    TypeName::Str("ivec4") => {
+                        let i32_type = self.context.i32_type();
+                        BasicTypeEnum::VectorType(i32_type.vec_type(4))
+                    }
                     TypeName::Str("array") => {
                         let elem_ty = args.first().ok_or_else(|| {
                             CompilerError::SpirvError("Array type missing element type".to_string())

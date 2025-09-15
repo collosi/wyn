@@ -74,6 +74,45 @@ impl TypeChecker {
         let zip_scheme = TypeScheme::Monotype(zip_body);
         self.scope_stack.insert("zip".to_string(), zip_scheme);
 
+        // Vector constructors
+        // vec2: f32 -> f32 -> vec2
+        let vec2_type = types::vec2();
+        let vec2_body = Type::arrow(types::f32(), Type::arrow(types::f32(), vec2_type));
+        self.scope_stack.insert("vec2".to_string(), TypeScheme::Monotype(vec2_body));
+        
+        // vec3: f32 -> f32 -> f32 -> vec3
+        let vec3_type = types::vec3();
+        let vec3_body = Type::arrow(types::f32(), 
+            Type::arrow(types::f32(), 
+                Type::arrow(types::f32(), vec3_type)));
+        self.scope_stack.insert("vec3".to_string(), TypeScheme::Monotype(vec3_body));
+        
+        // vec4: f32 -> f32 -> f32 -> f32 -> vec4
+        let vec4_type = types::vec4();
+        let vec4_body = Type::arrow(types::f32(),
+            Type::arrow(types::f32(),
+                Type::arrow(types::f32(),
+                    Type::arrow(types::f32(), vec4_type))));
+        self.scope_stack.insert("vec4".to_string(), TypeScheme::Monotype(vec4_body));
+
+        // Similarly for ivec2, ivec3, ivec4
+        let ivec2_type = types::ivec2();
+        let ivec2_body = Type::arrow(types::i32(), Type::arrow(types::i32(), ivec2_type));
+        self.scope_stack.insert("ivec2".to_string(), TypeScheme::Monotype(ivec2_body));
+        
+        let ivec3_type = types::ivec3();
+        let ivec3_body = Type::arrow(types::i32(),
+            Type::arrow(types::i32(),
+                Type::arrow(types::i32(), ivec3_type)));
+        self.scope_stack.insert("ivec3".to_string(), TypeScheme::Monotype(ivec3_body));
+        
+        let ivec4_type = types::ivec4();
+        let ivec4_body = Type::arrow(types::i32(),
+            Type::arrow(types::i32(),
+                Type::arrow(types::i32(),
+                    Type::arrow(types::i32(), ivec4_type))));
+        self.scope_stack.insert("ivec4".to_string(), TypeScheme::Monotype(ivec4_body));
+
         Ok(())
     }
 
