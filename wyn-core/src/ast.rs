@@ -85,6 +85,7 @@ pub struct Decl {
     pub params: Vec<DeclParam>,         // Parameters - can be typed or untyped
     pub ty: Option<Type>,                // Return type for functions or type annotation for variables
     pub return_attributes: Vec<Attribute>, // Attributes on the return type (for entry points)
+    pub attributed_return_type: Option<Vec<AttributedType>>, // For multiple outputs with per-component attributes
     pub body: Expression,                // The value/expression for let/def declarations
 }
 
@@ -253,6 +254,13 @@ pub mod types {
 
     pub fn tuple(types: Vec<Type>) -> Type {
         Type::Constructed(TypeName::Str("tuple"), types)
+    }
+
+    pub fn attributed_tuple(attributed_types: Vec<crate::ast::AttributedType>) -> Type {
+        // For now, extract just the types for the type system
+        // The attributes will be handled separately during codegen
+        let types = attributed_types.into_iter().map(|at| at.ty).collect();
+        Type::Constructed(TypeName::Str("attributed_tuple"), types)
     }
 
     pub fn function(arg: Type, ret: Type) -> Type {

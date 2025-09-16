@@ -646,8 +646,18 @@ impl TypeChecker {
     // Removed: fresh_var - now using polytype's context.new_variable()
 
     fn types_match(&mut self, t1: &Type, t2: &Type) -> bool {
-        // Use polytype's unification for proper type matching
-        self.context.unify(t1, t2).is_ok()
+        // Handle attributed_tuple vs tuple matching
+        match (t1, t2) {
+            // Allow regular tuple to match attributed_tuple if component types match
+            (Type::Constructed(TypeName::Str("tuple"), actual_types),
+             Type::Constructed(TypeName::Str("attributed_tuple"), expected_types)) => {
+                expected_types.len() == actual_types.len() &&
+                expected_types.iter().zip(actual_types.iter())
+                    .all(|(e, a)| self.context.unify(a, e).is_ok())
+            }
+            // Regular case - use polytype's unification for proper type matching
+            _ => self.context.unify(t1, t2).is_ok()
+        }
     }
 }
 

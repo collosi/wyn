@@ -78,6 +78,7 @@ impl Defunctionalizer {
                 params: func.params.iter().map(|p| DeclParam::Untyped(p.name.clone())).collect(),
                 ty: None, // Function definitions don't have explicit type annotations
                 return_attributes: vec![],
+                attributed_return_type: None,
                 body: func.body.clone(),
             }));
         }
@@ -104,6 +105,7 @@ impl Defunctionalizer {
             params: decl.params.clone(),
             ty: decl.ty.clone(),
             return_attributes: decl.return_attributes.clone(),
+            attributed_return_type: decl.attributed_return_type.clone(),
             body: transformed_expr,
         });
 

@@ -84,7 +84,7 @@ impl Parser {
             
             // Parse return type with optional attributes
             let return_attributes = self.parse_attributes()?;
-            let ty = Some(self.parse_type()?);
+            let (ty, attributed_return_type) = self.parse_return_type()?;
             
             self.expect(Token::Assign)?;
             let body = self.parse_expression()?;
@@ -96,6 +96,7 @@ impl Parser {
                 params,
                 ty,
                 return_attributes,
+                attributed_return_type,
                 body,
             })
         }
@@ -130,6 +131,7 @@ impl Parser {
                 params: vec![], // No parameters for typed declarations
                 ty,
                 return_attributes: vec![],
+                attributed_return_type: None,
                 body,
             })
         } else {
@@ -149,6 +151,7 @@ impl Parser {
                 params,
                 ty: None, // No explicit type for untyped declarations
                 return_attributes: vec![],
+                attributed_return_type: None,
                 body,
             })
         }
@@ -187,6 +190,76 @@ impl Parser {
             type_params,
             ty,
         })
+    }
+
+    fn parse_return_type(&mut self) -> Result<(Option<Type>, Option<Vec<AttributedType>>)> {
+        // Check if it's an attributed tuple: ([attr1] type1, [attr2] type2, ...)
+        if self.check(&Token::LeftParen) {
+            self.advance(); // consume '('
+            let mut attributed_types = Vec::new();
+
+            if !self.check(&Token::RightParen) {
+                loop {
+                    // Parse attributes for this component - in return types, we allow [attr] syntax
+                    let component_attributes = if self.check(&Token::LeftBracket) {
+                        // Parse [attribute] syntax for return type components
+                        self.advance(); // consume '['
+                        let attr_name = self.expect_identifier()?;
+                        let attribute = match attr_name.as_str() {
+                            "location" => {
+                                self.expect(Token::LeftParen)?;
+                                let location = if let Some(Token::IntLiteral(loc)) = self.peek() {
+                                    let loc = *loc as u32;
+                                    self.advance();
+                                    loc
+                                } else {
+                                    return Err(CompilerError::ParseError("Expected integer location".to_string()));
+                                };
+                                self.expect(Token::RightParen)?;
+                                Attribute::Location(location)
+                            }
+                            "builtin" => {
+                                self.expect(Token::LeftParen)?;
+                                let builtin_name = self.expect_identifier()?;
+                                let builtin = match builtin_name.as_str() {
+                                    "position" => spirv::BuiltIn::Position,
+                                    _ => return Err(CompilerError::ParseError(format!("Unknown builtin: {}", builtin_name))),
+                                };
+                                self.expect(Token::RightParen)?;
+                                Attribute::BuiltIn(builtin)
+                            }
+                            _ => return Err(CompilerError::ParseError(format!("Unknown attribute: {}", attr_name))),
+                        };
+                        self.expect(Token::RightBracket)?;
+                        vec![attribute]
+                    } else {
+                        vec![]
+                    };
+                    // Parse the type
+                    let component_type = self.parse_type()?;
+                    
+                    attributed_types.push(AttributedType {
+                        attributes: component_attributes,
+                        ty: component_type,
+                    });
+
+                    if !self.check(&Token::Comma) {
+                        break;
+                    }
+                    self.advance(); // consume ','
+                }
+            }
+
+            self.expect(Token::RightParen)?;
+            
+            // Create a tuple type from the attributed types for the type system
+            let tuple_type = types::attributed_tuple(attributed_types.clone());
+            Ok((Some(tuple_type), Some(attributed_types)))
+        } else {
+            // Regular single return type
+            let ty = self.parse_type()?;
+            Ok((Some(ty), None))
+        }
     }
 
     fn parse_attributes(&mut self) -> Result<Vec<Attribute>> {
@@ -530,9 +603,34 @@ impl Parser {
             Some(Token::LeftBracket) => self.parse_array_literal(),
             Some(Token::LeftParen) => {
                 self.advance(); // consume '('
-                let expr = self.parse_expression()?;
-                self.expect(Token::RightParen)?;
-                Ok(expr)
+                
+                // Check for empty tuple
+                if self.check(&Token::RightParen) {
+                    self.advance();
+                    return Ok(Expression::Tuple(vec![]));
+                }
+                
+                // Parse first expression
+                let first_expr = self.parse_expression()?;
+                
+                // Check if it's a tuple or just a parenthesized expression
+                if self.check(&Token::Comma) {
+                    // It's a tuple
+                    let mut elements = vec![first_expr];
+                    while self.check(&Token::Comma) {
+                        self.advance(); // consume ','
+                        if self.check(&Token::RightParen) {
+                            break; // Allow trailing comma
+                        }
+                        elements.push(self.parse_expression()?);
+                    }
+                    self.expect(Token::RightParen)?;
+                    Ok(Expression::Tuple(elements))
+                } else {
+                    // Just a parenthesized expression
+                    self.expect(Token::RightParen)?;
+                    Ok(first_expr)
+                }
             }
             Some(Token::Backslash) => self.parse_lambda(),
             Some(Token::Let) => self.parse_let_in(),
@@ -1851,6 +1949,130 @@ def fragment_main(): [4]f32 = SKY_RGBA
                     CompilerError::ParseError(msg) if msg.contains("Uniform declarations cannot have initializer values") => Ok(()),
                     _ => Err(format!("Expected parse error about uniform initializer, got: {:?}", error)),
                 }
+            },
+        );
+    }
+
+    #[test]
+    fn test_parse_multiple_shader_outputs() {
+        expect_parse(
+            r#"
+            #[fragment] def fragment_main(): ([location(0)] vec4, [location(1)] vec3) = 
+              let color = vec4 1.0f32 0.5f32 0.2f32 1.0f32 in
+              let normal = vec3 0.0f32 1.0f32 0.0f32 in
+              (color, normal)
+            "#,
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+                }
+                match &declarations[0] {
+                    Declaration::Decl(decl) => {
+                        if decl.name != "fragment_main" {
+                            return Err(format!("Expected name 'fragment_main', got '{}'", decl.name));
+                        }
+                        if !decl.attributes.contains(&Attribute::Fragment) {
+                            return Err(format!("Expected Fragment attribute, got {:?}", decl.attributes));
+                        }
+                        // Check that we have attributed return type
+                        if decl.attributed_return_type.is_none() {
+                            return Err("Expected attributed return type for multiple outputs".to_string());
+                        }
+                        let attributed_types = decl.attributed_return_type.as_ref().unwrap();
+                        if attributed_types.len() != 2 {
+                            return Err(format!("Expected 2 output components, got {}", attributed_types.len()));
+                        }
+                        
+                        // Check first output: [location(0)] vec4
+                        if attributed_types[0].attributes != vec![Attribute::Location(0)] {
+                            return Err(format!("Expected Location(0) on first output, got {:?}", attributed_types[0].attributes));
+                        }
+                        
+                        // Check second output: [location(1)] vec3  
+                        if attributed_types[1].attributes != vec![Attribute::Location(1)] {
+                            return Err(format!("Expected Location(1) on second output, got {:?}", attributed_types[1].attributes));
+                        }
+                        
+                        Ok(())
+                    }
+                    _ => Err("Expected Decl declaration".to_string()),
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn test_parse_complete_shader_example() {
+        expect_parse(
+            r#"
+            // Complete shader example with multiple outputs
+            #[uniform] def material_color: vec3
+            #[uniform] def time: f32
+
+            #[vertex] def vertex_main(): ([builtin(position)] vec4, [location(0)] vec3) =
+              let angle: f32 = time in
+              let x: f32 = sin angle in
+              let y: f32 = cos angle in
+              let position: vec4 = vec4 x y 0.0f32 1.0f32 in
+              let color: vec3 = material_color in
+              (position, color)
+
+            #[fragment] def fragment_main(): ([location(0)] vec4, [location(1)] vec3) = 
+              let final_color: vec4 = vec4 1.0f32 0.5f32 0.2f32 1.0f32 in
+              let normal: vec3 = vec3 0.0f32 1.0f32 0.0f32 in
+              (final_color, normal)
+            "#,
+            |declarations| {
+                if declarations.len() != 4 {
+                    return Err(format!("Expected 4 declarations, got {}", declarations.len()));
+                }
+
+                // Check uniform declarations
+                match &declarations[0] {
+                    Declaration::Decl(decl) => {
+                        if decl.name != "material_color" || !decl.attributes.contains(&Attribute::Uniform) {
+                            return Err("Expected uniform material_color".to_string());
+                        }
+                    }
+                    _ => return Err("Expected uniform declaration".to_string()),
+                }
+
+                match &declarations[1] {
+                    Declaration::Decl(decl) => {
+                        if decl.name != "time" || !decl.attributes.contains(&Attribute::Uniform) {
+                            return Err("Expected uniform time".to_string());
+                        }
+                    }
+                    _ => return Err("Expected uniform declaration".to_string()),
+                }
+
+                // Check vertex shader with multiple outputs
+                match &declarations[2] {
+                    Declaration::Decl(decl) => {
+                        if decl.name != "vertex_main" || !decl.attributes.contains(&Attribute::Vertex) {
+                            return Err("Expected vertex shader".to_string());
+                        }
+                        if decl.attributed_return_type.is_none() {
+                            return Err("Expected attributed return type for vertex shader".to_string());
+                        }
+                    }
+                    _ => return Err("Expected vertex declaration".to_string()),
+                }
+
+                // Check fragment shader with multiple outputs
+                match &declarations[3] {
+                    Declaration::Decl(decl) => {
+                        if decl.name != "fragment_main" || !decl.attributes.contains(&Attribute::Fragment) {
+                            return Err("Expected fragment shader".to_string());
+                        }
+                        if decl.attributed_return_type.is_none() {
+                            return Err("Expected attributed return type for fragment shader".to_string());
+                        }
+                    }
+                    _ => return Err("Expected fragment declaration".to_string()),
+                }
+
+                Ok(())
             },
         );
     }

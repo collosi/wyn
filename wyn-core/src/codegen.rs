@@ -180,6 +180,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             BasicTypeEnum::FloatType(float_ty) => float_ty.fn_type(&param_types, false),
             BasicTypeEnum::IntType(int_ty) => int_ty.fn_type(&param_types, false),
             BasicTypeEnum::VectorType(vec_ty) => vec_ty.fn_type(&param_types, false),
+            BasicTypeEnum::StructType(struct_ty) => struct_ty.fn_type(&param_types, false),
             _ => {
                 return Err(CompilerError::SpirvError(
                     "Unsupported return type".to_string(),
@@ -531,9 +532,41 @@ impl<'ctx> CodeGenerator<'ctx> {
                     }
                 }
             }
-            Expression::Tuple(_) => Err(CompilerError::SpirvError(
-                "Tuples not supported in LLVM generation".to_string(),
-            )),
+            Expression::Tuple(elements) => {
+                // Generate values for all tuple elements
+                let mut element_values = Vec::new();
+                for element in elements {
+                    element_values.push(self.generate_expression(element)?);
+                }
+
+                // Create a struct with the element values
+                if element_values.is_empty() {
+                    // Empty tuple - use unit type (empty struct)
+                    let unit_type = self.context.struct_type(&[], false);
+                    Ok(unit_type.const_zero().into())
+                } else {
+                    // Create struct with element values
+                    let element_types: Vec<BasicTypeEnum> = element_values
+                        .iter()
+                        .map(|val| val.get_type())
+                        .collect();
+                    let struct_type = self.context.struct_type(&element_types, false);
+                    
+                    // Build the struct value
+                    let mut struct_val = struct_type.get_undef().into();
+                    for (i, value) in element_values.into_iter().enumerate() {
+                        struct_val = self.builder
+                            .build_insert_value(struct_val, value, i as u32, "tuple_elem")
+                            .map_err(|e| CompilerError::SpirvError(format!("Failed to build tuple: {}", e)))?;
+                    }
+                    
+                    // Convert back to BasicValueEnum - structs should be StructValue
+                    match struct_val {
+                        inkwell::values::AggregateValueEnum::StructValue(sv) => Ok(sv.into()),
+                        _ => Err(CompilerError::SpirvError("Expected struct value".to_string()))
+                    }
+                }
+            }
             Expression::Lambda(_) => Err(CompilerError::SpirvError(
                 "Lambda expressions require defunctionalization before LLVM generation".to_string(),
             )),
@@ -788,10 +821,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                             }
                         }
                     }
-                    TypeName::Str("tuple") => {
-                        return Err(CompilerError::SpirvError(
-                            "Tuple types not supported in LLVM generation".to_string(),
-                        ));
+                    TypeName::Str("tuple") | TypeName::Str("attributed_tuple") => {
+                        // Create a struct type with the component types
+                        let mut component_types = Vec::new();
+                        for arg in args {
+                            component_types.push(self.get_or_create_type(arg)?);
+                        }
+                        let struct_type = self.context.struct_type(&component_types, false);
+                        BasicTypeEnum::StructType(struct_type)
                     }
                     _ => {
                         return Err(CompilerError::SpirvError(format!(
