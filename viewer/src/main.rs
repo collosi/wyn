@@ -11,7 +11,7 @@ use wgpu::{
     Color, ColorTargetState, CommandEncoderDescriptor, DeviceDescriptor, FragmentState, Instance,
     InstanceDescriptor, LoadOp, MultisampleState, Operations, PipelineLayoutDescriptor,
     PowerPreference, PresentMode, PrimitiveState, RenderPipeline, RequestAdapterOptions,
-    ShaderModuleDescriptor, StoreOp, SurfaceConfiguration, TextureUsages, Trace, VertexState,
+    ShaderModuleDescriptor, ShaderModuleDescriptorPassthrough, StoreOp, SurfaceConfiguration, TextureUsages, Trace, VertexState,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -46,6 +46,9 @@ enum Command {
         #[arg(long, default_value = "main")]
         fragment: String,
     },
+    /// Show device and driver information
+    #[command(name = "info")]
+    Info,
 }
 
 // --- Pipeline spec passed to the app -----------------------------------------
@@ -87,11 +90,21 @@ impl State {
             .await
             .context("request_adapter failed")?;
 
+        // Check if SPIRV_SHADER_PASSTHROUGH is supported
+        let adapter_features = adapter.features();
+        let spirv_passthrough_supported = adapter_features.contains(wgpu::Features::SPIRV_SHADER_PASSTHROUGH);
+        
+        println!("SPIRV_SHADER_PASSTHROUGH supported: {}", spirv_passthrough_supported);
+        
         // v26: request_device takes a single descriptor; trace is in the descriptor
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::empty(),
+                required_features: if spirv_passthrough_supported {
+                    wgpu::Features::SPIRV_SHADER_PASSTHROUGH
+                } else {
+                    wgpu::Features::empty()
+                },
                 required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
                 memory_hints: wgpu::MemoryHints::Performance,
                 trace: Trace::Off,
@@ -107,7 +120,7 @@ impl State {
             .ok_or_else(|| anyhow!("surface reports no supported formats"))?;
         let size = window.inner_size();
 
-        let mut config = SurfaceConfiguration {
+        let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width.max(1),
@@ -249,11 +262,39 @@ impl State {
 // Load a .spv file and create a ShaderModule using the SPIR-V helper
 fn load_spirv_module(device: &wgpu::Device, path: &Path) -> Result<wgpu::ShaderModule> {
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let source = wgpu::util::make_spirv(&bytes);
-    Ok(device.create_shader_module(ShaderModuleDescriptor {
-        label: Some(&format!("{}", path.display())),
-        source,
-    }))
+    
+    // Check if SPIRV_SHADER_PASSTHROUGH is supported
+    if device.features().contains(wgpu::Features::SPIRV_SHADER_PASSTHROUGH) {
+        // Convert bytes to u32 words for SPIR-V passthrough
+        let mut spirv_data = Vec::new();
+        for chunk in bytes.chunks_exact(4) {
+            let word = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            spirv_data.push(word);
+        }
+        
+        // Use create_shader_module_passthrough to bypass wgpu's SPIR-V validation
+        // This allows loading SPIR-V with unsupported capabilities like Linkage
+        let shader_module = unsafe {
+            device.create_shader_module_passthrough(ShaderModuleDescriptorPassthrough::SpirV(
+                wgpu::ShaderModuleDescriptorSpirV {
+                    label: Some(&format!("{}", path.display())),
+                    source: std::borrow::Cow::Borrowed(&spirv_data),
+                }
+            ))
+        };
+        
+        Ok(shader_module)
+    } else {
+        // Fall back to regular shader module creation with validation
+        let source = wgpu::util::make_spirv(&bytes);
+        
+        let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(&format!("{}", path.display())),
+            source,
+        });
+        
+        Ok(shader_module)
+    }
 }
 
 // --- Winit app shell ---------------------------------------------------------
@@ -316,22 +357,69 @@ impl ApplicationHandler for App {
     }
 }
 
+async fn show_device_info() -> Result<()> {
+    let instance = Instance::new(&InstanceDescriptor::default());
+    
+    // Try to get an adapter
+    let adapter = instance
+        .request_adapter(&RequestAdapterOptions {
+            power_preference: PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        })
+        .await
+        .context("No suitable adapter found")?;
+    
+    let info = adapter.get_info();
+    let features = adapter.features();
+    let limits = adapter.limits();
+    
+    println!("GPU Device Information:");
+    println!("  Name: {}", info.name);
+    println!("  Vendor: {:?}", info.vendor);
+    println!("  Device: {}", info.device);
+    println!("  Device Type: {:?}", info.device_type);
+    println!("  Driver: {}", info.driver);
+    println!("  Driver Info: {}", info.driver_info);
+    println!("  Backend: {:?}", info.backend);
+    
+    println!("\nSupported Features:");
+    println!("  {:#?}", features);
+    
+    println!("\nDevice Limits:");
+    println!("  Max Texture Dimension 1D: {}", limits.max_texture_dimension_1d);
+    println!("  Max Texture Dimension 2D: {}", limits.max_texture_dimension_2d);
+    println!("  Max Texture Dimension 3D: {}", limits.max_texture_dimension_3d);
+    println!("  Max Bind Groups: {}", limits.max_bind_groups);
+    println!("  Max Uniform Buffer Binding Size: {}", limits.max_uniform_buffer_binding_size);
+    println!("  Max Storage Buffer Binding Size: {}", limits.max_storage_buffer_binding_size);
+    
+    Ok(())
+}
+
 fn main() -> Result<()> {
     // Parse CLI and map to our pipeline spec
     let cli = Cli::parse();
-    let spec = match cli.command {
-        Command::VertexFragment { path, vertex, fragment } => PipelineSpec::VertexFragment {
-            path,
-            vertex,
-            fragment,
-        },
-    };
+    
+    match cli.command {
+        Command::Info => {
+            pollster::block_on(show_device_info())?;
+            return Ok(());
+        }
+        Command::VertexFragment { path, vertex, fragment } => {
+            let spec = PipelineSpec::VertexFragment {
+                path,
+                vertex,
+                fragment,
+            };
 
-    let event_loop = EventLoop::new().context("failed to create event loop")?;
-    let mut app = App { state: None, spec };
+            let event_loop = EventLoop::new().context("failed to create event loop")?;
+            let mut app = App { state: None, spec };
 
-    if let Err(e) = event_loop.run_app(&mut app) {
-        return Err(anyhow!(e)).context("winit event loop errored");
+            if let Err(e) = event_loop.run_app(&mut app) {
+                return Err(anyhow!(e)).context("winit event loop errored");
+            }
+        }
     }
 
     Ok(())
