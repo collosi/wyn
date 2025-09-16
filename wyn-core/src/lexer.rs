@@ -29,6 +29,8 @@ pub enum Token {
     Assign,
     Divide,
     Add,
+    Subtract,
+    Multiply,
     Arrow,
     Backslash, // \ for lambda expressions
     Dot,       // . for field access
@@ -130,6 +132,8 @@ fn parse_operator(input: &str) -> IResult<&str, Token> {
         value(Token::Assign, tag("=")),
         value(Token::Divide, tag("/")),
         value(Token::Add, char('+')),
+        value(Token::Subtract, char('-')),
+        value(Token::Multiply, char('*')),
         value(Token::Backslash, char('\\')),
         value(Token::Dot, char('.')),
     ))(input)

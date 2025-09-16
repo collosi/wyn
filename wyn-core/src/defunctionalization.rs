@@ -191,14 +191,26 @@ impl Defunctionalizer {
                 ))
             }
             Expression::BinaryOp(op, left, right) => {
-                let (transformed_left, _left_sv) =
+                let (transformed_left, left_sv) =
                     self.defunctionalize_expression(left, scope_stack)?;
-                let (transformed_right, _right_sv) =
+                let (transformed_right, right_sv) =
                     self.defunctionalize_expression(right, scope_stack)?;
 
-                let result_type = match op {
-                    BinaryOp::Divide => types::f32(), // Division typically results in float
-                    BinaryOp::Add => types::i32(), // Addition can be int or float, assume int for now
+                // For binary arithmetic operations, the result type should be the same as the operand types
+                // (assuming type checking has already ensured they match)
+                let result_type = match (&left_sv, &right_sv) {
+                    (StaticValue::Dyn(left_type), StaticValue::Dyn(_right_type)) => {
+                        // Use the left operand type (they should be the same after type checking)
+                        left_type.clone()
+                    }
+                    (StaticValue::Dyn(ty), _) | (_, StaticValue::Dyn(ty)) => {
+                        // If one is dynamic, use that type
+                        ty.clone()
+                    }
+                    _ => {
+                        // Fallback to a generic type variable if we can't determine the type
+                        polytype::Type::Variable(4)
+                    }
                 };
 
                 Ok((

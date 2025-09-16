@@ -152,6 +152,8 @@ pub struct LetInExpr {
 pub enum BinaryOp {
     Divide,
     Add,
+    Subtract,
+    Multiply,
 }
 
 // Helper module for creating common polytype Types

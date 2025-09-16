@@ -135,6 +135,8 @@ impl CodeAnnotator {
                 let op_str = match op {
                     BinaryOp::Add => " + ",
                     BinaryOp::Divide => " / ",
+                    BinaryOp::Subtract => " - ",
+                    BinaryOp::Multiply => " * ",
                 };
                 self.output.push_str(op_str);
 

@@ -370,6 +370,8 @@ impl Parser {
             let op = match token {
                 Token::Divide => BinaryOp::Divide,
                 Token::Add => BinaryOp::Add,
+                Token::Subtract => BinaryOp::Subtract,
+                Token::Multiply => BinaryOp::Multiply,
                 _ => break,
             };
             self.advance();
@@ -1703,5 +1705,49 @@ def fragment_main(): [4]f32 = SKY_RGBA
                 _ => Err("Expected second declaration to be Decl".to_string()),
             }
         });
+    }
+
+    #[test]
+    fn test_parse_vector_arithmetic() {
+        expect_parse(
+            r#"
+            def test_vector_arithmetic: f32 = 
+              let v1: vec3 = vec3 1.0f32 2.0f32 3.0f32 in
+              let v2: vec3 = vec3 4.0f32 5.0f32 6.0f32 in
+              let sum: vec3 = v1 + v2 in
+              let diff: vec3 = v1 - v2 in
+              let prod: vec3 = v1 * v2 in
+              let a: f32 = 2.5f32 in
+              let b: f32 = 3.0f32 in
+              let scalar_sum: f32 = a + b in
+              let scalar_diff: f32 = a - b in
+              let scalar_prod: f32 = a * b in
+              scalar_sum
+            "#,
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!(
+                        "Expected 1 declaration, got {}",
+                        declarations.len()
+                    ));
+                }
+                match &declarations[0] {
+                    Declaration::Decl(decl) => {
+                        if decl.name != "test_vector_arithmetic" {
+                            return Err(format!("Expected name 'test_vector_arithmetic', got '{}'", decl.name));
+                        }
+                        if decl.ty != Some(crate::ast::types::f32()) {
+                            return Err(format!("Expected f32 type, got {:?}", decl.ty));
+                        }
+                        // Check that the body contains nested let-in expressions with binary operations
+                        match &decl.body {
+                            Expression::LetIn(_) => Ok(()),
+                            _ => Err(format!("Expected LetIn expression, got {:?}", decl.body)),
+                        }
+                    }
+                    _ => Err("Expected Decl declaration".to_string()),
+                }
+            },
+        );
     }
 }

@@ -18,6 +18,62 @@ impl Default for TypeChecker {
 }
 
 impl TypeChecker {
+    fn resolve_operator_function(&self, op: &BinaryOp, left_type: &Type, right_type: &Type) -> Result<(String, Type)> {
+        // For now, require both operands to be the same type
+        if !self.types_equal(left_type, right_type) {
+            return Err(CompilerError::TypeError(format!(
+                "Binary operator requires matching operand types, got {:?} and {:?}",
+                left_type, right_type
+            )));
+        }
+
+        let op_prefix = match op {
+            BinaryOp::Add => "op_add",
+            BinaryOp::Subtract => "op_subtract", 
+            BinaryOp::Multiply => "op_multiply",
+            BinaryOp::Divide => "op_divide",
+        };
+
+        let type_suffix = self.get_type_suffix(left_type)?;
+        let op_name = format!("{}_{}", op_prefix, type_suffix);
+        
+        Ok((op_name, left_type.clone()))
+    }
+
+    fn get_type_suffix(&self, ty: &Type) -> Result<String> {
+        match ty {
+            Type::Constructed(TypeName::Str(name), _) => {
+                match *name {
+                    "int" => Ok("i32".to_string()),
+                    "float" => Ok("f32".to_string()),
+                    "vec2" => Ok("vec2".to_string()),
+                    "vec3" => Ok("vec3".to_string()),
+                    "vec4" => Ok("vec4".to_string()),
+                    "ivec2" => Ok("ivec2".to_string()),
+                    "ivec3" => Ok("ivec3".to_string()),
+                    "ivec4" => Ok("ivec4".to_string()),
+                    _ => Err(CompilerError::TypeError(format!(
+                        "Arithmetic operations not supported for type: {}", name
+                    )))
+                }
+            }
+            _ => Err(CompilerError::TypeError(format!(
+                "Arithmetic operations not supported for type: {:?}", ty
+            )))
+        }
+    }
+
+    fn types_equal(&self, left: &Type, right: &Type) -> bool {
+        match (left, right) {
+            (Type::Constructed(l_name, l_args), Type::Constructed(r_name, r_args)) => {
+                l_name == r_name && l_args.len() == r_args.len() && 
+                l_args.iter().zip(r_args.iter()).all(|(l, r)| self.types_equal(l, r))
+            }
+            (Type::Variable(l_id), Type::Variable(r_id)) => l_id == r_id,
+            _ => false,
+        }
+    }
+
     /// Create binary arithmetic operator type scheme: ∀t. t -> t -> t
     fn binary_arithmetic_scheme() -> TypeScheme<TypeName> {
         // Manually construct ∀t0. t0 -> t0 -> t0
@@ -115,6 +171,42 @@ impl TypeChecker {
                 Type::arrow(types::i32(),
                     Type::arrow(types::i32(), ivec4_type))));
         self.scope_stack.insert("ivec4".to_string(), TypeScheme::Monotype(ivec4_body));
+
+        // Operator functions for arithmetic operations
+        // f32 operations: op_add_f32, op_subtract_f32, op_multiply_f32, op_divide_f32
+        let f32_binary_op = Type::arrow(types::f32(), Type::arrow(types::f32(), types::f32()));
+        self.scope_stack.insert("op_add_f32".to_string(), TypeScheme::Monotype(f32_binary_op.clone()));
+        self.scope_stack.insert("op_subtract_f32".to_string(), TypeScheme::Monotype(f32_binary_op.clone()));
+        self.scope_stack.insert("op_multiply_f32".to_string(), TypeScheme::Monotype(f32_binary_op.clone()));
+        self.scope_stack.insert("op_divide_f32".to_string(), TypeScheme::Monotype(f32_binary_op));
+
+        // i32 operations: op_add_i32, op_subtract_i32, op_multiply_i32, op_divide_i32
+        let i32_binary_op = Type::arrow(types::i32(), Type::arrow(types::i32(), types::i32()));
+        self.scope_stack.insert("op_add_i32".to_string(), TypeScheme::Monotype(i32_binary_op.clone()));
+        self.scope_stack.insert("op_subtract_i32".to_string(), TypeScheme::Monotype(i32_binary_op.clone()));
+        self.scope_stack.insert("op_multiply_i32".to_string(), TypeScheme::Monotype(i32_binary_op.clone()));
+        self.scope_stack.insert("op_divide_i32".to_string(), TypeScheme::Monotype(i32_binary_op));
+
+        // vec2 operations
+        let vec2_binary_op = Type::arrow(types::vec2(), Type::arrow(types::vec2(), types::vec2()));
+        self.scope_stack.insert("op_add_vec2".to_string(), TypeScheme::Monotype(vec2_binary_op.clone()));
+        self.scope_stack.insert("op_subtract_vec2".to_string(), TypeScheme::Monotype(vec2_binary_op.clone()));
+        self.scope_stack.insert("op_multiply_vec2".to_string(), TypeScheme::Monotype(vec2_binary_op.clone()));
+        self.scope_stack.insert("op_divide_vec2".to_string(), TypeScheme::Monotype(vec2_binary_op));
+
+        // vec3 operations
+        let vec3_binary_op = Type::arrow(types::vec3(), Type::arrow(types::vec3(), types::vec3()));
+        self.scope_stack.insert("op_add_vec3".to_string(), TypeScheme::Monotype(vec3_binary_op.clone()));
+        self.scope_stack.insert("op_subtract_vec3".to_string(), TypeScheme::Monotype(vec3_binary_op.clone()));
+        self.scope_stack.insert("op_multiply_vec3".to_string(), TypeScheme::Monotype(vec3_binary_op.clone()));
+        self.scope_stack.insert("op_divide_vec3".to_string(), TypeScheme::Monotype(vec3_binary_op));
+
+        // vec4 operations
+        let vec4_binary_op = Type::arrow(types::vec4(), Type::arrow(types::vec4(), types::vec4()));
+        self.scope_stack.insert("op_add_vec4".to_string(), TypeScheme::Monotype(vec4_binary_op.clone()));
+        self.scope_stack.insert("op_subtract_vec4".to_string(), TypeScheme::Monotype(vec4_binary_op.clone()));
+        self.scope_stack.insert("op_multiply_vec4".to_string(), TypeScheme::Monotype(vec4_binary_op.clone()));
+        self.scope_stack.insert("op_divide_vec4".to_string(), TypeScheme::Monotype(vec4_binary_op));
 
         // Register vector field mappings
         self.register_vector_fields();
@@ -329,39 +421,41 @@ impl TypeChecker {
                 let left_type = self.infer_expression(left)?;
                 let right_type = self.infer_expression(right)?;
 
-                match op {
-                    BinaryOp::Add | BinaryOp::Divide => {
-                        // Arithmetic operators have type: ∀t. t -> t -> t
-                        let arith_scheme = Self::binary_arithmetic_scheme();
-                        let arith_type = arith_scheme.instantiate(&mut self.context);
+                // Map operator to appropriate op_* function based on operand types
+                let (op_name, _expected_arg_type) = self.resolve_operator_function(op, &left_type, &right_type)?;
+                
+                // Look up the operator function
+                let type_scheme = self
+                    .scope_stack
+                    .lookup(&op_name)
+                    .ok_or_else(|| CompilerError::UndefinedVariable(op_name.clone()))?;
+                let func_type = type_scheme.instantiate(&mut self.context);
 
-                        // Create fresh type variable for result
-                        let result_type = self.context.new_variable();
-
-                        // Unify: arith_type ~ (left_type -> right_type -> result_type)
-                        let expected_type = Type::arrow(
-                            left_type.clone(),
-                            Type::arrow(right_type.clone(), result_type.clone()),
-                        );
-
-                        let op_name = match op {
-                            BinaryOp::Add => "add",
-                            BinaryOp::Divide => "divide",
-                        };
-
-                        self.context
-                            .unify(&arith_type, &expected_type)
-                            .map_err(|e| {
+                // Type check as if this were a function call: op_func left_type right_type
+                let mut result_type = func_type.clone();
+                for arg_type in [left_type, right_type] {
+                    match result_type {
+                        Type::Constructed(TypeName::Str("->"), args) if args.len() == 2 => {
+                            let param_type = &args[0];
+                            let return_type = args[1].clone();
+                            self.context.unify(param_type, &arg_type).map_err(|e| {
                                 CompilerError::TypeError(format!(
-                                    "Cannot {} {:?} and {:?}: {}",
-                                    op_name, left_type, right_type, e
+                                    "Type mismatch in {} operator: expected {:?}, got {:?}: {}",
+                                    op_name, param_type, arg_type, e
                                 ))
                             })?;
-
-                        // Apply substitutions to get concrete result type
-                        Ok(result_type.apply(&self.context))
-                    } // Future operators like comparisons would go here with different type schemes
+                            result_type = return_type;
+                        }
+                        _ => {
+                            return Err(CompilerError::TypeError(format!(
+                                "Operator function {} is not a function type",
+                                op_name
+                            )));
+                        }
+                    }
                 }
+
+                Ok(result_type.apply(&self.context))
             }
             Expression::FunctionCall(func_name, args) => {
                 // Get function type scheme and instantiate it

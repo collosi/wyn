@@ -431,6 +431,62 @@ impl<'ctx> CodeGenerator<'ctx> {
                             }
                         }
                     }
+                    BinaryOp::Subtract => {
+                        // Check the type of the operands to determine whether to use int or float subtraction
+                        match (left_val, right_val) {
+                            (BasicValueEnum::IntValue(left_int), BasicValueEnum::IntValue(right_int)) => {
+                                let result = self
+                                    .builder
+                                    .build_int_sub(left_int, right_int, "sub")
+                                    .map_err(|e| {
+                                        CompilerError::SpirvError(format!("Failed to build int subtraction: {}", e))
+                                    })?;
+                                Ok(result.into())
+                            }
+                            (BasicValueEnum::FloatValue(left_float), BasicValueEnum::FloatValue(right_float)) => {
+                                let result = self
+                                    .builder
+                                    .build_float_sub(left_float, right_float, "sub")
+                                    .map_err(|e| {
+                                        CompilerError::SpirvError(format!("Failed to build float subtraction: {}", e))
+                                    })?;
+                                Ok(result.into())
+                            }
+                            _ => {
+                                Err(CompilerError::SpirvError(
+                                    "Type mismatch in subtraction: operands must be both int or both float".to_string()
+                                ))
+                            }
+                        }
+                    }
+                    BinaryOp::Multiply => {
+                        // Check the type of the operands to determine whether to use int or float multiplication
+                        match (left_val, right_val) {
+                            (BasicValueEnum::IntValue(left_int), BasicValueEnum::IntValue(right_int)) => {
+                                let result = self
+                                    .builder
+                                    .build_int_mul(left_int, right_int, "mul")
+                                    .map_err(|e| {
+                                        CompilerError::SpirvError(format!("Failed to build int multiplication: {}", e))
+                                    })?;
+                                Ok(result.into())
+                            }
+                            (BasicValueEnum::FloatValue(left_float), BasicValueEnum::FloatValue(right_float)) => {
+                                let result = self
+                                    .builder
+                                    .build_float_mul(left_float, right_float, "mul")
+                                    .map_err(|e| {
+                                        CompilerError::SpirvError(format!("Failed to build float multiplication: {}", e))
+                                    })?;
+                                Ok(result.into())
+                            }
+                            _ => {
+                                Err(CompilerError::SpirvError(
+                                    "Type mismatch in multiplication: operands must be both int or both float".to_string()
+                                ))
+                            }
+                        }
+                    }
                 }
             }
             Expression::FunctionCall(func_name, args) => {
