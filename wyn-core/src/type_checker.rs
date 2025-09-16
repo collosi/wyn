@@ -208,6 +208,12 @@ impl TypeChecker {
         self.scope_stack.insert("op_multiply_vec4".to_string(), TypeScheme::Monotype(vec4_binary_op.clone()));
         self.scope_stack.insert("op_divide_vec4".to_string(), TypeScheme::Monotype(vec4_binary_op));
 
+        // Trigonometric functions: f32 -> f32
+        let trig_type = Type::arrow(types::f32(), types::f32());
+        self.scope_stack.insert("sin".to_string(), TypeScheme::Monotype(trig_type.clone()));
+        self.scope_stack.insert("cos".to_string(), TypeScheme::Monotype(trig_type.clone()));
+        self.scope_stack.insert("tan".to_string(), TypeScheme::Monotype(trig_type));
+
         // Register vector field mappings
         self.register_vector_fields();
 

@@ -25,6 +25,16 @@ impl<'ctx> BuiltinManager<'ctx> {
         let length_ir = Self::generate_length_builtin();
         self.add_ir_to_module(module, &length_ir)?;
 
+        // Load trigonometric functions
+        let sin_ir = Self::generate_sin_builtin();
+        self.add_ir_to_module(module, &sin_ir)?;
+
+        let cos_ir = Self::generate_cos_builtin();
+        self.add_ir_to_module(module, &cos_ir)?;
+
+        let tan_ir = Self::generate_tan_builtin();
+        self.add_ir_to_module(module, &tan_ir)?;
+
         Ok(())
     }
 
@@ -69,6 +79,54 @@ entry:
   %length = load i32, i32* %length_ptr
   
   ret i32 %length
+}
+        "#
+        .to_string()
+    }
+
+    /// Generate LLVM IR for sin builtin function
+    fn generate_sin_builtin() -> String {
+        r#"
+; Sine function for f32
+; Uses LLVM's sin intrinsic
+declare float @llvm.sin.f32(float)
+
+define float @sin(float %x) {
+entry:
+  %result = call float @llvm.sin.f32(float %x)
+  ret float %result
+}
+        "#
+        .to_string()
+    }
+
+    /// Generate LLVM IR for cos builtin function
+    fn generate_cos_builtin() -> String {
+        r#"
+; Cosine function for f32
+; Uses LLVM's cos intrinsic
+declare float @llvm.cos.f32(float)
+
+define float @cos(float %x) {
+entry:
+  %result = call float @llvm.cos.f32(float %x)
+  ret float %result
+}
+        "#
+        .to_string()
+    }
+
+    /// Generate LLVM IR for tan builtin function
+    fn generate_tan_builtin() -> String {
+        r#"
+; Tangent function for f32
+; Uses LLVM's tan intrinsic
+declare float @llvm.tan.f32(float)
+
+define float @tan(float %x) {
+entry:
+  %result = call float @llvm.tan.f32(float %x)
+  ret float %result
 }
         "#
         .to_string()
@@ -189,7 +247,7 @@ loop_exit:
 
     /// Check if a function name represents a builtin
     pub fn is_builtin(&self, name: &str) -> bool {
-        matches!(name, "length" | "map") || name.starts_with("map_")
+        matches!(name, "length" | "map" | "sin" | "cos" | "tan") || name.starts_with("map_")
     }
 
     /// Generate a call to a builtin function
@@ -301,6 +359,28 @@ loop_exit:
                 // Return the output array
                 Ok(output_array.into())
             }
+            "sin" | "cos" | "tan" => {
+                if args.len() != 1 {
+                    return Err(CompilerError::SpirvError(format!(
+                        "{} builtin requires exactly one argument",
+                        func_name
+                    )));
+                }
+
+                // Get the trigonometric function
+                let trig_fn = module.get_function(func_name).ok_or_else(|| {
+                    CompilerError::SpirvError(format!("{} builtin function not found", func_name))
+                })?;
+
+                // Call the function with the float argument
+                let result = builder
+                    .build_call(trig_fn, &[args[0].into()], &format!("{}_result", func_name))
+                    .map_err(|e| {
+                        CompilerError::SpirvError(format!("Failed to call {} builtin: {}", func_name, e))
+                    })?;
+
+                Ok(result.try_as_basic_value().left().unwrap())
+            }
             _ => Err(CompilerError::SpirvError(format!(
                 "Unknown builtin function: {}",
                 func_name
@@ -355,6 +435,9 @@ mod tests {
 
         assert!(manager.is_builtin("length"));
         assert!(manager.is_builtin("map"));
+        assert!(manager.is_builtin("sin"));
+        assert!(manager.is_builtin("cos"));
+        assert!(manager.is_builtin("tan"));
         assert!(!manager.is_builtin("unknown"));
     }
 
