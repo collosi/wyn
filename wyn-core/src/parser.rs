@@ -28,13 +28,11 @@ impl Parser {
 
         match self.peek() {
             Some(Token::Let) => {
-                let mut decl = self.parse_decl("let")?;
-                decl.attributes = attributes;
+                let decl = self.parse_decl("let", attributes)?;
                 Ok(Declaration::Decl(decl))
             }
             Some(Token::Def) => {
-                let mut decl = self.parse_decl("def")?;
-                decl.attributes = attributes;
+                let decl = self.parse_decl("def", attributes)?;
                 Ok(Declaration::Decl(decl))
             }
             Some(Token::Val) => {
@@ -48,7 +46,7 @@ impl Parser {
         }
     }
 
-    fn parse_decl(&mut self, keyword: &'static str) -> Result<Decl> {
+    fn parse_decl(&mut self, keyword: &'static str, attributes: Vec<Attribute>) -> Result<Decl> {
         // Expect the keyword token (let or def)
         match keyword {
             "let" => self.expect(Token::Let)?,
@@ -93,7 +91,7 @@ impl Parser {
             
             Ok(Decl {
                 keyword,
-                attributes: vec![],
+                attributes,
                 name,
                 params,
                 ty,
@@ -101,17 +99,33 @@ impl Parser {
                 body,
             })
         }
-        // Check if this is a typed declaration (name: type = value)
+        // Check if this is a typed declaration (name: type = value or name: type for uniforms)
         else if self.check(&Token::Colon) {
-            // Typed declaration: let/def name: type = value
+            // Typed declaration: let/def name: type = value or let/def name: type (uniform)
             self.expect(Token::Colon)?;
             let ty = Some(self.parse_type()?);
-            self.expect(Token::Assign)?;
-            let body = self.parse_expression()?;
+            
+            // Check if this is a uniform declaration (no initializer allowed)
+            let has_uniform_attr = attributes.iter().any(|attr| matches!(attr, Attribute::Uniform));
+            
+            let body = if has_uniform_attr {
+                // Uniforms don't have initializers - use a placeholder expression
+                if self.check(&Token::Assign) {
+                    return Err(CompilerError::ParseError(
+                        "Uniform declarations cannot have initializer values".to_string()
+                    ));
+                }
+                // Use a placeholder expression for uniforms
+                Expression::Identifier("__uniform_placeholder".to_string())
+            } else {
+                // Regular typed declaration requires an initializer
+                self.expect(Token::Assign)?;
+                self.parse_expression()?
+            };
             
             Ok(Decl {
                 keyword,
-                attributes: vec![],
+                attributes,
                 name,
                 params: vec![], // No parameters for typed declarations
                 ty,
@@ -130,7 +144,7 @@ impl Parser {
             
             Ok(Decl {
                 keyword,
-                attributes: vec![],
+                attributes,
                 name,
                 params,
                 ty: None, // No explicit type for untyped declarations
@@ -190,6 +204,10 @@ impl Parser {
                 "fragment" => {
                     self.expect(Token::RightBracket)?;
                     Attribute::Fragment
+                }
+                "uniform" => {
+                    self.expect(Token::RightBracket)?;
+                    Attribute::Uniform
                 }
                 "builtin" => {
                     self.expect(Token::LeftParen)?;
@@ -1746,6 +1764,92 @@ def fragment_main(): [4]f32 = SKY_RGBA
                         }
                     }
                     _ => Err("Expected Decl declaration".to_string()),
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn test_parse_uniform_attribute() {
+        expect_parse(
+            r#"
+            #[uniform] def material_color: vec3
+            "#,
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!(
+                        "Expected 1 declaration, got {}",
+                        declarations.len()
+                    ));
+                }
+                match &declarations[0] {
+                    Declaration::Decl(decl) => {
+                        if decl.name != "material_color" {
+                            return Err(format!("Expected name 'material_color', got '{}'", decl.name));
+                        }
+                        if decl.attributes != vec![Attribute::Uniform] {
+                            return Err(format!(
+                                "Expected Uniform attribute, got {:?}",
+                                decl.attributes
+                            ));
+                        }
+                        if decl.ty != Some(crate::ast::types::vec3()) {
+                            return Err(format!("Expected vec3 type, got {:?}", decl.ty));
+                        }
+                        Ok(())
+                    }
+                    _ => Err("Expected Decl declaration".to_string()),
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn test_parse_uniform_without_initializer() {
+        expect_parse(
+            r#"
+            #[uniform] def material_color: vec3
+            "#,
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!(
+                        "Expected 1 declaration, got {}",
+                        declarations.len()
+                    ));
+                }
+                match &declarations[0] {
+                    Declaration::Decl(decl) => {
+                        if decl.name != "material_color" {
+                            return Err(format!("Expected name 'material_color', got '{}'", decl.name));
+                        }
+                        if decl.attributes != vec![Attribute::Uniform] {
+                            return Err(format!(
+                                "Expected Uniform attribute, got {:?}",
+                                decl.attributes
+                            ));
+                        }
+                        if decl.ty != Some(crate::ast::types::vec3()) {
+                            return Err(format!("Expected vec3 type, got {:?}", decl.ty));
+                        }
+                        // Check that there's no initializer (the body should be something like a placeholder)
+                        Ok(())
+                    }
+                    _ => Err("Expected Decl declaration".to_string()),
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn test_uniform_with_initializer_error() {
+        expect_parse_error(
+            r#"
+            #[uniform] def material_color: vec3 = vec3 1.0f32 0.5f32 0.2f32
+            "#,
+            |error| {
+                match error {
+                    CompilerError::ParseError(msg) if msg.contains("Uniform declarations cannot have initializer values") => Ok(()),
+                    _ => Err(format!("Expected parse error about uniform initializer, got: {:?}", error)),
                 }
             },
         );

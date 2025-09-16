@@ -293,6 +293,33 @@ impl TypeChecker {
     }
 
     fn check_decl(&mut self, decl: &Decl) -> Result<()> {
+        // Handle uniform declarations specially
+        if decl.attributes.contains(&Attribute::Uniform) {
+            // Uniforms must have a type annotation and no real initializer
+            if decl.ty.is_none() {
+                return Err(CompilerError::TypeError(format!(
+                    "Uniform declaration '{}' must have a type annotation",
+                    decl.name
+                )));
+            }
+            
+            // Check that the body is the placeholder (indicating no initializer was provided)
+            if !matches!(decl.body, Expression::Identifier(ref id) if id == "__uniform_placeholder") {
+                return Err(CompilerError::TypeError(format!(
+                    "Uniform declaration '{}' cannot have an initializer value. Uniforms must be provided by the host application.",
+                    decl.name
+                )));
+            }
+            
+            // Add the uniform to scope with its declared type
+            let uniform_type = decl.ty.as_ref().unwrap().clone();
+            let type_scheme = TypeScheme::Monotype(uniform_type);
+            self.scope_stack.insert(decl.name.clone(), type_scheme);
+            println!("DEBUG: Inserting uniform variable '{}' into scope", decl.name);
+            
+            return Ok(());
+        }
+
         if decl.params.is_empty() {
             // Variable declaration: let/def name: type = value or let/def name = value
             let expr_type = self.infer_expression(&decl.body)?;

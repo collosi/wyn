@@ -68,6 +68,7 @@ pub enum Attribute {
     Location(u32),
     Vertex,
     Fragment,
+    Uniform,
 }
 
 #[derive(Debug, Clone, PartialEq)]
