@@ -5,9 +5,9 @@ use crate::error::{CompilerError, Result};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::targets::{InitializationConfig, Target, TargetTriple};
+use inkwell::targets::{InitializationConfig, Target, TargetTriple, TargetMachine, RelocMode, CodeModel, FileType};
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
-use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue, GlobalValue};
 use inkwell::AddressSpace;
 use std::collections::HashMap;
 
@@ -22,6 +22,8 @@ pub struct CodeGenerator<'ctx> {
     type_cache: HashMap<Type, BasicTypeEnum<'ctx>>,
     current_function: Option<FunctionValue<'ctx>>,
     entry_points: Vec<(String, spirv::ExecutionModel)>,
+    uniform_globals: HashMap<String, GlobalValue<'ctx>>,
+    output_globals: HashMap<String, (GlobalValue<'ctx>, u32)>, // (global, location)
 }
 
 impl<'ctx> CodeGenerator<'ctx> {
@@ -45,6 +47,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             type_cache: HashMap::new(),
             current_function: None,
             entry_points: Vec::new(),
+            uniform_globals: HashMap::new(),
+            output_globals: HashMap::new(),
         }
     }
 
@@ -65,6 +69,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         for (name, exec_model) in &entry_points {
             self.add_spirv_entry_point_metadata(name, exec_model)?;
         }
+
+        // Add SPIR-V decorations for uniforms and outputs
+        self.add_spirv_decorations()?;
 
         // Verify the module
         if let Err(e) = self.module.verify() {
@@ -89,11 +96,20 @@ impl<'ctx> CodeGenerator<'ctx> {
                 if is_entry_point {
                     self.generate_entry_point(decl_node)
                 } else if decl_node.params.is_empty() {
-                    // Variable declaration: let/def name: type = value or let/def name = value
-                    let ty = decl_node.ty.as_ref().ok_or_else(|| {
-                        CompilerError::SpirvError(format!("{} declaration must have explicit type", decl_node.keyword))
-                    })?;
-                    self.generate_declaration_helper(&decl_node.name, ty, &decl_node.body)
+                    // Check if this is a uniform declaration
+                    let is_uniform = decl_node.attributes.iter().any(|attr| 
+                        matches!(attr, Attribute::Uniform)
+                    );
+                    
+                    if is_uniform {
+                        self.generate_uniform_declaration(decl_node)
+                    } else {
+                        // Regular variable declaration: let/def name: type = value or let/def name = value
+                        let ty = decl_node.ty.as_ref().ok_or_else(|| {
+                            CompilerError::SpirvError(format!("{} declaration must have explicit type", decl_node.keyword))
+                        })?;
+                        self.generate_declaration_helper(&decl_node.name, ty, &decl_node.body)
+                    }
                 } else {
                     // Function declaration: let/def name param1 param2 = body (skip for now)
                     Ok(())
@@ -106,10 +122,34 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    fn generate_uniform_declaration(&mut self, decl: &Decl) -> Result<()> {
+        let ty = decl.ty.as_ref().ok_or_else(|| {
+            CompilerError::SpirvError("Uniform declaration must have explicit type".to_string())
+        })?;
+
+        // Create a global variable for the uniform (no initializer needed)
+        let llvm_type = self.get_or_create_type(ty)?;
+        let global = self.module.add_global(llvm_type, Some(AddressSpace::default()), &decl.name);
+        
+        // Uniforms are externally provided, so no initializer
+        // The global will be linked at runtime by the graphics API
+        
+        // Store in variable cache so it can be referenced by other code
+        self.variable_cache.insert(decl.name.clone(), global.as_pointer_value());
+        self.variable_types.insert(decl.name.clone(), ty.clone());
+        
+        // Store for SPIR-V decoration generation
+        self.uniform_globals.insert(decl.name.clone(), global);
+        
+        println!("DEBUG: Generated uniform variable '{}' with type {:?}", decl.name, ty);
+        
+        Ok(())
+    }
+
     fn generate_declaration_helper(&mut self, name: &str, ty: &Type, value_expr: &Expression) -> Result<()> {
-        // For global variables, only allow literal constants
+        // For global variables, allow literal constants including arrays
         match value_expr {
-            Expression::IntLiteral(_) | Expression::FloatLiteral(_) => {
+            Expression::IntLiteral(_) | Expression::FloatLiteral(_) | Expression::ArrayLiteral(_) => {
                 // Generate the constant expression value
                 let value = self.generate_expression(value_expr)?;
                 
@@ -155,10 +195,15 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         self.entry_points.push((decl.name.clone(), exec_model));
 
-        // Create function signature
-        let return_type = self.get_or_create_type(decl.ty.as_ref().ok_or_else(|| {
+        // Create function signature and handle output variables
+        let return_type_ast = decl.ty.as_ref().ok_or_else(|| {
             CompilerError::SpirvError("Entry point must have return type".to_string())
-        })?)?;
+        })?;
+        
+        // Create output globals for attributed tuple return types
+        self.create_output_globals(return_type_ast)?;
+        
+        let return_type = self.get_or_create_type(return_type_ast)?;
 
         // Build parameter types
         let param_types: Vec<BasicMetadataTypeEnum> = decl
@@ -881,34 +926,121 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
-    fn emit_spirv(&self) -> Result<Vec<u32>> {
-        // For now, return a placeholder SPIR-V
-        // In a real implementation, we would:
-        // 1. Use LLVM's SPIR-V backend to generate SPIR-V
-        // 2. Or use an external tool like llvm-spirv to translate LLVM IR to SPIR-V
+    fn create_output_globals(&mut self, return_type: &Type) -> Result<()> {
+        // Check if this is an attributed tuple with location attributes
+        if let Type::Constructed(TypeName::Str("attributed_tuple"), args) = return_type {
+            // For each component in the attributed tuple, create an output global
+            for (index, component_type) in args.iter().enumerate() {
+                // Extract location from the component type if it has attributes
+                // For now, use sequential locations starting from 0
+                let location = index as u32;
+                
+                // Create a global output variable for this component
+                let llvm_type = self.get_or_create_type(component_type)?;
+                let global_name = format!("output_{}", index);
+                let global = self.module.add_global(llvm_type, Some(AddressSpace::default()), &global_name);
+                
+                // Store for decoration later
+                self.output_globals.insert(global_name.clone(), (global, location));
+                
+                println!("DEBUG: Created output global '{}' at location {}", global_name, location);
+            }
+        }
+        Ok(())
+    }
 
+    fn add_spirv_decorations(&mut self) -> Result<()> {
+        // Collect the keys first to avoid borrowing issues
+        let uniform_names: Vec<String> = self.uniform_globals.keys().cloned().collect();
+        let output_names: Vec<String> = self.output_globals.keys().cloned().collect();
+        
+        // Add SPIR-V decorations for uniform variables
+        for name in uniform_names {
+            if let Some(global) = self.uniform_globals.get(&name) {
+                self.add_uniform_decoration(&name, *global)?;
+            }
+        }
+
+        // Add SPIR-V decorations for output variables
+        for name in output_names {
+            if let Some((global, location)) = self.output_globals.get(&name) {
+                self.add_output_decoration(&name, *global, *location)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn add_uniform_decoration(&mut self, name: &str, global: GlobalValue<'ctx>) -> Result<()> {
+        // For SPIR-V uniforms, we need to add proper storage class and binding decorations
+        // This is a simplified approach - in practice we'd use proper SPIR-V decoration APIs
+        
+        // Add a comment to the global to indicate it's a uniform
+        let uniform_name = format!("{}_uniform", name);
+        global.set_name(&uniform_name);
+        
+        // Set storage class to Uniform (via address space or other mechanism)
+        // In SPIR-V, uniforms typically use StorageClass::Uniform
+        
+        println!("DEBUG: Added uniform decoration for '{}'", name);
+        Ok(())
+    }
+
+    fn add_output_decoration(&mut self, name: &str, global: GlobalValue<'ctx>, location: u32) -> Result<()> {
+        // For SPIR-V outputs, we need to add location decorations
+        // This is a simplified approach - in practice we'd use proper SPIR-V decoration APIs
+        
+        let output_name = format!("{}_output_loc{}", name, location);
+        global.set_name(&output_name);
+        
+        println!("DEBUG: Added output decoration for '{}' at location {}", name, location);
+        Ok(())
+    }
+
+    fn emit_spirv(&self) -> Result<Vec<u32>> {
         // Initialize LLVM targets
         Target::initialize_all(&InitializationConfig::default());
-
-        // For now, let's output LLVM IR and return a minimal SPIR-V header
-        // This is a placeholder - real implementation would generate actual SPIR-V
 
         // Print LLVM IR for debugging
         self.module.print_to_stderr();
 
-        // Return expanded SPIR-V placeholder to satisfy tests
-        // In a real implementation, this would be actual SPIR-V bytecode
-        let mut spirv_placeholder = vec![
-            spirv::MAGIC_NUMBER,
-            0x00010500, // Version 1.5
-            0,          // Generator ID
-            100,        // Bound (placeholder)
-            0,          // Schema
-        ];
+        // Find the SPIR-V target
+        let target_triple = TargetTriple::create("spirv64-unknown-unknown");
+        let target = Target::from_triple(&target_triple)
+            .map_err(|e| CompilerError::SpirvError(format!("Failed to create SPIR-V target: {}", e)))?;
+
+        // Create target machine for SPIR-V
+        let target_machine = target
+            .create_target_machine(
+                &target_triple,
+                "",
+                "",
+                inkwell::OptimizationLevel::Default,
+                RelocMode::Default,
+                CodeModel::Default,
+            )
+            .ok_or_else(|| CompilerError::SpirvError("Failed to create target machine".to_string()))?;
+
+        // Generate SPIR-V object code
+        let object_data = target_machine
+            .write_to_memory_buffer(&self.module, FileType::Object)
+            .map_err(|e| CompilerError::SpirvError(format!("Failed to generate SPIR-V: {}", e)))?;
+
+        // Convert the memory buffer to Vec<u32>
+        let bytes = object_data.as_slice();
         
-        // Add padding to make it reasonably sized for tests
-        spirv_placeholder.extend(vec![0; 60]); // Total ~65 words
+        // SPIR-V is stored as 32-bit words, so convert bytes to u32
+        if bytes.len() % 4 != 0 {
+            return Err(CompilerError::SpirvError("SPIR-V output not aligned to 32-bit words".to_string()));
+        }
         
-        Ok(spirv_placeholder)
+        let words: Vec<u32> = bytes
+            .chunks_exact(4)
+            .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect();
+        
+        println!("DEBUG: Generated {} bytes of SPIR-V ({} words)", bytes.len(), words.len());
+        
+        Ok(words)
     }
 }

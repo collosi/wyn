@@ -2005,7 +2005,7 @@ def fragment_main(): [4]f32 = SKY_RGBA
     fn test_parse_complete_shader_example() {
         expect_parse(
             r#"
-            // Complete shader example with multiple outputs
+            -- Complete shader example with multiple outputs
             #[uniform] def material_color: vec3
             #[uniform] def time: f32
 
