@@ -8,6 +8,7 @@ use inkwell::module::Module;
 use inkwell::targets::{InitializationConfig, Target, TargetTriple, TargetMachine, RelocMode, CodeModel, FileType};
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue, GlobalValue};
+use inkwell::module::Linkage;
 use inkwell::AddressSpace;
 use std::collections::HashMap;
 
@@ -31,8 +32,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         let module = context.create_module(module_name);
         let builder = context.create_builder();
 
-        // Set up SPIR-V target triple
-        module.set_triple(&TargetTriple::create("spirv64-unknown-unknown"));
+        // Set up SPIR-V target triple for Vulkan graphics
+        module.set_triple(&TargetTriple::create("spirv-unknown-vulkan1.2"));
 
         let builtin_manager = BuiltinManager::new(context);
 
@@ -235,6 +236,10 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Create the function
         let function = self.module.add_function(&decl.name, fn_type, None);
+        
+        // Set internal linkage for all SPIR-V functions to avoid linkage attributes
+        function.set_linkage(Linkage::Internal);
+        
         self.function_cache.insert(decl.name.clone(), function);
         self.current_function = Some(function);
 
@@ -901,27 +906,33 @@ impl<'ctx> CodeGenerator<'ctx> {
         exec_model: &spirv::ExecutionModel,
     ) -> Result<()> {
         // Add SPIR-V specific attributes to mark entry points
-        let _func = self
+        let func = self
             .function_cache
             .get(name)
             .ok_or_else(|| CompilerError::SpirvError(format!("Entry point {} not found", name)))?;
 
-        // For SPIR-V, we need to add specific attributes that the LLVM SPIR-V backend recognizes
-        // This is a simplified version - real implementation would need proper SPIR-V metadata
-
-        // Add execution model as a function attribute
-        let _exec_model_str = match exec_model {
-            spirv::ExecutionModel::Vertex => "spir_vertex",
-            spirv::ExecutionModel::Fragment => "spir_fragment",
+        // Add SPIR-V entry point attributes using LLVM function attributes
+        let exec_model_str = match exec_model {
+            spirv::ExecutionModel::Vertex => "spirv.entry_point.vertex",
+            spirv::ExecutionModel::Fragment => "spirv.entry_point.fragment", 
             _ => {
                 return Err(CompilerError::SpirvError(
                     "Unsupported execution model".to_string(),
                 ))
             }
         };
-
-        // Note: In a real implementation, we'd add proper SPIR-V metadata here
-        // For now, we'll rely on the LLVM SPIR-V translator to handle the conversion
+        
+        // Add function attribute to mark as SPIR-V entry point
+        let attr_kind = inkwell::attributes::Attribute::get_named_enum_kind_id(exec_model_str);
+        if attr_kind > 0 {
+            let attr = self.context.create_enum_attribute(attr_kind, 0);
+            func.add_attribute(inkwell::attributes::AttributeLoc::Function, attr);
+        }
+        
+        // Also remove linkage attributes by setting internal linkage
+        func.set_linkage(Linkage::Internal);
+        
+        println!("DEBUG: Added SPIR-V entry point metadata for '{}' with execution model {:?}", name, exec_model);
 
         Ok(())
     }
@@ -1004,8 +1015,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Print LLVM IR for debugging
         self.module.print_to_stderr();
 
-        // Find the SPIR-V target
-        let target_triple = TargetTriple::create("spirv64-unknown-unknown");
+        // Find the SPIR-V target - use spirv-unknown-vulkan1.2 for graphics shaders
+        let target_triple = TargetTriple::create("spirv-unknown-vulkan1.2");
         let target = Target::from_triple(&target_triple)
             .map_err(|e| CompilerError::SpirvError(format!("Failed to create SPIR-V target: {}", e)))?;
 

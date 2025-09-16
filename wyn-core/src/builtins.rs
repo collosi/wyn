@@ -2,7 +2,7 @@ use crate::ast::{Type, TypeName};
 use crate::error::{CompilerError, Result};
 use inkwell::context::Context;
 use inkwell::memory_buffer::MemoryBuffer;
-use inkwell::module::Module;
+use inkwell::module::{Module, Linkage};
 use std::collections::HashMap;
 
 /// Manages builtin function implementations using LLVM IR templates
@@ -34,6 +34,15 @@ impl<'ctx> BuiltinManager<'ctx> {
 
         let tan_ir = Self::generate_tan_builtin();
         self.add_ir_to_module(module, &tan_ir)?;
+
+        // Set all builtin functions to private linkage to avoid SPIR-V export
+        let builtin_names = ["length", "sin", "cos", "tan"];
+        for name in &builtin_names {
+            if let Some(func) = module.get_function(name) {
+                func.set_linkage(Linkage::Private);
+                println!("DEBUG: Set {} function to private linkage", name);
+            }
+        }
 
         Ok(())
     }
