@@ -107,19 +107,30 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     fn generate_declaration_helper(&mut self, name: &str, ty: &Type, value_expr: &Expression) -> Result<()> {
-        // Generate the expression value
-        let value = self.generate_expression(value_expr)?;
-        
-        // Create a global variable with the correct type
-        let llvm_type = self.get_or_create_type(ty)?;
-        let global = self.module.add_global(llvm_type, Some(AddressSpace::default()), name);
-        global.set_initializer(&value);
-        
-        // Store in variable cache
-        self.variable_cache.insert(name.to_string(), global.as_pointer_value());
-        self.variable_types.insert(name.to_string(), ty.clone());
+        // For global variables, only allow literal constants
+        match value_expr {
+            Expression::IntLiteral(_) | Expression::FloatLiteral(_) => {
+                // Generate the constant expression value
+                let value = self.generate_expression(value_expr)?;
+                
+                // Create a global variable with the correct type
+                let llvm_type = self.get_or_create_type(ty)?;
+                let global = self.module.add_global(llvm_type, Some(AddressSpace::default()), name);
+                global.set_initializer(&value);
+                
+                // Store in variable cache
+                self.variable_cache.insert(name.to_string(), global.as_pointer_value());
+                self.variable_types.insert(name.to_string(), ty.clone());
 
-        Ok(())
+                Ok(())
+            }
+            _ => {
+                // For complex expressions, skip global variable generation
+                // In shader programming, complex calculations should be in functions
+                println!("Warning: Skipping global variable '{}' with complex initializer - use literals only for globals", name);
+                Ok(())
+            }
+        }
     }
 
     fn generate_entry_point(&mut self, decl: &Decl) -> Result<()> {
@@ -513,12 +524,37 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                 Ok(result)
             }
-            Expression::FieldAccess(_expr, field) => {
-                // TODO: Implement field access when record types are added
-                Err(CompilerError::SpirvError(format!(
-                    "Field access '{}' not yet implemented - need record types",
-                    field
-                )))
+            Expression::FieldAccess(expr, field) => {
+                let record_value = self.generate_expression(expr)?;
+                
+                // For now, assume this is a vector type and extract the component
+                // TODO: Need to determine record type and field layout for general records
+                
+                // Map field name to vector component index (for built-in vector types)
+                let component_index = match field.as_str() {
+                    "x" => 0,
+                    "y" => 1,
+                    "z" => 2,
+                    "w" => 3,
+                    _ => return Err(CompilerError::SpirvError(format!(
+                        "Field access for '{}' not yet implemented for non-vector types", field
+                    ))),
+                };
+                
+                // Use LLVM extract_element for vectors
+                if let BasicValueEnum::VectorValue(vec_val) = record_value {
+                    let index_val = self.context.i32_type().const_int(component_index, false);
+                    let extracted = self.builder
+                        .build_extract_element(vec_val, index_val, "field_extract")
+                        .unwrap();
+                    Ok(extracted)
+                } else {
+                    // For future general record types, we would use extract_value with field indices
+                    Err(CompilerError::SpirvError(format!(
+                        "Field access on non-vector record types not yet implemented. Got: {:?}", 
+                        record_value.get_type()
+                    )))
+                }
             }
         }
     }

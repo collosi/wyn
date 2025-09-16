@@ -3,10 +3,12 @@ use crate::ast::*;
 use crate::error::{CompilerError, Result};
 use crate::scope::ScopeStack;
 use polytype::{Context, TypeScheme};
+use std::collections::HashMap;
 
 pub struct TypeChecker {
     scope_stack: ScopeStack<TypeScheme<TypeName>>, // Store polymorphic types
     context: Context<TypeName>,                    // Polytype unification context
+    record_field_map: HashMap<(String, String), Type>, // Map (type_name, field_name) -> field_type
 }
 
 impl Default for TypeChecker {
@@ -30,6 +32,7 @@ impl TypeChecker {
         let mut checker = TypeChecker {
             scope_stack: ScopeStack::new(),
             context: Context::default(),
+            record_field_map: HashMap::new(),
         };
 
         // Load built-in functions from builtins.wyn file
@@ -113,7 +116,53 @@ impl TypeChecker {
                     Type::arrow(types::i32(), ivec4_type))));
         self.scope_stack.insert("ivec4".to_string(), TypeScheme::Monotype(ivec4_body));
 
+        // Register vector field mappings
+        self.register_vector_fields();
+
         Ok(())
+    }
+
+    fn register_vector_fields(&mut self) {
+        // f32 vector fields
+        // vec2 fields
+        self.record_field_map.insert(("vec2".to_string(), "x".to_string()), types::f32());
+        self.record_field_map.insert(("vec2".to_string(), "y".to_string()), types::f32());
+        
+        // vec3 fields  
+        self.record_field_map.insert(("vec3".to_string(), "x".to_string()), types::f32());
+        self.record_field_map.insert(("vec3".to_string(), "y".to_string()), types::f32());
+        self.record_field_map.insert(("vec3".to_string(), "z".to_string()), types::f32());
+        
+        // vec4 fields
+        self.record_field_map.insert(("vec4".to_string(), "x".to_string()), types::f32());
+        self.record_field_map.insert(("vec4".to_string(), "y".to_string()), types::f32());
+        self.record_field_map.insert(("vec4".to_string(), "z".to_string()), types::f32());
+        self.record_field_map.insert(("vec4".to_string(), "w".to_string()), types::f32());
+
+        // i32 vector fields
+        // ivec2 fields
+        self.record_field_map.insert(("ivec2".to_string(), "x".to_string()), types::i32());
+        self.record_field_map.insert(("ivec2".to_string(), "y".to_string()), types::i32());
+        
+        // ivec3 fields
+        self.record_field_map.insert(("ivec3".to_string(), "x".to_string()), types::i32());
+        self.record_field_map.insert(("ivec3".to_string(), "y".to_string()), types::i32());
+        self.record_field_map.insert(("ivec3".to_string(), "z".to_string()), types::i32());
+        
+        // ivec4 fields
+        self.record_field_map.insert(("ivec4".to_string(), "x".to_string()), types::i32());
+        self.record_field_map.insert(("ivec4".to_string(), "y".to_string()), types::i32());
+        self.record_field_map.insert(("ivec4".to_string(), "z".to_string()), types::i32());
+        self.record_field_map.insert(("ivec4".to_string(), "w".to_string()), types::i32());
+
+        // TODO: Add other vector types (uvec, bvec, dvec, f16vec) when we have proper types for them
+    }
+
+    /// Register a record type with its field mappings
+    pub fn register_record_type(&mut self, type_name: &str, fields: Vec<(String, Type)>) {
+        for (field_name, field_type) in fields {
+            self.record_field_map.insert((type_name.to_string(), field_name), field_type);
+        }
     }
 
     pub fn check_program(&mut self, program: &Program) -> Result<()> {
@@ -440,14 +489,29 @@ impl TypeChecker {
 
                 Ok(func_type.apply(&self.context))
             }
-            Expression::FieldAccess(_expr, field) => {
-                // TODO: Implement proper record types for vector component access
-                // Vector types like vec3 should be defined as records: {x:f32, y:f32, z:f32}
-                // See: https://futhark-lang.org/blog/2017-03-06-futhark-record-system.html
-                Err(CompilerError::TypeError(format!(
-                    "Field access '{}' not yet implemented - need to add record types",
-                    field
-                )))
+            Expression::FieldAccess(expr, field) => {
+                let expr_type = self.infer_expression(expr)?;
+                
+                // Extract the type name from the expression type
+                match expr_type {
+                    Type::Constructed(TypeName::Str(type_name), _) => {
+                        // Look up the field in our record field mapping
+                        if let Some(field_type) = self.record_field_map.get(&(type_name.to_string(), field.clone())) {
+                            Ok(field_type.clone())
+                        } else {
+                            Err(CompilerError::TypeError(format!(
+                                "Type '{}' has no field '{}'",
+                                type_name, field
+                            )))
+                        }
+                    }
+                    _ => {
+                        Err(CompilerError::TypeError(format!(
+                            "Field access '{}' not supported on type {:?}",
+                            field, expr_type
+                        )))
+                    }
+                }
             }
         }
     }

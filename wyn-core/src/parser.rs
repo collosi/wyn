@@ -305,83 +305,30 @@ impl Parser {
                 self.advance();
                 Ok(types::f32())
             }
-            // f32 vectors
-            Some(Token::Vec2Type) => {
+            // Vector types  
+            Some(Token::Identifier(name)) if name == "vec2" => {
                 self.advance();
                 Ok(types::vec2())
             }
-            Some(Token::Vec3Type) => {
+            Some(Token::Identifier(name)) if name == "vec3" => {
                 self.advance();
                 Ok(types::vec3())
             }
-            Some(Token::Vec4Type) => {
+            Some(Token::Identifier(name)) if name == "vec4" => {
                 self.advance();
                 Ok(types::vec4())
             }
-            // i32 vectors
-            Some(Token::IVec2Type) => {
+            Some(Token::Identifier(name)) if name == "ivec2" => {
                 self.advance();
                 Ok(types::ivec2())
             }
-            Some(Token::IVec3Type) => {
+            Some(Token::Identifier(name)) if name == "ivec3" => {
                 self.advance();
                 Ok(types::ivec3())
             }
-            Some(Token::IVec4Type) => {
+            Some(Token::Identifier(name)) if name == "ivec4" => {
                 self.advance();
                 Ok(types::ivec4())
-            }
-            // u32 vectors
-            Some(Token::UVec2Type) => {
-                self.advance();
-                Ok(types::uvec2())
-            }
-            Some(Token::UVec3Type) => {
-                self.advance();
-                Ok(types::uvec3())
-            }
-            Some(Token::UVec4Type) => {
-                self.advance();
-                Ok(types::uvec4())
-            }
-            // bool vectors
-            Some(Token::BVec2Type) => {
-                self.advance();
-                Ok(types::bvec2())
-            }
-            Some(Token::BVec3Type) => {
-                self.advance();
-                Ok(types::bvec3())
-            }
-            Some(Token::BVec4Type) => {
-                self.advance();
-                Ok(types::bvec4())
-            }
-            // f64 vectors
-            Some(Token::DVec2Type) => {
-                self.advance();
-                Ok(types::dvec2())
-            }
-            Some(Token::DVec3Type) => {
-                self.advance();
-                Ok(types::dvec3())
-            }
-            Some(Token::DVec4Type) => {
-                self.advance();
-                Ok(types::dvec4())
-            }
-            // f16 vectors
-            Some(Token::F16Vec2Type) => {
-                self.advance();
-                Ok(types::f16vec2())
-            }
-            Some(Token::F16Vec3Type) => {
-                self.advance();
-                Ok(types::f16vec3())
-            }
-            Some(Token::F16Vec4Type) => {
-                self.advance();
-                Ok(types::f16vec4())
             }
             Some(Token::Identifier(name)) if name.starts_with('\'') => {
                 // Type variable like 't1, 't2
@@ -1656,6 +1603,105 @@ def fragment_main(): [4]f32 = SKY_RGBA
             }
             
             Ok(())
+        });
+    }
+
+    #[test]
+    fn test_field_access_parsing() {
+        expect_parse("def x: f32 = v.x", |declarations| {
+            assert_eq!(declarations.len(), 1);
+            match &declarations[0] {
+                Declaration::Decl(decl) => {
+                    assert_eq!(decl.name, "x");
+                    match &decl.body {
+                        Expression::FieldAccess(expr, field) => {
+                            assert_eq!(field, "x");
+                            match expr.as_ref() {
+                                Expression::Identifier(name) => {
+                                    if name == "v" {
+                                        Ok(())
+                                    } else {
+                                        Err(format!("Expected identifier 'v', got '{}'", name))
+                                    }
+                                },
+                                _ => Err(format!("Expected identifier in field access, got: {:?}", expr)),
+                            }
+                        }
+                        _ => Err(format!("Expected field access expression, got: {:?}", decl.body)),
+                    }
+                }
+                _ => Err("Expected Decl declaration".to_string()),
+            }
+        });
+    }
+
+    #[test]
+    fn test_simple_identifier_parsing() {
+        expect_parse("def x: f32 = y", |declarations| {
+            assert_eq!(declarations.len(), 1);
+            match &declarations[0] {
+                Declaration::Decl(decl) => {
+                    assert_eq!(decl.name, "x");
+                    match &decl.body {
+                        Expression::Identifier(name) => {
+                            if name == "y" {
+                                Ok(())
+                            } else {
+                                Err(format!("Expected identifier 'y', got '{}'", name))
+                            }
+                        },
+                        _ => Err(format!("Expected identifier expression, got: {:?}", decl.body)),
+                    }
+                }
+                _ => Err("Expected Decl declaration".to_string()),
+            }
+        });
+    }
+
+    #[test]
+    fn test_vector_field_access_file() {
+        expect_parse("def v: vec3 = vec3 1.0f32 2.0f32 3.0f32\ndef x: f32 = v.x", |declarations| {
+            assert_eq!(declarations.len(), 2);
+            
+            // Check first declaration: def v: vec3 = vec3 1.0f32 2.0f32 3.0f32
+            match &declarations[0] {
+                Declaration::Decl(decl) => {
+                    assert_eq!(decl.name, "v");
+                    // Body should be a function call: vec3 1.0f32 2.0f32 3.0f32
+                    match &decl.body {
+                        Expression::FunctionCall(func_name, args) => {
+                            assert_eq!(func_name, "vec3");
+                            assert_eq!(args.len(), 3);
+                        }
+                        _ => return Err(format!("Expected function call for vec3 constructor, got: {:?}", decl.body)),
+                    }
+                }
+                _ => return Err("Expected first declaration to be Decl".to_string()),
+            }
+
+            // Check second declaration: def x: f32 = v.x
+            match &declarations[1] {
+                Declaration::Decl(decl) => {
+                    assert_eq!(decl.name, "x");
+                    match &decl.body {
+                        Expression::FieldAccess(expr, field) => {
+                            assert_eq!(field, "x");
+                            match expr.as_ref() {
+                                Expression::Identifier(name) => {
+                                    if name == "v" {
+                                        Ok(())
+                                    } else {
+                                        Err(format!("Expected identifier 'v', got '{}'", name))
+                                    }
+                                },
+                                _ => Err(format!("Expected identifier in field access, got: {:?}", expr)),
+                            }
+                        }
+                        _ => Err(format!("Expected field access expression, got: {:?}", decl.body)),
+                    }
+                }
+                _ => Err("Expected second declaration to be Decl".to_string()),
+            }
         });
     }
 }
