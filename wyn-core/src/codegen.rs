@@ -513,6 +513,13 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                 Ok(result)
             }
+            Expression::FieldAccess(_expr, field) => {
+                // TODO: Implement field access when record types are added
+                Err(CompilerError::SpirvError(format!(
+                    "Field access '{}' not yet implemented - need record types",
+                    field
+                )))
+            }
         }
     }
 

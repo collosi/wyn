@@ -272,6 +272,13 @@ impl Defunctionalizer {
                     body_sv,
                 ))
             }
+            Expression::FieldAccess(expr, field) => {
+                let (transformed_expr, expr_sv) = self.defunctionalize_expression(expr, scope_stack)?;
+                Ok((
+                    Expression::FieldAccess(Box::new(transformed_expr), field.clone()),
+                    expr_sv, // Field access doesn't change the static value representation
+                ))
+            }
         }
     }
 
@@ -487,6 +494,9 @@ impl Defunctionalizer {
             }
             Expression::IntLiteral(_) | Expression::FloatLiteral(_) => {
                 // No free variables in literals
+            }
+            Expression::FieldAccess(expr, _field) => {
+                self.collect_free_variables(expr, bound_vars, free_vars)?;
             }
         }
         Ok(())

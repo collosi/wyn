@@ -440,6 +440,15 @@ impl TypeChecker {
 
                 Ok(func_type.apply(&self.context))
             }
+            Expression::FieldAccess(_expr, field) => {
+                // TODO: Implement proper record types for vector component access
+                // Vector types like vec3 should be defined as records: {x:f32, y:f32, z:f32}
+                // See: https://futhark-lang.org/blog/2017-03-06-futhark-record-system.html
+                Err(CompilerError::TypeError(format!(
+                    "Field access '{}' not yet implemented - need to add record types",
+                    field
+                )))
+            }
         }
     }
 

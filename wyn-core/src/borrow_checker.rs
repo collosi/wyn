@@ -312,6 +312,14 @@ impl BorrowChecker {
             }
             // Literals don't create borrows or lifetimes
             Expression::IntLiteral(_) | Expression::FloatLiteral(_) => {}
+            Expression::FieldAccess(expr, _field) => {
+                self.extract_expression_facts(
+                    fact_writer,
+                    expr,
+                    current_block,
+                    location_counter,
+                )?;
+            }
         }
 
         Ok(())

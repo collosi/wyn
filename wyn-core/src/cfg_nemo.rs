@@ -162,6 +162,9 @@ impl<W: Write> CfgNemoExtractor<W> {
             }
             // Literals don't require further processing
             Expression::IntLiteral(_) | Expression::FloatLiteral(_) => {}
+            Expression::FieldAccess(expr, _field) => {
+                self.extract_expression_cfg(expr)?;
+            }
         }
 
         Ok(())

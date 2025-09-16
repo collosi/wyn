@@ -124,6 +124,7 @@ pub enum Expression {
     Lambda(LambdaExpr),
     Application(Box<Expression>, Vec<Expression>), // Function application
     LetIn(LetInExpr),
+    FieldAccess(Box<Expression>, String), // e.g. v.x, v.y
 }
 
 #[derive(Debug, Clone, PartialEq)]

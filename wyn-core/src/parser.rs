@@ -506,6 +506,18 @@ impl Parser {
                     self.expect(Token::RightBracket)?;
                     expr = Expression::ArrayIndex(Box::new(expr), Box::new(index));
                 }
+                Some(Token::Dot) => {
+                    // Field access (e.g., v.x, v.y, v.z, v.w)
+                    self.advance();
+                    if let Some(Token::Identifier(field_name)) = self.peek().cloned() {
+                        self.advance();
+                        expr = Expression::FieldAccess(Box::new(expr), field_name);
+                    } else {
+                        return Err(CompilerError::ParseError(
+                            "Expected field name after '.'".to_string(),
+                        ));
+                    }
+                }
                 Some(Token::LeftParen) => {
                     // Function application with parentheses: f(arg1, arg2)
                     self.advance();

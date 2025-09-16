@@ -227,6 +227,9 @@ impl CodeAnnotator {
                 self.annotate_expression(&let_in.body);
                 self.advance_index();
             }
+            Expression::FieldAccess(expr, _field) => {
+                self.annotate_expression(expr);
+            }
         }
     }
 
