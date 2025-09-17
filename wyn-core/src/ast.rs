@@ -150,12 +150,9 @@ pub struct LetInExpr {
     pub body: Box<Expression>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum BinaryOp {
-    Divide,
-    Add,
-    Subtract,
-    Multiply,
+#[derive(Debug, Clone, PartialEq)]
+pub struct BinaryOp {
+    pub op: String,
 }
 
 // Helper module for creating common polytype Types

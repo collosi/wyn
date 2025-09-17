@@ -217,7 +217,7 @@ impl Defunctionalizer {
 
                 Ok((
                     Expression::BinaryOp(
-                        *op,
+                        op.clone(),
                         Box::new(transformed_left),
                         Box::new(transformed_right),
                     ),

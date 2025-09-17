@@ -132,13 +132,8 @@ impl CodeAnnotator {
                 write!(self.output, "#B{}.{} (", loc.block.0, loc.index).unwrap();
                 self.annotate_expression(left);
 
-                let op_str = match op {
-                    BinaryOp::Add => " + ",
-                    BinaryOp::Divide => " / ",
-                    BinaryOp::Subtract => " - ",
-                    BinaryOp::Multiply => " * ",
-                };
-                self.output.push_str(op_str);
+                let op_str = format!(" {} ", op.op);
+                self.output.push_str(&op_str);
 
                 self.annotate_expression(right);
                 self.output.push(')');

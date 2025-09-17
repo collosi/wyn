@@ -27,10 +27,7 @@ pub enum Token {
 
     // Operators
     Assign,
-    Divide,
-    Add,
-    Subtract,
-    Multiply,
+    BinOp(String), // Binary operators: +, -, *, /
     Arrow,
     Backslash, // \ for lambda expressions
     Dot,       // . for field access
@@ -130,10 +127,10 @@ fn parse_operator(input: &str) -> IResult<&str, Token> {
     alt((
         value(Token::Arrow, tag("->")),
         value(Token::Assign, tag("=")),
-        value(Token::Divide, tag("/")),
-        value(Token::Add, char('+')),
-        value(Token::Subtract, char('-')),
-        value(Token::Multiply, char('*')),
+        map(tag("/"), |s: &str| Token::BinOp(s.to_string())),
+        map(char('+'), |c| Token::BinOp(c.to_string())),
+        map(char('-'), |c| Token::BinOp(c.to_string())),
+        map(char('*'), |c| Token::BinOp(c.to_string())),
         value(Token::Backslash, char('\\')),
         value(Token::Dot, char('.')),
     ))(input)
@@ -282,8 +279,28 @@ mod tests {
             tokens,
             vec![
                 Token::FloatLiteral(135.0),
-                Token::Divide,
+                Token::BinOp("/".to_string()),
                 Token::FloatLiteral(255.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_tokenize_binary_operators() {
+        let input = "a + b - c * d / e";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("a".to_string()),
+                Token::BinOp("+".to_string()),
+                Token::Identifier("b".to_string()),
+                Token::BinOp("-".to_string()),
+                Token::Identifier("c".to_string()),
+                Token::BinOp("*".to_string()),
+                Token::Identifier("d".to_string()),
+                Token::BinOp("/".to_string()),
+                Token::Identifier("e".to_string()),
             ]
         );
     }

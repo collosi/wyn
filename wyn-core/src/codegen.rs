@@ -5,7 +5,7 @@ use crate::error::{CompilerError, Result};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::targets::{InitializationConfig, Target, TargetTriple, TargetMachine, RelocMode, CodeModel, FileType};
+use inkwell::targets::{InitializationConfig, Target, TargetTriple, RelocMode, CodeModel, FileType};
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue, GlobalValue};
 use inkwell::module::Linkage;
@@ -436,8 +436,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let left_val = self.generate_expression(left)?;
                 let right_val = self.generate_expression(right)?;
 
-                match op {
-                    BinaryOp::Divide => {
+                // Use unified operator string instead of enum variants
+                match op.op.as_str() {
+                    "/" => {
                         // Assuming float division
                         let result = self
                             .builder
@@ -454,7 +455,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                             })?;
                         Ok(result.into())
                     }
-                    BinaryOp::Add => {
+                    "+" => {
                         // Check the type of the operands to determine whether to use int or float addition
                         match (left_val, right_val) {
                             (BasicValueEnum::IntValue(left_int), BasicValueEnum::IntValue(right_int)) => {
@@ -482,7 +483,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                             }
                         }
                     }
-                    BinaryOp::Subtract => {
+                    "-" => {
                         // Check the type of the operands to determine whether to use int or float subtraction
                         match (left_val, right_val) {
                             (BasicValueEnum::IntValue(left_int), BasicValueEnum::IntValue(right_int)) => {
@@ -510,7 +511,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                             }
                         }
                     }
-                    BinaryOp::Multiply => {
+                    "*" => {
                         // Check the type of the operands to determine whether to use int or float multiplication
                         match (left_val, right_val) {
                             (BasicValueEnum::IntValue(left_int), BasicValueEnum::IntValue(right_int)) => {
@@ -537,6 +538,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                                 ))
                             }
                         }
+                    }
+                    _ => {
+                        Err(CompilerError::SpirvError(format!(
+                            "Unknown binary operator: {}", op.op
+                        )))
                     }
                 }
             }

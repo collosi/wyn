@@ -27,11 +27,14 @@ impl TypeChecker {
             )));
         }
 
-        let op_prefix = match op {
-            BinaryOp::Add => "op_add",
-            BinaryOp::Subtract => "op_subtract", 
-            BinaryOp::Multiply => "op_multiply",
-            BinaryOp::Divide => "op_divide",
+        let op_prefix = match op.op.as_str() {
+            "+" => "op_add",
+            "-" => "op_subtract", 
+            "*" => "op_multiply",
+            "/" => "op_divide",
+            _ => return Err(CompilerError::TypeError(format!(
+                "Unknown binary operator: {}", op.op
+            ))),
         };
 
         let type_suffix = self.get_type_suffix(left_type)?;

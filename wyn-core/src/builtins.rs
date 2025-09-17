@@ -5,43 +5,62 @@ use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Module, Linkage};
 use std::collections::HashMap;
 
-/// Manages builtin function implementations using LLVM IR templates
+/// Types of builtin implementations
+#[derive(Debug, Clone, PartialEq)]
+pub enum BuiltinType {
+    /// LLVM IR template that gets loaded into module
+    LlvmIrTemplate(String),
+    /// Binary operation intrinsic with base name (e.g., "fadd", "mul")
+    /// Type info is used to generate full intrinsic name
+    BinOpIntrinsic(String),
+}
+
+/// Manages builtin function implementations using different strategies
 pub struct BuiltinManager<'ctx> {
     context: &'ctx Context,
     specialized_functions: HashMap<String, String>, // Maps function signature to specialized IR
+    builtin_registry: HashMap<String, BuiltinType>, // Maps builtin name to implementation type
 }
 
 impl<'ctx> BuiltinManager<'ctx> {
     pub fn new(context: &'ctx Context) -> Self {
+        let mut registry = HashMap::new();
+        
+        // Register builtin functions with their implementation types
+        
+        // LLVM IR template builtins
+        registry.insert("length".to_string(), BuiltinType::LlvmIrTemplate(Self::generate_length_builtin()));
+        registry.insert("sin".to_string(), BuiltinType::LlvmIrTemplate(Self::generate_sin_builtin()));
+        registry.insert("cos".to_string(), BuiltinType::LlvmIrTemplate(Self::generate_cos_builtin()));
+        registry.insert("tan".to_string(), BuiltinType::LlvmIrTemplate(Self::generate_tan_builtin()));
+        
+        // Binary operation intrinsics
+        registry.insert("+".to_string(), BuiltinType::BinOpIntrinsic("fadd".to_string()));
+        registry.insert("-".to_string(), BuiltinType::BinOpIntrinsic("fsub".to_string()));
+        registry.insert("*".to_string(), BuiltinType::BinOpIntrinsic("fmul".to_string()));
+        registry.insert("/".to_string(), BuiltinType::BinOpIntrinsic("fdiv".to_string()));
+        
         Self {
             context,
             specialized_functions: HashMap::new(),
+            builtin_registry: registry,
         }
     }
 
     /// Load builtin functions into a module
     pub fn load_builtins_into_module(&mut self, module: &Module<'ctx>) -> Result<()> {
-        // Load basic length function (works for all array types)
-        let length_ir = Self::generate_length_builtin();
-        self.add_ir_to_module(module, &length_ir)?;
-
-        // Load trigonometric functions
-        let sin_ir = Self::generate_sin_builtin();
-        self.add_ir_to_module(module, &sin_ir)?;
-
-        let cos_ir = Self::generate_cos_builtin();
-        self.add_ir_to_module(module, &cos_ir)?;
-
-        let tan_ir = Self::generate_tan_builtin();
-        self.add_ir_to_module(module, &tan_ir)?;
-
-        // Set all builtin functions to private linkage to avoid SPIR-V export
-        let builtin_names = ["length", "sin", "cos", "tan"];
-        for name in &builtin_names {
-            if let Some(func) = module.get_function(name) {
-                func.set_linkage(Linkage::Private);
-                println!("DEBUG: Set {} function to private linkage", name);
+        // Load all LLVM IR template builtins
+        for (name, builtin_type) in &self.builtin_registry.clone() {
+            if let BuiltinType::LlvmIrTemplate(ir) = builtin_type {
+                self.add_ir_to_module(module, ir)?;
+                
+                // Set to private linkage to avoid SPIR-V export
+                if let Some(func) = module.get_function(name) {
+                    func.set_linkage(Linkage::Private);
+                    println!("DEBUG: Set {} function to private linkage", name);
+                }
             }
+            // BinOpIntrinsic functions are generated on-demand during codegen
         }
 
         Ok(())
@@ -256,7 +275,28 @@ loop_exit:
 
     /// Check if a function name represents a builtin
     pub fn is_builtin(&self, name: &str) -> bool {
-        matches!(name, "length" | "map" | "sin" | "cos" | "tan") || name.starts_with("map_")
+        self.builtin_registry.contains_key(name) || matches!(name, "map") || name.starts_with("map_")
+    }
+    
+    /// Get the builtin type for a given name
+    pub fn get_builtin_type(&self, name: &str) -> Option<&BuiltinType> {
+        self.builtin_registry.get(name)
+    }
+    
+    /// Generate LLVM intrinsic name with type information
+    pub fn generate_intrinsic_name(&self, base_name: &str, operand_type: &Type) -> Result<String> {
+        let type_suffix = match operand_type {
+            Type::Constructed(TypeName::Str("int"), _) => "i32",
+            Type::Constructed(TypeName::Str("float"), _) => "f32",
+            Type::Constructed(TypeName::Str("vec2"), _) => "v2f32", 
+            Type::Constructed(TypeName::Str("vec3"), _) => "v3f32",
+            Type::Constructed(TypeName::Str("vec4"), _) => "v4f32",
+            _ => return Err(CompilerError::TypeError(format!(
+                "Unsupported type for intrinsic {}: {:?}", base_name, operand_type
+            ))),
+        };
+        
+        Ok(format!("llvm.{}.{}", base_name, type_suffix))
     }
 
     /// Generate a call to a builtin function

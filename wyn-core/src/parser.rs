@@ -458,16 +458,13 @@ impl Parser {
         let mut left = self.parse_application_expression()?;
 
         while let Some(token) = self.peek() {
-            let op = match token {
-                Token::Divide => BinaryOp::Divide,
-                Token::Add => BinaryOp::Add,
-                Token::Subtract => BinaryOp::Subtract,
-                Token::Multiply => BinaryOp::Multiply,
+            let op_string = match token {
+                Token::BinOp(op) => op.clone(),
                 _ => break,
             };
             self.advance();
             let right = self.parse_postfix_expression()?;
-            left = Expression::BinaryOp(op, Box::new(left), Box::new(right));
+            left = Expression::BinaryOp(BinaryOp { op: op_string }, Box::new(left), Box::new(right));
         }
 
         Ok(left)
@@ -482,7 +479,7 @@ impl Parser {
         // Stop at operators, commas, closing delimiters, etc.
         while self.peek().is_some() && self.can_start_primary_expression() {
             // Don't consume binary operators
-            if matches!(self.peek(), Some(Token::Add) | Some(Token::Divide)) {
+            if matches!(self.peek(), Some(Token::BinOp(_))) {
                 break;
             }
             // Don't consume expression terminators
@@ -1030,7 +1027,7 @@ mod tests {
             }
             match &declarations[0] {
                 Declaration::Decl(decl) => match &decl.body {
-                    Expression::BinaryOp(BinaryOp::Divide, left, right) => {
+                    Expression::BinaryOp(op, left, right) if op.op == "/" => {
                         if **left != Expression::FloatLiteral(135.0) {
                             return Err(format!("Expected left operand 135.0, got {:?}", **left));
                         }
@@ -1104,6 +1101,77 @@ mod tests {
                 }
             },
         );
+    }
+
+    #[test]
+    fn test_operator_precedence_and_associativity() {
+        // Test expression: a + b * c - d / e + f
+        // According to spec, * and / have higher precedence than + and -
+        // All are left-associative
+        // Should parse as: ((a + (b * c)) - (d / e)) + f
+        expect_parse("def result: i32 = a + b * c - d / e + f", |declarations| {
+            if declarations.len() != 1 {
+                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+            }
+            match &declarations[0] {
+                Declaration::Decl(decl) => {
+                    // The outermost operation should be the last + (left-associative)
+                    match &decl.body {
+                        Expression::BinaryOp(outer_op, outer_left, outer_right) if outer_op.op == "+" => {
+                            // Right side should be 'f'
+                            if !matches!(**outer_right, Expression::Identifier(ref name) if name == "f") {
+                                return Err(format!("Expected right side to be 'f', got {:?}", outer_right));
+                            }
+                            
+                            // Left side should be (a + (b * c)) - (d / e)
+                            match &**outer_left {
+                                Expression::BinaryOp(sub_op, sub_left, sub_right) if sub_op.op == "-" => {
+                                    // Right side of subtraction should be (d / e)
+                                    match &**sub_right {
+                                        Expression::BinaryOp(div_op, div_left, div_right) if div_op.op == "/" => {
+                                            if !matches!(**div_left, Expression::Identifier(ref name) if name == "d") {
+                                                return Err(format!("Expected 'd' in division left, got {:?}", div_left));
+                                            }
+                                            if !matches!(**div_right, Expression::Identifier(ref name) if name == "e") {
+                                                return Err(format!("Expected 'e' in division right, got {:?}", div_right));
+                                            }
+                                        }
+                                        _ => return Err(format!("Expected division on right of subtraction, got {:?}", sub_right))
+                                    }
+                                    
+                                    // Left side of subtraction should be a + (b * c)
+                                    match &**sub_left {
+                                        Expression::BinaryOp(add_op, add_left, add_right) if add_op.op == "+" => {
+                                            if !matches!(**add_left, Expression::Identifier(ref name) if name == "a") {
+                                                return Err(format!("Expected 'a' on left of first addition, got {:?}", add_left));
+                                            }
+                                            
+                                            // Right side should be (b * c)
+                                            match &**add_right {
+                                                Expression::BinaryOp(mul_op, mul_left, mul_right) if mul_op.op == "*" => {
+                                                    if !matches!(**mul_left, Expression::Identifier(ref name) if name == "b") {
+                                                        return Err(format!("Expected 'b' in multiplication left, got {:?}", mul_left));
+                                                    }
+                                                    if !matches!(**mul_right, Expression::Identifier(ref name) if name == "c") {
+                                                        return Err(format!("Expected 'c' in multiplication right, got {:?}", mul_right));
+                                                    }
+                                                    Ok(())
+                                                }
+                                                _ => Err(format!("Expected multiplication on right of first addition, got {:?}", add_right))
+                                            }
+                                        }
+                                        _ => Err(format!("Expected addition on left of subtraction, got {:?}", sub_left))
+                                    }
+                                }
+                                _ => Err(format!("Expected subtraction on left of final addition, got {:?}", outer_left))
+                            }
+                        }
+                        _ => Err(format!("Expected outermost operation to be addition, got {:?}", decl.body))
+                    }
+                }
+                _ => Err("Expected Decl declaration".to_string())
+            }
+        });
     }
 
     #[test]
