@@ -35,10 +35,10 @@ impl<'ctx> BuiltinManager<'ctx> {
         registry.insert("tan".to_string(), BuiltinType::LlvmIrTemplate(Self::generate_tan_builtin()));
         
         // Binary operation intrinsics
-        registry.insert("+".to_string(), BuiltinType::BinOpIntrinsic("fadd".to_string()));
-        registry.insert("-".to_string(), BuiltinType::BinOpIntrinsic("fsub".to_string()));
-        registry.insert("*".to_string(), BuiltinType::BinOpIntrinsic("fmul".to_string()));
-        registry.insert("/".to_string(), BuiltinType::BinOpIntrinsic("fdiv".to_string()));
+        registry.insert("+".to_string(), BuiltinType::BinOpIntrinsic("add".to_string()));
+        registry.insert("-".to_string(), BuiltinType::BinOpIntrinsic("sub".to_string()));
+        registry.insert("*".to_string(), BuiltinType::BinOpIntrinsic("mul".to_string()));
+        registry.insert("/".to_string(), BuiltinType::BinOpIntrinsic("div".to_string()));
         
         Self {
             context,
