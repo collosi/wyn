@@ -455,16 +455,58 @@ impl Parser {
     }
 
     fn parse_binary_expression(&mut self) -> Result<Expression> {
+        self.parse_binary_expression_with_precedence(0)
+    }
+
+    fn get_operator_precedence(op: &str) -> Option<(i32, bool)> {
+        // Returns (precedence, is_left_associative)
+        // Higher precedence binds tighter
+        match op {
+            "*" | "/" => Some((2, true)),  // Multiplication and division
+            "+" | "-" => Some((1, true)),  // Addition and subtraction
+            _ => None,
+        }
+    }
+
+    fn parse_binary_expression_with_precedence(&mut self, min_precedence: i32) -> Result<Expression> {
         let mut left = self.parse_application_expression()?;
 
-        while let Some(token) = self.peek() {
-            let op_string = match token {
-                Token::BinOp(op) => op.clone(),
+        loop {
+            // Check if we have a binary operator
+            let op_string = match self.peek() {
+                Some(Token::BinOp(op)) => op.clone(),
                 _ => break,
             };
+
+            // Get operator precedence
+            let (precedence, is_left_assoc) = match Self::get_operator_precedence(&op_string) {
+                Some(p) => p,
+                None => break,
+            };
+
+            // Check if this operator has high enough precedence to be parsed here
+            if precedence < min_precedence {
+                break;
+            }
+
+            // Consume the operator
             self.advance();
-            let right = self.parse_postfix_expression()?;
-            left = Expression::BinaryOp(BinaryOp { op: op_string }, Box::new(left), Box::new(right));
+
+            // Parse right side with appropriate precedence
+            let next_min_precedence = if is_left_assoc {
+                precedence + 1  // For left-associative, parse with higher precedence
+            } else {
+                precedence      // For right-associative, parse with same precedence
+            };
+
+            let right = self.parse_binary_expression_with_precedence(next_min_precedence)?;
+
+            // Build the binary operation
+            left = Expression::BinaryOp(
+                BinaryOp { op: op_string },
+                Box::new(left),
+                Box::new(right),
+            );
         }
 
         Ok(left)
@@ -1475,6 +1517,69 @@ mod tests {
                 _ => Err("Expected Let declaration".to_string()),
             }
         });
+    }
+
+    #[test]
+    fn test_operator_precedence_equivalence() {
+        // Helper to parse just the expression from a declaration
+        fn parse_expr(input: &str) -> Expression {
+            let full_input = format!("def result: i32 = {}", input);
+            let tokens = tokenize(&full_input).expect("Failed to tokenize");
+            let mut parser = Parser::new(tokens);
+            let program = parser.parse().expect("Failed to parse");
+            match &program.declarations[0] {
+                Declaration::Decl(decl) => decl.body.clone(),
+                _ => panic!("Expected Decl declaration"),
+            }
+        }
+
+        // Test cases: (expression, expected_equivalent_with_parens)
+        let equivalent_cases = vec![
+            // Precedence tests
+            ("a + b * c", "a + (b * c)"),
+            ("a * b + c", "(a * b) + c"),
+            ("a + b / c", "a + (b / c)"),
+            ("a / b + c", "(a / b) + c"),
+            
+            // Left associativity tests
+            ("a - b + c", "(a - b) + c"),
+            ("a + b - c", "(a + b) - c"),
+            ("a * b / c", "(a * b) / c"),
+            ("a / b * c", "(a / b) * c"),
+            
+            // Complex expression
+            ("a + b * c - d / e + f", "((a + (b * c)) - (d / e)) + f"),
+        ];
+
+        for (expr, expected) in equivalent_cases {
+            let parsed_expr = parse_expr(expr);
+            let parsed_expected = parse_expr(expected);
+            assert_eq!(
+                parsed_expr, 
+                parsed_expected, 
+                "{} should parse the same as {}", 
+                expr, 
+                expected
+            );
+        }
+
+        // Test cases that should NOT be equivalent
+        let non_equivalent_cases = vec![
+            ("a + b * c", "(a + b) * c"),
+            ("a * b + c * d", "a * (b + c) * d"),
+        ];
+
+        for (expr1, expr2) in non_equivalent_cases {
+            let parsed_expr1 = parse_expr(expr1);
+            let parsed_expr2 = parse_expr(expr2);
+            assert_ne!(
+                parsed_expr1,
+                parsed_expr2,
+                "{} should NOT parse the same as {}",
+                expr1,
+                expr2
+            );
+        }
     }
 
     #[test]
