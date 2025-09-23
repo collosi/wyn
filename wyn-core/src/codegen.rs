@@ -2,6 +2,7 @@ use crate::ast::TypeName;
 use crate::ast::*;
 use crate::builtins::BuiltinManager;
 use crate::error::{CompilerError, Result};
+use crate::spirv_postprocess::SpirvPostProcessor;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
@@ -547,8 +548,51 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             Expression::FunctionCall(func_name, args) => {
+                // Handle length as a compiler intrinsic
+                if func_name == "length" {
+                    if args.len() != 1 {
+                        return Err(CompilerError::SpirvError(
+                            "length requires exactly one argument".to_string(),
+                        ));
+                    }
+                    
+                    // For arrays, return the compile-time known size
+                    // This avoids complex pointer manipulations that break SPIR-V
+                    let array_expr = &args[0];
+                    
+                    // If it's an array identifier, get its type and return the size
+                    if let Expression::Identifier(array_name) = array_expr {
+                        let array_type = self.variable_types.get(array_name)
+                            .ok_or_else(|| CompilerError::UndefinedVariable(array_name.clone()))?;
+                        
+                        match array_type {
+                            Type::Constructed(TypeName::Array("array", size), _) => {
+                                let i32_type = self.context.i32_type();
+                                Ok(i32_type.const_int(*size as u64, false).into())
+                            }
+                            Type::Constructed(TypeName::Str("array"), _) => {
+                                // Default size for unsized arrays
+                                let i32_type = self.context.i32_type();
+                                Ok(i32_type.const_int(1, false).into())
+                            }
+                            _ => Err(CompilerError::SpirvError(
+                                "length can only be applied to arrays".to_string()
+                            ))
+                        }
+                    } else {
+                        // For array literals, count the elements
+                        if let Expression::ArrayLiteral(elements) = array_expr {
+                            let i32_type = self.context.i32_type();
+                            Ok(i32_type.const_int(elements.len() as u64, false).into())
+                        } else {
+                            Err(CompilerError::SpirvError(
+                                "length can only be applied to array variables or literals".to_string()
+                            ))
+                        }
+                    }
+                }
                 // Check if it's a builtin function
-                if self.builtin_manager.is_builtin(func_name) {
+                else if self.builtin_manager.is_builtin(func_name) {
                     // Generate arguments first
                     let mut arg_values = Vec::new();
                     for arg in args {
@@ -1058,6 +1102,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         
         println!("DEBUG: Generated {} bytes of SPIR-V ({} words)", bytes.len(), words.len());
         
-        Ok(words)
+        // Post-process SPIR-V to fix compatibility issues
+        let processed_words = SpirvPostProcessor::process(words)?;
+        println!("DEBUG: Post-processed SPIR-V ({} words)", processed_words.len());
+        
+        Ok(processed_words)
     }
 }

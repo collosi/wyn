@@ -29,7 +29,7 @@ impl<'ctx> BuiltinManager<'ctx> {
         // Register builtin functions with their implementation types
         
         // LLVM IR template builtins
-        registry.insert("length".to_string(), BuiltinType::LlvmIrTemplate(Self::generate_length_builtin()));
+        // Note: length builtin removed due to SPIR-V compatibility issues with complex pointer types
         registry.insert("sin".to_string(), BuiltinType::LlvmIrTemplate(Self::generate_sin_builtin()));
         registry.insert("cos".to_string(), BuiltinType::LlvmIrTemplate(Self::generate_cos_builtin()));
         registry.insert("tan".to_string(), BuiltinType::LlvmIrTemplate(Self::generate_tan_builtin()));
@@ -258,7 +258,6 @@ loop_exit:
         element_type: Option<&Type>,
     ) -> Result<String> {
         match builtin {
-            "length" => Ok("length".to_string()),
             "map" => {
                 let element_type = element_type.ok_or_else(|| {
                     CompilerError::TypeError("map builtin requires element type".to_string())
@@ -310,42 +309,6 @@ loop_exit:
         use inkwell::AddressSpace;
 
         match func_name {
-            "length" => {
-                if args.len() != 1 {
-                    return Err(CompilerError::SpirvError(
-                        "length builtin requires exactly one argument".to_string(),
-                    ));
-                }
-
-                // Get the length function
-                let length_fn = module.get_function("length").ok_or_else(|| {
-                    CompilerError::SpirvError("length builtin function not found".to_string())
-                })?;
-
-                // Convert array to i8* for the builtin call
-                let array_val = args[0];
-                let array_ptr = array_val.into_pointer_value();
-                let i8_ptr_type = self.context.ptr_type(AddressSpace::default());
-                let array_as_i8_ptr = builder
-                    .build_bit_cast(array_ptr, i8_ptr_type, "array_as_i8_ptr")
-                    .map_err(|e| {
-                        CompilerError::SpirvError(format!(
-                            "Failed to cast array for length call: {}",
-                            e
-                        ))
-                    })?;
-
-                // Call the length function
-                let call_result = builder
-                    .build_call(length_fn, &[array_as_i8_ptr.into()], "length_result")
-                    .map_err(|e| {
-                        CompilerError::SpirvError(format!("Failed to call length builtin: {}", e))
-                    })?;
-
-                Ok(call_result.try_as_basic_value().left().ok_or_else(|| {
-                    CompilerError::SpirvError("length call returned void".to_string())
-                })?)
-            }
             "map" => {
                 if args.len() != 2 {
                     return Err(CompilerError::SpirvError(
@@ -444,12 +407,6 @@ loop_exit:
         element_type: Option<&Type>,
     ) -> Result<(Vec<Type>, Type)> {
         match name {
-            "length" => {
-                // length: [a] -> int
-                let array_type = Type::Constructed(TypeName::Str("array"), vec![Type::Variable(0)]);
-                let int_type = Type::Constructed(TypeName::Str("int"), vec![]);
-                Ok((vec![array_type], int_type))
-            }
             "map" => {
                 // map: (a -> b) -> [a] -> [b]
                 let element_type = element_type.ok_or_else(|| {
@@ -482,7 +439,6 @@ mod tests {
         let context = Context::create();
         let manager = BuiltinManager::new(&context);
 
-        assert!(manager.is_builtin("length"));
         assert!(manager.is_builtin("map"));
         assert!(manager.is_builtin("sin"));
         assert!(manager.is_builtin("cos"));

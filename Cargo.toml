@@ -15,4 +15,4 @@ clap = { version = "4.5", features = ["derive"] }
 nom = "7.1"
 polytype = "7.0"
 spirv = "0.3"
-inkwell = { version = "0.5.0", features = ["llvm18-0"] }
+inkwell = { git = "https://github.com/TheDan64/inkwell", rev = "50c16a644c6f5d5b41c27cc1620d63097cad43dd", features = ["llvm20-1"] }
