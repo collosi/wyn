@@ -12,6 +12,7 @@ pub mod lexer;
 pub mod nemo_facts;
 pub mod parser;
 pub mod scope;
+pub mod spirv_postprocess;
 pub mod type_checker;
 
 #[cfg(test)]
@@ -53,6 +54,9 @@ impl Compiler {
         // Generate SPIR-V using LLVM/Inkwell
         let context = Context::create();
         let codegen = codegen::CodeGenerator::new(&context, "wyn_module");
-        codegen.generate(&defunctionalized_program)
+        let raw_spirv = codegen.generate(&defunctionalized_program)?;
+        
+        // Post-process SPIR-V to fix compatibility issues
+        spirv_postprocess::SpirvPostProcessor::process(raw_spirv)
     }
 }
