@@ -2,47 +2,67 @@ use crate::ast::TypeName;
 use crate::ast::*;
 use crate::builtins::BuiltinManager;
 use crate::error::{CompilerError, Result};
-use crate::spirv_postprocess::SpirvPostProcessor;
-use inkwell::builder::Builder;
-use inkwell::context::Context;
-use inkwell::module::Module;
-use inkwell::targets::{InitializationConfig, Target, TargetTriple, RelocMode, CodeModel, FileType};
-use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
-use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue, GlobalValue};
-use inkwell::module::Linkage;
-use inkwell::AddressSpace;
+use rspirv::dr::{Builder, Module as SpirvModule, Operand};
+use rspirv::spirv::{self, StorageClass, Decoration, Capability, AddressingModel, MemoryModel};
+use rspirv::binary::Assemble;
 use std::collections::HashMap;
 
-pub struct CodeGenerator<'ctx> {
-    context: &'ctx Context,
-    module: Module<'ctx>,
-    builder: Builder<'ctx>,
-    builtin_manager: BuiltinManager<'ctx>,
-    variable_cache: HashMap<String, PointerValue<'ctx>>,
-    variable_types: HashMap<String, Type>,
-    function_cache: HashMap<String, FunctionValue<'ctx>>,
-    type_cache: HashMap<Type, BasicTypeEnum<'ctx>>,
-    current_function: Option<FunctionValue<'ctx>>,
-    entry_points: Vec<(String, spirv::ExecutionModel)>,
-    uniform_globals: HashMap<String, GlobalValue<'ctx>>,
-    output_globals: HashMap<String, (GlobalValue<'ctx>, u32)>, // (global, location)
+/// Value represents a SPIR-V value with its type and ID
+#[derive(Debug, Clone, Copy)]
+pub struct Value {
+    pub id: spirv::Word,
+    pub type_id: spirv::Word,
 }
 
-impl<'ctx> CodeGenerator<'ctx> {
-    pub fn new(context: &'ctx Context, module_name: &str) -> Self {
-        let module = context.create_module(module_name);
-        let builder = context.create_builder();
+/// Type information for SPIR-V code generation
+#[derive(Debug, Clone)]
+pub struct TypeInfo {
+    pub id: spirv::Word,
+    pub size_bytes: u32,
+}
 
-        // Set up SPIR-V target triple for Vulkan graphics
-        module.set_triple(&TargetTriple::create("spirv-unknown-vulkan1.2"));
+pub struct CodeGenerator {
+    builder: Builder,
+    module: SpirvModule,
+    builtin_manager: BuiltinManager,
+    variable_cache: HashMap<String, Value>,
+    variable_types: HashMap<String, Type>,
+    function_cache: HashMap<String, spirv::Word>,
+    type_cache: HashMap<Type, TypeInfo>,
+    current_function: Option<spirv::Word>,
+    entry_points: Vec<(String, spirv::ExecutionModel)>,
+    uniform_globals: HashMap<String, Value>,
+    output_globals: HashMap<String, (Value, u32, spirv::Word)>, // (value, location, component_type)
+    
+    // Type IDs for common types
+    void_type: spirv::Word,
+    bool_type: spirv::Word,
+    i32_type: spirv::Word,
+    f32_type: spirv::Word,
+    ptr_input_f32_type: spirv::Word,
+    ptr_output_f32_type: spirv::Word,
+    ptr_uniform_f32_type: spirv::Word,
+    ptr_function_f32_type: spirv::Word,
+    ptr_function_i32_type: spirv::Word,
+}
 
-        let builtin_manager = BuiltinManager::new(context);
-
-        CodeGenerator {
-            context,
-            module,
+impl CodeGenerator {
+    pub fn new(_module_name: &str) -> Self {
+        let mut builder = Builder::new();
+        
+        // Set up SPIR-V header
+        builder.set_version(1, 0);
+        
+        // Add capabilities
+        builder.capability(Capability::Shader);
+        
+        // Add memory model
+        builder.memory_model(AddressingModel::Logical, MemoryModel::GLSL450);
+        
+        let mut generator = CodeGenerator {
+            module: SpirvModule::new(),
             builder,
-            builtin_manager,
+            builtin_manager: BuiltinManager::new(),
             variable_cache: HashMap::new(),
             variable_types: HashMap::new(),
             function_cache: HashMap::new(),
@@ -51,13 +71,41 @@ impl<'ctx> CodeGenerator<'ctx> {
             entry_points: Vec::new(),
             uniform_globals: HashMap::new(),
             output_globals: HashMap::new(),
-        }
+            
+            // Will be initialized in setup_common_types
+            void_type: 0,
+            bool_type: 0,
+            i32_type: 0,
+            f32_type: 0,
+            ptr_input_f32_type: 0,
+            ptr_output_f32_type: 0,
+            ptr_uniform_f32_type: 0,
+            ptr_function_f32_type: 0,
+            ptr_function_i32_type: 0,
+        };
+        
+        generator.setup_common_types();
+        generator
+    }
+
+    fn setup_common_types(&mut self) {
+        // Create common SPIR-V types
+        self.void_type = self.builder.type_void();
+        self.bool_type = self.builder.type_bool();
+        self.i32_type = self.builder.type_int(32, 1);
+        self.f32_type = self.builder.type_float(32);
+        
+        // Create pointer types for different storage classes
+        self.ptr_input_f32_type = self.builder.type_pointer(None, StorageClass::Input, self.f32_type);
+        self.ptr_output_f32_type = self.builder.type_pointer(None, StorageClass::Output, self.f32_type);
+        self.ptr_uniform_f32_type = self.builder.type_pointer(None, StorageClass::Uniform, self.f32_type);
+        self.ptr_function_f32_type = self.builder.type_pointer(None, StorageClass::Function, self.f32_type);
+        self.ptr_function_i32_type = self.builder.type_pointer(None, StorageClass::Function, self.i32_type);
     }
 
     pub fn generate(mut self, program: &Program) -> Result<Vec<u32>> {
         // Load builtin functions into the module
-        self.builtin_manager
-            .load_builtins_into_module(&self.module)?;
+        self.builtin_manager.load_builtins_into_module(&mut self.builder)?;
 
         // Process all declarations
         for decl in &program.declarations {
@@ -75,15 +123,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Add SPIR-V decorations for uniforms and outputs
         self.add_spirv_decorations()?;
 
-        // Verify the module
-        if let Err(e) = self.module.verify() {
-            return Err(CompilerError::SpirvError(format!(
-                "LLVM module verification failed: {}",
-                e
-            )));
-        }
-
-        // Convert LLVM IR to SPIR-V
+        // Build the module and return SPIR-V words
         self.emit_spirv()
     }
 
@@ -129,19 +169,22 @@ impl<'ctx> CodeGenerator<'ctx> {
             CompilerError::SpirvError("Uniform declaration must have explicit type".to_string())
         })?;
 
-        // Create a global variable for the uniform (no initializer needed)
-        let llvm_type = self.get_or_create_type(ty)?;
-        let global = self.module.add_global(llvm_type, Some(AddressSpace::default()), &decl.name);
+        // Create a global variable for the uniform
+        let type_info = self.get_or_create_type(ty)?;
+        let ptr_type = self.builder.type_pointer(None, StorageClass::Uniform, type_info.id);
+        let global_id = self.builder.variable(ptr_type, None, StorageClass::Uniform, None);
         
-        // Uniforms are externally provided, so no initializer
-        // The global will be linked at runtime by the graphics API
+        let value = Value {
+            id: global_id,
+            type_id: ptr_type,
+        };
         
         // Store in variable cache so it can be referenced by other code
-        self.variable_cache.insert(decl.name.clone(), global.as_pointer_value());
+        self.variable_cache.insert(decl.name.clone(), value);
         self.variable_types.insert(decl.name.clone(), ty.clone());
         
         // Store for SPIR-V decoration generation
-        self.uniform_globals.insert(decl.name.clone(), global);
+        self.uniform_globals.insert(decl.name.clone(), value);
         
         println!("DEBUG: Generated uniform variable '{}' with type {:?}", decl.name, ty);
         
@@ -156,12 +199,17 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let value = self.generate_expression(value_expr)?;
                 
                 // Create a global variable with the correct type
-                let llvm_type = self.get_or_create_type(ty)?;
-                let global = self.module.add_global(llvm_type, Some(AddressSpace::default()), name);
-                global.set_initializer(&value);
+                let type_info = self.get_or_create_type(ty)?;
+                let ptr_type = self.builder.type_pointer(None, StorageClass::Private, type_info.id);
+                let global_id = self.builder.variable(ptr_type, None, StorageClass::Private, Some(value.id));
+                
+                let global_value = Value {
+                    id: global_id,
+                    type_id: ptr_type,
+                };
                 
                 // Store in variable cache
-                self.variable_cache.insert(name.to_string(), global.as_pointer_value());
+                self.variable_cache.insert(name.to_string(), global_value);
                 self.variable_types.insert(name.to_string(), ty.clone());
 
                 Ok(())
@@ -203,112 +251,146 @@ impl<'ctx> CodeGenerator<'ctx> {
         })?;
         
         // Create output globals for attributed tuple return types
-        self.create_output_globals(return_type_ast)?;
+        if matches!(return_type_ast, Type::Constructed(TypeName::Str("attributed_tuple"), _)) {
+            self.create_output_globals(return_type_ast)?;
+        }
         
-        let return_type = self.get_or_create_type(return_type_ast)?;
+        let return_type_info = self.get_or_create_type(return_type_ast)?;
 
         // Build parameter types
-        let param_types: Vec<BasicMetadataTypeEnum> = decl
-            .params
-            .iter()
-            .map(|param| {
-                match param {
-                    DeclParam::Typed(p) => self.get_or_create_type(&p.ty),
-                    DeclParam::Untyped(_) => Err(CompilerError::SpirvError(
-                        "Entry point parameters must have explicit types".to_string()
-                    )),
+        let mut param_type_ids = Vec::new();
+        for param in &decl.params {
+            match param {
+                DeclParam::Typed(p) => {
+                    let param_type_info = self.get_or_create_type(&p.ty)?;
+                    param_type_ids.push(param_type_info.id);
                 }
-                .map(BasicMetadataTypeEnum::from)
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let fn_type = match return_type {
-            BasicTypeEnum::ArrayType(arr_ty) => arr_ty.fn_type(&param_types, false),
-            BasicTypeEnum::FloatType(float_ty) => float_ty.fn_type(&param_types, false),
-            BasicTypeEnum::IntType(int_ty) => int_ty.fn_type(&param_types, false),
-            BasicTypeEnum::VectorType(vec_ty) => vec_ty.fn_type(&param_types, false),
-            BasicTypeEnum::StructType(struct_ty) => struct_ty.fn_type(&param_types, false),
-            _ => {
-                return Err(CompilerError::SpirvError(
-                    "Unsupported return type".to_string(),
-                ))
+                DeclParam::Untyped(_) => {
+                    return Err(CompilerError::SpirvError(
+                        "Entry point parameters must have explicit types".to_string()
+                    ));
+                }
             }
+        }
+
+        // Create function type - entry points return void and use output variables
+        let actual_return_type = if matches!(return_type_ast, Type::Constructed(TypeName::Str("attributed_tuple"), _)) {
+            self.void_type
+        } else {
+            return_type_info.id
         };
-
+        let fn_type = self.builder.type_function(actual_return_type, param_type_ids);
+        
         // Create the function
-        let function = self.module.add_function(&decl.name, fn_type, None);
+        let function_id = self.builder.begin_function(
+            actual_return_type,
+            None,
+            spirv::FunctionControl::NONE,
+            fn_type,
+        )?;
         
-        // Set internal linkage for all SPIR-V functions to avoid linkage attributes
-        function.set_linkage(Linkage::Internal);
-        
-        self.function_cache.insert(decl.name.clone(), function);
-        self.current_function = Some(function);
+        self.function_cache.insert(decl.name.clone(), function_id);
+        self.current_function = Some(function_id);
 
-        // Create entry block
-        let entry_block = self.context.append_basic_block(function, "entry");
-        self.builder.position_at_end(entry_block);
-
-        // Map parameters to names
-        for (i, param) in decl.params.iter().enumerate() {
-            let param_value = function
-                .get_nth_param(i as u32)
-                .ok_or_else(|| CompilerError::SpirvError("Missing parameter".to_string()))?;
-            
+        // Create function parameters - need to do this after begin_block
+        let mut params_to_store = Vec::new();
+        for (_i, param) in decl.params.iter().enumerate() {
             let (param_name, param_type) = match param {
                 DeclParam::Typed(p) => (&p.name, &p.ty),
                 DeclParam::Untyped(_) => {
                     return Err(CompilerError::SpirvError(
                         "Entry point parameters must have explicit types".to_string()
-                    ))
+                    ));
                 }
             };
 
-            // Get the parameter type from LLVM
-            let llvm_param_type = self.get_or_create_type(param_type)?;
+            let param_type_info = self.get_or_create_type(param_type)?;
+            let param_id = self.builder.function_parameter(param_type_info.id)?;
+            
+            params_to_store.push((param_name.clone(), param_type.clone(), param_id, param_type_info));
+        }
 
-            // Create alloca for the parameter
-            let alloca = self
-                .builder
-                .build_alloca(llvm_param_type, param_name)
-                .map_err(|e| {
-                    CompilerError::SpirvError(format!("Failed to create alloca: {}", e))
-                })?;
+        // Create entry block
+        let _entry_label = self.builder.begin_block(None)?;
+        
+        // Now store the parameters in local variables (must be done after begin_block)
+        for (param_name, param_type, param_id, param_type_info) in params_to_store {
+            // Create local variable for the parameter
+            let ptr_type = self.builder.type_pointer(None, StorageClass::Function, param_type_info.id);
+            let local_var = self.builder.variable(ptr_type, None, StorageClass::Function, None);
+            self.builder.store(local_var, param_id, None, vec![])?;
 
-            self.builder.build_store(alloca, param_value).map_err(|e| {
-                CompilerError::SpirvError(format!("Failed to store parameter: {}", e))
-            })?;
+            let param_value = Value {
+                id: local_var,
+                type_id: ptr_type,
+            };
 
-            self.variable_cache.insert(param_name.clone(), alloca);
-            self.variable_types
-                .insert(param_name.clone(), param_type.clone());
+            self.variable_cache.insert(param_name.clone(), param_value);
+            self.variable_types.insert(param_name, param_type);
         }
 
         // Generate function body
         let result = self.generate_expression(&decl.body)?;
 
-        // Return the result
-        self.builder
-            .build_return(Some(&result))
-            .map_err(|e| CompilerError::SpirvError(format!("Failed to build return: {}", e)))?;
-
+        // For entry points, we need to store the result in output variables instead of returning
+        if !self.output_globals.is_empty() {
+            // This is an entry point with outputs - extract tuple components and store them
+            match return_type_ast {
+                Type::Constructed(TypeName::Str("attributed_tuple"), args) => {
+                    // Extract each component from the result tuple and store in corresponding output
+                    for (index, _component_type) in args.iter().enumerate() {
+                        let output_name = format!("output_{}", index);
+                        if let Some((output_global, _, component_type)) = self.output_globals.get(&output_name) {
+                            // Extract the component from the result tuple
+                            let component_id = self.builder.composite_extract(
+                                *component_type, // Use the stored component type
+                                None,
+                                result.id,
+                                vec![index as u32]
+                            )?;
+                            
+                            // Store in the output global
+                            self.builder.store(output_global.id, component_id, None, vec![])?;
+                        }
+                    }
+                }
+                _ => {
+                    // Single return value - just return it normally
+                    self.builder.ret_value(result.id)?;
+                }
+            }
+            
+            // Entry points return void
+            self.builder.ret()?;
+        } else {
+            // Regular function - return the result
+            self.builder.ret_value(result.id)?;
+        }
+        
+        self.builder.end_function()?;
         self.current_function = None;
 
         Ok(())
     }
 
-    fn generate_expression(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>> {
+    fn generate_expression(&mut self, expr: &Expression) -> Result<Value> {
         match expr {
             Expression::IntLiteral(n) => {
-                let i32_type = self.context.i32_type();
-                Ok(i32_type.const_int(*n as u64, true).into())
+                let const_id = self.builder.constant_bit32(self.i32_type, *n as u32);
+                Ok(Value {
+                    id: const_id,
+                    type_id: self.i32_type,
+                })
             }
             Expression::FloatLiteral(f) => {
-                let f32_type = self.context.f32_type();
-                Ok(f32_type.const_float(*f as f64).into())
+                let const_id = self.builder.constant_bit32(self.f32_type, f.to_bits());
+                Ok(Value {
+                    id: const_id,
+                    type_id: self.f32_type,
+                })
             }
             Expression::Identifier(name) => {
-                if let Some(ptr) = self.variable_cache.get(name) {
-                    let ptr_copy = *ptr;
+                if let Some(&value) = self.variable_cache.get(name) {
                     // Get the variable's type for the load operation
                     let var_type = self
                         .variable_types
@@ -321,19 +403,310 @@ impl<'ctx> CodeGenerator<'ctx> {
                         })?
                         .clone();
 
-                    let value_type = self.get_or_create_type(&var_type)?;
+                    let type_info = self.get_or_create_type(&var_type)?;
 
                     // Load the value from the pointer
-                    let loaded = self
-                        .builder
-                        .build_load(value_type, ptr_copy, name)
-                        .map_err(|e| {
-                            CompilerError::SpirvError(format!("Failed to load variable: {}", e))
-                        })?;
-                    Ok(loaded)
+                    let loaded_id = self.builder.load(type_info.id, None, value.id, None, vec![])?;
+                    Ok(Value {
+                        id: loaded_id,
+                        type_id: type_info.id,
+                    })
                 } else {
                     Err(CompilerError::UndefinedVariable(name.clone()))
                 }
+            }
+            Expression::BinaryOp(op, left, right) => {
+                let left_val = self.generate_expression(left)?;
+                let right_val = self.generate_expression(right)?;
+
+                // Use unified operator string instead of enum variants
+                match op.op.as_str() {
+                    "/" => {
+                        // Assuming float division
+                        let result_id = self.builder.f_div(self.f32_type, None, left_val.id, right_val.id)?;
+                        Ok(Value {
+                            id: result_id,
+                            type_id: self.f32_type,
+                        })
+                    }
+                    "+" => {
+                        // Check the type of the operands to determine whether to use int or float addition
+                        if left_val.type_id == self.i32_type && right_val.type_id == self.i32_type {
+                            let result_id = self.builder.i_add(self.i32_type, None, left_val.id, right_val.id)?;
+                            Ok(Value {
+                                id: result_id,
+                                type_id: self.i32_type,
+                            })
+                        } else if left_val.type_id == self.f32_type && right_val.type_id == self.f32_type {
+                            let result_id = self.builder.f_add(self.f32_type, None, left_val.id, right_val.id)?;
+                            Ok(Value {
+                                id: result_id,
+                                type_id: self.f32_type,
+                            })
+                        } else {
+                            Err(CompilerError::SpirvError(
+                                "Type mismatch in addition: operands must be both int or both float".to_string()
+                            ))
+                        }
+                    }
+                    "-" => {
+                        // Check the type of the operands to determine whether to use int or float subtraction
+                        if left_val.type_id == self.i32_type && right_val.type_id == self.i32_type {
+                            let result_id = self.builder.i_sub(self.i32_type, None, left_val.id, right_val.id)?;
+                            Ok(Value {
+                                id: result_id,
+                                type_id: self.i32_type,
+                            })
+                        } else if left_val.type_id == self.f32_type && right_val.type_id == self.f32_type {
+                            let result_id = self.builder.f_sub(self.f32_type, None, left_val.id, right_val.id)?;
+                            Ok(Value {
+                                id: result_id,
+                                type_id: self.f32_type,
+                            })
+                        } else {
+                            Err(CompilerError::SpirvError(
+                                "Type mismatch in subtraction: operands must be both int or both float".to_string()
+                            ))
+                        }
+                    }
+                    "*" => {
+                        // Check the type of the operands to determine whether to use int or float multiplication
+                        if left_val.type_id == self.i32_type && right_val.type_id == self.i32_type {
+                            let result_id = self.builder.i_mul(self.i32_type, None, left_val.id, right_val.id)?;
+                            Ok(Value {
+                                id: result_id,
+                                type_id: self.i32_type,
+                            })
+                        } else if left_val.type_id == self.f32_type && right_val.type_id == self.f32_type {
+                            let result_id = self.builder.f_mul(self.f32_type, None, left_val.id, right_val.id)?;
+                            Ok(Value {
+                                id: result_id,
+                                type_id: self.f32_type,
+                            })
+                        } else {
+                            Err(CompilerError::SpirvError(
+                                "Type mismatch in multiplication: operands must be both int or both float".to_string()
+                            ))
+                        }
+                    }
+                    _ => {
+                        Err(CompilerError::SpirvError(format!(
+                            "Unknown binary operator: {}", op.op
+                        )))
+                    }
+                }
+            }
+            Expression::FunctionCall(func_name, args) => {
+                // Handle length as a compiler intrinsic
+                if func_name == "length" {
+                    if args.len() != 1 {
+                        return Err(CompilerError::SpirvError(
+                            "length requires exactly one argument".to_string(),
+                        ));
+                    }
+                    
+                    // For arrays, return the compile-time known size
+                    let array_expr = &args[0];
+                    
+                    // If it's an array identifier, get its type and return the size
+                    if let Expression::Identifier(array_name) = array_expr {
+                        let array_type = self.variable_types.get(array_name)
+                            .ok_or_else(|| CompilerError::UndefinedVariable(array_name.clone()))?;
+                        
+                        match array_type {
+                            Type::Constructed(TypeName::Array("array", size), _) => {
+                                let const_id = self.builder.constant_bit32(self.i32_type, *size as u32);
+                                Ok(Value {
+                                    id: const_id,
+                                    type_id: self.i32_type,
+                                })
+                            }
+                            Type::Constructed(TypeName::Str("array"), _) => {
+                                // Default size for unsized arrays
+                                let const_id = self.builder.constant_bit32(self.i32_type, 1);
+                                Ok(Value {
+                                    id: const_id,
+                                    type_id: self.i32_type,
+                                })
+                            }
+                            _ => Err(CompilerError::SpirvError(
+                                "length can only be applied to arrays".to_string()
+                            ))
+                        }
+                    } else {
+                        // For array literals, count the elements
+                        if let Expression::ArrayLiteral(elements) = array_expr {
+                            let const_id = self.builder.constant_bit32(self.i32_type, elements.len() as u32);
+                            Ok(Value {
+                                id: const_id,
+                                type_id: self.i32_type,
+                            })
+                        } else {
+                            Err(CompilerError::SpirvError(
+                                "length can only be applied to array variables or literals".to_string()
+                            ))
+                        }
+                    }
+                }
+                // Check if it's a builtin function
+                else if self.builtin_manager.is_builtin(func_name) {
+                    // Generate arguments first
+                    let mut arg_values = Vec::new();
+                    for arg in args {
+                        arg_values.push(self.generate_expression(arg)?);
+                    }
+
+                    // Call the builtin through the manager
+                    self.builtin_manager.generate_builtin_call(
+                        &mut self.builder,
+                        func_name,
+                        &arg_values,
+                    )
+                } else {
+                    match func_name.as_str() {
+                        "to_vec4_f32" => {
+                            if args.len() != 1 {
+                                return Err(CompilerError::SpirvError(
+                                    "to_vec4_f32 requires exactly one argument".to_string(),
+                                ));
+                            }
+
+                            let array_val = self.generate_expression(&args[0])?;
+                            self.convert_array_to_vec4(array_val)
+                        }
+                        // Vector constructors
+                        "vec2" => self.generate_vector_constructor(2, &args),
+                        "vec3" => self.generate_vector_constructor(3, &args),
+                        "vec4" => self.generate_vector_constructor(4, &args),
+                        "ivec2" => self.generate_vector_constructor(2, &args),
+                        "ivec3" => self.generate_vector_constructor(3, &args),
+                        "ivec4" => self.generate_vector_constructor(4, &args),
+                        _ => Err(CompilerError::SpirvError(format!(
+                            "Function call '{}' not supported",
+                            func_name
+                        ))),
+                    }
+                }
+            }
+            Expression::Tuple(elements) => {
+                // Generate values for all tuple elements
+                let mut element_values = Vec::new();
+                let mut element_type_ids = Vec::new();
+                for element in elements {
+                    let val = self.generate_expression(element)?;
+                    element_values.push(val.id);
+                    element_type_ids.push(val.type_id);
+                }
+
+                // Create a struct with the element values
+                if element_values.is_empty() {
+                    // Empty tuple - use unit type (empty struct)
+                    let unit_type = self.builder.type_struct(vec![]);
+                    let const_id = self.builder.constant_null(unit_type);
+                    Ok(Value {
+                        id: const_id,
+                        type_id: unit_type,
+                    })
+                } else {
+                    // Create struct with element values
+                    let struct_type = self.builder.type_struct(element_type_ids);
+                    let struct_id = self.builder.composite_construct(struct_type, None, element_values)?;
+                    
+                    Ok(Value {
+                        id: struct_id,
+                        type_id: struct_type,
+                    })
+                }
+            }
+            Expression::LetIn(let_in) => {
+                // Generate code for the value expression
+                let value = self.generate_expression(&let_in.value)?;
+
+                // Create a local variable for the let binding
+                let var_type = let_in.ty.clone().unwrap_or_else(|| {
+                    // For now, use i32 as default type if not specified
+                    crate::ast::types::i32()
+                });
+
+                let type_info = self.get_or_create_type(&var_type)?;
+                let ptr_type = self.builder.type_pointer(None, StorageClass::Function, type_info.id);
+                let local_var = self.builder.variable(ptr_type, None, StorageClass::Function, None);
+                self.builder.store(local_var, value.id, None, vec![])?;
+
+                // Store in variable cache
+                let local_value = Value {
+                    id: local_var,
+                    type_id: ptr_type,
+                };
+                self.variable_cache.insert(let_in.name.clone(), local_value);
+                self.variable_types.insert(let_in.name.clone(), var_type);
+
+                // Generate code for the body expression
+                let result = self.generate_expression(&let_in.body)?;
+
+                // Clean up variable from cache
+                self.variable_cache.remove(&let_in.name);
+                self.variable_types.remove(&let_in.name);
+
+                Ok(result)
+            }
+            Expression::FieldAccess(expr, field) => {
+                let record_value = self.generate_expression(expr)?;
+                
+                // Map field name to vector component index (for built-in vector types)
+                let component_index = match field.as_str() {
+                    "x" => 0,
+                    "y" => 1,
+                    "z" => 2,
+                    "w" => 3,
+                    _ => return Err(CompilerError::SpirvError(format!(
+                        "Field access for '{}' not yet implemented for non-vector types", field
+                    ))),
+                };
+                
+                // Use SPIR-V CompositeExtract for vectors
+                // For vec3/vec4, the component type is f32
+                let extracted_id = self.builder.composite_extract(
+                    self.f32_type, 
+                    None, 
+                    record_value.id, 
+                    vec![component_index]
+                )?;
+                
+                Ok(Value {
+                    id: extracted_id,
+                    type_id: self.f32_type,
+                })
+            }
+            Expression::ArrayLiteral(elements) => {
+                if elements.is_empty() {
+                    return Err(CompilerError::SpirvError("Empty array literals not supported".to_string()));
+                }
+
+                // Generate all element values
+                let mut element_values = Vec::new();
+                let mut element_type_id = None;
+                for elem in elements {
+                    let val = self.generate_expression(elem)?;
+                    element_values.push(val.id);
+                    if element_type_id.is_none() {
+                        element_type_id = Some(val.type_id);
+                    }
+                }
+
+                let elem_type = element_type_id.unwrap();
+                
+                // Create array type
+                let length_id = self.builder.constant_bit32(self.i32_type, elements.len() as u32);
+                let array_type = self.builder.type_array(elem_type, length_id);
+
+                // Build the array using composite construct
+                let array_id = self.builder.composite_construct(array_type, None, element_values)?;
+
+                Ok(Value {
+                    id: array_id,
+                    type_id: array_type,
+                })
             }
             Expression::ArrayIndex(array_expr, index_expr) => {
                 let array_name = match array_expr.as_ref() {
@@ -345,14 +718,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                     }
                 };
 
-                let array_ptr = self
-                    .variable_cache
-                    .get(array_name)
-                    .copied()
-                    .ok_or_else(|| CompilerError::UndefinedVariable(array_name.clone()))?;
+                let array_value = if let Some(&value) = self.variable_cache.get(array_name) {
+                    value
+                } else {
+                    return Err(CompilerError::UndefinedVariable(array_name.clone()));
+                };
 
                 let index = self.generate_expression(index_expr)?;
-                let index_value = index.into_int_value();
 
                 // Get the array type
                 let array_type = self
@@ -376,385 +748,38 @@ impl<'ctx> CodeGenerator<'ctx> {
                     }
                 };
 
-                let element_type_id = self.get_or_create_type(&element_type)?;
+                let element_type_info = self.get_or_create_type(&element_type)?;
 
-                // Build GEP to get element pointer
-                let zero = self.context.i32_type().const_zero();
-                let indices = [zero, index_value];
-
-                let array_llvm_type = self.get_or_create_type(&array_type)?;
-
-                let element_ptr = unsafe {
-                    self.builder
-                        .build_gep(array_llvm_type, array_ptr, &indices, "array_element")
-                        .map_err(|e| {
-                            CompilerError::SpirvError(format!("Failed to build GEP: {}", e))
-                        })?
-                };
+                // Create pointer type for array element access
+                let element_ptr_type = self.builder.type_pointer(None, StorageClass::Function, element_type_info.id);
+                
+                // Use AccessChain to get element pointer
+                let element_ptr = self.builder.access_chain(
+                    element_ptr_type,
+                    None,
+                    array_value.id,
+                    vec![index.id]
+                )?;
 
                 // Load the element
-                let element = self
-                    .builder
-                    .build_load(element_type_id, element_ptr, "element")
-                    .map_err(|e| {
-                        CompilerError::SpirvError(format!("Failed to load element: {}", e))
-                    })?;
+                let element_id = self.builder.load(element_type_info.id, None, element_ptr, None, vec![])?;
 
-                Ok(element)
+                Ok(Value {
+                    id: element_id,
+                    type_id: element_type_info.id,
+                })
             }
-            Expression::ArrayLiteral(elements) => {
-                if elements.is_empty() {
-                    return Err(CompilerError::SpirvError("Empty array literals not supported".to_string()));
-                }
-
-                // Generate all element values
-                let mut const_values = Vec::new();
-                for elem in elements {
-                    const_values.push(self.generate_expression(elem)?);
-                }
-
-                // All elements should have the same type - use the first element's type
-                match const_values[0] {
-                    BasicValueEnum::FloatValue(_) => {
-                        let float_values: Vec<_> = const_values.iter().map(|v| v.into_float_value()).collect();
-                        let f32_type = self.context.f32_type();
-                        Ok(f32_type.const_array(&float_values).into())
-                    }
-                    BasicValueEnum::IntValue(_) => {
-                        let int_values: Vec<_> = const_values.iter().map(|v| v.into_int_value()).collect();
-                        let i32_type = self.context.i32_type();
-                        Ok(i32_type.const_array(&int_values).into())
-                    }
-                    BasicValueEnum::ArrayValue(_) => {
-                        let array_values: Vec<_> = const_values.iter().map(|v| v.into_array_value()).collect();
-                        let first_elem_type = array_values[0].get_type();
-                        Ok(first_elem_type.const_array(&array_values).into())
-                    }
-                    _ => Err(CompilerError::SpirvError("Unsupported array element type".to_string())),
-                }
-            },
-            Expression::BinaryOp(op, left, right) => {
-                let left_val = self.generate_expression(left)?;
-                let right_val = self.generate_expression(right)?;
-
-                // Use unified operator string instead of enum variants
-                match op.op.as_str() {
-                    "/" => {
-                        // Assuming float division
-                        let result = self
-                            .builder
-                            .build_float_div(
-                                left_val.into_float_value(),
-                                right_val.into_float_value(),
-                                "div",
-                            )
-                            .map_err(|e| {
-                                CompilerError::SpirvError(format!(
-                                    "Failed to build division: {}",
-                                    e
-                                ))
-                            })?;
-                        Ok(result.into())
-                    }
-                    "+" => {
-                        // Check the type of the operands to determine whether to use int or float addition
-                        match (left_val, right_val) {
-                            (BasicValueEnum::IntValue(left_int), BasicValueEnum::IntValue(right_int)) => {
-                                let result = self
-                                    .builder
-                                    .build_int_add(left_int, right_int, "add")
-                                    .map_err(|e| {
-                                        CompilerError::SpirvError(format!("Failed to build int addition: {}", e))
-                                    })?;
-                                Ok(result.into())
-                            }
-                            (BasicValueEnum::FloatValue(left_float), BasicValueEnum::FloatValue(right_float)) => {
-                                let result = self
-                                    .builder
-                                    .build_float_add(left_float, right_float, "add")
-                                    .map_err(|e| {
-                                        CompilerError::SpirvError(format!("Failed to build float addition: {}", e))
-                                    })?;
-                                Ok(result.into())
-                            }
-                            _ => {
-                                Err(CompilerError::SpirvError(
-                                    "Type mismatch in addition: operands must be both int or both float".to_string()
-                                ))
-                            }
-                        }
-                    }
-                    "-" => {
-                        // Check the type of the operands to determine whether to use int or float subtraction
-                        match (left_val, right_val) {
-                            (BasicValueEnum::IntValue(left_int), BasicValueEnum::IntValue(right_int)) => {
-                                let result = self
-                                    .builder
-                                    .build_int_sub(left_int, right_int, "sub")
-                                    .map_err(|e| {
-                                        CompilerError::SpirvError(format!("Failed to build int subtraction: {}", e))
-                                    })?;
-                                Ok(result.into())
-                            }
-                            (BasicValueEnum::FloatValue(left_float), BasicValueEnum::FloatValue(right_float)) => {
-                                let result = self
-                                    .builder
-                                    .build_float_sub(left_float, right_float, "sub")
-                                    .map_err(|e| {
-                                        CompilerError::SpirvError(format!("Failed to build float subtraction: {}", e))
-                                    })?;
-                                Ok(result.into())
-                            }
-                            _ => {
-                                Err(CompilerError::SpirvError(
-                                    "Type mismatch in subtraction: operands must be both int or both float".to_string()
-                                ))
-                            }
-                        }
-                    }
-                    "*" => {
-                        // Check the type of the operands to determine whether to use int or float multiplication
-                        match (left_val, right_val) {
-                            (BasicValueEnum::IntValue(left_int), BasicValueEnum::IntValue(right_int)) => {
-                                let result = self
-                                    .builder
-                                    .build_int_mul(left_int, right_int, "mul")
-                                    .map_err(|e| {
-                                        CompilerError::SpirvError(format!("Failed to build int multiplication: {}", e))
-                                    })?;
-                                Ok(result.into())
-                            }
-                            (BasicValueEnum::FloatValue(left_float), BasicValueEnum::FloatValue(right_float)) => {
-                                let result = self
-                                    .builder
-                                    .build_float_mul(left_float, right_float, "mul")
-                                    .map_err(|e| {
-                                        CompilerError::SpirvError(format!("Failed to build float multiplication: {}", e))
-                                    })?;
-                                Ok(result.into())
-                            }
-                            _ => {
-                                Err(CompilerError::SpirvError(
-                                    "Type mismatch in multiplication: operands must be both int or both float".to_string()
-                                ))
-                            }
-                        }
-                    }
-                    _ => {
-                        Err(CompilerError::SpirvError(format!(
-                            "Unknown binary operator: {}", op.op
-                        )))
-                    }
-                }
-            }
-            Expression::FunctionCall(func_name, args) => {
-                // Handle length as a compiler intrinsic
-                if func_name == "length" {
-                    if args.len() != 1 {
-                        return Err(CompilerError::SpirvError(
-                            "length requires exactly one argument".to_string(),
-                        ));
-                    }
-                    
-                    // For arrays, return the compile-time known size
-                    // This avoids complex pointer manipulations that break SPIR-V
-                    let array_expr = &args[0];
-                    
-                    // If it's an array identifier, get its type and return the size
-                    if let Expression::Identifier(array_name) = array_expr {
-                        let array_type = self.variable_types.get(array_name)
-                            .ok_or_else(|| CompilerError::UndefinedVariable(array_name.clone()))?;
-                        
-                        match array_type {
-                            Type::Constructed(TypeName::Array("array", size), _) => {
-                                let i32_type = self.context.i32_type();
-                                Ok(i32_type.const_int(*size as u64, false).into())
-                            }
-                            Type::Constructed(TypeName::Str("array"), _) => {
-                                // Default size for unsized arrays
-                                let i32_type = self.context.i32_type();
-                                Ok(i32_type.const_int(1, false).into())
-                            }
-                            _ => Err(CompilerError::SpirvError(
-                                "length can only be applied to arrays".to_string()
-                            ))
-                        }
-                    } else {
-                        // For array literals, count the elements
-                        if let Expression::ArrayLiteral(elements) = array_expr {
-                            let i32_type = self.context.i32_type();
-                            Ok(i32_type.const_int(elements.len() as u64, false).into())
-                        } else {
-                            Err(CompilerError::SpirvError(
-                                "length can only be applied to array variables or literals".to_string()
-                            ))
-                        }
-                    }
-                }
-                // Check if it's a builtin function
-                else if self.builtin_manager.is_builtin(func_name) {
-                    // Generate arguments first
-                    let mut arg_values = Vec::new();
-                    for arg in args {
-                        arg_values.push(self.generate_expression(arg)?);
-                    }
-
-                    // Call the builtin through the manager
-                    self.builtin_manager.generate_builtin_call(
-                        &self.module,
-                        &self.builder,
-                        func_name,
-                        &arg_values,
-                    )
-                } else {
-                    match func_name.as_str() {
-                        "to_vec4_f32" => {
-                            if args.len() != 1 {
-                                return Err(CompilerError::SpirvError(
-                                    "to_vec4_f32 requires exactly one argument".to_string(),
-                                ));
-                            }
-
-                            let array_val = self.generate_expression(&args[0])?;
-                            self.convert_array_to_vec4(array_val)
-                        }
-                        // Vector constructors
-                        "vec2" => self.generate_vector_constructor(2, &args, self.context.f32_type().into()),
-                        "vec3" => self.generate_vector_constructor(3, &args, self.context.f32_type().into()),
-                        "vec4" => self.generate_vector_constructor(4, &args, self.context.f32_type().into()),
-                        "ivec2" => self.generate_vector_constructor(2, &args, self.context.i32_type().into()),
-                        "ivec3" => self.generate_vector_constructor(3, &args, self.context.i32_type().into()),
-                        "ivec4" => self.generate_vector_constructor(4, &args, self.context.i32_type().into()),
-                        _ => Err(CompilerError::SpirvError(format!(
-                            "Function call '{}' not supported",
-                            func_name
-                        ))),
-                    }
-                }
-            }
-            Expression::Tuple(elements) => {
-                // Generate values for all tuple elements
-                let mut element_values = Vec::new();
-                for element in elements {
-                    element_values.push(self.generate_expression(element)?);
-                }
-
-                // Create a struct with the element values
-                if element_values.is_empty() {
-                    // Empty tuple - use unit type (empty struct)
-                    let unit_type = self.context.struct_type(&[], false);
-                    Ok(unit_type.const_zero().into())
-                } else {
-                    // Create struct with element values
-                    let element_types: Vec<BasicTypeEnum> = element_values
-                        .iter()
-                        .map(|val| val.get_type())
-                        .collect();
-                    let struct_type = self.context.struct_type(&element_types, false);
-                    
-                    // Build the struct value
-                    let mut struct_val = struct_type.get_undef().into();
-                    for (i, value) in element_values.into_iter().enumerate() {
-                        struct_val = self.builder
-                            .build_insert_value(struct_val, value, i as u32, "tuple_elem")
-                            .map_err(|e| CompilerError::SpirvError(format!("Failed to build tuple: {}", e)))?;
-                    }
-                    
-                    // Convert back to BasicValueEnum - structs should be StructValue
-                    match struct_val {
-                        inkwell::values::AggregateValueEnum::StructValue(sv) => Ok(sv.into()),
-                        _ => Err(CompilerError::SpirvError("Expected struct value".to_string()))
-                    }
-                }
-            }
-            Expression::Lambda(_) => Err(CompilerError::SpirvError(
-                "Lambda expressions require defunctionalization before LLVM generation".to_string(),
+            _ => Err(CompilerError::SpirvError(
+                "Expression type not yet implemented for rspirv backend".to_string(),
             )),
-            Expression::Application(_, _) => Err(CompilerError::SpirvError(
-                "Function applications require defunctionalization before LLVM generation"
-                    .to_string(),
-            )),
-            Expression::LetIn(let_in) => {
-                // Generate code for the value expression
-                let value = self.generate_expression(&let_in.value)?;
-
-                // Store the value in a local variable
-                let var_type =
-                    self.get_or_create_type(&let_in.ty.clone().unwrap_or_else(|| {
-                        // For now, use i32 as default type if not specified
-                        crate::ast::types::i32()
-                    }))?;
-
-                let ptr = self
-                    .builder
-                    .build_alloca(var_type, &let_in.name)
-                    .map_err(|e| {
-                        CompilerError::SpirvError(format!("Failed to build alloca: {:?}", e))
-                    })?;
-
-                self.builder.build_store(ptr, value).map_err(|e| {
-                    CompilerError::SpirvError(format!("Failed to build store: {:?}", e))
-                })?;
-
-                // Store in variable cache
-                let ast_type = let_in
-                    .ty
-                    .clone()
-                    .unwrap_or_else(|| crate::ast::types::i32());
-                self.variable_cache.insert(let_in.name.clone(), ptr);
-                self.variable_types.insert(let_in.name.clone(), ast_type);
-
-                // Generate code for the body expression
-                let result = self.generate_expression(&let_in.body)?;
-
-                // Clean up variable from cache
-                self.variable_cache.remove(&let_in.name);
-                self.variable_types.remove(&let_in.name);
-
-                Ok(result)
-            }
-            Expression::FieldAccess(expr, field) => {
-                let record_value = self.generate_expression(expr)?;
-                
-                // For now, assume this is a vector type and extract the component
-                // TODO: Need to determine record type and field layout for general records
-                
-                // Map field name to vector component index (for built-in vector types)
-                let component_index = match field.as_str() {
-                    "x" => 0,
-                    "y" => 1,
-                    "z" => 2,
-                    "w" => 3,
-                    _ => return Err(CompilerError::SpirvError(format!(
-                        "Field access for '{}' not yet implemented for non-vector types", field
-                    ))),
-                };
-                
-                // Use LLVM extract_element for vectors
-                if let BasicValueEnum::VectorValue(vec_val) = record_value {
-                    let index_val = self.context.i32_type().const_int(component_index, false);
-                    let extracted = self.builder
-                        .build_extract_element(vec_val, index_val, "field_extract")
-                        .unwrap();
-                    Ok(extracted)
-                } else {
-                    // For future general record types, we would use extract_value with field indices
-                    Err(CompilerError::SpirvError(format!(
-                        "Field access on non-vector record types not yet implemented. Got: {:?}", 
-                        record_value.get_type()
-                    )))
-                }
-            }
         }
     }
-
 
     fn generate_vector_constructor(
         &mut self,
         size: u32,
         args: &[Expression],
-        elem_type: BasicTypeEnum<'ctx>,
-    ) -> Result<BasicValueEnum<'ctx>> {
+    ) -> Result<Value> {
         // Check argument count
         if args.len() != size as usize {
             return Err(CompilerError::SpirvError(format!(
@@ -768,167 +793,112 @@ impl<'ctx> CodeGenerator<'ctx> {
         let mut elements = Vec::new();
         for arg in args {
             let val = self.generate_expression(arg)?;
-            elements.push(val);
+            elements.push(val.id);
         }
 
-        // Create the vector type
-        let vec_type = match elem_type {
-            BasicTypeEnum::FloatType(f) => f.vec_type(size),
-            BasicTypeEnum::IntType(i) => i.vec_type(size),
-            _ => {
-                return Err(CompilerError::SpirvError(
-                    "Invalid element type for vector".to_string(),
-                ))
-            }
-        };
+        // Create the vector type - assume f32 elements for now
+        let vec_type = self.builder.type_vector(self.f32_type, size);
 
-        // Build the vector
-        let mut vector = vec_type.get_undef();
-        for (i, elem) in elements.iter().enumerate() {
-            vector = self
-                .builder
-                .build_insert_element(
-                    vector,
-                    *elem,
-                    self.context.i32_type().const_int(i as u64, false),
-                    &format!("vec_elem_{}", i),
-                )
-                .map_err(|e| {
-                    CompilerError::SpirvError(format!("Failed to insert element: {}", e))
-                })?;
-        }
+        // Build the vector using composite construct
+        let vector_id = self.builder.composite_construct(vec_type, None, elements)?;
 
-        Ok(vector.into())
+        Ok(Value {
+            id: vector_id,
+            type_id: vec_type,
+        })
     }
 
-    fn convert_array_to_vec4(
-        &mut self,
-        array_val: BasicValueEnum<'ctx>,
-    ) -> Result<BasicValueEnum<'ctx>> {
-        // For LLVM, we need to extract array elements and build a vector
-        let f32_type = self.context.f32_type();
-        let vec4_type = f32_type.vec_type(4);
+    fn convert_array_to_vec4(&mut self, array_val: Value) -> Result<Value> {
+        // For rspirv, we need to extract array elements and build a vector
+        let vec4_type = self.builder.type_vector(self.f32_type, 4);
 
-        // Convert to array value
-        let array = array_val.into_array_value();
-
-        // Extract elements from the array
+        // Extract elements from the array and build vector
         let mut elements = Vec::new();
         for i in 0..4 {
-            let element = self
-                .builder
-                .build_extract_value(array, i, &format!("elem_{}", i))
-                .map_err(|e| {
-                    CompilerError::SpirvError(format!("Failed to extract element: {}", e))
-                })?;
-            elements.push(element.into_float_value());
+            let element_id = self.builder.composite_extract(self.f32_type, None, array_val.id, vec![i])?;
+            elements.push(element_id);
         }
 
         // Build the vector
-        let mut vector = vec4_type.get_undef();
-        for (i, elem) in elements.iter().enumerate() {
-            vector = self
-                .builder
-                .build_insert_element(
-                    vector,
-                    *elem,
-                    self.context.i32_type().const_int(i as u64, false),
-                    &format!("vec_elem_{}", i),
-                )
-                .map_err(|e| {
-                    CompilerError::SpirvError(format!("Failed to insert element: {}", e))
-                })?;
-        }
+        let vector_id = self.builder.composite_construct(vec4_type, None, elements)?;
 
-        Ok(vector.into())
+        Ok(Value {
+            id: vector_id,
+            type_id: vec4_type,
+        })
     }
 
-    fn get_or_create_type(&mut self, ty: &Type) -> Result<BasicTypeEnum<'ctx>> {
+    fn get_or_create_type(&mut self, ty: &Type) -> Result<TypeInfo> {
         if let Some(cached) = self.type_cache.get(ty) {
-            return Ok(*cached);
+            return Ok(cached.clone());
         }
 
-        let llvm_type = match ty {
+        let (type_id, size_bytes) = match ty {
             Type::Constructed(name, args) => {
                 match name {
-                    TypeName::Str("int") => BasicTypeEnum::IntType(self.context.i32_type()),
-                    TypeName::Str("float") => BasicTypeEnum::FloatType(self.context.f32_type()),
+                    TypeName::Str("int") => (self.i32_type, 4),
+                    TypeName::Str("float") => (self.f32_type, 4),
                     
                     // f32 vector types
                     TypeName::Str("vec2") => {
-                        let f32_type = self.context.f32_type();
-                        BasicTypeEnum::VectorType(f32_type.vec_type(2))
+                        let vec_type = self.builder.type_vector(self.f32_type, 2);
+                        (vec_type, 8)
                     }
                     TypeName::Str("vec3") => {
-                        let f32_type = self.context.f32_type();
-                        BasicTypeEnum::VectorType(f32_type.vec_type(3))
+                        let vec_type = self.builder.type_vector(self.f32_type, 3);
+                        (vec_type, 12)
                     }
                     TypeName::Str("vec4") => {
-                        let f32_type = self.context.f32_type();
-                        BasicTypeEnum::VectorType(f32_type.vec_type(4))
+                        let vec_type = self.builder.type_vector(self.f32_type, 4);
+                        (vec_type, 16)
                     }
                     
                     // i32 vector types
                     TypeName::Str("ivec2") => {
-                        let i32_type = self.context.i32_type();
-                        BasicTypeEnum::VectorType(i32_type.vec_type(2))
+                        let vec_type = self.builder.type_vector(self.i32_type, 2);
+                        (vec_type, 8)
                     }
                     TypeName::Str("ivec3") => {
-                        let i32_type = self.context.i32_type();
-                        BasicTypeEnum::VectorType(i32_type.vec_type(3))
+                        let vec_type = self.builder.type_vector(self.i32_type, 3);
+                        (vec_type, 12)
                     }
                     TypeName::Str("ivec4") => {
-                        let i32_type = self.context.i32_type();
-                        BasicTypeEnum::VectorType(i32_type.vec_type(4))
+                        let vec_type = self.builder.type_vector(self.i32_type, 4);
+                        (vec_type, 16)
                     }
                     TypeName::Str("array") => {
                         let elem_ty = args.first().ok_or_else(|| {
                             CompilerError::SpirvError("Array type missing element type".to_string())
                         })?;
-                        let elem_type = self.get_or_create_type(elem_ty)?;
+                        let elem_type_info = self.get_or_create_type(elem_ty)?;
 
-                        // For unsized arrays, use default size
-                        match elem_type {
-                            BasicTypeEnum::ArrayType(arr) => arr.array_type(1).into(),
-                            BasicTypeEnum::FloatType(float) => float.array_type(1).into(),
-                            BasicTypeEnum::IntType(int) => int.array_type(1).into(),
-                            BasicTypeEnum::VectorType(vec) => vec.array_type(1).into(),
-                            _ => {
-                                return Err(CompilerError::SpirvError(
-                                    "Unsupported array element type".to_string(),
-                                ))
-                            }
-                        }
+                        // For unsized arrays, use default size of 1
+                        let length_id = self.builder.constant_bit32(self.i32_type, 1);
+                        let array_type = self.builder.type_array(elem_type_info.id, length_id);
+                        (array_type, elem_type_info.size_bytes)
                     }
                     TypeName::Array("array", size) => {
                         let elem_ty = args.first().ok_or_else(|| {
                             CompilerError::SpirvError("Array type missing element type".to_string())
                         })?;
-                        let elem_type = self.get_or_create_type(elem_ty)?;
+                        let elem_type_info = self.get_or_create_type(elem_ty)?;
 
                         // Use the actual size from the type
-                        match elem_type {
-                            BasicTypeEnum::ArrayType(arr) => arr.array_type(*size as u32).into(),
-                            BasicTypeEnum::FloatType(float) => {
-                                float.array_type(*size as u32).into()
-                            }
-                            BasicTypeEnum::IntType(int) => int.array_type(*size as u32).into(),
-                            BasicTypeEnum::VectorType(vec) => vec.array_type(*size as u32).into(),
-                            _ => {
-                                return Err(CompilerError::SpirvError(
-                                    "Unsupported array element type".to_string(),
-                                ))
-                            }
-                        }
+                        let length_id = self.builder.constant_bit32(self.i32_type, *size as u32);
+                        let array_type = self.builder.type_array(elem_type_info.id, length_id);
+                        (array_type, elem_type_info.size_bytes * (*size as u32))
                     }
                     TypeName::Str("tuple") | TypeName::Str("attributed_tuple") => {
                         // Create a struct type with the component types
-                        let mut component_types = Vec::new();
+                        let mut component_type_ids = Vec::new();
+                        let mut total_size = 0;
                         for arg in args {
-                            component_types.push(self.get_or_create_type(arg)?);
+                            let component_info = self.get_or_create_type(arg)?;
+                            component_type_ids.push(component_info.id);
+                            total_size += component_info.size_bytes;
                         }
-                        let struct_type = self.context.struct_type(&component_types, false);
-                        BasicTypeEnum::StructType(struct_type)
+                        let struct_type = self.builder.type_struct(component_type_ids);
+                        (struct_type, total_size)
                     }
                     _ => {
                         return Err(CompilerError::SpirvError(format!(
@@ -940,14 +910,19 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             _ => {
                 return Err(CompilerError::SpirvError(format!(
-                    "Type {:?} not supported in LLVM generation",
+                    "Type {:?} not supported in SPIR-V generation",
                     ty
                 )));
             }
         };
 
-        self.type_cache.insert(ty.clone(), llvm_type);
-        Ok(llvm_type)
+        let type_info = TypeInfo {
+            id: type_id,
+            size_bytes,
+        };
+        
+        self.type_cache.insert(ty.clone(), type_info.clone());
+        Ok(type_info)
     }
 
     fn add_spirv_entry_point_metadata(
@@ -955,32 +930,23 @@ impl<'ctx> CodeGenerator<'ctx> {
         name: &str,
         exec_model: &spirv::ExecutionModel,
     ) -> Result<()> {
-        // Add SPIR-V specific attributes to mark entry points
-        let func = self
+        // Add SPIR-V entry point
+        let func_id = self
             .function_cache
             .get(name)
+            .copied()
             .ok_or_else(|| CompilerError::SpirvError(format!("Entry point {} not found", name)))?;
 
-        // Add SPIR-V entry point attributes using LLVM function attributes
-        let exec_model_str = match exec_model {
-            spirv::ExecutionModel::Vertex => "spirv.entry_point.vertex",
-            spirv::ExecutionModel::Fragment => "spirv.entry_point.fragment", 
-            _ => {
-                return Err(CompilerError::SpirvError(
-                    "Unsupported execution model".to_string(),
-                ))
-            }
-        };
-        
-        // Add function attribute to mark as SPIR-V entry point
-        let attr_kind = inkwell::attributes::Attribute::get_named_enum_kind_id(exec_model_str);
-        if attr_kind > 0 {
-            let attr = self.context.create_enum_attribute(attr_kind, 0);
-            func.add_attribute(inkwell::attributes::AttributeLoc::Function, attr);
+        // Get interface variables (uniforms and outputs)
+        let mut interface_vars = Vec::new();
+        for (_, value) in &self.uniform_globals {
+            interface_vars.push(value.id);
         }
-        
-        // Also remove linkage attributes by setting internal linkage
-        func.set_linkage(Linkage::Internal);
+        for (_, (value, _, _)) in &self.output_globals {
+            interface_vars.push(value.id);
+        }
+
+        self.builder.entry_point(*exec_model, func_id, name, interface_vars);
         
         println!("DEBUG: Added SPIR-V entry point metadata for '{}' with execution model {:?}", name, exec_model);
 
@@ -997,12 +963,18 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let location = index as u32;
                 
                 // Create a global output variable for this component
-                let llvm_type = self.get_or_create_type(component_type)?;
-                let global_name = format!("output_{}", index);
-                let global = self.module.add_global(llvm_type, Some(AddressSpace::default()), &global_name);
+                let type_info = self.get_or_create_type(component_type)?;
+                let ptr_type = self.builder.type_pointer(None, StorageClass::Output, type_info.id);
+                let global_id = self.builder.variable(ptr_type, None, StorageClass::Output, None);
+                
+                let global_value = Value {
+                    id: global_id,
+                    type_id: ptr_type,
+                };
                 
                 // Store for decoration later
-                self.output_globals.insert(global_name.clone(), (global, location));
+                let global_name = format!("output_{}", index);
+                self.output_globals.insert(global_name.clone(), (global_value, location, type_info.id));
                 
                 println!("DEBUG: Created output global '{}' at location {}", global_name, location);
             }
@@ -1011,101 +983,46 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     fn add_spirv_decorations(&mut self) -> Result<()> {
-        // Collect the keys first to avoid borrowing issues
-        let uniform_names: Vec<String> = self.uniform_globals.keys().cloned().collect();
-        let output_names: Vec<String> = self.output_globals.keys().cloned().collect();
-        
         // Add SPIR-V decorations for uniform variables
-        for name in uniform_names {
-            if let Some(global) = self.uniform_globals.get(&name) {
-                self.add_uniform_decoration(&name, *global)?;
-            }
+        for (name, value) in &self.uniform_globals.clone() {
+            self.add_uniform_decoration(name, *value)?;
         }
 
         // Add SPIR-V decorations for output variables
-        for name in output_names {
-            if let Some((global, location)) = self.output_globals.get(&name) {
-                self.add_output_decoration(&name, *global, *location)?;
-            }
+        for (name, (value, location, _)) in &self.output_globals.clone() {
+            self.add_output_decoration(name, *value, *location)?;
         }
 
         Ok(())
     }
 
-    fn add_uniform_decoration(&mut self, name: &str, global: GlobalValue<'ctx>) -> Result<()> {
-        // For SPIR-V uniforms, we need to add proper storage class and binding decorations
-        // This is a simplified approach - in practice we'd use proper SPIR-V decoration APIs
-        
-        // Add a comment to the global to indicate it's a uniform
-        let uniform_name = format!("{}_uniform", name);
-        global.set_name(&uniform_name);
-        
-        // Set storage class to Uniform (via address space or other mechanism)
-        // In SPIR-V, uniforms typically use StorageClass::Uniform
+    fn add_uniform_decoration(&mut self, name: &str, value: Value) -> Result<()> {
+        // For SPIR-V uniforms, add proper decorations
+        // Add descriptor set and binding decorations
+        self.builder.decorate(value.id, Decoration::DescriptorSet, vec![Operand::LiteralBit32(0)]);
+        self.builder.decorate(value.id, Decoration::Binding, vec![Operand::LiteralBit32(0)]);
         
         println!("DEBUG: Added uniform decoration for '{}'", name);
         Ok(())
     }
 
-    fn add_output_decoration(&mut self, name: &str, global: GlobalValue<'ctx>, location: u32) -> Result<()> {
-        // For SPIR-V outputs, we need to add location decorations
-        // This is a simplified approach - in practice we'd use proper SPIR-V decoration APIs
-        
-        let output_name = format!("{}_output_loc{}", name, location);
-        global.set_name(&output_name);
+    fn add_output_decoration(&mut self, name: &str, value: Value, location: u32) -> Result<()> {
+        // For SPIR-V outputs, add location decorations
+        self.builder.decorate(value.id, Decoration::Location, vec![Operand::LiteralBit32(location)]);
         
         println!("DEBUG: Added output decoration for '{}' at location {}", name, location);
         Ok(())
     }
 
-    fn emit_spirv(&self) -> Result<Vec<u32>> {
-        // Initialize LLVM targets
-        Target::initialize_all(&InitializationConfig::default());
-
-        // Print LLVM IR for debugging
-        self.module.print_to_stderr();
-
-        // Find the SPIR-V target - use spirv-unknown-vulkan1.2 for graphics shaders
-        let target_triple = TargetTriple::create("spirv-unknown-vulkan1.2");
-        let target = Target::from_triple(&target_triple)
-            .map_err(|e| CompilerError::SpirvError(format!("Failed to create SPIR-V target: {}", e)))?;
-
-        // Create target machine for SPIR-V
-        let target_machine = target
-            .create_target_machine(
-                &target_triple,
-                "",
-                "",
-                inkwell::OptimizationLevel::Default,
-                RelocMode::Default,
-                CodeModel::Default,
-            )
-            .ok_or_else(|| CompilerError::SpirvError("Failed to create target machine".to_string()))?;
-
-        // Generate SPIR-V object code
-        let object_data = target_machine
-            .write_to_memory_buffer(&self.module, FileType::Object)
-            .map_err(|e| CompilerError::SpirvError(format!("Failed to generate SPIR-V: {}", e)))?;
-
-        // Convert the memory buffer to Vec<u32>
-        let bytes = object_data.as_slice();
+    fn emit_spirv(mut self) -> Result<Vec<u32>> {
+        // Build the module (takes ownership of builder)
+        self.module = self.builder.module();
         
-        // SPIR-V is stored as 32-bit words, so convert bytes to u32
-        if bytes.len() % 4 != 0 {
-            return Err(CompilerError::SpirvError("SPIR-V output not aligned to 32-bit words".to_string()));
-        }
+        // Convert module to SPIR-V words
+        let words = self.module.assemble();
         
-        let words: Vec<u32> = bytes
-            .chunks_exact(4)
-            .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-            .collect();
+        println!("DEBUG: Generated {} words of SPIR-V", words.len());
         
-        println!("DEBUG: Generated {} bytes of SPIR-V ({} words)", bytes.len(), words.len());
-        
-        // Post-process SPIR-V to fix compatibility issues
-        let processed_words = SpirvPostProcessor::process(words)?;
-        println!("DEBUG: Post-processed SPIR-V ({} words)", processed_words.len());
-        
-        Ok(processed_words)
+        Ok(words)
     }
 }

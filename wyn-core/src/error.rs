@@ -19,6 +19,9 @@ pub enum CompilerError {
 
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+
+    #[error("SPIR-V builder error: {0}")]
+    SpirvBuilderError(#[from] rspirv::dr::Error),
 }
 
 pub type Result<T> = std::result::Result<T, CompilerError>;

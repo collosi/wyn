@@ -12,7 +12,6 @@ pub mod lexer;
 pub mod nemo_facts;
 pub mod parser;
 pub mod scope;
-pub mod spirv_postprocess;
 pub mod type_checker;
 
 #[cfg(test)]
@@ -34,8 +33,6 @@ impl Compiler {
     }
 
     pub fn compile(&self, source: &str) -> Result<Vec<u32>> {
-        use inkwell::context::Context;
-
         // Tokenize
         let tokens = lexer::tokenize(source).map_err(error::CompilerError::ParseError)?;
 
@@ -51,12 +48,11 @@ impl Compiler {
         let mut defunctionalizer = defunctionalization::Defunctionalizer::new();
         let defunctionalized_program = defunctionalizer.defunctionalize_program(&program)?;
 
-        // Generate SPIR-V using LLVM/Inkwell
-        let context = Context::create();
-        let codegen = codegen::CodeGenerator::new(&context, "wyn_module");
+        // Generate SPIR-V using rspirv
+        let codegen = codegen::CodeGenerator::new("wyn_module");
         let raw_spirv = codegen.generate(&defunctionalized_program)?;
         
-        // Post-process SPIR-V to fix compatibility issues
-        spirv_postprocess::SpirvPostProcessor::process(raw_spirv)
+        // Post-process SPIR-V to fix compatibility issues (now handled within rspirv backend)
+        Ok(raw_spirv)
     }
 }
