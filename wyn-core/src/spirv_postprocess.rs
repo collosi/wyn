@@ -11,9 +11,9 @@ pub struct SpirvPostProcessor;
 impl SpirvPostProcessor {
     /// Post-process SPIR-V to fix compatibility issues
     /// 
-    /// Takes raw SPIR-V words from LLVM and applies transformations:
-    /// - Remove Linkage capability and LinkageAttributes decorations
-    /// - Fix any other compatibility issues
+    /// Takes raw SPIR-V words from LLVM and applies transformations.
+    /// Each transformation phase is independent and can be disabled by commenting out
+    /// the respective function call.
     /// 
     /// Returns the modified SPIR-V as words
     pub fn process(spirv_words: Vec<u32>) -> Result<Vec<u32>> {
@@ -29,9 +29,16 @@ impl SpirvPostProcessor {
             .map_err(|e| CompilerError::SpirvError(format!("Failed to parse SPIR-V: {:?}", e)))?;
         let mut module = loader.module();
         
-        // Apply transformations
+        // Apply transformation phases (each can be independently disabled)
+        
+        // Phase 1: Remove Linkage capability and LinkageAttributes decorations
         Self::remove_linkage_support(&mut module)?;
+        
+        // Phase 2: Fix Load instruction alignment operands
         Self::fix_load_alignment(&mut module)?;
+        
+        // Phase 3: Add missing OpEntryPoint declarations
+        Self::add_entry_points(&mut module)?;
         
         // Convert back to binary
         let binary = module.assemble();
@@ -90,6 +97,64 @@ impl SpirvPostProcessor {
         }
         
         // Note: Skipping global variables for now since the field structure differs
+        
+        Ok(())
+    }
+    
+    /// Add missing OpEntryPoint declarations
+    /// 
+    /// LLVM SPIR-V backend may not generate proper entry points, so we add them manually
+    fn add_entry_points(module: &mut Module) -> Result<()> {
+        use rspirv::dr::Instruction;
+        
+        // Look for functions named vertex_main and fragment_main
+        let mut vertex_id = None;
+        let mut fragment_id = None;
+        
+        // Find entry point function IDs by looking at debug names
+        for debug_name in &module.debug_names {
+            if debug_name.class.opcode == spirv::Op::Name {
+                if let (Some(Operand::IdRef(func_id)), Some(Operand::LiteralString(name))) = 
+                    (debug_name.operands.get(0), debug_name.operands.get(1)) {
+                    match name.as_str() {
+                        "vertex_main" => vertex_id = Some(*func_id),
+                        "fragment_main" => fragment_id = Some(*func_id),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        
+        // Add OpEntryPoint instructions
+        if let Some(vertex_id) = vertex_id {
+            let entry_point = Instruction::new(
+                spirv::Op::EntryPoint,
+                None,
+                None,
+                vec![
+                    Operand::ExecutionModel(spirv::ExecutionModel::Vertex),
+                    Operand::IdRef(vertex_id),
+                    Operand::LiteralString("vertex_main".to_string()),
+                ]
+            );
+            module.entry_points.push(entry_point);
+            println!("DEBUG: Added vertex entry point for function ID {}", vertex_id);
+        }
+        
+        if let Some(fragment_id) = fragment_id {
+            let entry_point = Instruction::new(
+                spirv::Op::EntryPoint,
+                None,
+                None,
+                vec![
+                    Operand::ExecutionModel(spirv::ExecutionModel::Fragment),
+                    Operand::IdRef(fragment_id),
+                    Operand::LiteralString("fragment_main".to_string()),
+                ]
+            );
+            module.entry_points.push(entry_point);
+            println!("DEBUG: Added fragment entry point for function ID {}", fragment_id);
+        }
         
         Ok(())
     }
