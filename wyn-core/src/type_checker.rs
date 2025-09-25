@@ -32,6 +32,12 @@ impl TypeChecker {
             "-" => "op_subtract", 
             "*" => "op_multiply",
             "/" => "op_divide",
+            "==" => "op_equal",
+            "!=" => "op_not_equal", 
+            "<" => "op_less_than",
+            ">" => "op_greater_than",
+            "<=" => "op_less_than_equal",
+            ">=" => "op_greater_than_equal",
             _ => return Err(CompilerError::TypeError(format!(
                 "Unknown binary operator: {}", op.op
             ))),
@@ -40,7 +46,19 @@ impl TypeChecker {
         let type_suffix = self.get_type_suffix(left_type)?;
         let op_name = format!("{}_{}", op_prefix, type_suffix);
         
-        Ok((op_name, left_type.clone()))
+        // Determine the return type based on operator
+        let return_type = match op.op.as_str() {
+            "==" | "!=" | "<" | ">" | "<=" | ">=" => {
+                // Comparison operators return boolean
+                Type::Constructed(TypeName::Str("bool"), vec![])
+            }
+            _ => {
+                // Arithmetic operators return the same type as operands
+                left_type.clone()
+            }
+        };
+        
+        Ok((op_name, return_type))
     }
 
     fn get_type_suffix(&self, ty: &Type) -> Result<String> {
@@ -642,6 +660,29 @@ impl TypeChecker {
                         )))
                     }
                 }
+            }
+            Expression::If(if_expr) => {
+                // Infer condition type - should be bool
+                let condition_ty = self.infer_expression(&if_expr.condition)?;
+                let bool_ty = Type::Constructed(TypeName::Str("bool"), vec![]);
+                
+                // Unify condition with bool type
+                self.context.unify(&condition_ty, &bool_ty)
+                    .map_err(|_| CompilerError::TypeError(format!(
+                        "If condition must be boolean, got: {}", condition_ty
+                    )))?;
+                
+                // Infer then and else branch types - they must be the same
+                let then_ty = self.infer_expression(&if_expr.then_branch)?;
+                let else_ty = self.infer_expression(&if_expr.else_branch)?;
+                
+                // Unify then and else types
+                self.context.unify(&then_ty, &else_ty)
+                    .map_err(|_| CompilerError::TypeError(format!(
+                        "If branches have incompatible types: then={}, else={}", then_ty, else_ty
+                    )))?;
+                
+                Ok(then_ty)
             }
         }
     }

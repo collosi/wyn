@@ -225,6 +225,7 @@ pub fn expr_type_name(expr: &Expression) -> &'static str {
         Expression::Lambda(_) => "lambda",
         Expression::LetIn(_) => "let_in",
         Expression::FieldAccess(..) => "field_access",
+        Expression::If(..) => "if_expr",
     }
 }
 

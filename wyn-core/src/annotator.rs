@@ -227,6 +227,14 @@ impl CodeAnnotator {
             Expression::FieldAccess(expr, _field) => {
                 self.annotate_expression(expr);
             }
+            Expression::If(if_expr) => {
+                self.output.push_str("if ");
+                self.annotate_expression(&if_expr.condition);
+                self.output.push_str(" then ");
+                self.annotate_expression(&if_expr.then_branch);
+                self.output.push_str(" else ");
+                self.annotate_expression(&if_expr.else_branch);
+            }
         }
     }
 

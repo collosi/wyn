@@ -293,6 +293,19 @@ impl Defunctionalizer {
                     expr_sv, // Field access doesn't change the static value representation
                 ))
             }
+            Expression::If(if_expr) => {
+                let (condition, condition_sv) = self.defunctionalize_expression(&if_expr.condition, scope_stack)?;
+                let (then_branch, then_sv) = self.defunctionalize_expression(&if_expr.then_branch, scope_stack)?;
+                let (else_branch, else_sv) = self.defunctionalize_expression(&if_expr.else_branch, scope_stack)?;
+                Ok((
+                    Expression::If(IfExpr {
+                        condition: Box::new(condition),
+                        then_branch: Box::new(then_branch),
+                        else_branch: Box::new(else_branch),
+                    }),
+                    StaticValue::Dyn(Type::Constructed(TypeName::Str("unknown"), vec![])), // If expressions are runtime values
+                ))
+            }
         }
     }
 
@@ -511,6 +524,11 @@ impl Defunctionalizer {
             }
             Expression::FieldAccess(expr, _field) => {
                 self.collect_free_variables(expr, bound_vars, free_vars)?;
+            }
+            Expression::If(if_expr) => {
+                self.collect_free_variables(&if_expr.condition, bound_vars, free_vars)?;
+                self.collect_free_variables(&if_expr.then_branch, bound_vars, free_vars)?;
+                self.collect_free_variables(&if_expr.else_branch, bound_vars, free_vars)?;
             }
         }
         Ok(())

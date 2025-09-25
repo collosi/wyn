@@ -223,6 +223,7 @@ impl Parser {
                                 let builtin_name = self.expect_identifier()?;
                                 let builtin = match builtin_name.as_str() {
                                     "position" => spirv::BuiltIn::Position,
+                                    "vertex_index" => spirv::BuiltIn::VertexIndex,
                                     _ => return Err(CompilerError::ParseError(format!("Unknown builtin: {}", builtin_name))),
                                 };
                                 self.expect(Token::RightParen)?;
@@ -462,8 +463,9 @@ impl Parser {
         // Returns (precedence, is_left_associative)
         // Higher precedence binds tighter
         match op {
-            "*" | "/" => Some((2, true)),  // Multiplication and division
-            "+" | "-" => Some((1, true)),  // Addition and subtraction
+            "*" | "/" => Some((3, true)),           // Multiplication and division
+            "+" | "-" => Some((2, true)),           // Addition and subtraction  
+            "==" | "!=" | "<" | ">" | "<=" | ">=" => Some((1, true)), // Comparison operators
             _ => None,
         }
     }
@@ -673,6 +675,7 @@ impl Parser {
             }
             Some(Token::Backslash) => self.parse_lambda(),
             Some(Token::Let) => self.parse_let_in(),
+            Some(Token::If) => self.parse_if_then_else(),
             _ => Err(CompilerError::ParseError("Expected expression".to_string())),
         }
     }
@@ -769,6 +772,23 @@ impl Parser {
             ty,
             value,
             body,
+        }))
+    }
+
+    fn parse_if_then_else(&mut self) -> Result<Expression> {
+        use crate::ast::IfExpr;
+        
+        self.expect(Token::If)?;
+        let condition = Box::new(self.parse_expression()?);
+        self.expect(Token::Then)?;
+        let then_branch = Box::new(self.parse_expression()?);
+        self.expect(Token::Else)?;
+        let else_branch = Box::new(self.parse_expression()?);
+        
+        Ok(Expression::If(IfExpr {
+            condition,
+            then_branch,
+            else_branch,
         }))
     }
 
@@ -2248,5 +2268,66 @@ def fragment_main(): [4]f32 = SKY_RGBA
                 Ok(())
             },
         );
+    }
+
+    #[test]
+    fn test_if_then_else_parsing() {
+        // Test simple if-then-else
+        expect_parse("def test: i32 = if x == 0 then 1 else 2", |declarations| {
+            if declarations.len() != 1 {
+                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+            }
+            
+            match &declarations[0] {
+                Declaration::Decl(decl) => {
+                    if decl.name != "test" {
+                        return Err(format!("Expected name 'test', got '{}'", decl.name));
+                    }
+                    
+                    // Check the if-then-else expression structure
+                    match &decl.body {
+                        Expression::If(if_expr) => {
+                            // Check condition is a comparison
+                            match &*if_expr.condition {
+                                Expression::BinaryOp(op, left, right) => {
+                                    if op.op != "==" {
+                                        return Err(format!("Expected '==' operator, got '{}'", op.op));
+                                    }
+                                    
+                                    // Check left side is identifier 'x'
+                                    match &**left {
+                                        Expression::Identifier(name) if name == "x" => {},
+                                        _ => return Err(format!("Expected identifier 'x' on left side of comparison, got {:?}", left)),
+                                    }
+                                    
+                                    // Check right side is literal 0
+                                    match &**right {
+                                        Expression::IntLiteral(0) => {},
+                                        _ => return Err(format!("Expected literal 0 on right side of comparison, got {:?}", right)),
+                                    }
+                                }
+                                _ => return Err(format!("Expected comparison expression in if condition, got {:?}", if_expr.condition)),
+                            }
+                            
+                            // Check then branch is literal 1
+                            match &*if_expr.then_branch {
+                                Expression::IntLiteral(1) => {},
+                                _ => return Err(format!("Expected literal 1 in then branch, got {:?}", if_expr.then_branch)),
+                            }
+                            
+                            // Check else branch is literal 2
+                            match &*if_expr.else_branch {
+                                Expression::IntLiteral(2) => {},
+                                _ => return Err(format!("Expected literal 2 in else branch, got {:?}", if_expr.else_branch)),
+                            }
+                        }
+                        _ => return Err(format!("Expected if-then-else expression, got {:?}", decl.body)),
+                    }
+                    
+                    Ok(())
+                }
+                _ => Err("Expected Decl declaration".to_string()),
+            }
+        });
     }
 }

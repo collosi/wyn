@@ -7,6 +7,35 @@ use rspirv::spirv::{self, StorageClass, Decoration, Capability, AddressingModel,
 use rspirv::binary::Assemble;
 use std::collections::HashMap;
 
+// Macros for binary operations to reduce repetition
+macro_rules! arithmetic_op {
+    ($self:ident, $left:ident, $right:ident, $int_op:ident, $float_op:ident, $op_name:literal) => {
+        if $left.type_id == $self.i32_type && $right.type_id == $self.i32_type {
+            let result_id = $self.builder.$int_op($self.i32_type, None, $left.id, $right.id)?;
+            Ok(Value { id: result_id, type_id: $self.i32_type })
+        } else if $left.type_id == $self.f32_type && $right.type_id == $self.f32_type {
+            let result_id = $self.builder.$float_op($self.f32_type, None, $left.id, $right.id)?;
+            Ok(Value { id: result_id, type_id: $self.f32_type })
+        } else {
+            Err(CompilerError::SpirvError(format!("Type mismatch in {}: operands must be both int or both float", $op_name)))
+        }
+    };
+}
+
+macro_rules! comparison_op {
+    ($self:ident, $left:ident, $right:ident, $int_op:ident, $float_op:ident, $op_name:literal) => {
+        if $left.type_id == $self.i32_type && $right.type_id == $self.i32_type {
+            let result_id = $self.builder.$int_op($self.bool_type, None, $left.id, $right.id)?;
+            Ok(Value { id: result_id, type_id: $self.bool_type })
+        } else if $left.type_id == $self.f32_type && $right.type_id == $self.f32_type {
+            let result_id = $self.builder.$float_op($self.bool_type, None, $left.id, $right.id)?;
+            Ok(Value { id: result_id, type_id: $self.bool_type })
+        } else {
+            Err(CompilerError::SpirvError(format!("Type mismatch in {}: operands must be both int or both float", $op_name)))
+        }
+    };
+}
+
 /// Value represents a SPIR-V value with its type and ID
 #[derive(Debug, Clone, Copy)]
 pub struct Value {
@@ -30,6 +59,7 @@ pub struct CodeGenerator {
     function_cache: HashMap<String, spirv::Word>,
     type_cache: HashMap<Type, TypeInfo>,
     current_function: Option<spirv::Word>,
+    current_block: Option<spirv::Word>,
     entry_points: Vec<(String, spirv::ExecutionModel)>,
     uniform_globals: HashMap<String, Value>,
     output_globals: HashMap<String, (Value, u32, spirv::Word)>, // (value, location, component_type)
@@ -68,6 +98,7 @@ impl CodeGenerator {
             function_cache: HashMap::new(),
             type_cache: HashMap::new(),
             current_function: None,
+            current_block: None,
             entry_points: Vec::new(),
             uniform_globals: HashMap::new(),
             output_globals: HashMap::new(),
@@ -311,7 +342,8 @@ impl CodeGenerator {
         }
 
         // Create entry block
-        let _entry_label = self.builder.begin_block(None)?;
+        let entry_label = self.builder.begin_block(None)?;
+        self.current_block = Some(entry_label);
         
         // Now store the parameters in local variables (must be done after begin_block)
         for (param_name, param_type, param_id, param_type_info) in params_to_store {
@@ -369,6 +401,7 @@ impl CodeGenerator {
         
         self.builder.end_function()?;
         self.current_function = None;
+        self.current_block = None;
 
         Ok(())
     }
@@ -421,74 +454,24 @@ impl CodeGenerator {
 
                 // Use unified operator string instead of enum variants
                 match op.op.as_str() {
+                    "+" => arithmetic_op!(self, left_val, right_val, i_add, f_add, "addition"),
+                    "-" => arithmetic_op!(self, left_val, right_val, i_sub, f_sub, "subtraction"),
+                    "*" => arithmetic_op!(self, left_val, right_val, i_mul, f_mul, "multiplication"),
                     "/" => {
-                        // Assuming float division
-                        let result_id = self.builder.f_div(self.f32_type, None, left_val.id, right_val.id)?;
-                        Ok(Value {
-                            id: result_id,
-                            type_id: self.f32_type,
-                        })
-                    }
-                    "+" => {
-                        // Check the type of the operands to determine whether to use int or float addition
-                        if left_val.type_id == self.i32_type && right_val.type_id == self.i32_type {
-                            let result_id = self.builder.i_add(self.i32_type, None, left_val.id, right_val.id)?;
-                            Ok(Value {
-                                id: result_id,
-                                type_id: self.i32_type,
-                            })
-                        } else if left_val.type_id == self.f32_type && right_val.type_id == self.f32_type {
-                            let result_id = self.builder.f_add(self.f32_type, None, left_val.id, right_val.id)?;
-                            Ok(Value {
-                                id: result_id,
-                                type_id: self.f32_type,
-                            })
+                        // Division - only support float for now
+                        if left_val.type_id == self.f32_type && right_val.type_id == self.f32_type {
+                            let result_id = self.builder.f_div(self.f32_type, None, left_val.id, right_val.id)?;
+                            Ok(Value { id: result_id, type_id: self.f32_type })
                         } else {
-                            Err(CompilerError::SpirvError(
-                                "Type mismatch in addition: operands must be both int or both float".to_string()
-                            ))
+                            Err(CompilerError::SpirvError("Division currently only supported for float types".to_string()))
                         }
                     }
-                    "-" => {
-                        // Check the type of the operands to determine whether to use int or float subtraction
-                        if left_val.type_id == self.i32_type && right_val.type_id == self.i32_type {
-                            let result_id = self.builder.i_sub(self.i32_type, None, left_val.id, right_val.id)?;
-                            Ok(Value {
-                                id: result_id,
-                                type_id: self.i32_type,
-                            })
-                        } else if left_val.type_id == self.f32_type && right_val.type_id == self.f32_type {
-                            let result_id = self.builder.f_sub(self.f32_type, None, left_val.id, right_val.id)?;
-                            Ok(Value {
-                                id: result_id,
-                                type_id: self.f32_type,
-                            })
-                        } else {
-                            Err(CompilerError::SpirvError(
-                                "Type mismatch in subtraction: operands must be both int or both float".to_string()
-                            ))
-                        }
-                    }
-                    "*" => {
-                        // Check the type of the operands to determine whether to use int or float multiplication
-                        if left_val.type_id == self.i32_type && right_val.type_id == self.i32_type {
-                            let result_id = self.builder.i_mul(self.i32_type, None, left_val.id, right_val.id)?;
-                            Ok(Value {
-                                id: result_id,
-                                type_id: self.i32_type,
-                            })
-                        } else if left_val.type_id == self.f32_type && right_val.type_id == self.f32_type {
-                            let result_id = self.builder.f_mul(self.f32_type, None, left_val.id, right_val.id)?;
-                            Ok(Value {
-                                id: result_id,
-                                type_id: self.f32_type,
-                            })
-                        } else {
-                            Err(CompilerError::SpirvError(
-                                "Type mismatch in multiplication: operands must be both int or both float".to_string()
-                            ))
-                        }
-                    }
+                    "==" => comparison_op!(self, left_val, right_val, i_equal, f_ord_equal, "equality"),
+                    "!=" => comparison_op!(self, left_val, right_val, i_not_equal, f_ord_not_equal, "inequality"),
+                    "<" => comparison_op!(self, left_val, right_val, s_less_than, f_ord_less_than, "less than"),
+                    ">" => comparison_op!(self, left_val, right_val, s_greater_than, f_ord_greater_than, "greater than"),
+                    "<=" => comparison_op!(self, left_val, right_val, s_less_than_equal, f_ord_less_than_equal, "less than equal"),
+                    ">=" => comparison_op!(self, left_val, right_val, s_greater_than_equal, f_ord_greater_than_equal, "greater than equal"),
                     _ => {
                         Err(CompilerError::SpirvError(format!(
                             "Unknown binary operator: {}", op.op
@@ -708,6 +691,9 @@ impl CodeGenerator {
                     type_id: array_type,
                 })
             }
+            Expression::If(if_expr) => {
+                self.generate_if_then_else(&if_expr.condition, &if_expr.then_branch, &if_expr.else_branch)
+            }
             Expression::ArrayIndex(array_expr, index_expr) => {
                 let array_name = match array_expr.as_ref() {
                     Expression::Identifier(name) => name,
@@ -773,6 +759,68 @@ impl CodeGenerator {
                 "Expression type not yet implemented for rspirv backend".to_string(),
             )),
         }
+    }
+
+    fn generate_if_then_else(
+        &mut self,
+        condition: &Expression,
+        then_expr: &Expression,
+        else_expr: &Expression,
+    ) -> Result<Value> {
+        // Get current block - must exist when generating expressions
+        let _current = self.current_block.ok_or_else(|| {
+            CompilerError::SpirvError("No current block available for if-then-else".to_string())
+        })?;
+
+        // Generate condition
+        let condition_val = self.generate_expression(condition)?;
+
+        // Create blocks for then, else, and merge
+        let then_block = self.builder.id();
+        let else_block = self.builder.id();
+        let merge_block = self.builder.id();
+
+        // Create selection merge and branch
+        self.builder.selection_merge(merge_block, spirv::SelectionControl::NONE)?;
+        self.builder.branch_conditional(condition_val.id, then_block, else_block, vec![])?;
+
+        // Generate then block
+        self.builder.begin_block(Some(then_block))?;
+        self.current_block = Some(then_block);
+        let then_val = self.generate_expression(then_expr)?;
+        let then_end_block = self.current_block.ok_or_else(|| {
+            CompilerError::SpirvError("Lost current block during then expression".to_string())
+        })?;
+        self.builder.branch(merge_block)?;
+
+        // Generate else block  
+        self.builder.begin_block(Some(else_block))?;
+        self.current_block = Some(else_block);
+        let else_val = self.generate_expression(else_expr)?;
+        let else_end_block = self.current_block.ok_or_else(|| {
+            CompilerError::SpirvError("Lost current block during else expression".to_string())
+        })?;
+        self.builder.branch(merge_block)?;
+
+        // Create merge block with phi
+        self.builder.begin_block(Some(merge_block))?;
+        self.current_block = Some(merge_block);
+
+        // Create phi instruction - both branches should have same type
+        let result_type = then_val.type_id;
+        let phi_id = self.builder.phi(
+            result_type,
+            None,
+            vec![
+                (then_val.id, then_end_block),
+                (else_val.id, else_end_block),
+            ]
+        )?;
+
+        Ok(Value {
+            id: phi_id,
+            type_id: result_type,
+        })
     }
 
     fn generate_vector_constructor(

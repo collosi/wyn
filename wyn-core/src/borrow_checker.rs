@@ -320,6 +320,11 @@ impl BorrowChecker {
                     location_counter,
                 )?;
             }
+            Expression::If(if_expr) => {
+                self.extract_expression_facts(fact_writer, &if_expr.condition, current_block, location_counter)?;
+                self.extract_expression_facts(fact_writer, &if_expr.then_branch, current_block, location_counter)?;
+                self.extract_expression_facts(fact_writer, &if_expr.else_branch, current_block, location_counter)?;
+            }
         }
 
         Ok(())

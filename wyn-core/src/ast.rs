@@ -127,6 +127,7 @@ pub enum Expression {
     Application(Box<Expression>, Vec<Expression>), // Function application
     LetIn(LetInExpr),
     FieldAccess(Box<Expression>, String), // e.g. v.x, v.y
+    If(IfExpr), // if-then-else expression
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -153,6 +154,13 @@ pub struct LetInExpr {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BinaryOp {
     pub op: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IfExpr {
+    pub condition: Box<Expression>,
+    pub then_branch: Box<Expression>,
+    pub else_branch: Box<Expression>,
 }
 
 // Helper module for creating common polytype Types

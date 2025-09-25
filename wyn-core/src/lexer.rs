@@ -15,6 +15,9 @@ pub enum Token {
     Def,
     Val,
     In,
+    If,
+    Then,
+    Else,
 
     // Identifiers and literals
     Identifier(String),
@@ -70,6 +73,9 @@ fn parse_keyword(input: &str) -> IResult<&str, Token> {
         keyword("def", Token::Def),
         keyword("val", Token::Val),
         keyword("in", Token::In),
+        keyword("if", Token::If),
+        keyword("then", Token::Then),
+        keyword("else", Token::Else),
     ))(input)
 }
 
@@ -126,7 +132,16 @@ fn parse_int_literal(input: &str) -> IResult<&str, Token> {
 fn parse_operator(input: &str) -> IResult<&str, Token> {
     alt((
         value(Token::Arrow, tag("->")),
+        // Comparison operators (must come before single =, <, >)
+        map(tag("=="), |s: &str| Token::BinOp(s.to_string())),
+        map(tag("!="), |s: &str| Token::BinOp(s.to_string())),
+        map(tag("<="), |s: &str| Token::BinOp(s.to_string())),
+        map(tag(">="), |s: &str| Token::BinOp(s.to_string())),
+        map(tag("<"), |s: &str| Token::BinOp(s.to_string())),
+        map(tag(">"), |s: &str| Token::BinOp(s.to_string())),
+        // Assignment (must come after ==)
         value(Token::Assign, tag("=")),
+        // Arithmetic operators
         map(tag("/"), |s: &str| Token::BinOp(s.to_string())),
         map(char('+'), |c| Token::BinOp(c.to_string())),
         map(char('-'), |c| Token::BinOp(c.to_string())),

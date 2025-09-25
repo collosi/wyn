@@ -165,6 +165,11 @@ impl<W: Write> CfgNemoExtractor<W> {
             Expression::FieldAccess(expr, _field) => {
                 self.extract_expression_cfg(expr)?;
             }
+            Expression::If(if_expr) => {
+                self.extract_expression_cfg(&if_expr.condition)?;
+                self.extract_expression_cfg(&if_expr.then_branch)?;
+                self.extract_expression_cfg(&if_expr.else_branch)?;
+            }
         }
 
         Ok(())
