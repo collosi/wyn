@@ -18,71 +18,7 @@ impl Default for TypeChecker {
 }
 
 impl TypeChecker {
-    fn resolve_operator_function(&self, op: &BinaryOp, left_type: &Type, right_type: &Type) -> Result<(String, Type)> {
-        // For now, require both operands to be the same type
-        if !self.types_equal(left_type, right_type) {
-            return Err(CompilerError::TypeError(format!(
-                "Binary operator requires matching operand types, got {:?} and {:?}",
-                left_type, right_type
-            )));
-        }
 
-        let op_prefix = match op.op.as_str() {
-            "+" => "op_add",
-            "-" => "op_subtract", 
-            "*" => "op_multiply",
-            "/" => "op_divide",
-            "==" => "op_equal",
-            "!=" => "op_not_equal", 
-            "<" => "op_less_than",
-            ">" => "op_greater_than",
-            "<=" => "op_less_than_equal",
-            ">=" => "op_greater_than_equal",
-            _ => return Err(CompilerError::TypeError(format!(
-                "Unknown binary operator: {}", op.op
-            ))),
-        };
-
-        let type_suffix = self.get_type_suffix(left_type)?;
-        let op_name = format!("{}_{}", op_prefix, type_suffix);
-        
-        // Determine the return type based on operator
-        let return_type = match op.op.as_str() {
-            "==" | "!=" | "<" | ">" | "<=" | ">=" => {
-                // Comparison operators return boolean
-                Type::Constructed(TypeName::Str("bool"), vec![])
-            }
-            _ => {
-                // Arithmetic operators return the same type as operands
-                left_type.clone()
-            }
-        };
-        
-        Ok((op_name, return_type))
-    }
-
-    fn get_type_suffix(&self, ty: &Type) -> Result<String> {
-        match ty {
-            Type::Constructed(TypeName::Str(name), _) => {
-                match *name {
-                    "int" => Ok("i32".to_string()),
-                    "float" => Ok("f32".to_string()),
-                    "vec2" => Ok("vec2".to_string()),
-                    "vec3" => Ok("vec3".to_string()),
-                    "vec4" => Ok("vec4".to_string()),
-                    "ivec2" => Ok("ivec2".to_string()),
-                    "ivec3" => Ok("ivec3".to_string()),
-                    "ivec4" => Ok("ivec4".to_string()),
-                    _ => Err(CompilerError::TypeError(format!(
-                        "Arithmetic operations not supported for type: {}", name
-                    )))
-                }
-            }
-            _ => Err(CompilerError::TypeError(format!(
-                "Arithmetic operations not supported for type: {:?}", ty
-            )))
-        }
-    }
 
     fn types_equal(&self, left: &Type, right: &Type) -> bool {
         match (left, right) {
@@ -475,41 +411,29 @@ impl TypeChecker {
                 let left_type = self.infer_expression(left)?;
                 let right_type = self.infer_expression(right)?;
 
-                // Map operator to appropriate op_* function based on operand types
-                let (op_name, _expected_arg_type) = self.resolve_operator_function(op, &left_type, &right_type)?;
-                
-                // Look up the operator function
-                let type_scheme = self
-                    .scope_stack
-                    .lookup(&op_name)
-                    .ok_or_else(|| CompilerError::UndefinedVariable(op_name.clone()))?;
-                let func_type = type_scheme.instantiate(&mut self.context);
+                // Check that both operands have compatible types
+                self.context.unify(&left_type, &right_type)
+                    .map_err(|_| CompilerError::TypeError(format!(
+                        "Binary operator '{}' requires operands of the same type, got {:?} and {:?}",
+                        op.op, left_type, right_type
+                    )))?;
 
-                // Type check as if this were a function call: op_func left_type right_type
-                let mut result_type = func_type.clone();
-                for arg_type in [left_type, right_type] {
-                    match result_type {
-                        Type::Constructed(TypeName::Str("->"), args) if args.len() == 2 => {
-                            let param_type = &args[0];
-                            let return_type = args[1].clone();
-                            self.context.unify(param_type, &arg_type).map_err(|e| {
-                                CompilerError::TypeError(format!(
-                                    "Type mismatch in {} operator: expected {:?}, got {:?}: {}",
-                                    op_name, param_type, arg_type, e
-                                ))
-                            })?;
-                            result_type = return_type;
-                        }
-                        _ => {
-                            return Err(CompilerError::TypeError(format!(
-                                "Operator function {} is not a function type",
-                                op_name
-                            )));
-                        }
+                // Determine return type based on operator
+                let return_type = match op.op.as_str() {
+                    "==" | "!=" | "<" | ">" | "<=" | ">=" => {
+                        // Comparison operators return boolean
+                        Type::Constructed(TypeName::Str("bool"), vec![])
                     }
-                }
+                    "+" | "-" | "*" | "/" => {
+                        // Arithmetic operators return the same type as operands
+                        left_type.apply(&self.context)
+                    }
+                    _ => return Err(CompilerError::TypeError(format!(
+                        "Unknown binary operator: {}", op.op
+                    )))
+                };
 
-                Ok(result_type.apply(&self.context))
+                Ok(return_type)
             }
             Expression::FunctionCall(func_name, args) => {
                 // Get function type scheme and instantiate it

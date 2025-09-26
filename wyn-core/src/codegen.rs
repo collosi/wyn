@@ -593,7 +593,13 @@ impl CodeGenerator {
                 } else {
                     // Create struct with element values
                     let struct_type = self.builder.type_struct(element_type_ids);
-                    let struct_id = self.builder.composite_construct(struct_type, None, element_values)?;
+                    let struct_id = if self.current_block.is_some() {
+                        // Inside function - use runtime composite construct
+                        self.builder.composite_construct(struct_type, None, element_values)?
+                    } else {
+                        // Global constant - use constant composite
+                        self.builder.constant_composite(struct_type, element_values)
+                    };
                     
                     Ok(Value {
                         id: struct_id,
@@ -683,8 +689,14 @@ impl CodeGenerator {
                 let length_id = self.builder.constant_bit32(self.i32_type, elements.len() as u32);
                 let array_type = self.builder.type_array(elem_type, length_id);
 
-                // Build the array using composite construct
-                let array_id = self.builder.composite_construct(array_type, None, element_values)?;
+                // Build the array using appropriate instruction based on context
+                let array_id = if self.current_block.is_some() {
+                    // Inside function - use runtime composite construct
+                    self.builder.composite_construct(array_type, None, element_values)?
+                } else {
+                    // Global constant - use constant composite
+                    self.builder.constant_composite(array_type, element_values)
+                };
 
                 Ok(Value {
                     id: array_id,
@@ -847,8 +859,14 @@ impl CodeGenerator {
         // Create the vector type - assume f32 elements for now
         let vec_type = self.builder.type_vector(self.f32_type, size);
 
-        // Build the vector using composite construct
-        let vector_id = self.builder.composite_construct(vec_type, None, elements)?;
+        // Build the vector using appropriate instruction based on context
+        let vector_id = if self.current_block.is_some() {
+            // Inside function - use runtime composite construct
+            self.builder.composite_construct(vec_type, None, elements)?
+        } else {
+            // Global constant - use constant composite
+            self.builder.constant_composite(vec_type, elements)
+        };
 
         Ok(Value {
             id: vector_id,
@@ -867,8 +885,14 @@ impl CodeGenerator {
             elements.push(element_id);
         }
 
-        // Build the vector
-        let vector_id = self.builder.composite_construct(vec4_type, None, elements)?;
+        // Build the vector using appropriate instruction based on context
+        let vector_id = if self.current_block.is_some() {
+            // Inside function - use runtime composite construct
+            self.builder.composite_construct(vec4_type, None, elements)?
+        } else {
+            // Global constant - use constant composite
+            self.builder.constant_composite(vec4_type, elements)
+        };
 
         Ok(Value {
             id: vector_id,

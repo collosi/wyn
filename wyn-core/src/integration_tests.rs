@@ -77,7 +77,7 @@ def fragment_main(): [4]f32 = red
 
         let compiler = Compiler::new();
         let result = compiler.compile(source);
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Compilation failed: {:?}", result.err());
     }
 
     #[test]
