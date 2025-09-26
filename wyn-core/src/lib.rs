@@ -5,6 +5,7 @@ pub mod builtins;
 pub mod cfg;
 pub mod cfg_nemo;
 pub mod codegen;
+pub mod constant_folding;
 pub mod defunctionalization;
 pub mod error;
 pub mod inference;
@@ -44,9 +45,13 @@ impl Compiler {
         let mut type_checker = type_checker::TypeChecker::new();
         type_checker.check_program(&program)?;
 
+        // Constant folding (evaluate compile-time constants)
+        let mut constant_folder = constant_folding::ConstantFolder::new();
+        let folded_program = constant_folder.fold_program(&program)?;
+
         // Defunctionalization (convert higher-order functions to first-order)
         let mut defunctionalizer = defunctionalization::Defunctionalizer::new();
-        let defunctionalized_program = defunctionalizer.defunctionalize_program(&program)?;
+        let defunctionalized_program = defunctionalizer.defunctionalize_program(&folded_program)?;
 
         // Generate SPIR-V using rspirv
         let codegen = codegen::CodeGenerator::new("wyn_module");
