@@ -265,6 +265,17 @@ impl CodeGenerator {
         *self.ptr_cache.entry(key).or_insert_with(|| self.builder.type_pointer(None, sc, ty))
     }
 
+    /// Create a composite (struct, array, or vector) using the appropriate instruction
+    /// based on context (runtime composite_construct vs compile-time constant_composite)
+    fn make_composite(&mut self, ty: spirv::Word, elems: Vec<spirv::Word>) -> Result<Value> {
+        let id = if self.current_block.is_some() {
+            self.builder.composite_construct(ty, None, elems)?
+        } else {
+            self.builder.constant_composite(ty, elems)
+        };
+        Ok(Value { id, type_id: ty })
+    }
+
     pub fn generate(mut self, program: &Program) -> Result<Vec<u32>> {
         // Try to create a pipeline from the program
         self.pipeline = Pipeline::from_program(program)?;
@@ -975,18 +986,7 @@ impl CodeGenerator {
                 } else {
                     // Create struct with element values
                     let struct_type = self.builder.type_struct(element_type_ids);
-                    let struct_id = if self.current_block.is_some() {
-                        // Inside function - use runtime composite construct
-                        self.builder.composite_construct(struct_type, None, element_values)?
-                    } else {
-                        // Global constant - use constant composite
-                        self.builder.constant_composite(struct_type, element_values)
-                    };
-
-                    Ok(Value {
-                        id: struct_id,
-                        type_id: struct_type,
-                    })
+                    self.make_composite(struct_type, element_values)
                 }
             }
             Expression::LetIn(let_in) => {
@@ -1080,19 +1080,8 @@ impl CodeGenerator {
                 let length_id = self.builder.constant_bit32(self.i32_type, elements.len() as u32);
                 let array_type = self.builder.type_array(elem_type, length_id);
 
-                // Build the array using appropriate instruction based on context
-                let array_id = if self.current_block.is_some() {
-                    // Inside function - use runtime composite construct
-                    self.builder.composite_construct(array_type, None, element_values)?
-                } else {
-                    // Global constant - use constant composite
-                    self.builder.constant_composite(array_type, element_values)
-                };
-
-                Ok(Value {
-                    id: array_id,
-                    type_id: array_type,
-                })
+                // Build the array
+                self.make_composite(array_type, element_values)
             }
             Expression::If(if_expr) => {
                 self.generate_if_then_else(&if_expr.condition, &if_expr.then_branch, &if_expr.else_branch)
@@ -1240,19 +1229,8 @@ impl CodeGenerator {
         // Create the vector type - assume f32 elements for now
         let vec_type = self.builder.type_vector(self.f32_type, size);
 
-        // Build the vector using appropriate instruction based on context
-        let vector_id = if self.current_block.is_some() {
-            // Inside function - use runtime composite construct
-            self.builder.composite_construct(vec_type, None, elements)?
-        } else {
-            // Global constant - use constant composite
-            self.builder.constant_composite(vec_type, elements)
-        };
-
-        Ok(Value {
-            id: vector_id,
-            type_id: vec_type,
-        })
+        // Build the vector
+        self.make_composite(vec_type, elements)
     }
 
     fn convert_array_to_vec4(&mut self, array_val: Value) -> Result<Value> {
@@ -1266,19 +1244,8 @@ impl CodeGenerator {
             elements.push(element_id);
         }
 
-        // Build the vector using appropriate instruction based on context
-        let vector_id = if self.current_block.is_some() {
-            // Inside function - use runtime composite construct
-            self.builder.composite_construct(vec4_type, None, elements)?
-        } else {
-            // Global constant - use constant composite
-            self.builder.constant_composite(vec4_type, elements)
-        };
-
-        Ok(Value {
-            id: vector_id,
-            type_id: vec4_type,
-        })
+        // Build the vector
+        self.make_composite(vec4_type, elements)
     }
 
     fn get_or_create_type(&mut self, ty: &Type) -> Result<TypeInfo> {
