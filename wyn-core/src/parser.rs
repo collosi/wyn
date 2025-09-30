@@ -540,7 +540,7 @@ impl Parser {
     fn can_start_primary_expression(&self) -> bool {
         matches!(
             self.peek(),
-            Some(Token::IntLiteral(_)) | 
+            Some(Token::IntLiteral(_)) |
             Some(Token::FloatLiteral(_)) |
             Some(Token::Identifier(_)) |
             Some(Token::LeftBracket) |  // array literal

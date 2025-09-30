@@ -90,22 +90,10 @@ impl AttrExt for [Attribute] {
         self.iter().any(pred)
     }
     fn first_builtin(&self) -> Option<spirv::BuiltIn> {
-        self.iter().find_map(|a| {
-            if let Attribute::BuiltIn(b) = a {
-                Some(*b)
-            } else {
-                None
-            }
-        })
+        self.iter().find_map(|a| if let Attribute::BuiltIn(b) = a { Some(*b) } else { None })
     }
     fn first_location(&self) -> Option<u32> {
-        self.iter().find_map(|a| {
-            if let Attribute::Location(l) = a {
-                Some(*l)
-            } else {
-                None
-            }
-        })
+        self.iter().find_map(|a| if let Attribute::Location(l) = a { Some(*l) } else { None })
     }
 }
 
