@@ -2,6 +2,7 @@ use crate::ast::TypeName;
 use crate::ast::*;
 use crate::error::{CompilerError, Result};
 use crate::scope::ScopeStack;
+use log::{debug, warn};
 use polytype::{Context, TypeScheme};
 use std::collections::HashMap;
 
@@ -39,7 +40,7 @@ impl TypeChecker {
 
         // Load built-in functions from builtins.wyn file
         if let Err(e) = checker.load_builtins() {
-            eprintln!("Warning: Could not load builtins: {}", e);
+            warn!("Could not load builtins: {}", e);
         }
 
         checker
@@ -287,14 +288,14 @@ impl TypeChecker {
     fn check_declaration(&mut self, decl: &Declaration) -> Result<()> {
         match decl {
             Declaration::Decl(decl_node) => {
-                println!(
-                    "DEBUG: Checking {} declaration: {}",
+                debug!(
+                    "Checking {} declaration: {}",
                     decl_node.keyword, decl_node.name
                 );
                 self.check_decl(decl_node)
             }
             Declaration::Val(val_decl) => {
-                println!("DEBUG: Checking Val declaration: {}", val_decl.name);
+                debug!("Checking Val declaration: {}", val_decl.name);
                 self.check_val_decl(val_decl)
             }
         }
@@ -323,7 +324,7 @@ impl TypeChecker {
             let uniform_type = decl.ty.as_ref().unwrap().clone();
             let type_scheme = TypeScheme::Monotype(uniform_type);
             self.scope_stack.insert(decl.name.clone(), type_scheme);
-            println!("DEBUG: Inserting uniform variable '{}' into scope", decl.name);
+            debug!("Inserting uniform variable '{}' into scope", decl.name);
 
             return Ok(());
         }
@@ -353,9 +354,9 @@ impl TypeChecker {
             // Add to scope - use declared type if available, otherwise inferred type
             let stored_type = decl.ty.as_ref().unwrap_or(&expr_type).clone();
             let type_scheme = TypeScheme::Monotype(stored_type.clone());
-            println!("DEBUG: Inserting variable '{}' into scope", decl.name);
+            debug!("Inserting variable '{}' into scope", decl.name);
             self.scope_stack.insert(decl.name.clone(), type_scheme);
-            println!("Inferred type for {}: {}", decl.name, stored_type);
+            debug!("Inferred type for {}: {}", decl.name, stored_type);
         } else {
             // Function declaration: let/def name param1 param2 = body
             // Create type variables or use explicit types for parameters
@@ -397,7 +398,7 @@ impl TypeChecker {
             let type_scheme = TypeScheme::Monotype(func_type.clone());
             self.scope_stack.insert(decl.name.clone(), type_scheme);
 
-            println!("Inferred type for {}: {}", decl.name, func_type);
+            debug!("Inferred type for {}: {}", decl.name, func_type);
         }
 
         Ok(())
@@ -416,7 +417,7 @@ impl TypeChecker {
             Expression::FloatLiteral(_) => Ok(types::f32()),
             Expression::Identifier(name) => {
                 let type_scheme = self.scope_stack.lookup(name).ok_or_else(|| {
-                    println!("DEBUG: Variable lookup failed for '{}'", name);
+                    debug!("Variable lookup failed for '{}'", name);
                     CompilerError::UndefinedVariable(name.clone())
                 })?;
                 // Instantiate the type scheme to get a concrete type

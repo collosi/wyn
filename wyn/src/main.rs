@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use log::{info, error};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -79,6 +80,7 @@ enum DriverError {
 }
 
 fn main() -> Result<(), DriverError> {
+    env_logger::init();
     let cli = Cli::parse();
 
     match cli.command {
@@ -122,7 +124,7 @@ fn compile_file(
     verbose: bool,
 ) -> Result<(), DriverError> {
     if verbose {
-        println!("Compiling {}...", input.display());
+        info!("Compiling {}...", input.display());
     }
 
     // Read source file
@@ -162,8 +164,8 @@ fn compile_file(
     }
 
     if verbose {
-        println!("Successfully compiled to {}", output_path.display());
-        println!("Generated {} words of SPIR-V", spirv_len);
+        info!("Successfully compiled to {}", output_path.display());
+        info!("Generated {} words of SPIR-V", spirv_len);
     }
 
     Ok(())
@@ -177,7 +179,7 @@ fn check_file(
     verbose: bool,
 ) -> Result<(), DriverError> {
     if verbose {
-        println!("Checking {}...", input.display());
+        info!("Checking {}...", input.display());
     }
 
     // Read source file
@@ -203,7 +205,7 @@ fn check_file(
     let _spirv = compiler.compile(&source)?;
 
     if verbose {
-        println!("✓ {} is valid", input.display());
+        info!("✓ {} is valid", input.display());
     }
 
     Ok(())
@@ -227,7 +229,7 @@ fn generate_annotated_source(
     fs::write(output_path, annotated)?;
 
     if verbose {
-        println!("Generated annotated source: {}", output_path.display());
+        info!("Generated annotated source: {}", output_path.display());
     }
 
     Ok(())
@@ -245,7 +247,7 @@ fn generate_nemo_facts(source: &str, output_path: &PathBuf, verbose: bool) -> Re
     extractor.extract_cfg(&program)?;
 
     if verbose {
-        println!("Generated Nemo facts: {}", output_path.display());
+        info!("Generated Nemo facts: {}", output_path.display());
     }
 
     Ok(())
@@ -262,13 +264,13 @@ fn run_borrow_checking(source: &str, verbose: bool) -> Result<(), DriverError> {
     let result = checker.check_program(&program)?;
 
     if result.has_errors() {
-        println!("Borrow check errors found:");
+        error!("Borrow check errors found:");
         result.print_errors();
         return Err(DriverError::CompilationError(
             wyn_core::error::CompilerError::SpirvError("Borrow check failed".to_string()),
         ));
     } else if verbose {
-        println!("✓ Borrow checking passed");
+        info!("✓ Borrow checking passed");
     }
 
     Ok(())

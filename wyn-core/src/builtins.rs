@@ -1,6 +1,7 @@
 use crate::ast::{Type, TypeName};
 use crate::codegen::Value;
 use crate::error::{CompilerError, Result};
+use log::debug;
 use rspirv::dr::Builder;
 use rspirv::spirv;
 use std::collections::HashMap;
@@ -52,7 +53,7 @@ impl BuiltinManager {
         // Import GLSL.std.450 extension instruction set
         self.glsl_ext_inst_id = Some(builder.ext_inst_import("GLSL.std.450"));
 
-        println!("DEBUG: Imported GLSL.std.450 extension instruction set");
+        debug!("Imported GLSL.std.450 extension instruction set");
         Ok(())
     }
 

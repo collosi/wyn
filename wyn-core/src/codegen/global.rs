@@ -1,4 +1,5 @@
 use crate::error::Result;
+use log::debug;
 use rspirv::dr::{Builder, Operand};
 use rspirv::spirv::{self, Decoration, ExecutionModel, StorageClass};
 use std::collections::HashMap;
@@ -53,8 +54,8 @@ impl GlobalBuilder {
         // Store for future lookups
         self.builtin_variables.insert(key, var_id);
 
-        println!(
-            "DEBUG: Created {:?} builtin {:?} for {:?}",
+        debug!(
+            "Created {:?} builtin {:?} for {:?}",
             storage_class, builtin, execution_model
         );
         Ok(Some(var_id))
@@ -86,8 +87,8 @@ impl GlobalBuilder {
         // Store for future lookups
         self.location_variables.insert(key, var_id);
 
-        println!(
-            "DEBUG: Created {:?} location {} variable",
+        debug!(
+            "Created {:?} location {} variable",
             storage_class, location
         );
         Ok(var_id)
@@ -204,15 +205,15 @@ impl GlobalBuilder {
             .filter_map(|((builtin, storage_class), &var_id)| {
                 let is_valid =
                     self.is_builtin_valid_for_execution_model(*builtin, *storage_class, execution_model);
-                println!(
-                    "DEBUG: Builtin {:?} {:?} for {:?}: valid={}",
+                debug!(
+                    "Builtin {:?} {:?} for {:?}: valid={}",
                     builtin, storage_class, execution_model, is_valid
                 );
                 if is_valid { Some(var_id) } else { None }
             })
             .collect();
-        println!(
-            "DEBUG: get_builtin_interface_variables for {:?} returning {} variables",
+        debug!(
+            "get_builtin_interface_variables for {:?} returning {} variables",
             execution_model,
             vars.len()
         );

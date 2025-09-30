@@ -10,6 +10,7 @@ thiserror.workspace = true
 nom.workspace = true
 polytype.workspace = true
 spirv.workspace = true
+log.workspace = true
 rspirv = "0.12"
 nemo = { git = "https://github.com/knowsys/nemo", tag = "v0.8.0" }
 

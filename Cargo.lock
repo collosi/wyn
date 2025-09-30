@@ -3857,6 +3857,8 @@ name = "wyn"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "env_logger",
+ "log",
  "thiserror 1.0.69",
  "wyn-core",
 ]
@@ -3865,6 +3867,7 @@ dependencies = [
 name = "wyn-core"
 version = "0.1.0"
 dependencies = [
+ "log",
  "naga 22.1.0",
  "nemo",
  "nom",

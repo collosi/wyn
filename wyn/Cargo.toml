@@ -13,3 +13,5 @@ path = "src/main.rs"
 wyn-core = { path = "../wyn-core" }
 clap.workspace = true
 thiserror.workspace = true
+log.workspace = true
+env_logger.workspace = true

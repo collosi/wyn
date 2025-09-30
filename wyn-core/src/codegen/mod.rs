@@ -6,6 +6,7 @@ use crate::ast::*;
 use crate::builtins::BuiltinManager;
 use crate::error::{CompilerError, Result};
 use self::global::GlobalBuilder;
+use log::debug;
 use rspirv::binary::Assemble;
 use rspirv::dr::{Builder, Module as SpirvModule};
 use rspirv::spirv::{self, AddressingModel, Capability, ExecutionModel, MemoryModel, StorageClass};
@@ -131,8 +132,8 @@ impl CodeGenerator {
                     type_info.id,
                 )?;
 
-                println!(
-                    "DEBUG: Created fragment input at location {} with type {:?}",
+                debug!(
+                    "Created fragment input at location {} with type {:?}",
                     location, var_type
                 );
             }
@@ -460,8 +461,8 @@ impl CodeGenerator {
         // Store for SPIR-V decoration generation
         self.uniform_globals.insert(decl.name.clone(), value);
 
-        println!(
-            "DEBUG: Generated uniform variable '{}' with type {:?}",
+        debug!(
+            "Generated uniform variable '{}' with type {:?}",
             decl.name, ty
         );
 
@@ -500,8 +501,8 @@ impl CodeGenerator {
             _ => {
                 // For complex expressions, skip global variable generation
                 // In shader programming, complex calculations should be in functions
-                println!(
-                    "Warning: Skipping global variable '{}' with complex initializer - use literals only for globals",
+                log::warn!(
+                    "Skipping global variable '{}' with complex initializer - use literals only for globals",
                     name
                 );
                 Ok(())
@@ -1332,8 +1333,8 @@ impl CodeGenerator {
             _ => {} // Other execution models don't need special modes for now
         }
 
-        println!(
-            "DEBUG: Added SPIR-V entry point metadata for '{}' with execution model {:?}",
+        debug!(
+            "Added SPIR-V entry point metadata for '{}' with execution model {:?}",
             name, exec_model
         );
 
@@ -1362,7 +1363,7 @@ impl CodeGenerator {
         // Convert module to SPIR-V words
         let words = self.module.assemble();
 
-        println!("DEBUG: Generated {} words of SPIR-V", words.len());
+        debug!("Generated {} words of SPIR-V", words.len());
 
         Ok(words)
     }
