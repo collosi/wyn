@@ -1,6 +1,6 @@
+use crate::ast::AttrExt;
 use crate::ast::TypeName;
 use crate::ast::*;
-use crate::ast::AttrExt;
 use crate::builtins::BuiltinManager;
 use crate::codegen_global::GlobalBuilder;
 use crate::error::{CompilerError, Result};
@@ -49,8 +49,7 @@ impl Pipeline {
                     attributed_types
                         .iter()
                         .filter_map(|attr_type| {
-                            attr_type.attributes.first_location()
-                                .map(|loc| (loc, attr_type.ty.clone()))
+                            attr_type.attributes.first_location().map(|loc| (loc, attr_type.ty.clone()))
                         })
                         .collect()
                 } else {
@@ -122,6 +121,13 @@ pub struct TypeInfo {
     pub size_bytes: u32,
 }
 
+/// Key for caching pointer types by storage class and pointee type
+#[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
+struct PtrKey {
+    sc: StorageClass,
+    ty: spirv::Word,
+}
+
 pub struct CodeGenerator {
     builder: Builder,
     module: SpirvModule,
@@ -132,6 +138,7 @@ pub struct CodeGenerator {
     variable_types: HashMap<String, Type>,
     function_cache: HashMap<String, spirv::Word>,
     type_cache: HashMap<Type, TypeInfo>,
+    ptr_cache: HashMap<PtrKey, spirv::Word>,
     current_function: Option<spirv::Word>,
     current_block: Option<spirv::Word>,
     function_entry_block_index: Option<usize>,
@@ -146,11 +153,6 @@ pub struct CodeGenerator {
     bool_type: spirv::Word,
     i32_type: spirv::Word,
     f32_type: spirv::Word,
-    ptr_input_f32_type: spirv::Word,
-    ptr_output_f32_type: spirv::Word,
-    ptr_uniform_f32_type: spirv::Word,
-    ptr_function_f32_type: spirv::Word,
-    ptr_function_i32_type: spirv::Word,
 }
 
 impl CodeGenerator {
@@ -228,6 +230,7 @@ impl CodeGenerator {
             variable_types: HashMap::new(),
             function_cache: HashMap::new(),
             type_cache: HashMap::new(),
+            ptr_cache: HashMap::new(),
             current_function: None,
             current_block: None,
             function_entry_block_index: None,
@@ -242,11 +245,6 @@ impl CodeGenerator {
             bool_type: 0,
             i32_type: 0,
             f32_type: 0,
-            ptr_input_f32_type: 0,
-            ptr_output_f32_type: 0,
-            ptr_uniform_f32_type: 0,
-            ptr_function_f32_type: 0,
-            ptr_function_i32_type: 0,
         };
 
         generator.setup_common_types();
@@ -259,13 +257,12 @@ impl CodeGenerator {
         self.bool_type = self.builder.type_bool();
         self.i32_type = self.builder.type_int(32, 1);
         self.f32_type = self.builder.type_float(32);
+    }
 
-        // Create pointer types for different storage classes
-        self.ptr_input_f32_type = self.builder.type_pointer(None, StorageClass::Input, self.f32_type);
-        self.ptr_output_f32_type = self.builder.type_pointer(None, StorageClass::Output, self.f32_type);
-        self.ptr_uniform_f32_type = self.builder.type_pointer(None, StorageClass::Uniform, self.f32_type);
-        self.ptr_function_f32_type = self.builder.type_pointer(None, StorageClass::Function, self.f32_type);
-        self.ptr_function_i32_type = self.builder.type_pointer(None, StorageClass::Function, self.i32_type);
+    /// Get or create a pointer type for the given storage class and pointee type
+    fn ptr_of(&mut self, sc: StorageClass, ty: spirv::Word) -> spirv::Word {
+        let key = PtrKey { sc, ty };
+        *self.ptr_cache.entry(key).or_insert_with(|| self.builder.type_pointer(None, sc, ty))
     }
 
     pub fn generate(mut self, program: &Program) -> Result<Vec<u32>> {
@@ -303,7 +300,8 @@ impl CodeGenerator {
                     self.generate_entry_point(decl_node)
                 } else if decl_node.params.is_empty() {
                     // Check if this is a uniform declaration
-                    let is_uniform = decl_node.attributes.iter().any(|attr| matches!(attr, Attribute::Uniform));
+                    let is_uniform =
+                        decl_node.attributes.iter().any(|attr| matches!(attr, Attribute::Uniform));
 
                     if is_uniform {
                         self.generate_uniform_declaration(decl_node)
@@ -336,7 +334,7 @@ impl CodeGenerator {
 
         // Create a global variable for the uniform
         let type_info = self.get_or_create_type(ty)?;
-        let ptr_type = self.builder.type_pointer(None, StorageClass::Uniform, type_info.id);
+        let ptr_type = self.ptr_of(StorageClass::Uniform, type_info.id);
         let global_id = self.builder.variable(ptr_type, None, StorageClass::Uniform, None);
 
         let value = Value {
@@ -373,7 +371,7 @@ impl CodeGenerator {
 
                 // Create a global variable with the correct type
                 let type_info = self.get_or_create_type(ty)?;
-                let ptr_type = self.builder.type_pointer(None, StorageClass::Private, type_info.id);
+                let ptr_type = self.ptr_of(StorageClass::Private, type_info.id);
                 let global_id =
                     self.builder.variable(ptr_type, None, StorageClass::Private, Some(value.id));
 
@@ -551,7 +549,7 @@ impl CodeGenerator {
         // Store regular parameters in local variables (must be done after begin_block)
         for (param_name, param_type, param_id, param_type_info) in params_to_store {
             // Create local variable for the parameter
-            let ptr_type = self.builder.type_pointer(None, StorageClass::Function, param_type_info.id);
+            let ptr_type = self.ptr_of(StorageClass::Function, param_type_info.id);
             let local_var = self.builder.variable(ptr_type, None, StorageClass::Function, None);
             self.builder.store(local_var, param_id, None, vec![])?;
 
@@ -1002,7 +1000,7 @@ impl CodeGenerator {
                 });
 
                 let type_info = self.get_or_create_type(&var_type)?;
-                let ptr_type = self.builder.type_pointer(None, StorageClass::Function, type_info.id);
+                let ptr_type = self.ptr_of(StorageClass::Function, type_info.id);
 
                 // Create the variable ID but queue the OpVariable instruction
                 let local_var = self.builder.id();
@@ -1142,8 +1140,7 @@ impl CodeGenerator {
                 let element_type_info = self.get_or_create_type(&element_type)?;
 
                 // Create pointer type for array element access
-                let element_ptr_type =
-                    self.builder.type_pointer(None, StorageClass::Function, element_type_info.id);
+                let element_ptr_type = self.ptr_of(StorageClass::Function, element_type_info.id);
 
                 // Use AccessChain to get element pointer
                 let element_ptr =
@@ -1444,7 +1441,7 @@ impl CodeGenerator {
 
                     // Create a global output variable for this component
                     let type_info = self.get_or_create_type(component_type)?;
-                    let ptr_type = self.builder.type_pointer(None, StorageClass::Output, type_info.id);
+                    let ptr_type = self.ptr_of(StorageClass::Output, type_info.id);
                     let global_id = self.builder.variable(ptr_type, None, StorageClass::Output, None);
 
                     let global_value = Value {
@@ -1500,8 +1497,7 @@ impl CodeGenerator {
                         StorageClass::Output,
                         exec_model,
                     )? {
-                        let ptr_type =
-                            self.builder.type_pointer(None, StorageClass::Output, type_info.id);
+                        let ptr_type = self.ptr_of(StorageClass::Output, type_info.id);
                         let global_value = Value {
                             id: global_id,
                             type_id: ptr_type,
@@ -1529,7 +1525,7 @@ impl CodeGenerator {
                         type_info.id,
                     )?;
 
-                    let ptr_type = self.builder.type_pointer(None, StorageClass::Output, type_info.id);
+                    let ptr_type = self.ptr_of(StorageClass::Output, type_info.id);
                     let global_value = Value {
                         id: global_id,
                         type_id: ptr_type,
