@@ -5,6 +5,7 @@ pub mod builtins;
 pub mod cfg;
 pub mod cfg_nemo;
 pub mod codegen;
+pub mod codegen_global;
 pub mod constant_folding;
 pub mod defunctionalization;
 pub mod error;

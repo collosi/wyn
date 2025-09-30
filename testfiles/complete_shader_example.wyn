@@ -1,0 +1,14 @@
+-- Complete shader example with vertex_index builtin
+
+#[vertex] def vertex_main(#[builtin(vertex_index)] vertex_index: i32): (#[builtin(position)] vec4, #[location(1)] vec3) =
+  let position: vec4 = if vertex_index == 0 then
+      vec4 -0.8f32 -0.8f32 0.0f32 1.0f32
+    else if vertex_index == 1 then
+      vec4 0.8f32 -0.8f32 0.0f32 1.0f32
+    else
+      vec4 0.0f32 0.8f32 0.0f32 1.0f32 in
+  let color: vec3 = vec3 1.0f32 0.0f32 0.0f32 in
+  (position, color)
+
+#[fragment] def fragment_main(): #[location(0)] vec4 = 
+  vec4 1.0f32 0.0f32 0.0f32 1.0f32
