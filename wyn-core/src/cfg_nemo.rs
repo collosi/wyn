@@ -2,7 +2,7 @@
 use crate::ast::*;
 use crate::cfg::{BlockId, Location};
 use crate::error::{CompilerError, Result};
-use crate::nemo_facts::{expr_type_name, NemoFactWriter};
+use crate::nemo_facts::{NemoFactWriter, expr_type_name};
 use std::io::Write;
 
 /// CFG extractor that can output both regular facts and Nemo facts
@@ -69,15 +69,11 @@ impl<W: Write> CfgNemoExtractor<W> {
             };
 
             // Write location fact
-            self.nemo_writer
-                .write_location_fact(location_id, &location)
-                .map_err(Self::io_error)?;
+            self.nemo_writer.write_location_fact(location_id, &location).map_err(Self::io_error)?;
 
             // Write expression type fact
             let expr_type = expr_type_name(expr);
-            self.nemo_writer
-                .write_expr_fact(location_id, expr_type)
-                .map_err(Self::io_error)?;
+            self.nemo_writer.write_expr_fact(location_id, expr_type).map_err(Self::io_error)?;
 
             self.current_index += 1;
         }
@@ -85,9 +81,7 @@ impl<W: Write> CfgNemoExtractor<W> {
         match expr {
             Expression::Identifier(name) => {
                 // Variable reference
-                self.nemo_writer
-                    .write_var_ref_fact(location_id, name)
-                    .map_err(Self::io_error)?;
+                self.nemo_writer.write_var_ref_fact(location_id, name).map_err(Self::io_error)?;
             }
             Expression::BinaryOp(_, left, right) => {
                 self.extract_expression_cfg(left)?;
@@ -126,9 +120,7 @@ impl<W: Write> CfgNemoExtractor<W> {
 
                 // Write edge from parent block to lambda block
                 if let Some(parent) = parent_block {
-                    self.nemo_writer
-                        .write_edge_fact(parent, lambda_block)
-                        .map_err(Self::io_error)?;
+                    self.nemo_writer.write_edge_fact(parent, lambda_block).map_err(Self::io_error)?;
                 }
 
                 // Process lambda parameters as variable definitions
@@ -182,9 +174,7 @@ impl<W: Write> CfgNemoExtractor<W> {
         self.current_index = 0;
 
         // Write block fact
-        self.nemo_writer
-            .write_block_fact(block_id)
-            .map_err(Self::io_error)?;
+        self.nemo_writer.write_block_fact(block_id).map_err(Self::io_error)?;
 
         if self.debug {
             eprintln!("DEBUG: Started new block {}", block_id.0);

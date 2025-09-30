@@ -23,9 +23,8 @@ impl std::str::FromStr for TypeName {
         if let Some(at_pos) = s.find('@') {
             let (name, size_str) = s.split_at(at_pos);
             let size_str = &size_str[1..]; // Skip the '@'
-            let size = size_str
-                .parse::<usize>()
-                .map_err(|_| format!("Invalid array size: {}", size_str))?;
+            let size =
+                size_str.parse::<usize>().map_err(|_| format!("Invalid array size: {}", size_str))?;
             // We need to leak the string to get &'static str for now
             let leaked_name = Box::leak(name.to_string().into_boxed_str());
             Ok(TypeName::Array(leaked_name, size))
@@ -82,8 +81,8 @@ pub struct Decl {
     pub keyword: &'static str, // Either "let" or "def"
     pub attributes: Vec<Attribute>,
     pub name: String,
-    pub params: Vec<DeclParam>, // Parameters - can be typed or untyped
-    pub ty: Option<Type>,       // Return type for functions or type annotation for variables
+    pub params: Vec<DeclParam>,            // Parameters - can be typed or untyped
+    pub ty: Option<Type>,                  // Return type for functions or type annotation for variables
     pub return_attributes: Vec<Attribute>, // Attributes on the return type (for entry points)
     pub attributed_return_type: Option<Vec<AttributedType>>, // For multiple outputs with per-component attributes
     pub body: Expression, // The value/expression for let/def declarations

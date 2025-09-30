@@ -137,10 +137,7 @@ impl GlobalBuilder {
                 )
             }
             (ExecutionModel::Fragment, StorageClass::Output) => {
-                matches!(
-                    builtin,
-                    spirv::BuiltIn::FragDepth | spirv::BuiltIn::SampleMask
-                )
+                matches!(builtin, spirv::BuiltIn::FragDepth | spirv::BuiltIn::SampleMask)
             }
             _ => false, // Other execution models not supported yet
         }
@@ -200,28 +197,18 @@ impl GlobalBuilder {
     }
 
     /// Get all created builtin variables for interface lists
-    pub fn get_builtin_interface_variables(
-        &self,
-        execution_model: ExecutionModel,
-    ) -> Vec<spirv::Word> {
+    pub fn get_builtin_interface_variables(&self, execution_model: ExecutionModel) -> Vec<spirv::Word> {
         let vars: Vec<spirv::Word> = self
             .builtin_variables
             .iter()
             .filter_map(|((builtin, storage_class), &var_id)| {
-                let is_valid = self.is_builtin_valid_for_execution_model(
-                    *builtin,
-                    *storage_class,
-                    execution_model,
-                );
+                let is_valid =
+                    self.is_builtin_valid_for_execution_model(*builtin, *storage_class, execution_model);
                 println!(
                     "DEBUG: Builtin {:?} {:?} for {:?}: valid={}",
                     builtin, storage_class, execution_model, is_valid
                 );
-                if is_valid {
-                    Some(var_id)
-                } else {
-                    None
-                }
+                if is_valid { Some(var_id) } else { None }
             })
             .collect();
         println!(
@@ -233,19 +220,14 @@ impl GlobalBuilder {
     }
 
     /// Get all created location variables for interface lists
-    pub fn get_location_interface_variables(
-        &self,
-        storage_class: StorageClass,
-    ) -> Vec<spirv::Word> {
+    pub fn get_location_interface_variables(&self, storage_class: StorageClass) -> Vec<spirv::Word> {
         self.location_variables
             .iter()
-            .filter_map(|((_, sc), &var_id)| {
-                if *sc == storage_class {
-                    Some(var_id)
-                } else {
-                    None
-                }
-            })
+            .filter_map(
+                |((_, sc), &var_id)| {
+                    if *sc == storage_class { Some(var_id) } else { None }
+                },
+            )
             .collect()
     }
 }

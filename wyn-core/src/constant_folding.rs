@@ -229,9 +229,7 @@ mod tests {
 
         // Test 135f32 / 255f32
         let expr = Expression::BinaryOp(
-            BinaryOp {
-                op: "/".to_string(),
-            },
+            BinaryOp { op: "/".to_string() },
             Box::new(Expression::FloatLiteral(135.0)),
             Box::new(Expression::FloatLiteral(255.0)),
         );
@@ -254,16 +252,12 @@ mod tests {
         // Test [135f32/255f32, 206f32/255f32, 1.0f32]
         let expr = Expression::ArrayLiteral(vec![
             Expression::BinaryOp(
-                BinaryOp {
-                    op: "/".to_string(),
-                },
+                BinaryOp { op: "/".to_string() },
                 Box::new(Expression::FloatLiteral(135.0)),
                 Box::new(Expression::FloatLiteral(255.0)),
             ),
             Expression::BinaryOp(
-                BinaryOp {
-                    op: "/".to_string(),
-                },
+                BinaryOp { op: "/".to_string() },
                 Box::new(Expression::FloatLiteral(206.0)),
                 Box::new(Expression::FloatLiteral(255.0)),
             ),

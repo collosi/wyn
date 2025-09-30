@@ -88,10 +88,8 @@ impl BuiltinManager {
 
                 // For most GLSL functions, the result type is the same as the first argument
                 let result_type = args[0].type_id;
-                let arg_operands: Vec<rspirv::dr::Operand> = args
-                    .iter()
-                    .map(|v| rspirv::dr::Operand::IdRef(v.id))
-                    .collect();
+                let arg_operands: Vec<rspirv::dr::Operand> =
+                    args.iter().map(|v| rspirv::dr::Operand::IdRef(v.id)).collect();
 
                 let result_id =
                     builder.ext_inst(result_type, None, glsl_ext_id, *inst_num, arg_operands)?;
@@ -127,10 +125,7 @@ impl BuiltinManager {
                 let float_type = Type::Constructed(TypeName::Str("float"), vec![]);
                 Ok((vec![float_type.clone()], float_type))
             }
-            _ => Err(CompilerError::TypeError(format!(
-                "Unknown builtin: {}",
-                name
-            ))),
+            _ => Err(CompilerError::TypeError(format!("Unknown builtin: {}", name))),
         }
     }
 }

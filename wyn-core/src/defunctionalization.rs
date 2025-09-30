@@ -75,11 +75,7 @@ impl Defunctionalizer {
                 keyword: "def",
                 attributes: vec![],
                 name: func.name.clone(),
-                params: func
-                    .params
-                    .iter()
-                    .map(|p| DeclParam::Untyped(p.name.clone()))
-                    .collect(),
+                params: func.params.iter().map(|p| DeclParam::Untyped(p.name.clone())).collect(),
                 ty: None, // Function definitions don't have explicit type annotations
                 return_attributes: vec![],
                 attributed_return_type: None,
@@ -122,9 +118,7 @@ impl Defunctionalizer {
         scope_stack: &mut ScopeStack<StaticValue>,
     ) -> Result<(Expression, StaticValue)> {
         match expr {
-            Expression::IntLiteral(n) => {
-                Ok((Expression::IntLiteral(*n), StaticValue::Dyn(types::i32())))
-            }
+            Expression::IntLiteral(n) => Ok((Expression::IntLiteral(*n), StaticValue::Dyn(types::i32()))),
             Expression::FloatLiteral(f) => {
                 Ok((Expression::FloatLiteral(*f), StaticValue::Dyn(types::f32())))
             }
@@ -144,9 +138,7 @@ impl Defunctionalizer {
                             // Reference to a closure record
                             Ok((Expression::Identifier(name.clone()), sv.clone()))
                         }
-                        StaticValue::Arr(_) => {
-                            Ok((Expression::Identifier(name.clone()), sv.clone()))
-                        }
+                        StaticValue::Arr(_) => Ok((Expression::Identifier(name.clone()), sv.clone())),
                     }
                 } else {
                     // Unknown variable - assume dynamic with type variable
@@ -165,8 +157,7 @@ impl Defunctionalizer {
                 let mut element_sv = None;
 
                 for elem in elements {
-                    let (transformed_elem, sv) =
-                        self.defunctionalize_expression(elem, scope_stack)?;
+                    let (transformed_elem, sv) = self.defunctionalize_expression(elem, scope_stack)?;
                     transformed_elements.push(transformed_elem);
 
                     // All elements should have the same static value structure
@@ -175,31 +166,23 @@ impl Defunctionalizer {
                     }
                 }
 
-                let array_sv = StaticValue::Arr(Box::new(
-                    element_sv.unwrap_or(StaticValue::Dyn(types::i32())),
-                ));
+                let array_sv =
+                    StaticValue::Arr(Box::new(element_sv.unwrap_or(StaticValue::Dyn(types::i32()))));
                 Ok((Expression::ArrayLiteral(transformed_elements), array_sv))
             }
             Expression::ArrayIndex(array, index) => {
-                let (transformed_array, _array_sv) =
-                    self.defunctionalize_expression(array, scope_stack)?;
-                let (transformed_index, _index_sv) =
-                    self.defunctionalize_expression(index, scope_stack)?;
+                let (transformed_array, _array_sv) = self.defunctionalize_expression(array, scope_stack)?;
+                let (transformed_index, _index_sv) = self.defunctionalize_expression(index, scope_stack)?;
 
                 // Result type depends on array element type - for now, assume dynamic
                 Ok((
-                    Expression::ArrayIndex(
-                        Box::new(transformed_array),
-                        Box::new(transformed_index),
-                    ),
+                    Expression::ArrayIndex(Box::new(transformed_array), Box::new(transformed_index)),
                     StaticValue::Dyn(polytype::Type::Variable(1)),
                 ))
             }
             Expression::BinaryOp(op, left, right) => {
-                let (transformed_left, left_sv) =
-                    self.defunctionalize_expression(left, scope_stack)?;
-                let (transformed_right, right_sv) =
-                    self.defunctionalize_expression(right, scope_stack)?;
+                let (transformed_left, left_sv) = self.defunctionalize_expression(left, scope_stack)?;
+                let (transformed_right, right_sv) = self.defunctionalize_expression(right, scope_stack)?;
 
                 // For binary arithmetic operations, the result type should be the same as the operand types
                 // (assuming type checking has already ensured they match)
@@ -231,8 +214,7 @@ impl Defunctionalizer {
                 // Regular function calls (first-order) remain unchanged
                 let mut transformed_args = Vec::new();
                 for arg in args {
-                    let (transformed_arg, _sv) =
-                        self.defunctionalize_expression(arg, scope_stack)?;
+                    let (transformed_arg, _sv) = self.defunctionalize_expression(arg, scope_stack)?;
                     transformed_args.push(transformed_arg);
                 }
 
@@ -246,8 +228,7 @@ impl Defunctionalizer {
                 let mut element_types = Vec::new();
 
                 for elem in elements {
-                    let (transformed_elem, sv) =
-                        self.defunctionalize_expression(elem, scope_stack)?;
+                    let (transformed_elem, sv) = self.defunctionalize_expression(elem, scope_stack)?;
                     transformed_elements.push(transformed_elem);
 
                     // Extract type from static value
@@ -290,8 +271,7 @@ impl Defunctionalizer {
                 ))
             }
             Expression::FieldAccess(expr, field) => {
-                let (transformed_expr, expr_sv) =
-                    self.defunctionalize_expression(expr, scope_stack)?;
+                let (transformed_expr, expr_sv) = self.defunctionalize_expression(expr, scope_stack)?;
                 Ok((
                     Expression::FieldAccess(Box::new(transformed_expr), field.clone()),
                     expr_sv, // Field access doesn't change the static value representation
@@ -363,17 +343,13 @@ impl Defunctionalizer {
             );
         }
 
-        let (transformed_body, _body_sv) =
-            self.defunctionalize_expression(&lambda.body, scope_stack)?;
+        let (transformed_body, _body_sv) = self.defunctionalize_expression(&lambda.body, scope_stack)?;
 
         // Pop parameter scope
         scope_stack.pop_scope();
 
         // Create the generated function
-        let return_type = lambda
-            .return_type
-            .clone()
-            .unwrap_or(polytype::Type::Variable(7));
+        let return_type = lambda.return_type.clone().unwrap_or(polytype::Type::Variable(7));
         let generated_func = DefunctionalizedFunction {
             name: func_name.clone(),
             params: func_params,
@@ -388,11 +364,7 @@ impl Defunctionalizer {
             // No free variables - just return function name
             Ok((
                 Expression::Identifier(func_name),
-                StaticValue::Lam(
-                    "__unused".to_string(),
-                    (*lambda.body).clone(),
-                    HashMap::new(),
-                ),
+                StaticValue::Lam("__unused".to_string(), (*lambda.body).clone(), HashMap::new()),
             ))
         } else {
             // Create closure record
@@ -541,11 +513,7 @@ impl Defunctionalizer {
         Ok(())
     }
 
-    fn create_closure_record(
-        &self,
-        func_name: &str,
-        free_vars: &HashSet<String>,
-    ) -> Result<Expression> {
+    fn create_closure_record(&self, func_name: &str, free_vars: &HashSet<String>) -> Result<Expression> {
         // For now, create a simple record-like structure
         // In a full implementation, this would create a proper record expression
         // For SPIR-V compatibility, we might need to represent this as an array or struct

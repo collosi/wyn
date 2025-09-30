@@ -4,8 +4,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use thiserror::Error;
 use wyn_core::{
-    annotator::CodeAnnotator, borrow_checker::BorrowChecker, cfg_nemo::CfgNemoExtractor, lexer,
-    parser::Parser as WynParser, Compiler,
+    Compiler, annotator::CodeAnnotator, borrow_checker::BorrowChecker, cfg_nemo::CfgNemoExtractor, lexer,
+    parser::Parser as WynParser,
 };
 
 #[derive(Parser)]
@@ -233,11 +233,7 @@ fn generate_annotated_source(
     Ok(())
 }
 
-fn generate_nemo_facts(
-    source: &str,
-    output_path: &PathBuf,
-    verbose: bool,
-) -> Result<(), DriverError> {
+fn generate_nemo_facts(source: &str, output_path: &PathBuf, verbose: bool) -> Result<(), DriverError> {
     // Parse the source to get the AST
     let tokens = lexer::tokenize(source).map_err(wyn_core::error::CompilerError::ParseError)?;
     let mut parser = WynParser::new(tokens);

@@ -23,10 +23,7 @@ impl TypeChecker {
             (Type::Constructed(l_name, l_args), Type::Constructed(r_name, r_args)) => {
                 l_name == r_name
                     && l_args.len() == r_args.len()
-                    && l_args
-                        .iter()
-                        .zip(r_args.iter())
-                        .all(|(l, r)| self.types_equal(l, r))
+                    && l_args.iter().zip(r_args.iter()).all(|(l, r)| self.types_equal(l, r))
             }
             (Type::Variable(l_id), Type::Variable(r_id)) => l_id == r_id,
             _ => false,
@@ -86,8 +83,7 @@ impl TypeChecker {
         // vec2: f32 -> f32 -> vec2
         let vec2_type = types::vec2();
         let vec2_body = Type::arrow(types::f32(), Type::arrow(types::f32(), vec2_type));
-        self.scope_stack
-            .insert("vec2".to_string(), TypeScheme::Monotype(vec2_body));
+        self.scope_stack.insert("vec2".to_string(), TypeScheme::Monotype(vec2_body));
 
         // vec3: f32 -> f32 -> f32 -> vec3
         let vec3_type = types::vec3();
@@ -95,8 +91,7 @@ impl TypeChecker {
             types::f32(),
             Type::arrow(types::f32(), Type::arrow(types::f32(), vec3_type)),
         );
-        self.scope_stack
-            .insert("vec3".to_string(), TypeScheme::Monotype(vec3_body));
+        self.scope_stack.insert("vec3".to_string(), TypeScheme::Monotype(vec3_body));
 
         // vec4: f32 -> f32 -> f32 -> f32 -> vec4
         let vec4_type = types::vec4();
@@ -107,22 +102,19 @@ impl TypeChecker {
                 Type::arrow(types::f32(), Type::arrow(types::f32(), vec4_type)),
             ),
         );
-        self.scope_stack
-            .insert("vec4".to_string(), TypeScheme::Monotype(vec4_body));
+        self.scope_stack.insert("vec4".to_string(), TypeScheme::Monotype(vec4_body));
 
         // Similarly for ivec2, ivec3, ivec4
         let ivec2_type = types::ivec2();
         let ivec2_body = Type::arrow(types::i32(), Type::arrow(types::i32(), ivec2_type));
-        self.scope_stack
-            .insert("ivec2".to_string(), TypeScheme::Monotype(ivec2_body));
+        self.scope_stack.insert("ivec2".to_string(), TypeScheme::Monotype(ivec2_body));
 
         let ivec3_type = types::ivec3();
         let ivec3_body = Type::arrow(
             types::i32(),
             Type::arrow(types::i32(), Type::arrow(types::i32(), ivec3_type)),
         );
-        self.scope_stack
-            .insert("ivec3".to_string(), TypeScheme::Monotype(ivec3_body));
+        self.scope_stack.insert("ivec3".to_string(), TypeScheme::Monotype(ivec3_body));
 
         let ivec4_type = types::ivec4();
         let ivec4_body = Type::arrow(
@@ -132,8 +124,7 @@ impl TypeChecker {
                 Type::arrow(types::i32(), Type::arrow(types::i32(), ivec4_type)),
             ),
         );
-        self.scope_stack
-            .insert("ivec4".to_string(), TypeScheme::Monotype(ivec4_body));
+        self.scope_stack.insert("ivec4".to_string(), TypeScheme::Monotype(ivec4_body));
 
         // Operator functions for arithmetic operations
         // f32 operations: op_add_f32, op_subtract_f32, op_multiply_f32, op_divide_f32
@@ -150,10 +141,7 @@ impl TypeChecker {
             "op_multiply_f32".to_string(),
             TypeScheme::Monotype(f32_binary_op.clone()),
         );
-        self.scope_stack.insert(
-            "op_divide_f32".to_string(),
-            TypeScheme::Monotype(f32_binary_op),
-        );
+        self.scope_stack.insert("op_divide_f32".to_string(), TypeScheme::Monotype(f32_binary_op));
 
         // i32 operations: op_add_i32, op_subtract_i32, op_multiply_i32, op_divide_i32
         let i32_binary_op = Type::arrow(types::i32(), Type::arrow(types::i32(), types::i32()));
@@ -169,10 +157,7 @@ impl TypeChecker {
             "op_multiply_i32".to_string(),
             TypeScheme::Monotype(i32_binary_op.clone()),
         );
-        self.scope_stack.insert(
-            "op_divide_i32".to_string(),
-            TypeScheme::Monotype(i32_binary_op),
-        );
+        self.scope_stack.insert("op_divide_i32".to_string(), TypeScheme::Monotype(i32_binary_op));
 
         // vec2 operations
         let vec2_binary_op = Type::arrow(types::vec2(), Type::arrow(types::vec2(), types::vec2()));
@@ -188,10 +173,7 @@ impl TypeChecker {
             "op_multiply_vec2".to_string(),
             TypeScheme::Monotype(vec2_binary_op.clone()),
         );
-        self.scope_stack.insert(
-            "op_divide_vec2".to_string(),
-            TypeScheme::Monotype(vec2_binary_op),
-        );
+        self.scope_stack.insert("op_divide_vec2".to_string(), TypeScheme::Monotype(vec2_binary_op));
 
         // vec3 operations
         let vec3_binary_op = Type::arrow(types::vec3(), Type::arrow(types::vec3(), types::vec3()));
@@ -207,10 +189,7 @@ impl TypeChecker {
             "op_multiply_vec3".to_string(),
             TypeScheme::Monotype(vec3_binary_op.clone()),
         );
-        self.scope_stack.insert(
-            "op_divide_vec3".to_string(),
-            TypeScheme::Monotype(vec3_binary_op),
-        );
+        self.scope_stack.insert("op_divide_vec3".to_string(), TypeScheme::Monotype(vec3_binary_op));
 
         // vec4 operations
         let vec4_binary_op = Type::arrow(types::vec4(), Type::arrow(types::vec4(), types::vec4()));
@@ -226,19 +205,13 @@ impl TypeChecker {
             "op_multiply_vec4".to_string(),
             TypeScheme::Monotype(vec4_binary_op.clone()),
         );
-        self.scope_stack.insert(
-            "op_divide_vec4".to_string(),
-            TypeScheme::Monotype(vec4_binary_op),
-        );
+        self.scope_stack.insert("op_divide_vec4".to_string(), TypeScheme::Monotype(vec4_binary_op));
 
         // Trigonometric functions: f32 -> f32
         let trig_type = Type::arrow(types::f32(), types::f32());
-        self.scope_stack
-            .insert("sin".to_string(), TypeScheme::Monotype(trig_type.clone()));
-        self.scope_stack
-            .insert("cos".to_string(), TypeScheme::Monotype(trig_type.clone()));
-        self.scope_stack
-            .insert("tan".to_string(), TypeScheme::Monotype(trig_type));
+        self.scope_stack.insert("sin".to_string(), TypeScheme::Monotype(trig_type.clone()));
+        self.scope_stack.insert("cos".to_string(), TypeScheme::Monotype(trig_type.clone()));
+        self.scope_stack.insert("tan".to_string(), TypeScheme::Monotype(trig_type));
 
         // Register vector field mappings
         self.register_vector_fields();
@@ -249,53 +222,35 @@ impl TypeChecker {
     fn register_vector_fields(&mut self) {
         // f32 vector fields
         // vec2 fields
-        self.record_field_map
-            .insert(("vec2".to_string(), "x".to_string()), types::f32());
-        self.record_field_map
-            .insert(("vec2".to_string(), "y".to_string()), types::f32());
+        self.record_field_map.insert(("vec2".to_string(), "x".to_string()), types::f32());
+        self.record_field_map.insert(("vec2".to_string(), "y".to_string()), types::f32());
 
         // vec3 fields
-        self.record_field_map
-            .insert(("vec3".to_string(), "x".to_string()), types::f32());
-        self.record_field_map
-            .insert(("vec3".to_string(), "y".to_string()), types::f32());
-        self.record_field_map
-            .insert(("vec3".to_string(), "z".to_string()), types::f32());
+        self.record_field_map.insert(("vec3".to_string(), "x".to_string()), types::f32());
+        self.record_field_map.insert(("vec3".to_string(), "y".to_string()), types::f32());
+        self.record_field_map.insert(("vec3".to_string(), "z".to_string()), types::f32());
 
         // vec4 fields
-        self.record_field_map
-            .insert(("vec4".to_string(), "x".to_string()), types::f32());
-        self.record_field_map
-            .insert(("vec4".to_string(), "y".to_string()), types::f32());
-        self.record_field_map
-            .insert(("vec4".to_string(), "z".to_string()), types::f32());
-        self.record_field_map
-            .insert(("vec4".to_string(), "w".to_string()), types::f32());
+        self.record_field_map.insert(("vec4".to_string(), "x".to_string()), types::f32());
+        self.record_field_map.insert(("vec4".to_string(), "y".to_string()), types::f32());
+        self.record_field_map.insert(("vec4".to_string(), "z".to_string()), types::f32());
+        self.record_field_map.insert(("vec4".to_string(), "w".to_string()), types::f32());
 
         // i32 vector fields
         // ivec2 fields
-        self.record_field_map
-            .insert(("ivec2".to_string(), "x".to_string()), types::i32());
-        self.record_field_map
-            .insert(("ivec2".to_string(), "y".to_string()), types::i32());
+        self.record_field_map.insert(("ivec2".to_string(), "x".to_string()), types::i32());
+        self.record_field_map.insert(("ivec2".to_string(), "y".to_string()), types::i32());
 
         // ivec3 fields
-        self.record_field_map
-            .insert(("ivec3".to_string(), "x".to_string()), types::i32());
-        self.record_field_map
-            .insert(("ivec3".to_string(), "y".to_string()), types::i32());
-        self.record_field_map
-            .insert(("ivec3".to_string(), "z".to_string()), types::i32());
+        self.record_field_map.insert(("ivec3".to_string(), "x".to_string()), types::i32());
+        self.record_field_map.insert(("ivec3".to_string(), "y".to_string()), types::i32());
+        self.record_field_map.insert(("ivec3".to_string(), "z".to_string()), types::i32());
 
         // ivec4 fields
-        self.record_field_map
-            .insert(("ivec4".to_string(), "x".to_string()), types::i32());
-        self.record_field_map
-            .insert(("ivec4".to_string(), "y".to_string()), types::i32());
-        self.record_field_map
-            .insert(("ivec4".to_string(), "z".to_string()), types::i32());
-        self.record_field_map
-            .insert(("ivec4".to_string(), "w".to_string()), types::i32());
+        self.record_field_map.insert(("ivec4".to_string(), "x".to_string()), types::i32());
+        self.record_field_map.insert(("ivec4".to_string(), "y".to_string()), types::i32());
+        self.record_field_map.insert(("ivec4".to_string(), "z".to_string()), types::i32());
+        self.record_field_map.insert(("ivec4".to_string(), "w".to_string()), types::i32());
 
         // TODO: Add other vector types (uvec, bvec, dvec, f16vec) when we have proper types for them
     }
@@ -303,8 +258,7 @@ impl TypeChecker {
     /// Register a record type with its field mappings
     pub fn register_record_type(&mut self, type_name: &str, fields: Vec<(String, Type)>) {
         for (field_name, field_type) in fields {
-            self.record_field_map
-                .insert((type_name.to_string(), field_name), field_type);
+            self.record_field_map.insert((type_name.to_string(), field_name), field_type);
         }
     }
 
@@ -358,8 +312,7 @@ impl TypeChecker {
             }
 
             // Check that the body is the placeholder (indicating no initializer was provided)
-            if !matches!(decl.body, Expression::Identifier(ref id) if id == "__uniform_placeholder")
-            {
+            if !matches!(decl.body, Expression::Identifier(ref id) if id == "__uniform_placeholder") {
                 return Err(CompilerError::TypeError(format!(
                     "Uniform declaration '{}' cannot have an initializer value. Uniforms must be provided by the host application.",
                     decl.name
@@ -370,10 +323,7 @@ impl TypeChecker {
             let uniform_type = decl.ty.as_ref().unwrap().clone();
             let type_scheme = TypeScheme::Monotype(uniform_type);
             self.scope_stack.insert(decl.name.clone(), type_scheme);
-            println!(
-                "DEBUG: Inserting uniform variable '{}' into scope",
-                decl.name
-            );
+            println!("DEBUG: Inserting uniform variable '{}' into scope", decl.name);
 
             return Ok(());
         }
@@ -503,7 +453,7 @@ impl TypeChecker {
                         return Err(CompilerError::TypeError(format!(
                             "Cannot index non-array type: got {:?}",
                             array_type
-                        )))
+                        )));
                     }
                 })
             }
@@ -512,11 +462,12 @@ impl TypeChecker {
                 let right_type = self.infer_expression(right)?;
 
                 // Check that both operands have compatible types
-                self.context.unify(&left_type, &right_type)
-                    .map_err(|_| CompilerError::TypeError(format!(
+                self.context.unify(&left_type, &right_type).map_err(|_| {
+                    CompilerError::TypeError(format!(
                         "Binary operator '{}' requires operands of the same type, got {:?} and {:?}",
                         op.op, left_type, right_type
-                    )))?;
+                    ))
+                })?;
 
                 // Determine return type based on operator
                 let return_type = match op.op.as_str() {
@@ -532,7 +483,7 @@ impl TypeChecker {
                         return Err(CompilerError::TypeError(format!(
                             "Unknown binary operator: {}",
                             op.op
-                        )))
+                        )));
                     }
                 };
 
@@ -557,11 +508,9 @@ impl TypeChecker {
                     let expected_func_type = Type::arrow(arg_type, result_type.clone());
 
                     // Unify the function type with expected
-                    self.context
-                        .unify(&func_type, &expected_func_type)
-                        .map_err(|e| {
-                            CompilerError::TypeError(format!("Function call type error: {:?}", e))
-                        })?;
+                    self.context.unify(&func_type, &expected_func_type).map_err(|e| {
+                        CompilerError::TypeError(format!("Function call type error: {:?}", e))
+                    })?;
 
                     // Update func_type to result_type for the next argument (currying)
                     func_type = result_type;
@@ -598,10 +547,7 @@ impl TypeChecker {
                 // For multiple parameters, create nested function types
                 let mut func_type = return_type;
                 for param in lambda.params.iter().rev() {
-                    let param_type = param
-                        .ty
-                        .clone()
-                        .unwrap_or_else(|| self.context.new_variable());
+                    let param_type = param.ty.clone().unwrap_or_else(|| self.context.new_variable());
                     func_type = types::function(param_type, func_type);
                 }
 
@@ -649,14 +595,9 @@ impl TypeChecker {
                     let expected_func_type = Type::arrow(arg_type, result_type.clone());
 
                     // Unify the function type with expected
-                    self.context
-                        .unify(&func_type, &expected_func_type)
-                        .map_err(|e| {
-                            CompilerError::TypeError(format!(
-                                "Function application type error: {:?}",
-                                e
-                            ))
-                        })?;
+                    self.context.unify(&func_type, &expected_func_type).map_err(|e| {
+                        CompilerError::TypeError(format!("Function application type error: {:?}", e))
+                    })?;
 
                     // Update func_type to result_type for the next argument (currying)
                     func_type = result_type;
@@ -671,9 +612,8 @@ impl TypeChecker {
                 match expr_type {
                     Type::Constructed(TypeName::Str(type_name), _) => {
                         // Look up the field in our record field mapping
-                        if let Some(field_type) = self
-                            .record_field_map
-                            .get(&(type_name.to_string(), field.clone()))
+                        if let Some(field_type) =
+                            self.record_field_map.get(&(type_name.to_string(), field.clone()))
                         {
                             Ok(field_type.clone())
                         } else {
@@ -696,10 +636,7 @@ impl TypeChecker {
 
                 // Unify condition with bool type
                 self.context.unify(&condition_ty, &bool_ty).map_err(|_| {
-                    CompilerError::TypeError(format!(
-                        "If condition must be boolean, got: {}",
-                        condition_ty
-                    ))
+                    CompilerError::TypeError(format!("If condition must be boolean, got: {}", condition_ty))
                 })?;
 
                 // Infer then and else branch types - they must be the same
@@ -754,10 +691,8 @@ impl TypeChecker {
                 }
             } else {
                 // Multiple attributed return types - expression should be a tuple of the inner types
-                let expected_inner_types: Vec<Type> = attributed_return_type
-                    .iter()
-                    .map(|attr_type| attr_type.ty.clone())
-                    .collect();
+                let expected_inner_types: Vec<Type> =
+                    attributed_return_type.iter().map(|attr_type| attr_type.ty.clone()).collect();
 
                 let expected_tuple_type = types::tuple(expected_inner_types);
                 if !self.types_match(expr_type, &expected_tuple_type) {
@@ -821,10 +756,7 @@ mod tests {
         let mut checker = TypeChecker::new();
         let result = checker.check_program(&program);
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            CompilerError::UndefinedVariable(_)
-        ));
+        assert!(matches!(result.unwrap_err(), CompilerError::UndefinedVariable(_)));
     }
 
     #[test]

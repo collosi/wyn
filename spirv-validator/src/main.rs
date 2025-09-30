@@ -56,11 +56,8 @@ async fn main() -> Result<()> {
 
     // Create wgpu instance
     println!("🚀 Initializing wgpu...");
-    let backends = if args.vulkan {
-        Backends::VULKAN
-    } else {
-        Backends::VULKAN | Backends::METAL | Backends::DX12
-    };
+    let backends =
+        if args.vulkan { Backends::VULKAN } else { Backends::VULKAN | Backends::METAL | Backends::DX12 };
 
     let instance = Instance::new(&InstanceDescriptor {
         backends,
@@ -81,13 +78,8 @@ async fn main() -> Result<()> {
     println!("🎮 Backend: {:?}", adapter.get_info().backend);
 
     // Check if passthrough is supported
-    let spirv_passthrough_supported = adapter
-        .features()
-        .contains(Features::SPIRV_SHADER_PASSTHROUGH);
-    println!(
-        "🔧 SPIR-V Passthrough supported: {}",
-        spirv_passthrough_supported
-    );
+    let spirv_passthrough_supported = adapter.features().contains(Features::SPIRV_SHADER_PASSTHROUGH);
+    println!("🔧 SPIR-V Passthrough supported: {}", spirv_passthrough_supported);
 
     // Request device
     let (device, _queue) = adapter
@@ -110,12 +102,7 @@ async fn main() -> Result<()> {
     // Test SPIR-V loading
     println!("🧪 Testing SPIR-V shader loading...");
 
-    match test_spirv_loading(
-        &device,
-        &spirv_words,
-        args.compute,
-        spirv_passthrough_supported,
-    ) {
+    match test_spirv_loading(&device, &spirv_words, args.compute, spirv_passthrough_supported) {
         Ok(()) => {
             println!("✅ SPIR-V validation PASSED! 🎉");
             println!("   The shader loaded successfully in wgpu");
@@ -125,10 +112,7 @@ async fn main() -> Result<()> {
             println!("   Error: {}", e);
 
             // Try with passthrough if available
-            if device
-                .features()
-                .contains(Features::SPIRV_SHADER_PASSTHROUGH)
-            {
+            if device.features().contains(Features::SPIRV_SHADER_PASSTHROUGH) {
                 println!("🔄 Trying with SPIR-V passthrough...");
                 match test_spirv_passthrough(&device, &spirv_words) {
                     Ok(()) => {
@@ -171,10 +155,7 @@ fn test_spirv_loading(
     } else {
         println!("🔄 Using regular SPIR-V creation with validation...");
         // Convert u32 words back to bytes for make_spirv
-        let bytes: Vec<u8> = spirv_words
-            .iter()
-            .flat_map(|word| word.to_le_bytes())
-            .collect();
+        let bytes: Vec<u8> = spirv_words.iter().flat_map(|word| word.to_le_bytes()).collect();
 
         let source = wgpu::util::make_spirv(&bytes);
         device.create_shader_module(ShaderModuleDescriptor {

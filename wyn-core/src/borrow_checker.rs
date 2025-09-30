@@ -21,11 +21,7 @@ impl BorrowChecker {
     }
 
     /// Generate complete Nemo program for borrow checking analysis
-    pub fn generate_nemo_program<W: Write>(
-        &mut self,
-        mut writer: W,
-        program: &Program,
-    ) -> Result<()> {
+    pub fn generate_nemo_program<W: Write>(&mut self, mut writer: W, program: &Program) -> Result<()> {
         // First, extract basic facts
         let mut fact_writer = NemoFactWriter::new(&mut writer, self.debug);
         fact_writer.write_header().map_err(Self::io_error)?;
@@ -49,12 +45,7 @@ impl BorrowChecker {
         let mut block_counter = 0;
 
         for decl in &program.declarations {
-            self.extract_declaration_facts(
-                fact_writer,
-                decl,
-                &mut location_counter,
-                &mut block_counter,
-            )?;
+            self.extract_declaration_facts(fact_writer, decl, &mut location_counter, &mut block_counter)?;
         }
 
         Ok(())
@@ -73,9 +64,7 @@ impl BorrowChecker {
                     // Let variable binding
                     let block_id = BlockId(*block_counter);
                     *block_counter += 1;
-                    fact_writer
-                        .write_block_fact(block_id)
-                        .map_err(Self::io_error)?;
+                    fact_writer.write_block_fact(block_id).map_err(Self::io_error)?;
 
                     // Let binding creates a lifetime
                     let lifetime_id = self.get_next_lifetime_id();
@@ -86,30 +75,19 @@ impl BorrowChecker {
                         block: block_id,
                         index: 0,
                     };
-                    fact_writer
-                        .write_location_fact(location_id, &location)
-                        .map_err(Self::io_error)?;
-                    fact_writer
-                        .write_var_def_fact(location_id, &decl.name)
-                        .map_err(Self::io_error)?;
+                    fact_writer.write_location_fact(location_id, &location).map_err(Self::io_error)?;
+                    fact_writer.write_var_def_fact(location_id, &decl.name).map_err(Self::io_error)?;
                     fact_writer
                         .write_lifetime_start_fact(lifetime_id, location_id, &decl.name)
                         .map_err(Self::io_error)?;
 
                     // Analyze value expression
-                    self.extract_expression_facts(
-                        fact_writer,
-                        &decl.body,
-                        block_id,
-                        location_counter,
-                    )?;
+                    self.extract_expression_facts(fact_writer, &decl.body, block_id, location_counter)?;
                 } else {
                     // Function declaration or def variable
                     let block_id = BlockId(*block_counter);
                     *block_counter += 1;
-                    fact_writer
-                        .write_block_fact(block_id)
-                        .map_err(Self::io_error)?;
+                    fact_writer.write_block_fact(block_id).map_err(Self::io_error)?;
 
                     // Parameters create lifetimes
                     for param in &decl.params {
@@ -125,24 +103,15 @@ impl BorrowChecker {
                             block: block_id,
                             index: 0,
                         };
-                        fact_writer
-                            .write_location_fact(location_id, &location)
-                            .map_err(Self::io_error)?;
-                        fact_writer
-                            .write_var_def_fact(location_id, param_name)
-                            .map_err(Self::io_error)?;
+                        fact_writer.write_location_fact(location_id, &location).map_err(Self::io_error)?;
+                        fact_writer.write_var_def_fact(location_id, param_name).map_err(Self::io_error)?;
                         fact_writer
                             .write_lifetime_start_fact(lifetime_id, location_id, param_name)
                             .map_err(Self::io_error)?;
                     }
 
                     // Analyze function body
-                    self.extract_expression_facts(
-                        fact_writer,
-                        &decl.body,
-                        block_id,
-                        location_counter,
-                    )?;
+                    self.extract_expression_facts(fact_writer, &decl.body, block_id, location_counter)?;
                 }
             }
             Declaration::Val(_) => {
@@ -166,16 +135,12 @@ impl BorrowChecker {
             block: current_block,
             index: location_id - 1,
         };
-        fact_writer
-            .write_location_fact(location_id, &location)
-            .map_err(Self::io_error)?;
+        fact_writer.write_location_fact(location_id, &location).map_err(Self::io_error)?;
 
         match expr {
             Expression::Identifier(name) => {
                 // Variable reference - this is a potential borrow
-                fact_writer
-                    .write_var_ref_fact(location_id, name)
-                    .map_err(Self::io_error)?;
+                fact_writer.write_var_ref_fact(location_id, name).map_err(Self::io_error)?;
 
                 // In a functional language, references are typically borrows
                 let borrow_id = self.get_next_borrow_id();
@@ -190,12 +155,7 @@ impl BorrowChecker {
             }
             Expression::ArrayLiteral(elements) => {
                 for element in elements {
-                    self.extract_expression_facts(
-                        fact_writer,
-                        element,
-                        current_block,
-                        location_counter,
-                    )?;
+                    self.extract_expression_facts(fact_writer, element, current_block, location_counter)?;
                 }
             }
             Expression::ArrayIndex(array, index) => {
@@ -211,49 +171,28 @@ impl BorrowChecker {
                     })
                     .collect();
 
-                fact_writer
-                    .write_call_fact(location_id, func_name, &arg_names)
-                    .map_err(Self::io_error)?;
+                fact_writer.write_call_fact(location_id, func_name, &arg_names).map_err(Self::io_error)?;
 
                 for arg in args {
-                    self.extract_expression_facts(
-                        fact_writer,
-                        arg,
-                        current_block,
-                        location_counter,
-                    )?;
+                    self.extract_expression_facts(fact_writer, arg, current_block, location_counter)?;
                 }
             }
             Expression::Application(func, args) => {
                 self.extract_expression_facts(fact_writer, func, current_block, location_counter)?;
                 for arg in args {
-                    self.extract_expression_facts(
-                        fact_writer,
-                        arg,
-                        current_block,
-                        location_counter,
-                    )?;
+                    self.extract_expression_facts(fact_writer, arg, current_block, location_counter)?;
                 }
             }
             Expression::Tuple(elements) => {
                 for element in elements {
-                    self.extract_expression_facts(
-                        fact_writer,
-                        element,
-                        current_block,
-                        location_counter,
-                    )?;
+                    self.extract_expression_facts(fact_writer, element, current_block, location_counter)?;
                 }
             }
             Expression::Lambda(lambda) => {
                 // Lambda creates a new block
                 let lambda_block = BlockId(current_block.0 + 1000); // Offset to avoid conflicts
-                fact_writer
-                    .write_block_fact(lambda_block)
-                    .map_err(Self::io_error)?;
-                fact_writer
-                    .write_edge_fact(current_block, lambda_block)
-                    .map_err(Self::io_error)?;
+                fact_writer.write_block_fact(lambda_block).map_err(Self::io_error)?;
+                fact_writer.write_edge_fact(current_block, lambda_block).map_err(Self::io_error)?;
 
                 // Lambda parameters create lifetimes
                 for param in &lambda.params {
@@ -277,38 +216,21 @@ impl BorrowChecker {
                 }
 
                 // Analyze lambda body
-                self.extract_expression_facts(
-                    fact_writer,
-                    &lambda.body,
-                    lambda_block,
-                    location_counter,
-                )?;
+                self.extract_expression_facts(fact_writer, &lambda.body, lambda_block, location_counter)?;
             }
             Expression::LetIn(let_in) => {
                 // Let binding creates a lifetime
                 let lifetime_id = self.get_next_lifetime_id();
-                fact_writer
-                    .write_var_def_fact(location_id, &let_in.name)
-                    .map_err(Self::io_error)?;
+                fact_writer.write_var_def_fact(location_id, &let_in.name).map_err(Self::io_error)?;
                 fact_writer
                     .write_lifetime_start_fact(lifetime_id, location_id, &let_in.name)
                     .map_err(Self::io_error)?;
 
                 // Analyze value expression
-                self.extract_expression_facts(
-                    fact_writer,
-                    &let_in.value,
-                    current_block,
-                    location_counter,
-                )?;
+                self.extract_expression_facts(fact_writer, &let_in.value, current_block, location_counter)?;
 
                 // Analyze body expression
-                self.extract_expression_facts(
-                    fact_writer,
-                    &let_in.body,
-                    current_block,
-                    location_counter,
-                )?;
+                self.extract_expression_facts(fact_writer, &let_in.body, current_block, location_counter)?;
             }
             // Literals don't create borrows or lifetimes
             Expression::IntLiteral(_) | Expression::FloatLiteral(_) => {}
@@ -346,8 +268,7 @@ impl BorrowChecker {
         writeln!(writer).map_err(Self::io_error)?;
 
         // Simple rule: A variable is live if its lifetime has started
-        writeln!(writer, "% A variable is live if its lifetime has started")
-            .map_err(Self::io_error)?;
+        writeln!(writer, "% A variable is live if its lifetime has started").map_err(Self::io_error)?;
         writeln!(
             writer,
             "live_var(Var, Loc) :- lifetime_start(LifetimeId, Loc, Var)."

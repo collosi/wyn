@@ -64,11 +64,7 @@ impl<T> ScopeStack<T> {
     /// Pop the current scope from the stack
     /// Returns None if trying to pop the global scope
     pub fn pop_scope(&mut self) -> Option<Scope<T>> {
-        if self.scopes.len() > 1 {
-            self.scopes.pop()
-        } else {
-            None
-        }
+        if self.scopes.len() > 1 { self.scopes.pop() } else { None }
     }
 
     /// Insert a binding in the current (innermost) scope
@@ -90,10 +86,7 @@ impl<T> ScopeStack<T> {
 
     /// Check if a name is defined in the current scope (not outer scopes)
     pub fn is_defined_in_current_scope(&self, name: &str) -> bool {
-        self.scopes
-            .last()
-            .map(|scope| scope.contains_key(name))
-            .unwrap_or(false)
+        self.scopes.last().map(|scope| scope.contains_key(name)).unwrap_or(false)
     }
 
     /// Check if a name is defined in any scope
@@ -108,11 +101,7 @@ impl<T> ScopeStack<T> {
 
     /// Get all bindings in the current scope
     pub fn current_scope_bindings(&self) -> impl Iterator<Item = (&String, &T)> {
-        self.scopes
-            .last()
-            .map(|scope| scope.bindings.iter())
-            .into_iter()
-            .flatten()
+        self.scopes.last().map(|scope| scope.bindings.iter()).into_iter().flatten()
     }
 
     /// Collect all names that are defined in outer scopes but not current scope

@@ -1,4 +1,4 @@
-use crate::ast::{types, Type, TypeName};
+use crate::ast::{Type, TypeName, types};
 use polytype::TypeScheme;
 
 // Helper function to create monomorphic type schemes
