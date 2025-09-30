@@ -284,11 +284,19 @@ impl TypeChecker {
         }
 
         if decl.params.is_empty() {
-            // Variable declaration: let/def name: type = value or let/def name = value
+            // Variable or entry point declaration: let/def name: type = value or let/def name = value
             let expr_type = self.infer_expression(&decl.body)?;
 
             if let Some(declared_type) = &decl.ty {
-                if !self.types_match(&expr_type, declared_type) {
+                // Check if this is an entry point with attributed return type
+                let is_entry_point = decl.attributes.iter().any(|attr| 
+                    matches!(attr, Attribute::Vertex | Attribute::Fragment)
+                );
+                
+                if is_entry_point && decl.attributed_return_type.is_some() {
+                    // For entry points with attributed return types, check against the inner types
+                    self.check_attributed_return_type(&expr_type, decl)?;
+                } else if !self.types_match(&expr_type, declared_type) {
                     return Err(CompilerError::TypeError(format!(
                         "Type mismatch: expected {:?}, got {:?}",
                         declared_type, expr_type
@@ -626,6 +634,37 @@ impl TypeChecker {
             // Regular case - use polytype's unification for proper type matching
             _ => self.context.unify(t1, t2).is_ok()
         }
+    }
+
+    /// Check that the expression type matches the expected inner types of attributed return types
+    fn check_attributed_return_type(&mut self, expr_type: &Type, decl: &Decl) -> Result<()> {
+        if let Some(attributed_return_type) = &decl.attributed_return_type {
+            if attributed_return_type.len() == 1 {
+                // Single attributed return type - expression should match the inner type
+                let expected_type = &attributed_return_type[0].ty;
+                if !self.types_match(expr_type, expected_type) {
+                    return Err(CompilerError::TypeError(format!(
+                        "Type mismatch in entry point: expected {:?}, got {:?}",
+                        expected_type, expr_type
+                    )));
+                }
+            } else {
+                // Multiple attributed return types - expression should be a tuple of the inner types
+                let expected_inner_types: Vec<Type> = attributed_return_type
+                    .iter()
+                    .map(|attr_type| attr_type.ty.clone())
+                    .collect();
+                
+                let expected_tuple_type = types::tuple(expected_inner_types);
+                if !self.types_match(expr_type, &expected_tuple_type) {
+                    return Err(CompilerError::TypeError(format!(
+                        "Type mismatch in entry point: expected tuple {:?}, got {:?}",
+                        expected_tuple_type, expr_type
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 }
 

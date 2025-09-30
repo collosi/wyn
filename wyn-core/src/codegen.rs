@@ -1,11 +1,66 @@
 use crate::ast::TypeName;
 use crate::ast::*;
 use crate::builtins::BuiltinManager;
+use crate::codegen_global::GlobalBuilder;
 use crate::error::{CompilerError, Result};
 use rspirv::dr::{Builder, Module as SpirvModule, Operand};
-use rspirv::spirv::{self, StorageClass, Decoration, Capability, AddressingModel, MemoryModel};
+use rspirv::spirv::{self, StorageClass, Decoration, Capability, AddressingModel, MemoryModel, ExecutionModel};
 use rspirv::binary::Assemble;
 use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub enum Pipeline {
+    VertexFragment {
+        vertex_shader: Decl,
+        fragment_shader: Decl,
+    },
+}
+
+impl Pipeline {
+    pub fn from_program(program: &Program) -> Result<Option<Pipeline>> {
+        let mut vertex_shader = None;
+        let mut fragment_shader = None;
+        
+        for decl in &program.declarations {
+            if let Declaration::Decl(decl_node) = decl {
+                if decl_node.attributes.iter().any(|attr| matches!(attr, Attribute::Vertex)) {
+                    vertex_shader = Some(decl_node.clone());
+                } else if decl_node.attributes.iter().any(|attr| matches!(attr, Attribute::Fragment)) {
+                    fragment_shader = Some(decl_node.clone());
+                }
+            }
+        }
+        
+        match (vertex_shader, fragment_shader) {
+            (Some(v), Some(f)) => Ok(Some(Pipeline::VertexFragment {
+                vertex_shader: v,
+                fragment_shader: f,
+            })),
+            _ => Ok(None), // No complete pipeline found
+        }
+    }
+    
+    pub fn get_vertex_location_outputs(&self) -> Vec<(u32, Type)> {
+        match self {
+            Pipeline::VertexFragment { vertex_shader, .. } => {
+                if let Some(attributed_types) = &vertex_shader.attributed_return_type {
+                    attributed_types.iter().enumerate().filter_map(|(_index, attr_type)| {
+                        // Find location attributes
+                        for attr in &attr_type.attributes {
+                            if let Attribute::Location(loc) = attr {
+                                return Some((*loc, attr_type.ty.clone()));
+                            }
+                        }
+                        None
+                    }).collect()
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+    }
+}
+
 
 // Macros for binary operations to reduce repetition
 macro_rules! arithmetic_op {
@@ -54,15 +109,20 @@ pub struct CodeGenerator {
     builder: Builder,
     module: SpirvModule,
     builtin_manager: BuiltinManager,
+    global_builder: GlobalBuilder,
+    pipeline: Option<Pipeline>,
     variable_cache: HashMap<String, Value>,
     variable_types: HashMap<String, Type>,
     function_cache: HashMap<String, spirv::Word>,
     type_cache: HashMap<Type, TypeInfo>,
     current_function: Option<spirv::Word>,
     current_block: Option<spirv::Word>,
+    function_entry_block_index: Option<usize>,
     entry_points: Vec<(String, spirv::ExecutionModel)>,
     uniform_globals: HashMap<String, Value>,
-    output_globals: HashMap<String, (Value, u32, spirv::Word)>, // (value, location, component_type)
+    output_globals: HashMap<String, (Value, u32, spirv::Word, bool)>, // (value, location, component_type, is_builtin)
+    builtin_inputs: HashMap<String, Value>,
+    pending_variables: Vec<(spirv::Word, spirv::Word)>, // (variable_id, type_id) for OpVariable instructions
     
     // Type IDs for common types
     void_type: spirv::Word,
@@ -77,6 +137,55 @@ pub struct CodeGenerator {
 }
 
 impl CodeGenerator {
+    fn execution_model_name(exec_model: ExecutionModel) -> &'static str {
+        match exec_model {
+            ExecutionModel::Vertex => "vertex",
+            ExecutionModel::Fragment => "fragment",
+            ExecutionModel::GLCompute => "compute",
+            ExecutionModel::Geometry => "geometry",
+            ExecutionModel::TessellationControl => "tess_control",
+            ExecutionModel::TessellationEvaluation => "tess_eval",
+            ExecutionModel::Kernel => "kernel",
+            ExecutionModel::TaskNV => "task",
+            ExecutionModel::MeshNV => "mesh",
+            ExecutionModel::RayGenerationKHR => "ray_gen",
+            ExecutionModel::IntersectionKHR => "intersection",
+            ExecutionModel::AnyHitKHR => "any_hit",
+            ExecutionModel::ClosestHitKHR => "closest_hit",
+            ExecutionModel::MissKHR => "miss",
+            ExecutionModel::CallableKHR => "callable",
+            ExecutionModel::TaskEXT => "task_ext",
+            ExecutionModel::MeshEXT => "mesh_ext",
+        }
+    }
+
+    fn output_variable_name(exec_model: ExecutionModel, index: usize) -> String {
+        format!("{}_output_{}", Self::execution_model_name(exec_model), index)
+    }
+
+    fn create_fragment_inputs(&mut self) -> Result<()> {
+        // Get vertex location outputs from the pipeline (if we have one)
+        if let Some(pipeline) = &self.pipeline {
+            let vertex_outputs = pipeline.get_vertex_location_outputs();
+            
+            for (location, var_type) in vertex_outputs {
+                let type_info = self.get_or_create_type(&var_type)?;
+                
+                // Create fragment input variable at the same location
+                let _input_var_id = self.global_builder.create_or_lookup_location(
+                    &mut self.builder,
+                    location,
+                    StorageClass::Input,
+                    type_info.id,
+                )?;
+                
+                println!("DEBUG: Created fragment input at location {} with type {:?}", location, var_type);
+            }
+        }
+        
+        Ok(())
+    }
+
     pub fn new(_module_name: &str) -> Self {
         let mut builder = Builder::new();
         
@@ -93,15 +202,20 @@ impl CodeGenerator {
             module: SpirvModule::new(),
             builder,
             builtin_manager: BuiltinManager::new(),
+            global_builder: GlobalBuilder::new(),
+            pipeline: None,
             variable_cache: HashMap::new(),
             variable_types: HashMap::new(),
             function_cache: HashMap::new(),
             type_cache: HashMap::new(),
             current_function: None,
             current_block: None,
+            function_entry_block_index: None,
             entry_points: Vec::new(),
             uniform_globals: HashMap::new(),
             output_globals: HashMap::new(),
+            builtin_inputs: HashMap::new(),
+            pending_variables: Vec::new(),
             
             // Will be initialized in setup_common_types
             void_type: 0,
@@ -135,6 +249,9 @@ impl CodeGenerator {
     }
 
     pub fn generate(mut self, program: &Program) -> Result<Vec<u32>> {
+        // Try to create a pipeline from the program
+        self.pipeline = Pipeline::from_program(program)?;
+        
         // Load builtin functions into the module
         self.builtin_manager.load_builtins_into_module(&mut self.builder)?;
 
@@ -151,8 +268,6 @@ impl CodeGenerator {
             self.add_spirv_entry_point_metadata(name, exec_model)?;
         }
 
-        // Add SPIR-V decorations for uniforms and outputs
-        self.add_spirv_decorations()?;
 
         // Build the module and return SPIR-V words
         self.emit_spirv()
@@ -281,20 +396,80 @@ impl CodeGenerator {
             CompilerError::SpirvError("Entry point must have return type".to_string())
         })?;
         
-        // Create output globals for attributed tuple return types
-        if matches!(return_type_ast, Type::Constructed(TypeName::Str("attributed_tuple"), _)) {
-            self.create_output_globals(return_type_ast)?;
+        // Handle shader-specific variable creation
+        match exec_model {
+            ExecutionModel::Fragment => {
+                // Fragment shaders need inputs that match vertex outputs (if we have a pipeline)
+                self.create_fragment_inputs()?;
+                
+                // Fragment shaders also need their own outputs
+                if matches!(return_type_ast, Type::Constructed(TypeName::Str("attributed_tuple"), _)) {
+                    if let Some(attributed_return_type) = &decl.attributed_return_type {
+                        self.create_output_globals_from_attributes(attributed_return_type, exec_model)?;
+                    } else {
+                        self.create_output_globals(return_type_ast)?;
+                    }
+                }
+            }
+            _ => {
+                // Vertex and other shaders just create outputs
+                if matches!(return_type_ast, Type::Constructed(TypeName::Str("attributed_tuple"), _)) {
+                    if let Some(attributed_return_type) = &decl.attributed_return_type {
+                        self.create_output_globals_from_attributes(attributed_return_type, exec_model)?;
+                    } else {
+                        self.create_output_globals(return_type_ast)?;
+                    }
+                }
+            }
         }
         
         let return_type_info = self.get_or_create_type(return_type_ast)?;
 
-        // Build parameter types
+        // Build parameter types and handle builtin inputs in a single pass
         let mut param_type_ids = Vec::new();
+        let mut builtin_inputs = Vec::new();
+        let mut regular_params = Vec::new(); // (name, type, type_info) for regular parameters
+        
         for param in &decl.params {
             match param {
                 DeclParam::Typed(p) => {
-                    let param_type_info = self.get_or_create_type(&p.ty)?;
-                    param_type_ids.push(param_type_info.id);
+                    // Check if this parameter has builtin attributes
+                    let has_builtin = p.attributes.iter().any(|attr| matches!(attr, Attribute::BuiltIn(_)));
+                    println!("DEBUG: Parameter '{}' has_builtin={}, attributes: {:?}", p.name, has_builtin, p.attributes);
+                    
+                    if has_builtin {
+                        // Handle as builtin input variable - don't add to function parameters
+                        let param_type_info = self.get_or_create_type(&p.ty)?;
+                        
+                        // Find the builtin type
+                        if let Some(Attribute::BuiltIn(builtin)) = p.attributes.iter().find(|attr| matches!(attr, Attribute::BuiltIn(_))) {
+                            // Use GlobalBuilder to create or lookup the builtin variable
+                            if let Some(input_var) = self.global_builder.create_or_lookup_builtin(
+                                &mut self.builder,
+                                *builtin,
+                                StorageClass::Input,
+                                exec_model,
+                            )? {
+                                builtin_inputs.push((p.name.clone(), input_var, param_type_info.id));
+                                
+                                // Also store globally for entry point interface
+                                self.builtin_inputs.insert(p.name.clone(), Value {
+                                    id: input_var,
+                                    type_id: param_type_info.id,
+                                });
+                            } else {
+                                return Err(CompilerError::SpirvError(format!(
+                                    "Builtin {:?} is not valid for {:?} input",
+                                    builtin, exec_model
+                                )));
+                            }
+                        }
+                    } else {
+                        // Regular parameter - add to function type and store for later parameter creation
+                        let param_type_info = self.get_or_create_type(&p.ty)?;
+                        param_type_ids.push(param_type_info.id);
+                        regular_params.push((p.name.clone(), p.ty.clone(), param_type_info));
+                    }
                 }
                 DeclParam::Untyped(_) => {
                     return Err(CompilerError::SpirvError(
@@ -323,29 +498,25 @@ impl CodeGenerator {
         self.function_cache.insert(decl.name.clone(), function_id);
         self.current_function = Some(function_id);
 
-        // Create function parameters - need to do this after begin_block
+        // Create function parameters - only for regular (non-builtin) parameters
         let mut params_to_store = Vec::new();
-        for (_i, param) in decl.params.iter().enumerate() {
-            let (param_name, param_type) = match param {
-                DeclParam::Typed(p) => (&p.name, &p.ty),
-                DeclParam::Untyped(_) => {
-                    return Err(CompilerError::SpirvError(
-                        "Entry point parameters must have explicit types".to_string()
-                    ));
-                }
-            };
-
-            let param_type_info = self.get_or_create_type(param_type)?;
+        for (param_name, param_type, param_type_info) in regular_params {
+            println!("DEBUG: Creating function parameter for '{}'", param_name);
             let param_id = self.builder.function_parameter(param_type_info.id)?;
-            
-            params_to_store.push((param_name.clone(), param_type.clone(), param_id, param_type_info));
+            params_to_store.push((param_name, param_type, param_id, param_type_info));
         }
 
         // Create entry block
         let entry_label = self.builder.begin_block(None)?;
         self.current_block = Some(entry_label);
         
-        // Now store the parameters in local variables (must be done after begin_block)
+        // Save the entry block index for later
+        self.function_entry_block_index = self.builder.selected_block();
+        
+        // Clear pending variables at the start of each function
+        self.pending_variables.clear();
+        
+        // Store regular parameters in local variables (must be done after begin_block)
         for (param_name, param_type, param_id, param_type_info) in params_to_store {
             // Create local variable for the parameter
             let ptr_type = self.builder.type_pointer(None, StorageClass::Function, param_type_info.id);
@@ -360,38 +531,26 @@ impl CodeGenerator {
             self.variable_cache.insert(param_name.clone(), param_value);
             self.variable_types.insert(param_name, param_type);
         }
+        
+        // Handle builtin inputs - they're global variables that we load from
+        for (param_name, input_var, type_id) in builtin_inputs {
+            let builtin_value = Value {
+                id: input_var,
+                type_id,
+            };
+            self.variable_cache.insert(param_name.clone(), builtin_value);
+            // Note: We don't store the type in variable_types for builtin inputs since they're not regular parameters
+        }
 
-        // Generate function body
+        // Generate function body (this will queue variables)
         let result = self.generate_expression(&decl.body)?;
+        
+        // Now emit all pending variables at the beginning of the entry block
+        self.emit_pending_variables_at_entry_block()?;
 
-        // For entry points, we need to store the result in output variables instead of returning
-        if !self.output_globals.is_empty() {
-            // This is an entry point with outputs - extract tuple components and store them
-            match return_type_ast {
-                Type::Constructed(TypeName::Str("attributed_tuple"), args) => {
-                    // Extract each component from the result tuple and store in corresponding output
-                    for (index, _component_type) in args.iter().enumerate() {
-                        let output_name = format!("output_{}", index);
-                        if let Some((output_global, _, component_type)) = self.output_globals.get(&output_name) {
-                            // Extract the component from the result tuple
-                            let component_id = self.builder.composite_extract(
-                                *component_type, // Use the stored component type
-                                None,
-                                result.id,
-                                vec![index as u32]
-                            )?;
-                            
-                            // Store in the output global
-                            self.builder.store(output_global.id, component_id, None, vec![])?;
-                        }
-                    }
-                }
-                _ => {
-                    // Single return value - just return it normally
-                    self.builder.ret_value(result.id)?;
-                }
-            }
-            
+        // Entry point coda: write return values to builtin/location outputs
+        if decl.attributed_return_type.is_some() || !self.output_globals.is_empty() {
+            self.generate_entry_point_coda(decl, &result, exec_model)?;
             // Entry points return void
             self.builder.ret()?;
         } else {
@@ -402,7 +561,143 @@ impl CodeGenerator {
         self.builder.end_function()?;
         self.current_function = None;
         self.current_block = None;
+        self.function_entry_block_index = None;
 
+        Ok(())
+    }
+    
+    /// Emit all pending OpVariable instructions at the beginning of the entry block
+    fn emit_pending_variables_at_entry_block(&mut self) -> Result<()> {
+        use rspirv::dr::{Instruction, InsertPoint, Operand};
+        
+        // Save current block position
+        let current_block_index = self.builder.selected_block();
+        
+        // Get entry block index
+        let entry_block_index = self.function_entry_block_index
+            .ok_or_else(|| CompilerError::SpirvError("No entry block index saved".to_string()))?;
+        
+        // Switch to entry block
+        self.builder.select_block(Some(entry_block_index))?;
+        
+        // Insert all pending variables at the beginning of the entry block
+        // We need to reverse the order since we're inserting at the beginning
+        for (var_id, type_id) in self.pending_variables.drain(..).rev() {
+            // Create the OpVariable instruction manually
+            let inst = Instruction::new(
+                spirv::Op::Variable,
+                Some(type_id),
+                Some(var_id),
+                vec![
+                    Operand::StorageClass(StorageClass::Function),
+                ]
+            );
+            
+            // Insert at the beginning of the block (right after the label)
+            self.builder.insert_into_block(InsertPoint::Begin, inst)?;
+        }
+        
+        // Restore original block position
+        self.builder.select_block(current_block_index)?;
+        
+        Ok(())
+    }
+
+    /// Generate the entry point coda that writes return values to builtin/location outputs
+    fn generate_entry_point_coda(&mut self, decl: &Decl, result: &Value, exec_model: ExecutionModel) -> Result<()> {
+        if let Some(attributed_return_type) = &decl.attributed_return_type {
+            // Handle attributed return types (new system)
+            if attributed_return_type.len() == 1 {
+                // Single attributed return value
+                let attributed_type = &attributed_return_type[0];
+                self.store_attributed_value(result, attributed_type, exec_model)?;
+            } else {
+                // Multiple attributed return values - extract from tuple
+                for (index, attributed_type) in attributed_return_type.iter().enumerate() {
+                    // Extract component from tuple
+                    let component_type_info = self.get_or_create_type(&attributed_type.ty)?;
+                    let component_id = self.builder.composite_extract(
+                        component_type_info.id,
+                        None,
+                        result.id,
+                        vec![index as u32]
+                    )?;
+                    let component_value = Value {
+                        id: component_id,
+                        type_id: component_type_info.id,
+                    };
+                    self.store_attributed_value(&component_value, attributed_type, exec_model)?;
+                }
+            }
+        } else if !self.output_globals.is_empty() {
+            // Handle legacy output system (for backward compatibility)
+            if let Some(decl_ty) = &decl.ty {
+                match decl_ty {
+                    Type::Constructed(TypeName::Str("attributed_tuple"), args) => {
+                        // Extract each component from the result tuple and store in corresponding output
+                        for (index, _component_type) in args.iter().enumerate() {
+                            let output_name = Self::output_variable_name(exec_model, index);
+                            if let Some((output_global, _, stored_component_type, _)) = self.output_globals.get(&output_name) {
+                                // Extract the component from the result tuple
+                                let component_id = self.builder.composite_extract(
+                                    *stored_component_type,
+                                    None,
+                                    result.id,
+                                    vec![index as u32]
+                                )?;
+                                
+                                // Store in the output global
+                                self.builder.store(output_global.id, component_id, None, vec![])?;
+                            }
+                        }
+                    }
+                    _ => {
+                        // Single return value case - store directly if there's an output variable
+                        if let Some((output_global, _, _, _)) = self.output_globals.values().next() {
+                            self.builder.store(output_global.id, result.id, None, vec![])?;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Store a single attributed value to the appropriate builtin or location output
+    fn store_attributed_value(&mut self, value: &Value, attributed_type: &AttributedType, exec_model: ExecutionModel) -> Result<()> {
+        for attribute in &attributed_type.attributes {
+            match attribute {
+                Attribute::BuiltIn(builtin) => {
+                    // Get or create builtin output variable
+                    if let Some(output_var) = self.global_builder.create_or_lookup_builtin(
+                        &mut self.builder,
+                        *builtin,
+                        StorageClass::Output,
+                        exec_model,
+                    )? {
+                        self.builder.store(output_var, value.id, None, vec![])?;
+                    } else {
+                        return Err(CompilerError::SpirvError(format!(
+                            "Builtin {:?} is not valid for {:?} output",
+                            builtin, exec_model
+                        )));
+                    }
+                }
+                Attribute::Location(location) => {
+                    // Get or create location output variable
+                    let output_var = self.global_builder.create_or_lookup_location(
+                        &mut self.builder,
+                        *location,
+                        StorageClass::Output,
+                        value.type_id,
+                    )?;
+                    self.builder.store(output_var, value.id, None, vec![])?;
+                }
+                _ => {
+                    // Ignore other attributes (like Vertex/Fragment which are on the function itself)
+                }
+            }
+        }
         Ok(())
     }
 
@@ -424,26 +719,39 @@ impl CodeGenerator {
             }
             Expression::Identifier(name) => {
                 if let Some(&value) = self.variable_cache.get(name) {
-                    // Get the variable's type for the load operation
-                    let var_type = self
-                        .variable_types
-                        .get(name)
-                        .ok_or_else(|| {
-                            CompilerError::SpirvError(format!(
-                                "Unknown variable type for: {}",
-                                name
-                            ))
-                        })?
-                        .clone();
+                    // Check if this is a builtin input variable (which doesn't have a type in variable_types)
+                    if let Some(builtin_value) = self.builtin_inputs.get(name) {
+                        // For builtin inputs, we need to load from the global variable
+                        // The type_id in builtin_value.type_id is the pointer type, we need the pointed-to type
+                        // Since we know builtins like vertex_index are i32, we can determine the pointed-to type
+                        let pointed_type = self.i32_type; // For now, assume vertex_index is i32
+                        let loaded_id = self.builder.load(pointed_type, None, builtin_value.id, None, vec![])?;
+                        Ok(Value {
+                            id: loaded_id,
+                            type_id: pointed_type,
+                        })
+                    } else {
+                        // Regular variable - get its type from variable_types
+                        let var_type = self
+                            .variable_types
+                            .get(name)
+                            .ok_or_else(|| {
+                                CompilerError::SpirvError(format!(
+                                    "Unknown variable type for: {}",
+                                    name
+                                ))
+                            })?
+                            .clone();
 
-                    let type_info = self.get_or_create_type(&var_type)?;
+                        let type_info = self.get_or_create_type(&var_type)?;
 
-                    // Load the value from the pointer
-                    let loaded_id = self.builder.load(type_info.id, None, value.id, None, vec![])?;
-                    Ok(Value {
-                        id: loaded_id,
-                        type_id: type_info.id,
-                    })
+                        // Load the value from the pointer
+                        let loaded_id = self.builder.load(type_info.id, None, value.id, None, vec![])?;
+                        Ok(Value {
+                            id: loaded_id,
+                            type_id: type_info.id,
+                        })
+                    }
                 } else {
                     Err(CompilerError::UndefinedVariable(name.clone()))
                 }
@@ -619,7 +927,11 @@ impl CodeGenerator {
 
                 let type_info = self.get_or_create_type(&var_type)?;
                 let ptr_type = self.builder.type_pointer(None, StorageClass::Function, type_info.id);
-                let local_var = self.builder.variable(ptr_type, None, StorageClass::Function, None);
+                
+                // Create the variable ID but queue the OpVariable instruction
+                let local_var = self.builder.id();
+                self.pending_variables.push((local_var, ptr_type));
+                
                 self.builder.store(local_var, value.id, None, vec![])?;
 
                 // Store in variable cache
@@ -1009,16 +1321,32 @@ impl CodeGenerator {
             .copied()
             .ok_or_else(|| CompilerError::SpirvError(format!("Entry point {} not found", name)))?;
 
-        // Get interface variables (uniforms and outputs)
+        // Get interface variables using GlobalBuilder
         let mut interface_vars = Vec::new();
+        
+        // Add uniform variables
         for (_, value) in &self.uniform_globals {
             interface_vars.push(value.id);
         }
-        for (_, (value, _, _)) in &self.output_globals {
-            interface_vars.push(value.id);
-        }
+        
+        // Add builtin variables for this execution model
+        let builtin_vars = self.global_builder.get_builtin_interface_variables(*exec_model);
+        interface_vars.extend(builtin_vars);
+        
+        // Add location-based variables for outputs
+        let output_location_vars = self.global_builder.get_location_interface_variables(StorageClass::Output);
+        interface_vars.extend(output_location_vars);
 
         self.builder.entry_point(*exec_model, func_id, name, interface_vars);
+        
+        // Add execution modes for specific shader types
+        match exec_model {
+            spirv::ExecutionModel::Fragment => {
+                // Fragment shaders need coordinate origin mode
+                self.builder.execution_mode(func_id, spirv::ExecutionMode::OriginUpperLeft, vec![]);
+            }
+            _ => {} // Other execution models don't need special modes for now
+        }
         
         println!("DEBUG: Added SPIR-V entry point metadata for '{}' with execution model {:?}", name, exec_model);
 
@@ -1030,25 +1358,110 @@ impl CodeGenerator {
         if let Type::Constructed(TypeName::Str("attributed_tuple"), args) = return_type {
             // For each component in the attributed tuple, create an output global
             for (index, component_type) in args.iter().enumerate() {
-                // Extract location from the component type if it has attributes
-                // For now, use sequential locations starting from 0
-                let location = index as u32;
-                
-                // Create a global output variable for this component
-                let type_info = self.get_or_create_type(component_type)?;
-                let ptr_type = self.builder.type_pointer(None, StorageClass::Output, type_info.id);
-                let global_id = self.builder.variable(ptr_type, None, StorageClass::Output, None);
-                
-                let global_value = Value {
-                    id: global_id,
-                    type_id: ptr_type,
-                };
-                
-                // Store for decoration later
                 let global_name = format!("output_{}", index);
-                self.output_globals.insert(global_name.clone(), (global_value, location, type_info.id));
                 
-                println!("DEBUG: Created output global '{}' at location {}", global_name, location);
+                // Only create if it doesn't already exist
+                if !self.output_globals.contains_key(&global_name) {
+                    // Extract location from the component type if it has attributes
+                    // For now, use sequential locations starting from 0
+                    let location = index as u32;
+                    
+                    // Create a global output variable for this component
+                    let type_info = self.get_or_create_type(component_type)?;
+                    let ptr_type = self.builder.type_pointer(None, StorageClass::Output, type_info.id);
+                    let global_id = self.builder.variable(ptr_type, None, StorageClass::Output, None);
+                    
+                    let global_value = Value {
+                        id: global_id,
+                        type_id: ptr_type,
+                    };
+                    
+                    // Store for decoration later
+                    self.output_globals.insert(global_name.clone(), (global_value, location, type_info.id, false));
+                    println!("DEBUG: Created output global '{}' at location {}", global_name, location);
+                } else {
+                    println!("DEBUG: Output global '{}' already exists, skipping creation", global_name);
+                }
+            }
+        }
+        Ok(())
+    }
+    
+    fn create_output_globals_from_attributes(&mut self, attributed_types: &[AttributedType], exec_model: ExecutionModel) -> Result<()> {
+        // Create output globals based on the actual attributes in the attributed tuple
+        
+        for (index, attributed_type) in attributed_types.iter().enumerate() {
+            let global_name = Self::output_variable_name(exec_model, index);
+            
+            // Only create if it doesn't already exist
+            if !self.output_globals.contains_key(&global_name) {
+                let type_info = self.get_or_create_type(&attributed_type.ty)?;
+                
+                // Check if this is a builtin or location attribute
+                let mut is_builtin = false;
+                let mut location = 0u32;
+                
+                for attr in &attributed_type.attributes {
+                    match attr {
+                        Attribute::BuiltIn(builtin) => {
+                            // For builtin attributes, we create the global but don't add it to output_globals
+                            // because builtins are handled differently (e.g., position is implicit)
+                            is_builtin = true;
+                            println!("DEBUG: Found builtin attribute {:?} for output component {}", builtin, index);
+                            
+                            // Use GlobalBuilder to create or lookup the builtin variable
+                            if let Some(global_id) = self.global_builder.create_or_lookup_builtin(
+                                &mut self.builder,
+                                *builtin,
+                                StorageClass::Output,
+                                exec_model,
+                            )? {
+                                
+                                let ptr_type = self.builder.type_pointer(None, StorageClass::Output, type_info.id);
+                                let global_value = Value {
+                                    id: global_id,
+                                    type_id: ptr_type,
+                                };
+                                
+                                // Store as a special builtin output (location doesn't matter for builtins)
+                                self.output_globals.insert(global_name.clone(), (global_value, 0, type_info.id, true));
+                                println!("DEBUG: Using builtin output global '{}' with BuiltIn {:?} decoration", global_name, builtin);
+                            } else {
+                                return Err(CompilerError::SpirvError(format!(
+                                    "Builtin {:?} is not valid for {:?} output",
+                                    builtin, exec_model
+                                )));
+                            }
+                            break;
+                        }
+                        Attribute::Location(loc) => {
+                            location = *loc;
+                        }
+                        _ => {}
+                    }
+                }
+                
+                // If it's not a builtin, create a regular location-based output
+                if !is_builtin {
+                    let global_id = self.global_builder.create_or_lookup_location(
+                        &mut self.builder,
+                        location,
+                        StorageClass::Output,
+                        type_info.id,
+                    )?;
+                    
+                    let ptr_type = self.builder.type_pointer(None, StorageClass::Output, type_info.id);
+                    let global_value = Value {
+                        id: global_id,
+                        type_id: ptr_type,
+                    };
+                    
+                    // Store for decoration later
+                    self.output_globals.insert(global_name.clone(), (global_value, location, type_info.id, false));
+                    println!("DEBUG: Created location-based output global '{}' at location {}", global_name, location);
+                }
+            } else {
+                println!("DEBUG: Output global '{}' already exists, skipping creation", global_name);
             }
         }
         Ok(())
@@ -1061,8 +1474,11 @@ impl CodeGenerator {
         }
 
         // Add SPIR-V decorations for output variables
-        for (name, (value, location, _)) in &self.output_globals.clone() {
-            self.add_output_decoration(name, *value, *location)?;
+        for (name, (value, location, _, is_builtin)) in &self.output_globals.clone() {
+            // Skip location decorations for builtin outputs (they already have BuiltIn decorations)
+            if !is_builtin {
+                self.add_output_decoration(name, *value, *location)?;
+            }
         }
 
         Ok(())
@@ -1086,6 +1502,100 @@ impl CodeGenerator {
         Ok(())
     }
 
+    /// Check if a builtin variable already exists in the module
+    fn find_existing_builtin(&self, builtin: spirv::BuiltIn, storage_class: StorageClass) -> Option<spirv::Word> {
+        let module = self.builder.module_ref();
+        
+        // Look through all global instructions for OpVariable with BuiltIn decoration
+        for instruction in &module.types_global_values {
+            if instruction.class.opcode == spirv::Op::Variable {
+                // Check if this variable has the storage class we want
+                if let Some(storage_operand) = instruction.operands.get(0) {
+                    if let rspirv::dr::Operand::StorageClass(sc) = storage_operand {
+                        if *sc == storage_class {
+                            // Found a variable with matching storage class, check its decorations
+                            if let Some(var_id) = instruction.result_id {
+                                // Look for BuiltIn decoration on this variable
+                                for decoration in &module.annotations {
+                                    if decoration.class.opcode == spirv::Op::Decorate {
+                                        if let (Some(target_id), Some(decoration_operand)) = 
+                                            (decoration.operands.get(0), decoration.operands.get(1)) {
+                                            if let (rspirv::dr::Operand::IdRef(id), rspirv::dr::Operand::Decoration(dec)) = 
+                                                (target_id, decoration_operand) {
+                                                if *id == var_id && *dec == Decoration::BuiltIn {
+                                                    // Check if the builtin type matches
+                                                    if let Some(builtin_operand) = decoration.operands.get(2) {
+                                                        if let rspirv::dr::Operand::BuiltIn(existing_builtin) = builtin_operand {
+                                                            if *existing_builtin == builtin {
+                                                                return Some(var_id);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+    
+    /// Get the SPIR-V type for a builtin
+    fn get_builtin_type(&mut self, builtin: spirv::BuiltIn) -> spirv::Word {
+        match builtin {
+            // Integer builtins
+            spirv::BuiltIn::VertexIndex | spirv::BuiltIn::InstanceIndex |
+            spirv::BuiltIn::VertexId | spirv::BuiltIn::InstanceId |
+            spirv::BuiltIn::DrawIndex | spirv::BuiltIn::BaseVertex |
+            spirv::BuiltIn::BaseInstance | spirv::BuiltIn::SampleId |
+            spirv::BuiltIn::SampleMask | spirv::BuiltIn::PrimitiveId |
+            spirv::BuiltIn::Layer | spirv::BuiltIn::ViewportIndex => self.i32_type,
+            
+            // Float builtins
+            spirv::BuiltIn::PointSize | spirv::BuiltIn::FragDepth => self.f32_type,
+            
+            // Boolean builtins
+            spirv::BuiltIn::FrontFacing | spirv::BuiltIn::HelperInvocation => self.bool_type,
+            
+            // Vector builtins
+            spirv::BuiltIn::Position | spirv::BuiltIn::FragCoord => {
+                self.builder.type_vector(self.f32_type, 4)
+            }
+            spirv::BuiltIn::PointCoord | spirv::BuiltIn::SamplePosition => {
+                self.builder.type_vector(self.f32_type, 2)
+            }
+            
+            // Array builtins (skip for now)
+            spirv::BuiltIn::ClipDistance | spirv::BuiltIn::CullDistance => {
+                // Return f32 for now, should be arrays
+                self.f32_type
+            }
+            
+            _ => self.f32_type, // Default fallback
+        }
+    }
+    
+    /// Ensure builtins are created for the given storage class
+    fn ensure_builtins(&mut self, builtins: &[spirv::BuiltIn], storage_class: StorageClass) -> Result<()> {
+        for builtin in builtins {
+            if self.find_existing_builtin(*builtin, storage_class).is_none() {
+                // Determine type and create variable
+                let type_id = self.get_builtin_type(*builtin);
+                let ptr_type = self.builder.type_pointer(None, storage_class, type_id);
+                let var_id = self.builder.variable(ptr_type, None, storage_class, None);
+                self.builder.decorate(var_id, Decoration::BuiltIn, vec![Operand::BuiltIn(*builtin)]);
+                
+                println!("DEBUG: Created {:?} builtin {:?}", storage_class, builtin);
+            }
+        }
+        Ok(())
+    }
+    
     fn emit_spirv(mut self) -> Result<Vec<u32>> {
         // Build the module (takes ownership of builder)
         self.module = self.builder.module();

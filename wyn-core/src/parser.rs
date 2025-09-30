@@ -83,7 +83,6 @@ impl Parser {
             self.expect(Token::Colon)?;
             
             // Parse return type with optional attributes
-            let return_attributes = self.parse_attributes()?;
             let (ty, attributed_return_type) = self.parse_return_type()?;
             
             self.expect(Token::Assign)?;
@@ -95,7 +94,7 @@ impl Parser {
                 name,
                 params,
                 ty,
-                return_attributes,
+                return_attributes: vec![], // No separate return attributes for now
                 attributed_return_type,
                 body,
             })
@@ -192,6 +191,25 @@ impl Parser {
         })
     }
 
+    fn parse_attributed_type(&mut self) -> Result<AttributedType> {
+        // Parse optional #[attribute] syntax
+        let attributes = if self.check(&Token::AttributeStart) {
+            self.advance(); // consume '#['
+            let attribute = self.parse_attribute()?;
+            vec![attribute]
+        } else {
+            vec![]
+        };
+        
+        // Parse the type
+        let ty = self.parse_type()?;
+        
+        Ok(AttributedType {
+            attributes,
+            ty,
+        })
+    }
+
     fn parse_return_type(&mut self) -> Result<(Option<Type>, Option<Vec<AttributedType>>)> {
         // Check if it's an attributed tuple: ([attr1] type1, [attr2] type2, ...)
         if self.check(&Token::LeftParen) {
@@ -200,49 +218,8 @@ impl Parser {
 
             if !self.check(&Token::RightParen) {
                 loop {
-                    // Parse attributes for this component - in return types, we allow [attr] syntax
-                    let component_attributes = if self.check(&Token::LeftBracket) {
-                        // Parse [attribute] syntax for return type components
-                        self.advance(); // consume '['
-                        let attr_name = self.expect_identifier()?;
-                        let attribute = match attr_name.as_str() {
-                            "location" => {
-                                self.expect(Token::LeftParen)?;
-                                let location = if let Some(Token::IntLiteral(loc)) = self.peek() {
-                                    let loc = *loc as u32;
-                                    self.advance();
-                                    loc
-                                } else {
-                                    return Err(CompilerError::ParseError("Expected integer location".to_string()));
-                                };
-                                self.expect(Token::RightParen)?;
-                                Attribute::Location(location)
-                            }
-                            "builtin" => {
-                                self.expect(Token::LeftParen)?;
-                                let builtin_name = self.expect_identifier()?;
-                                let builtin = match builtin_name.as_str() {
-                                    "position" => spirv::BuiltIn::Position,
-                                    "vertex_index" => spirv::BuiltIn::VertexIndex,
-                                    _ => return Err(CompilerError::ParseError(format!("Unknown builtin: {}", builtin_name))),
-                                };
-                                self.expect(Token::RightParen)?;
-                                Attribute::BuiltIn(builtin)
-                            }
-                            _ => return Err(CompilerError::ParseError(format!("Unknown attribute: {}", attr_name))),
-                        };
-                        self.expect(Token::RightBracket)?;
-                        vec![attribute]
-                    } else {
-                        vec![]
-                    };
-                    // Parse the type
-                    let component_type = self.parse_type()?;
-                    
-                    attributed_types.push(AttributedType {
-                        attributes: component_attributes,
-                        ty: component_type,
-                    });
+                    let attributed_type = self.parse_attributed_type()?;
+                    attributed_types.push(attributed_type);
 
                     if !self.check(&Token::Comma) {
                         break;
@@ -256,10 +233,77 @@ impl Parser {
             // Create a tuple type from the attributed types for the type system
             let tuple_type = types::attributed_tuple(attributed_types.clone());
             Ok((Some(tuple_type), Some(attributed_types)))
+        } else if self.check(&Token::AttributeStart) {
+            // Single attributed type: #[attribute] type
+            let attributed_type = self.parse_attributed_type()?;
+            
+            // Return as a single-element attributed tuple
+            let attributed_types = vec![attributed_type];
+            let tuple_type = types::attributed_tuple(attributed_types.clone());
+            Ok((Some(tuple_type), Some(attributed_types)))
         } else {
-            // Regular single return type
+            // Regular single return type without attributes
             let ty = self.parse_type()?;
             Ok((Some(ty), None))
+        }
+    }
+
+    fn parse_attribute(&mut self) -> Result<Attribute> {
+        let attr_name = self.expect_identifier()?;
+        
+        match attr_name.as_str() {
+            "vertex" => {
+                self.expect(Token::RightBracket)?;
+                Ok(Attribute::Vertex)
+            }
+            "fragment" => {
+                self.expect(Token::RightBracket)?;
+                Ok(Attribute::Fragment)
+            }
+            "uniform" => {
+                self.expect(Token::RightBracket)?;
+                Ok(Attribute::Uniform)
+            }
+            "builtin" => {
+                self.expect(Token::LeftParen)?;
+                let builtin_name = self.expect_identifier()?;
+                self.expect(Token::RightParen)?;
+                self.expect(Token::RightBracket)?;
+
+                let builtin = match builtin_name.as_str() {
+                    "position" => spirv::BuiltIn::Position,
+                    "vertex_index" => spirv::BuiltIn::VertexIndex,
+                    "instance_index" => spirv::BuiltIn::InstanceIndex,
+                    "front_facing" => spirv::BuiltIn::FrontFacing,
+                    "frag_depth" => spirv::BuiltIn::FragDepth,
+                    _ => {
+                        return Err(CompilerError::ParseError(format!(
+                            "Unknown builtin: {}",
+                            builtin_name
+                        )))
+                    }
+                };
+                Ok(Attribute::BuiltIn(builtin))
+            }
+            "location" => {
+                self.expect(Token::LeftParen)?;
+                let location = if let Some(Token::IntLiteral(location)) = self.advance() {
+                    *location as u32
+                } else {
+                    return Err(CompilerError::ParseError(
+                        "Expected location number".to_string(),
+                    ));
+                };
+                self.expect(Token::RightParen)?;
+                self.expect(Token::RightBracket)?;
+                Ok(Attribute::Location(location))
+            }
+            _ => {
+                Err(CompilerError::ParseError(format!(
+                    "Unknown attribute: {}",
+                    attr_name
+                )))
+            }
         }
     }
 
@@ -268,63 +312,7 @@ impl Parser {
 
         while self.check(&Token::AttributeStart) {
             self.advance(); // consume '#['
-            let attr_name = self.expect_identifier()?;
-
-            let attribute = match attr_name.as_str() {
-                "vertex" => {
-                    self.expect(Token::RightBracket)?;
-                    Attribute::Vertex
-                }
-                "fragment" => {
-                    self.expect(Token::RightBracket)?;
-                    Attribute::Fragment
-                }
-                "uniform" => {
-                    self.expect(Token::RightBracket)?;
-                    Attribute::Uniform
-                }
-                "builtin" => {
-                    self.expect(Token::LeftParen)?;
-                    let builtin_name = self.expect_identifier()?;
-                    self.expect(Token::RightParen)?;
-                    self.expect(Token::RightBracket)?;
-
-                    let builtin = match builtin_name.as_str() {
-                        "position" => spirv::BuiltIn::Position,
-                        "vertex_index" => spirv::BuiltIn::VertexIndex,
-                        "instance_index" => spirv::BuiltIn::InstanceIndex,
-                        "front_facing" => spirv::BuiltIn::FrontFacing,
-                        "frag_depth" => spirv::BuiltIn::FragDepth,
-                        _ => {
-                            return Err(CompilerError::ParseError(format!(
-                                "Unknown builtin: {}",
-                                builtin_name
-                            )))
-                        }
-                    };
-                    Attribute::BuiltIn(builtin)
-                }
-                "location" => {
-                    self.expect(Token::LeftParen)?;
-                    let location = if let Some(Token::IntLiteral(location)) = self.advance() {
-                        *location as u32
-                    } else {
-                        return Err(CompilerError::ParseError(
-                            "Expected location number".to_string(),
-                        ));
-                    };
-                    self.expect(Token::RightParen)?;
-                    self.expect(Token::RightBracket)?;
-                    Attribute::Location(location)
-                }
-                _ => {
-                    return Err(CompilerError::ParseError(format!(
-                        "Unknown attribute: {}",
-                        attr_name
-                    )))
-                }
-            };
-
+            let attribute = self.parse_attribute()?;
             attributes.push(attribute);
         }
 
@@ -1255,27 +1243,148 @@ mod tests {
                                 decl.attributes
                             ));
                         }
-                        if decl.return_attributes
-                            != vec![Attribute::BuiltIn(spirv::BuiltIn::Position)]
-                        {
-                            return Err(format!(
-                                "Expected Position builtin on return type, got {:?}",
-                                decl.return_attributes
-                            ));
-                        }
-                        if let Some(ref ty) = decl.ty {
-                            if *ty != crate::ast::types::sized_array(4, crate::ast::types::f32()) {
+                        if let Some(ref attributed_types) = decl.attributed_return_type {
+                            if attributed_types.len() != 1 {
                                 return Err(format!(
-                                    "Expected [4]f32 return type, got {:?}",
-                                    ty
+                                    "Expected 1 attributed return type, got {}",
+                                    attributed_types.len()
+                                ));
+                            }
+                            if attributed_types[0].attributes != vec![Attribute::BuiltIn(spirv::BuiltIn::Position)] {
+                                return Err(format!(
+                                    "Expected Position builtin on return type, got {:?}",
+                                    attributed_types[0].attributes
                                 ));
                             }
                         } else {
-                            return Err("Expected return type".to_string());
+                            return Err("Expected attributed return type".to_string());
+                        }
+                        // Check the type within the attributed return type  
+                        if let Some(ref attributed_types) = decl.attributed_return_type {
+                            if attributed_types[0].ty != crate::ast::types::sized_array(4, crate::ast::types::f32()) {
+                                return Err(format!(
+                                    "Expected [4]f32 return type, got {:?}",
+                                    attributed_types[0].ty
+                                ));
+                            }
                         }
                         Ok(())
                     }
                     _ => Err("Expected Decl declaration".to_string()),
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn test_parse_single_attributed_return_type() {
+        // Test single attributed return type
+        expect_parse(
+            "#[vertex] def vertex_main(): [builtin(position)] vec4 = vec4 0.0f32 0.0f32 0.0f32 1.0f32",
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+                }
+                
+                if let Declaration::Decl(decl) = &declarations[0] {
+                    // Check that it has vertex attribute
+                    if !decl.attributes.iter().any(|a| matches!(a, Attribute::Vertex)) {
+                        return Err("Missing vertex attribute".to_string());
+                    }
+                    
+                    // Check the attributed return type
+                    if let Some(attributed_types) = &decl.attributed_return_type {
+                        if attributed_types.len() != 1 {
+                            return Err(format!("Expected 1 attributed type, got {}", attributed_types.len()));
+                        }
+                        
+                        let attr_type = &attributed_types[0];
+                        // Check for builtin(position) attribute
+                        if !attr_type.attributes.iter().any(|a| matches!(a, Attribute::BuiltIn(spirv::BuiltIn::Position))) {
+                            return Err("Missing builtin(position) attribute".to_string());
+                        }
+                        
+                        // Check the type is vec4
+                        match &attr_type.ty {
+                            Type::Constructed(TypeName::Str("vec4"), _) => Ok(()),
+                            _ => Err("Expected vec4 type".to_string()),
+                        }
+                    } else {
+                        Err("Missing attributed return type".to_string())
+                    }
+                } else {
+                    Err("Expected Decl".to_string())
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn test_parse_tuple_attributed_return_type() {
+        // Test tuple of attributed return types
+        expect_parse(
+            "#[vertex] def vertex_main(): ([builtin(position)] vec4, [location(0)] vec3) = result",
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+                }
+                
+                if let Declaration::Decl(decl) = &declarations[0] {
+                    if let Some(attributed_types) = &decl.attributed_return_type {
+                        if attributed_types.len() != 2 {
+                            return Err(format!("Expected 2 attributed types, got {}", attributed_types.len()));
+                        }
+                        
+                        // Check first element: [builtin(position)] vec4
+                        let first = &attributed_types[0];
+                        if !first.attributes.iter().any(|a| matches!(a, Attribute::BuiltIn(spirv::BuiltIn::Position))) {
+                            return Err("First element missing builtin(position) attribute".to_string());
+                        }
+                        
+                        // Check second element: [location(0)] vec3
+                        let second = &attributed_types[1];
+                        if !second.attributes.iter().any(|a| matches!(a, Attribute::Location(0))) {
+                            return Err("Second element missing location(0) attribute".to_string());
+                        }
+                        
+                        Ok(())
+                    } else {
+                        Err("Missing attributed return type".to_string())
+                    }
+                } else {
+                    Err("Expected Decl".to_string())
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn test_parse_unattributed_return_type() {
+        // Test regular return type without attributes
+        expect_parse(
+            "def helper(): vec4 = vec4 1.0f32 0.0f32 0.0f32 1.0f32",
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+                }
+                
+                if let Declaration::Decl(decl) = &declarations[0] {
+                    // Should have no attributed_return_type
+                    if decl.attributed_return_type.is_some() {
+                        return Err("Unexpected attributed return type".to_string());
+                    }
+                    
+                    // Should have a regular type
+                    if let Some(ty) = &decl.ty {
+                        match ty {
+                            Type::Constructed(TypeName::Str("vec4"), _) => Ok(()),
+                            _ => Err("Expected vec4 type".to_string()),
+                        }
+                    } else {
+                        Err("Missing return type".to_string())
+                    }
+                } else {
+                    Err("Expected Decl".to_string())
                 }
             },
         );
@@ -1300,21 +1409,30 @@ mod tests {
                                 decl.attributes
                             ));
                         }
-                        if decl.return_attributes != vec![Attribute::Location(0)] {
-                            return Err(format!(
-                                "Expected Location(0) attribute on return type, got {:?}",
-                                decl.return_attributes
-                            ));
-                        }
-                        if let Some(ref ty) = decl.ty {
-                            if *ty != crate::ast::types::sized_array(4, crate::ast::types::f32()) {
+                        if let Some(ref attributed_types) = decl.attributed_return_type {
+                            if attributed_types.len() != 1 {
                                 return Err(format!(
-                                    "Expected [4]f32 return type, got {:?}",
-                                    ty
+                                    "Expected 1 attributed return type, got {}",
+                                    attributed_types.len()
+                                ));
+                            }
+                            if attributed_types[0].attributes != vec![Attribute::Location(0)] {
+                                return Err(format!(
+                                    "Expected Location(0) attribute on return type, got {:?}",
+                                    attributed_types[0].attributes
                                 ));
                             }
                         } else {
-                            return Err("Expected return type".to_string());
+                            return Err("Expected attributed return type".to_string());
+                        }
+                        // Check the type within the attributed return type
+                        if let Some(ref attributed_types) = decl.attributed_return_type {
+                            if attributed_types[0].ty != crate::ast::types::sized_array(4, crate::ast::types::f32()) {
+                                return Err(format!(
+                                    "Expected [4]f32 return type, got {:?}",
+                                    attributed_types[0].ty
+                                ));
+                            }
                         }
                         Ok(())
                     }
@@ -1461,8 +1579,21 @@ mod tests {
                         }
 
                         // Return type
-                        if decl.return_attributes != vec![Attribute::BuiltIn(spirv::BuiltIn::Position)] {
-                            return Err(format!("Expected Position attribute on return type, got {:?}", decl.return_attributes));
+                        if let Some(ref attributed_types) = decl.attributed_return_type {
+                            if attributed_types.len() != 1 {
+                                return Err(format!(
+                                    "Expected 1 attributed return type, got {}",
+                                    attributed_types.len()
+                                ));
+                            }
+                            if attributed_types[0].attributes != vec![Attribute::BuiltIn(spirv::BuiltIn::Position)] {
+                                return Err(format!(
+                                    "Expected Position attribute on return type, got {:?}",
+                                    attributed_types[0].attributes
+                                ));
+                            }
+                        } else {
+                            return Err("Expected attributed return type".to_string());
                         }
 
                         Ok(())
@@ -2329,5 +2460,47 @@ def fragment_main(): [4]f32 = SKY_RGBA
                 _ => Err("Expected Decl declaration".to_string()),
             }
         });
+    }
+    #[test]
+    fn test_array_literal() {
+        // Test simple if-then-else
+        expect_parse("#[vertex] def test(): #[builtin(position)] [4]f32 = [0.0, 0.5, 0.0, 1.0]", |declarations| {
+            if declarations.len() != 1 {
+                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+            }
+            Ok(())
+            });
+            }
+
+    #[test]
+    fn test_parse_array_type_directly() {
+        let tokens = tokenize("[4]f32").expect("Failed to tokenize");
+        let mut parser = Parser::new(tokens);
+        match parser.parse_type() {
+            Ok(ty) => println!("Successfully parsed type: {:?}", ty),
+            Err(e) => panic!("Failed to parse [4]f32: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_parse_array_literal() {
+        let tokens = tokenize("[0.0f32, 0.5f32, 0.0f32, 1.0f32]").expect("Failed to tokenize");
+        println!("Tokens: {:?}", tokens);
+        let mut parser = Parser::new(tokens);
+        match parser.parse_expression() {
+            Ok(expr) => {
+                println!("Successfully parsed array literal: {:?}", expr);
+                // Check that it's actually an array literal
+                match expr {
+                    Expression::ArrayLiteral(_) => {
+                        // Good, this is what we expect
+                    }
+                    _ => panic!("Expected ArrayLiteral, got {:?}", expr),
+                }
+            }
+            Err(e) => {
+                panic!("Failed to parse array literal: {:?}", e);
+            }
+        }
     }
 }
