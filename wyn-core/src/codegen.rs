@@ -271,6 +271,12 @@ impl CodeGenerator {
         }
     }
 
+    /// Extract a component from a composite (tuple, struct, array, or vector)
+    fn extract_component(&mut self, composite: Value, comp_ty: spirv::Word, idx: u32) -> Result<Value> {
+        let id = self.builder.composite_extract(comp_ty, None, composite.id, vec![idx])?;
+        Ok(Value { id, type_id: comp_ty })
+    }
+
     /// Prepare entry point parameters, separating builtins from regular parameters
     fn prepare_params(
         &mut self,
@@ -641,18 +647,9 @@ impl CodeGenerator {
             } else {
                 // Multiple attributed return values - extract from tuple
                 for (index, attributed_type) in attributed_return_type.iter().enumerate() {
-                    // Extract component from tuple
                     let component_type_info = self.get_or_create_type(&attributed_type.ty)?;
-                    let component_id = self.builder.composite_extract(
-                        component_type_info.id,
-                        None,
-                        result.id,
-                        vec![index as u32],
-                    )?;
-                    let component_value = Value {
-                        id: component_id,
-                        type_id: component_type_info.id,
-                    };
+                    let component_value =
+                        self.extract_component(*result, component_type_info.id, index as u32)?;
                     self.store_attributed_value(&component_value, attributed_type, exec_model)?;
                 }
             }
@@ -998,17 +995,7 @@ impl CodeGenerator {
 
                 // Use SPIR-V CompositeExtract for vectors
                 // For vec3/vec4, the component type is f32
-                let extracted_id = self.builder.composite_extract(
-                    self.f32_type,
-                    None,
-                    record_value.id,
-                    vec![component_index],
-                )?;
-
-                Ok(Value {
-                    id: extracted_id,
-                    type_id: self.f32_type,
-                })
+                self.extract_component(record_value, self.f32_type, component_index)
             }
             Expression::ArrayLiteral(elements) => {
                 if elements.is_empty() {
@@ -1194,8 +1181,8 @@ impl CodeGenerator {
         // Extract elements from the array and build vector
         let mut elements = Vec::new();
         for i in 0..4 {
-            let element_id = self.builder.composite_extract(self.f32_type, None, array_val.id, vec![i])?;
-            elements.push(element_id);
+            let element = self.extract_component(array_val, self.f32_type, i)?;
+            elements.push(element.id);
         }
 
         // Build the vector
