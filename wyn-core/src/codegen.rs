@@ -6,7 +6,7 @@ use crate::error::{CompilerError, Result};
 use rspirv::binary::Assemble;
 use rspirv::dr::{Builder, Module as SpirvModule};
 use rspirv::spirv::{
-    self, AddressingModel, Capability, Decoration, ExecutionModel, MemoryModel, StorageClass,
+    self, AddressingModel, Capability, ExecutionModel, MemoryModel, StorageClass,
 };
 use std::collections::HashMap;
 
@@ -1718,63 +1718,6 @@ impl CodeGenerator {
             }
         }
         Ok(())
-    }
-
-    /// Check if a builtin variable already exists in the module
-    fn find_existing_builtin(
-        &self,
-        builtin: spirv::BuiltIn,
-        storage_class: StorageClass,
-    ) -> Option<spirv::Word> {
-        let module = self.builder.module_ref();
-
-        // Look through all global instructions for OpVariable with BuiltIn decoration
-        for instruction in &module.types_global_values {
-            if instruction.class.opcode == spirv::Op::Variable {
-                // Check if this variable has the storage class we want
-                if let Some(storage_operand) = instruction.operands.first() {
-                    if let rspirv::dr::Operand::StorageClass(sc) = storage_operand {
-                        if *sc == storage_class {
-                            // Found a variable with matching storage class, check its decorations
-                            if let Some(var_id) = instruction.result_id {
-                                // Look for BuiltIn decoration on this variable
-                                for decoration in &module.annotations {
-                                    if decoration.class.opcode == spirv::Op::Decorate {
-                                        if let (Some(target_id), Some(decoration_operand)) = (
-                                            decoration.operands.first(),
-                                            decoration.operands.get(1),
-                                        ) {
-                                            if let (
-                                                rspirv::dr::Operand::IdRef(id),
-                                                rspirv::dr::Operand::Decoration(dec),
-                                            ) = (target_id, decoration_operand)
-                                            {
-                                                if *id == var_id && *dec == Decoration::BuiltIn {
-                                                    // Check if the builtin type matches
-                                                    if let Some(builtin_operand) =
-                                                        decoration.operands.get(2)
-                                                    {
-                                                        if let rspirv::dr::Operand::BuiltIn(
-                                                            existing_builtin,
-                                                        ) = builtin_operand
-                                                        {
-                                                            if *existing_builtin == builtin {
-                                                                return Some(var_id);
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        None
     }
 
     fn emit_spirv(mut self) -> Result<Vec<u32>> {
