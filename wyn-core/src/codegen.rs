@@ -902,12 +902,12 @@ impl CodeGenerator {
                             self.convert_array_to_vec4(array_val)
                         }
                         // Vector constructors
-                        "vec2" => self.generate_vector_constructor(2, args),
-                        "vec3" => self.generate_vector_constructor(3, args),
-                        "vec4" => self.generate_vector_constructor(4, args),
-                        "ivec2" => self.generate_vector_constructor(2, args),
-                        "ivec3" => self.generate_vector_constructor(3, args),
-                        "ivec4" => self.generate_vector_constructor(4, args),
+                        "vec2" => self.generate_vec_ctor(2, self.f32_type, args),
+                        "vec3" => self.generate_vec_ctor(3, self.f32_type, args),
+                        "vec4" => self.generate_vec_ctor(4, self.f32_type, args),
+                        "ivec2" => self.generate_vec_ctor(2, self.i32_type, args),
+                        "ivec3" => self.generate_vec_ctor(3, self.i32_type, args),
+                        "ivec4" => self.generate_vec_ctor(4, self.i32_type, args),
                         _ => Err(CompilerError::SpirvError(format!(
                             "Function call '{}' not supported",
                             func_name
@@ -1150,28 +1150,26 @@ impl CodeGenerator {
         })
     }
 
-    fn generate_vector_constructor(&mut self, size: u32, args: &[Expression]) -> Result<Value> {
-        // Check argument count
-        if args.len() != size as usize {
+    /// Generic vector constructor for vec* and ivec* types
+    fn generate_vec_ctor(
+        &mut self,
+        lanes: u32,
+        elem_ty: spirv::Word,
+        args: &[Expression],
+    ) -> Result<Value> {
+        if args.len() != lanes as usize {
             return Err(CompilerError::SpirvError(format!(
-                "Vector constructor expects {} arguments, got {}",
-                size,
+                "Vector constructor expects {} args, got {}",
+                lanes,
                 args.len()
             )));
         }
-
-        // Generate values for all arguments
-        let mut elements = Vec::new();
-        for arg in args {
-            let val = self.generate_expression(arg)?;
-            elements.push(val.id);
+        let mut elems = Vec::with_capacity(args.len());
+        for a in args {
+            elems.push(self.generate_expression(a)?.id);
         }
-
-        // Create the vector type - assume f32 elements for now
-        let vec_type = self.builder.type_vector(self.f32_type, size);
-
-        // Build the vector
-        self.make_composite(vec_type, elements)
+        let vty = self.builder.type_vector(elem_ty, lanes);
+        self.make_composite(vty, elems)
     }
 
     fn convert_array_to_vec4(&mut self, array_val: Value) -> Result<Value> {
@@ -1201,31 +1199,21 @@ impl CodeGenerator {
                     TypeName::Str("float") => (self.f32_type, 4),
 
                     // f32 vector types
-                    TypeName::Str("vec2") => {
-                        let vec_type = self.builder.type_vector(self.f32_type, 2);
-                        (vec_type, 8)
-                    }
-                    TypeName::Str("vec3") => {
-                        let vec_type = self.builder.type_vector(self.f32_type, 3);
-                        (vec_type, 12)
-                    }
-                    TypeName::Str("vec4") => {
-                        let vec_type = self.builder.type_vector(self.f32_type, 4);
-                        (vec_type, 16)
+                    TypeName::Str(s) if s.starts_with("vec") && s.len() == 4 => {
+                        let n: u32 = s[3..]
+                            .parse()
+                            .map_err(|_| CompilerError::SpirvError("Invalid vec arity".to_string()))?;
+                        let vec_type = self.builder.type_vector(self.f32_type, n);
+                        (vec_type, 4 * n)
                     }
 
                     // i32 vector types
-                    TypeName::Str("ivec2") => {
-                        let vec_type = self.builder.type_vector(self.i32_type, 2);
-                        (vec_type, 8)
-                    }
-                    TypeName::Str("ivec3") => {
-                        let vec_type = self.builder.type_vector(self.i32_type, 3);
-                        (vec_type, 12)
-                    }
-                    TypeName::Str("ivec4") => {
-                        let vec_type = self.builder.type_vector(self.i32_type, 4);
-                        (vec_type, 16)
+                    TypeName::Str(s) if s.starts_with("ivec") && s.len() == 5 => {
+                        let n: u32 = s[4..]
+                            .parse()
+                            .map_err(|_| CompilerError::SpirvError("Invalid ivec arity".to_string()))?;
+                        let vec_type = self.builder.type_vector(self.i32_type, n);
+                        (vec_type, 4 * n)
                     }
                     TypeName::Str("array") => {
                         let elem_ty = args.first().ok_or_else(|| {
