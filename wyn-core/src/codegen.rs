@@ -108,6 +108,11 @@ pub struct CodeGenerator {
 }
 
 impl CodeGenerator {
+    /// Check if a type is an attributed tuple
+    fn is_attributed_tuple(ty: &Type) -> bool {
+        matches!(ty, Type::Constructed(TypeName::Str("attributed_tuple"), _))
+    }
+
     fn create_fragment_inputs(&mut self) -> Result<()> {
         // Get vertex location outputs from the pipeline (if we have one)
         if let Some(pipeline) = &self.pipeline {
@@ -275,6 +280,14 @@ impl CodeGenerator {
     fn extract_component(&mut self, composite: Value, comp_ty: spirv::Word, idx: u32) -> Result<Value> {
         let id = self.builder.composite_extract(comp_ty, None, composite.id, vec![idx])?;
         Ok(Value { id, type_id: comp_ty })
+    }
+
+    /// Get element type from a vector type ID
+    /// For vectors, returns f32 for vec* types and i32 for ivec* types
+    fn element_type_of_vector(&self, _vec_type_id: spirv::Word) -> spirv::Word {
+        // For now, assume f32 since all our current vectors are vec*
+        // A complete implementation would inspect the SPIR-V type structure
+        self.f32_type
     }
 
     /// Prepare entry point parameters, separating builtins from regular parameters
@@ -539,10 +552,7 @@ impl CodeGenerator {
         let param_type_ids = self.prepare_params(exec_model, &decl.params)?;
 
         // Create function type - entry points return void and use output variables
-        let actual_return_type = if matches!(
-            return_type_ast,
-            Type::Constructed(TypeName::Str("attributed_tuple"), _)
-        ) {
+        let actual_return_type = if Self::is_attributed_tuple(return_type_ast) {
             self.void_type
         } else {
             return_type_info.id
@@ -690,14 +700,17 @@ impl CodeGenerator {
                     // Check if this is a builtin input variable (which doesn't have a type in variable_types)
                     if let Some(builtin_value) = self.builtin_inputs.get(name) {
                         // For builtin inputs, we need to load from the global variable
-                        // The type_id in builtin_value.type_id is the pointer type, we need the pointed-to type
-                        // Since we know builtins like vertex_index are i32, we can determine the pointed-to type
-                        let pointed_type = self.i32_type; // For now, assume vertex_index is i32
-                        let loaded_id =
-                            self.builder.load(pointed_type, None, builtin_value.id, None, vec![])?;
+                        // Use the actual type from builtin_value
+                        let loaded_id = self.builder.load(
+                            builtin_value.type_id,
+                            None,
+                            builtin_value.id,
+                            None,
+                            vec![],
+                        )?;
                         Ok(Value {
                             id: loaded_id,
-                            type_id: pointed_type,
+                            type_id: builtin_value.type_id,
                         })
                     } else {
                         // Regular variable - get its type from variable_types
@@ -994,8 +1007,8 @@ impl CodeGenerator {
                 };
 
                 // Use SPIR-V CompositeExtract for vectors
-                // For vec3/vec4, the component type is f32
-                self.extract_component(record_value, self.f32_type, component_index)
+                let elem_ty = self.element_type_of_vector(record_value.type_id);
+                self.extract_component(record_value, elem_ty, component_index)
             }
             Expression::ArrayLiteral(elements) => {
                 if elements.is_empty() {
@@ -1070,6 +1083,9 @@ impl CodeGenerator {
                 let element_type_info = self.get_or_create_type(&element_type)?;
 
                 // Create pointer type for array element access
+                // TODO: Derive storage class from base pointer. Currently assumes Function,
+                // which is correct for local arrays but wrong for Uniform/Private globals.
+                // Should extract SC from array_value.type_id or track it alongside Value.
                 let element_ptr_type = self.ptr_of(StorageClass::Function, element_type_info.id);
 
                 // Use AccessChain to get element pointer
