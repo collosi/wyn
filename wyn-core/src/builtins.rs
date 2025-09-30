@@ -20,6 +20,12 @@ pub struct BuiltinManager {
     glsl_ext_inst_id: Option<spirv::Word>, // ID for GLSL.std.450 extension
 }
 
+impl Default for BuiltinManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BuiltinManager {
     pub fn new() -> Self {
         let mut registry = HashMap::new();

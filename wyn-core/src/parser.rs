@@ -2464,7 +2464,7 @@ def fragment_main(): [4]f32 = SKY_RGBA
     #[test]
     fn test_array_literal() {
         // Test simple if-then-else
-        expect_parse("#[vertex] def test(): #[builtin(position)] [4]f32 = [0.0, 0.5, 0.0, 1.0]", |declarations| {
+        expect_parse("#[vertex] def test(): #[builtin(position)] [4]f32 = [0.0f32, 0.5f32, 0.0f32, 1.0f32]", |declarations| {
             if declarations.len() != 1 {
                 return Err(format!("Expected 1 declaration, got {}", declarations.len()));
             }

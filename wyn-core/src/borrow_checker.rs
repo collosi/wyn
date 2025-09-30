@@ -333,7 +333,7 @@ impl BorrowChecker {
     /// Write Nemo rules for borrow checking
     fn write_borrow_checking_rules<W: Write>(&self, mut writer: W) -> Result<()> {
         writeln!(writer, "% Simple borrow checking rules").map_err(Self::io_error)?;
-        writeln!(writer, "").map_err(Self::io_error)?;
+        writeln!(writer).map_err(Self::io_error)?;
 
         // Simple rule: A variable is live if its lifetime has started
         writeln!(writer, "% A variable is live if its lifetime has started")
@@ -343,12 +343,12 @@ impl BorrowChecker {
             "live_var(Var, Loc) :- lifetime_start(LifetimeId, Loc, Var)."
         )
         .map_err(Self::io_error)?;
-        writeln!(writer, "").map_err(Self::io_error)?;
+        writeln!(writer).map_err(Self::io_error)?;
 
         // Simple rule: Block reachability
         writeln!(writer, "% Block reachability").map_err(Self::io_error)?;
         writeln!(writer, "reachable(From, To) :- edge(From, To).").map_err(Self::io_error)?;
-        writeln!(writer, "").map_err(Self::io_error)?;
+        writeln!(writer).map_err(Self::io_error)?;
 
         // Note: Output declarations handled by the API
 

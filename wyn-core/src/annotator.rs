@@ -34,7 +34,7 @@ impl CodeAnnotator {
             "// Format: #B<block_id>.<index> <original_code>"
         )
         .unwrap();
-        writeln!(self.output, "").unwrap();
+        writeln!(self.output).unwrap();
 
         // Process all declarations
         for decl in &program.declarations {

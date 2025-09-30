@@ -31,16 +31,6 @@ impl TypeChecker {
         }
     }
 
-    /// Create binary arithmetic operator type scheme: ∀t. t -> t -> t
-    fn binary_arithmetic_scheme() -> TypeScheme<TypeName> {
-        // Manually construct ∀t0. t0 -> t0 -> t0
-        let mut ctx = Context::<TypeName>::default();
-        let var_0 = ctx.new_variable();
-        let arrow_type = Type::arrow(var_0.clone(), Type::arrow(var_0.clone(), var_0));
-
-        // For now, create a monomorphic type - we'll fix polymorphic types later
-        TypeScheme::Monotype(arrow_type)
-    }
     pub fn new() -> Self {
         let mut checker = TypeChecker {
             scope_stack: ScopeStack::new(),
@@ -405,7 +395,7 @@ impl TypeChecker {
                     Type::Constructed(name, args)
                         if matches!(name, TypeName::Str("array") | TypeName::Array("array", _)) =>
                     {
-                        args.into_iter().next().unwrap_or_else(|| types::i32())
+                        args.into_iter().next().unwrap_or_else(types::i32)
                     }
                     _ => {
                         return Err(CompilerError::TypeError(format!(

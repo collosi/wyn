@@ -5,6 +5,12 @@ use crate::error::{CompilerError, Result};
 pub struct ConstantFolder {
 }
 
+impl Default for ConstantFolder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConstantFolder {
     pub fn new() -> Self {
         ConstantFolder {}

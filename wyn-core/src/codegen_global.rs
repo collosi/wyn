@@ -10,6 +10,12 @@ pub struct GlobalBuilder {
     location_variables: HashMap<(u32, StorageClass), spirv::Word>,
 }
 
+impl Default for GlobalBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GlobalBuilder {
     pub fn new() -> Self {
         Self {

@@ -294,9 +294,9 @@ impl Defunctionalizer {
                 ))
             }
             Expression::If(if_expr) => {
-                let (condition, condition_sv) = self.defunctionalize_expression(&if_expr.condition, scope_stack)?;
-                let (then_branch, then_sv) = self.defunctionalize_expression(&if_expr.then_branch, scope_stack)?;
-                let (else_branch, else_sv) = self.defunctionalize_expression(&if_expr.else_branch, scope_stack)?;
+                let (condition, _condition_sv) = self.defunctionalize_expression(&if_expr.condition, scope_stack)?;
+                let (then_branch, _then_sv) = self.defunctionalize_expression(&if_expr.then_branch, scope_stack)?;
+                let (else_branch, _else_sv) = self.defunctionalize_expression(&if_expr.else_branch, scope_stack)?;
                 Ok((
                     Expression::If(IfExpr {
                         condition: Box::new(condition),

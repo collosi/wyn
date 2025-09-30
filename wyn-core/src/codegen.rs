@@ -3,7 +3,7 @@ use crate::ast::*;
 use crate::builtins::BuiltinManager;
 use crate::codegen_global::GlobalBuilder;
 use crate::error::{CompilerError, Result};
-use rspirv::dr::{Builder, Module as SpirvModule, Operand};
+use rspirv::dr::{Builder, Module as SpirvModule};
 use rspirv::spirv::{self, StorageClass, Decoration, Capability, AddressingModel, MemoryModel, ExecutionModel};
 use rspirv::binary::Assemble;
 use std::collections::HashMap;
@@ -44,7 +44,7 @@ impl Pipeline {
         match self {
             Pipeline::VertexFragment { vertex_shader, .. } => {
                 if let Some(attributed_types) = &vertex_shader.attributed_return_type {
-                    attributed_types.iter().enumerate().filter_map(|(_index, attr_type)| {
+                    attributed_types.iter().filter_map(|attr_type| {
                         // Find location attributes
                         for attr in &attr_type.attributes {
                             if let Attribute::Location(loc) = attr {
@@ -866,12 +866,12 @@ impl CodeGenerator {
                             self.convert_array_to_vec4(array_val)
                         }
                         // Vector constructors
-                        "vec2" => self.generate_vector_constructor(2, &args),
-                        "vec3" => self.generate_vector_constructor(3, &args),
-                        "vec4" => self.generate_vector_constructor(4, &args),
-                        "ivec2" => self.generate_vector_constructor(2, &args),
-                        "ivec3" => self.generate_vector_constructor(3, &args),
-                        "ivec4" => self.generate_vector_constructor(4, &args),
+                        "vec2" => self.generate_vector_constructor(2, args),
+                        "vec3" => self.generate_vector_constructor(3, args),
+                        "vec4" => self.generate_vector_constructor(4, args),
+                        "ivec2" => self.generate_vector_constructor(2, args),
+                        "ivec3" => self.generate_vector_constructor(3, args),
+                        "ivec4" => self.generate_vector_constructor(4, args),
                         _ => Err(CompilerError::SpirvError(format!(
                             "Function call '{}' not supported",
                             func_name
@@ -1049,7 +1049,7 @@ impl CodeGenerator {
                     Type::Constructed(name, args)
                         if matches!(name, TypeName::Str("array") | TypeName::Array("array", _)) =>
                     {
-                        args.first().cloned().unwrap_or_else(|| types::i32())
+                        args.first().cloned().unwrap_or_else(types::i32)
                     }
                     _ => {
                         return Err(CompilerError::SpirvError(
@@ -1325,7 +1325,7 @@ impl CodeGenerator {
         let mut interface_vars = Vec::new();
         
         // Add uniform variables
-        for (_, value) in &self.uniform_globals {
+        for value in self.uniform_globals.values() {
             interface_vars.push(value.id);
         }
         
@@ -1467,40 +1467,6 @@ impl CodeGenerator {
         Ok(())
     }
 
-    fn add_spirv_decorations(&mut self) -> Result<()> {
-        // Add SPIR-V decorations for uniform variables
-        for (name, value) in &self.uniform_globals.clone() {
-            self.add_uniform_decoration(name, *value)?;
-        }
-
-        // Add SPIR-V decorations for output variables
-        for (name, (value, location, _, is_builtin)) in &self.output_globals.clone() {
-            // Skip location decorations for builtin outputs (they already have BuiltIn decorations)
-            if !is_builtin {
-                self.add_output_decoration(name, *value, *location)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn add_uniform_decoration(&mut self, name: &str, value: Value) -> Result<()> {
-        // For SPIR-V uniforms, add proper decorations
-        // Add descriptor set and binding decorations
-        self.builder.decorate(value.id, Decoration::DescriptorSet, vec![Operand::LiteralBit32(0)]);
-        self.builder.decorate(value.id, Decoration::Binding, vec![Operand::LiteralBit32(0)]);
-        
-        println!("DEBUG: Added uniform decoration for '{}'", name);
-        Ok(())
-    }
-
-    fn add_output_decoration(&mut self, name: &str, value: Value, location: u32) -> Result<()> {
-        // For SPIR-V outputs, add location decorations
-        self.builder.decorate(value.id, Decoration::Location, vec![Operand::LiteralBit32(location)]);
-        
-        println!("DEBUG: Added output decoration for '{}' at location {}", name, location);
-        Ok(())
-    }
 
     /// Check if a builtin variable already exists in the module
     fn find_existing_builtin(&self, builtin: spirv::BuiltIn, storage_class: StorageClass) -> Option<spirv::Word> {
@@ -1510,7 +1476,7 @@ impl CodeGenerator {
         for instruction in &module.types_global_values {
             if instruction.class.opcode == spirv::Op::Variable {
                 // Check if this variable has the storage class we want
-                if let Some(storage_operand) = instruction.operands.get(0) {
+                if let Some(storage_operand) = instruction.operands.first() {
                     if let rspirv::dr::Operand::StorageClass(sc) = storage_operand {
                         if *sc == storage_class {
                             // Found a variable with matching storage class, check its decorations
@@ -1519,7 +1485,7 @@ impl CodeGenerator {
                                 for decoration in &module.annotations {
                                     if decoration.class.opcode == spirv::Op::Decorate {
                                         if let (Some(target_id), Some(decoration_operand)) = 
-                                            (decoration.operands.get(0), decoration.operands.get(1)) {
+                                            (decoration.operands.first(), decoration.operands.get(1)) {
                                             if let (rspirv::dr::Operand::IdRef(id), rspirv::dr::Operand::Decoration(dec)) = 
                                                 (target_id, decoration_operand) {
                                                 if *id == var_id && *dec == Decoration::BuiltIn {
@@ -1545,56 +1511,6 @@ impl CodeGenerator {
         None
     }
     
-    /// Get the SPIR-V type for a builtin
-    fn get_builtin_type(&mut self, builtin: spirv::BuiltIn) -> spirv::Word {
-        match builtin {
-            // Integer builtins
-            spirv::BuiltIn::VertexIndex | spirv::BuiltIn::InstanceIndex |
-            spirv::BuiltIn::VertexId | spirv::BuiltIn::InstanceId |
-            spirv::BuiltIn::DrawIndex | spirv::BuiltIn::BaseVertex |
-            spirv::BuiltIn::BaseInstance | spirv::BuiltIn::SampleId |
-            spirv::BuiltIn::SampleMask | spirv::BuiltIn::PrimitiveId |
-            spirv::BuiltIn::Layer | spirv::BuiltIn::ViewportIndex => self.i32_type,
-            
-            // Float builtins
-            spirv::BuiltIn::PointSize | spirv::BuiltIn::FragDepth => self.f32_type,
-            
-            // Boolean builtins
-            spirv::BuiltIn::FrontFacing | spirv::BuiltIn::HelperInvocation => self.bool_type,
-            
-            // Vector builtins
-            spirv::BuiltIn::Position | spirv::BuiltIn::FragCoord => {
-                self.builder.type_vector(self.f32_type, 4)
-            }
-            spirv::BuiltIn::PointCoord | spirv::BuiltIn::SamplePosition => {
-                self.builder.type_vector(self.f32_type, 2)
-            }
-            
-            // Array builtins (skip for now)
-            spirv::BuiltIn::ClipDistance | spirv::BuiltIn::CullDistance => {
-                // Return f32 for now, should be arrays
-                self.f32_type
-            }
-            
-            _ => self.f32_type, // Default fallback
-        }
-    }
-    
-    /// Ensure builtins are created for the given storage class
-    fn ensure_builtins(&mut self, builtins: &[spirv::BuiltIn], storage_class: StorageClass) -> Result<()> {
-        for builtin in builtins {
-            if self.find_existing_builtin(*builtin, storage_class).is_none() {
-                // Determine type and create variable
-                let type_id = self.get_builtin_type(*builtin);
-                let ptr_type = self.builder.type_pointer(None, storage_class, type_id);
-                let var_id = self.builder.variable(ptr_type, None, storage_class, None);
-                self.builder.decorate(var_id, Decoration::BuiltIn, vec![Operand::BuiltIn(*builtin)]);
-                
-                println!("DEBUG: Created {:?} builtin {:?}", storage_class, builtin);
-            }
-        }
-        Ok(())
-    }
     
     fn emit_spirv(mut self) -> Result<Vec<u32>> {
         // Build the module (takes ownership of builder)
