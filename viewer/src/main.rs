@@ -274,6 +274,8 @@ fn load_spirv_module(device: &wgpu::Device, path: &Path) -> Result<wgpu::ShaderM
         
         // Use create_shader_module_passthrough to bypass wgpu's SPIR-V validation
         // This allows loading SPIR-V with unsupported capabilities like Linkage
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        
         let shader_module = unsafe {
             device.create_shader_module_passthrough(ShaderModuleDescriptorPassthrough::SpirV(
                 wgpu::ShaderModuleDescriptorSpirV {
@@ -283,15 +285,30 @@ fn load_spirv_module(device: &wgpu::Device, path: &Path) -> Result<wgpu::ShaderM
             ))
         };
         
+        // Check for validation errors even with passthrough
+        let error_option = pollster::block_on(device.pop_error_scope());
+        if let Some(error) = error_option {
+            return Err(anyhow::Error::msg(format!("Shader validation failed (passthrough): {}", error)));
+        }
+        
         Ok(shader_module)
     } else {
         // Fall back to regular shader module creation with validation
         let source = wgpu::util::make_spirv(&bytes);
         
+        // Push an error scope to catch shader validation errors
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(&format!("{}", path.display())),
             source,
         });
+        
+        // Check for validation errors
+        let error_option = pollster::block_on(device.pop_error_scope());
+        if let Some(error) = error_option {
+            return Err(anyhow::Error::msg(format!("Shader validation failed: {}", error)));
+        }
         
         Ok(shader_module)
     }
