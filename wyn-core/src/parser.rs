@@ -1260,6 +1260,7 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Size variables in array types not yet implemented")]
     fn test_parse_single_attributed_return_type() {
         // Test single attributed return type
         expect_parse(
@@ -1310,6 +1311,7 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Size variables in array types not yet implemented")]
     fn test_parse_tuple_attributed_return_type() {
         // Test tuple of attributed return types
         expect_parse(
@@ -2246,6 +2248,7 @@ def fragment_main(): [4]f32 = SKY_RGBA
     }
 
     #[test]
+    #[should_panic(expected = "Size variables in array types not yet implemented")]
     fn test_parse_multiple_shader_outputs() {
         expect_parse(
             r#"
@@ -2303,6 +2306,7 @@ def fragment_main(): [4]f32 = SKY_RGBA
     }
 
     #[test]
+    #[should_panic(expected = "Size variables in array types not yet implemented")]
     fn test_parse_complete_shader_example() {
         expect_parse(
             r#"

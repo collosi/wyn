@@ -70,6 +70,45 @@ pub enum Attribute {
     Uniform,
 }
 
+impl Attribute {
+    pub fn is_vertex(&self) -> bool {
+        matches!(self, Attribute::Vertex)
+    }
+    pub fn is_fragment(&self) -> bool {
+        matches!(self, Attribute::Fragment)
+    }
+}
+
+pub trait AttrExt {
+    fn has<F: Fn(&Attribute) -> bool>(&self, pred: F) -> bool;
+    fn first_builtin(&self) -> Option<spirv::BuiltIn>;
+    fn first_location(&self) -> Option<u32>;
+}
+
+impl AttrExt for [Attribute] {
+    fn has<F: Fn(&Attribute) -> bool>(&self, pred: F) -> bool {
+        self.iter().any(pred)
+    }
+    fn first_builtin(&self) -> Option<spirv::BuiltIn> {
+        self.iter().find_map(|a| {
+            if let Attribute::BuiltIn(b) = a {
+                Some(*b)
+            } else {
+                None
+            }
+        })
+    }
+    fn first_location(&self) -> Option<u32> {
+        self.iter().find_map(|a| {
+            if let Attribute::Location(l) = a {
+                Some(*l)
+            } else {
+                None
+            }
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AttributedType {
     pub attributes: Vec<Attribute>,

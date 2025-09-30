@@ -1,7 +1,7 @@
 [workspace]
 members = ["wyn-core", "wyn", "spirv-validator"]
 resolver = "2"
-exclude = [ "viewer" ]
+exclude = [ "viz" ]
 
 [workspace.package]
 version = "0.1.0"

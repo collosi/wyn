@@ -1,5 +1,6 @@
 use crate::ast::TypeName;
 use crate::ast::*;
+use crate::ast::AttrExt;
 use crate::builtins::BuiltinManager;
 use crate::codegen_global::GlobalBuilder;
 use crate::error::{CompilerError, Result};
@@ -23,9 +24,10 @@ impl Pipeline {
 
         for decl in &program.declarations {
             if let Declaration::Decl(decl_node) = decl {
-                if decl_node.attributes.iter().any(|attr| matches!(attr, Attribute::Vertex)) {
+                if decl_node.attributes.has(Attribute::is_vertex) {
                     vertex_shader = Some(decl_node.clone());
-                } else if decl_node.attributes.iter().any(|attr| matches!(attr, Attribute::Fragment)) {
+                }
+                if decl_node.attributes.has(Attribute::is_fragment) {
                     fragment_shader = Some(decl_node.clone());
                 }
             }
@@ -47,13 +49,8 @@ impl Pipeline {
                     attributed_types
                         .iter()
                         .filter_map(|attr_type| {
-                            // Find location attributes
-                            for attr in &attr_type.attributes {
-                                if let Attribute::Location(loc) = attr {
-                                    return Some((*loc, attr_type.ty.clone()));
-                                }
-                            }
-                            None
+                            attr_type.attributes.first_location()
+                                .map(|loc| (loc, attr_type.ty.clone()))
                         })
                         .collect()
                 } else {
@@ -299,17 +296,14 @@ impl CodeGenerator {
         match decl {
             Declaration::Decl(decl_node) => {
                 // Check if this is an entry point (has Vertex or Fragment attribute)
-                let is_entry_point = decl_node
-                    .attributes
-                    .iter()
-                    .any(|attr| matches!(attr, Attribute::Vertex | Attribute::Fragment));
+                let is_entry_point = decl_node.attributes.has(Attribute::is_vertex)
+                    || decl_node.attributes.has(Attribute::is_fragment);
 
                 if is_entry_point {
                     self.generate_entry_point(decl_node)
                 } else if decl_node.params.is_empty() {
                     // Check if this is a uniform declaration
-                    let is_uniform =
-                        decl_node.attributes.iter().any(|attr| matches!(attr, Attribute::Uniform));
+                    let is_uniform = decl_node.attributes.iter().any(|attr| matches!(attr, Attribute::Uniform));
 
                     if is_uniform {
                         self.generate_uniform_declaration(decl_node)
@@ -408,9 +402,9 @@ impl CodeGenerator {
 
     fn generate_entry_point(&mut self, decl: &Decl) -> Result<()> {
         // Determine execution model
-        let exec_model = if decl.attributes.iter().any(|attr| matches!(attr, Attribute::Vertex)) {
+        let exec_model = if decl.attributes.has(Attribute::is_vertex) {
             spirv::ExecutionModel::Vertex
-        } else if decl.attributes.iter().any(|attr| matches!(attr, Attribute::Fragment)) {
+        } else if decl.attributes.has(Attribute::is_fragment) {
             spirv::ExecutionModel::Fragment
         } else {
             return Err(CompilerError::SpirvError(
@@ -470,43 +464,38 @@ impl CodeGenerator {
             match param {
                 DeclParam::Typed(p) => {
                     // Check if this parameter has builtin attributes
-                    let has_builtin = p.attributes.iter().any(|attr| matches!(attr, Attribute::BuiltIn(_)));
+                    let builtin_opt = p.attributes.first_builtin();
                     println!(
-                        "DEBUG: Parameter '{}' has_builtin={}, attributes: {:?}",
-                        p.name, has_builtin, p.attributes
+                        "DEBUG: Parameter '{}' builtin={:?}, attributes: {:?}",
+                        p.name, builtin_opt, p.attributes
                     );
 
-                    if has_builtin {
+                    if let Some(builtin) = builtin_opt {
                         // Handle as builtin input variable - don't add to function parameters
                         let param_type_info = self.get_or_create_type(&p.ty)?;
 
-                        // Find the builtin type
-                        if let Some(Attribute::BuiltIn(builtin)) =
-                            p.attributes.iter().find(|attr| matches!(attr, Attribute::BuiltIn(_)))
-                        {
-                            // Use GlobalBuilder to create or lookup the builtin variable
-                            if let Some(input_var) = self.global_builder.create_or_lookup_builtin(
-                                &mut self.builder,
-                                *builtin,
-                                StorageClass::Input,
-                                exec_model,
-                            )? {
-                                builtin_inputs.push((p.name.clone(), input_var, param_type_info.id));
+                        // Use GlobalBuilder to create or lookup the builtin variable
+                        if let Some(input_var) = self.global_builder.create_or_lookup_builtin(
+                            &mut self.builder,
+                            builtin,
+                            StorageClass::Input,
+                            exec_model,
+                        )? {
+                            builtin_inputs.push((p.name.clone(), input_var, param_type_info.id));
 
-                                // Also store globally for entry point interface
-                                self.builtin_inputs.insert(
-                                    p.name.clone(),
-                                    Value {
-                                        id: input_var,
-                                        type_id: param_type_info.id,
-                                    },
-                                );
-                            } else {
-                                return Err(CompilerError::SpirvError(format!(
-                                    "Builtin {:?} is not valid for {:?} input",
-                                    builtin, exec_model
-                                )));
-                            }
+                            // Also store globally for entry point interface
+                            self.builtin_inputs.insert(
+                                p.name.clone(),
+                                Value {
+                                    id: input_var,
+                                    type_id: param_type_info.id,
+                                },
+                            );
+                        } else {
+                            return Err(CompilerError::SpirvError(format!(
+                                "Builtin {:?} is not valid for {:?} input",
+                                builtin, exec_model
+                            )));
                         }
                     } else {
                         // Regular parameter - add to function type and store for later parameter creation
@@ -719,38 +708,30 @@ impl CodeGenerator {
         attributed_type: &AttributedType,
         exec_model: ExecutionModel,
     ) -> Result<()> {
-        for attribute in &attributed_type.attributes {
-            match attribute {
-                Attribute::BuiltIn(builtin) => {
-                    // Get or create builtin output variable
-                    if let Some(output_var) = self.global_builder.create_or_lookup_builtin(
-                        &mut self.builder,
-                        *builtin,
-                        StorageClass::Output,
-                        exec_model,
-                    )? {
-                        self.builder.store(output_var, value.id, None, vec![])?;
-                    } else {
-                        return Err(CompilerError::SpirvError(format!(
-                            "Builtin {:?} is not valid for {:?} output",
-                            builtin, exec_model
-                        )));
-                    }
-                }
-                Attribute::Location(location) => {
-                    // Get or create location output variable
-                    let output_var = self.global_builder.create_or_lookup_location(
-                        &mut self.builder,
-                        *location,
-                        StorageClass::Output,
-                        value.type_id,
-                    )?;
-                    self.builder.store(output_var, value.id, None, vec![])?;
-                }
-                _ => {
-                    // Ignore other attributes (like Vertex/Fragment which are on the function itself)
-                }
+        if let Some(builtin) = attributed_type.attributes.first_builtin() {
+            // Get or create builtin output variable
+            if let Some(output_var) = self.global_builder.create_or_lookup_builtin(
+                &mut self.builder,
+                builtin,
+                StorageClass::Output,
+                exec_model,
+            )? {
+                self.builder.store(output_var, value.id, None, vec![])?;
+            } else {
+                return Err(CompilerError::SpirvError(format!(
+                    "Builtin {:?} is not valid for {:?} output",
+                    builtin, exec_model
+                )));
             }
+        } else if let Some(location) = attributed_type.attributes.first_location() {
+            // Get or create location output variable
+            let output_var = self.global_builder.create_or_lookup_location(
+                &mut self.builder,
+                location,
+                StorageClass::Output,
+                value.type_id,
+            )?;
+            self.builder.store(output_var, value.id, None, vec![])?;
         }
         Ok(())
     }
@@ -1504,58 +1485,43 @@ impl CodeGenerator {
                 let type_info = self.get_or_create_type(&attributed_type.ty)?;
 
                 // Check if this is a builtin or location attribute
-                let mut is_builtin = false;
-                let mut location = 0u32;
+                if let Some(builtin) = attributed_type.attributes.first_builtin() {
+                    // For builtin attributes, we create the global but don't add it to output_globals
+                    // because builtins are handled differently (e.g., position is implicit)
+                    println!(
+                        "DEBUG: Found builtin attribute {:?} for output component {}",
+                        builtin, index
+                    );
 
-                for attr in &attributed_type.attributes {
-                    match attr {
-                        Attribute::BuiltIn(builtin) => {
-                            // For builtin attributes, we create the global but don't add it to output_globals
-                            // because builtins are handled differently (e.g., position is implicit)
-                            is_builtin = true;
-                            println!(
-                                "DEBUG: Found builtin attribute {:?} for output component {}",
-                                builtin, index
-                            );
+                    // Use GlobalBuilder to create or lookup the builtin variable
+                    if let Some(global_id) = self.global_builder.create_or_lookup_builtin(
+                        &mut self.builder,
+                        builtin,
+                        StorageClass::Output,
+                        exec_model,
+                    )? {
+                        let ptr_type =
+                            self.builder.type_pointer(None, StorageClass::Output, type_info.id);
+                        let global_value = Value {
+                            id: global_id,
+                            type_id: ptr_type,
+                        };
 
-                            // Use GlobalBuilder to create or lookup the builtin variable
-                            if let Some(global_id) = self.global_builder.create_or_lookup_builtin(
-                                &mut self.builder,
-                                *builtin,
-                                StorageClass::Output,
-                                exec_model,
-                            )? {
-                                let ptr_type =
-                                    self.builder.type_pointer(None, StorageClass::Output, type_info.id);
-                                let global_value = Value {
-                                    id: global_id,
-                                    type_id: ptr_type,
-                                };
-
-                                // Store as a special builtin output (location doesn't matter for builtins)
-                                self.output_globals
-                                    .insert(global_name.clone(), (global_value, 0, type_info.id, true));
-                                println!(
-                                    "DEBUG: Using builtin output global '{}' with BuiltIn {:?} decoration",
-                                    global_name, builtin
-                                );
-                            } else {
-                                return Err(CompilerError::SpirvError(format!(
-                                    "Builtin {:?} is not valid for {:?} output",
-                                    builtin, exec_model
-                                )));
-                            }
-                            break;
-                        }
-                        Attribute::Location(loc) => {
-                            location = *loc;
-                        }
-                        _ => {}
+                        // Store as a special builtin output (location doesn't matter for builtins)
+                        self.output_globals
+                            .insert(global_name.clone(), (global_value, 0, type_info.id, true));
+                        println!(
+                            "DEBUG: Using builtin output global '{}' with BuiltIn {:?} decoration",
+                            global_name, builtin
+                        );
+                    } else {
+                        return Err(CompilerError::SpirvError(format!(
+                            "Builtin {:?} is not valid for {:?} output",
+                            builtin, exec_model
+                        )));
                     }
-                }
-
-                // If it's not a builtin, create a regular location-based output
-                if !is_builtin {
+                } else if let Some(location) = attributed_type.attributes.first_location() {
+                    // Create a regular location-based output
                     let global_id = self.global_builder.create_or_lookup_location(
                         &mut self.builder,
                         location,
