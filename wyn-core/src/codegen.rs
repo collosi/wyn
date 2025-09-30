@@ -271,6 +271,90 @@ impl CodeGenerator {
         }
     }
 
+    /// Prepare entry point parameters, separating builtins from regular parameters
+    fn prepare_params(
+        &mut self,
+        exec_model: ExecutionModel,
+        params: &[DeclParam],
+    ) -> Result<Vec<spirv::Word>> {
+        let mut fn_param_type_ids = Vec::new();
+
+        for param in params {
+            let DeclParam::Typed(p) = param else {
+                return Err(CompilerError::SpirvError(
+                    "Entry point parameters must have explicit types".to_string(),
+                ));
+            };
+
+            let ty_info = self.get_or_create_type(&p.ty)?;
+            if let Some(builtin) = p.attributes.first_builtin() {
+                // Builtin parameter - create global input variable
+                let input_var = self
+                    .global_builder
+                    .create_or_lookup_builtin(&mut self.builder, builtin, StorageClass::Input, exec_model)?
+                    .ok_or_else(|| {
+                        CompilerError::SpirvError(format!(
+                            "Builtin {:?} invalid for {:?} input",
+                            builtin, exec_model
+                        ))
+                    })?;
+
+                let val = Value {
+                    id: input_var,
+                    type_id: ty_info.id,
+                };
+                self.variable_cache.insert(p.name.clone(), val);
+                self.builtin_inputs.insert(p.name.clone(), val);
+            } else {
+                // Regular parameter - add to function signature
+                fn_param_type_ids.push(ty_info.id);
+            }
+        }
+
+        Ok(fn_param_type_ids)
+    }
+
+    /// Create function parameter IDs (must be called before begin_block)
+    fn create_fn_params(&mut self, fn_param_type_ids: &[spirv::Word]) -> Result<Vec<spirv::Word>> {
+        let mut param_ids = Vec::new();
+        for &type_id in fn_param_type_ids {
+            let param_id = self.builder.function_parameter(type_id)?;
+            param_ids.push(param_id);
+        }
+        Ok(param_ids)
+    }
+
+    /// Store function parameters in local variables (must be called after begin_block)
+    fn store_fn_params(&mut self, params: &[DeclParam], param_ids: &[spirv::Word]) -> Result<()> {
+        let mut param_index = 0;
+        for param in params {
+            let DeclParam::Typed(p) = param else { continue };
+
+            // Skip builtins - they were handled in prepare_params
+            if p.attributes.first_builtin().is_some() {
+                continue;
+            }
+
+            let ty_info = self.get_or_create_type(&p.ty)?;
+            let param_id = param_ids[param_index];
+            param_index += 1;
+
+            // Create local variable and store parameter
+            let ptr_type = self.ptr_of(StorageClass::Function, ty_info.id);
+            let local_var = self.builder.variable(ptr_type, None, StorageClass::Function, None);
+            self.builder.store(local_var, param_id, None, vec![])?;
+
+            let value_ptr = Value {
+                id: local_var,
+                type_id: ptr_type,
+            };
+            self.variable_cache.insert(p.name.clone(), value_ptr);
+            self.variable_types.insert(p.name.clone(), p.ty.clone());
+        }
+
+        Ok(())
+    }
+
     pub fn generate(mut self, program: &Program) -> Result<Vec<u32>> {
         // Try to create a pipeline from the program
         self.pipeline = Pipeline::from_program(program)?;
@@ -445,62 +529,8 @@ impl CodeGenerator {
 
         let return_type_info = self.get_or_create_type(return_type_ast)?;
 
-        // Build parameter types and handle builtin inputs in a single pass
-        let mut param_type_ids = Vec::new();
-        let mut builtin_inputs = Vec::new();
-        let mut regular_params = Vec::new(); // (name, type, type_info) for regular parameters
-
-        for param in &decl.params {
-            match param {
-                DeclParam::Typed(p) => {
-                    // Check if this parameter has builtin attributes
-                    let builtin_opt = p.attributes.first_builtin();
-                    println!(
-                        "DEBUG: Parameter '{}' builtin={:?}, attributes: {:?}",
-                        p.name, builtin_opt, p.attributes
-                    );
-
-                    if let Some(builtin) = builtin_opt {
-                        // Handle as builtin input variable - don't add to function parameters
-                        let param_type_info = self.get_or_create_type(&p.ty)?;
-
-                        // Use GlobalBuilder to create or lookup the builtin variable
-                        if let Some(input_var) = self.global_builder.create_or_lookup_builtin(
-                            &mut self.builder,
-                            builtin,
-                            StorageClass::Input,
-                            exec_model,
-                        )? {
-                            builtin_inputs.push((p.name.clone(), input_var, param_type_info.id));
-
-                            // Also store globally for entry point interface
-                            self.builtin_inputs.insert(
-                                p.name.clone(),
-                                Value {
-                                    id: input_var,
-                                    type_id: param_type_info.id,
-                                },
-                            );
-                        } else {
-                            return Err(CompilerError::SpirvError(format!(
-                                "Builtin {:?} is not valid for {:?} input",
-                                builtin, exec_model
-                            )));
-                        }
-                    } else {
-                        // Regular parameter - add to function type and store for later parameter creation
-                        let param_type_info = self.get_or_create_type(&p.ty)?;
-                        param_type_ids.push(param_type_info.id);
-                        regular_params.push((p.name.clone(), p.ty.clone(), param_type_info));
-                    }
-                }
-                DeclParam::Untyped(_) => {
-                    return Err(CompilerError::SpirvError(
-                        "Entry point parameters must have explicit types".to_string(),
-                    ));
-                }
-            }
-        }
+        // Prepare parameters (handles both builtins and regular params)
+        let param_type_ids = self.prepare_params(exec_model, &decl.params)?;
 
         // Create function type - entry points return void and use output variables
         let actual_return_type = if matches!(
@@ -511,7 +541,7 @@ impl CodeGenerator {
         } else {
             return_type_info.id
         };
-        let fn_type = self.builder.type_function(actual_return_type, param_type_ids);
+        let fn_type = self.builder.type_function(actual_return_type, param_type_ids.clone());
 
         // Create the function
         let function_id =
@@ -520,49 +550,21 @@ impl CodeGenerator {
         self.function_cache.insert(decl.name.clone(), function_id);
         self.current_function = Some(function_id);
 
-        // Create function parameters - only for regular (non-builtin) parameters
-        let mut params_to_store = Vec::new();
-        for (param_name, param_type, param_type_info) in regular_params {
-            println!("DEBUG: Creating function parameter for '{}'", param_name);
-            let param_id = self.builder.function_parameter(param_type_info.id)?;
-            params_to_store.push((param_name, param_type, param_id, param_type_info));
-        }
+        // Create function parameters BEFORE begin_block
+        let param_ids = self.create_fn_params(&param_type_ids)?;
 
         // Create entry block
         let entry_label = self.builder.begin_block(None)?;
         self.current_block = Some(entry_label);
+
+        // Store parameters in local variables AFTER begin_block
+        self.store_fn_params(&decl.params, &param_ids)?;
 
         // Save the entry block index for later
         self.function_entry_block_index = self.builder.selected_block();
 
         // Clear pending variables at the start of each function
         self.pending_variables.clear();
-
-        // Store regular parameters in local variables (must be done after begin_block)
-        for (param_name, param_type, param_id, param_type_info) in params_to_store {
-            // Create local variable for the parameter
-            let ptr_type = self.ptr_of(StorageClass::Function, param_type_info.id);
-            let local_var = self.builder.variable(ptr_type, None, StorageClass::Function, None);
-            self.builder.store(local_var, param_id, None, vec![])?;
-
-            let param_value = Value {
-                id: local_var,
-                type_id: ptr_type,
-            };
-
-            self.variable_cache.insert(param_name.clone(), param_value);
-            self.variable_types.insert(param_name, param_type);
-        }
-
-        // Handle builtin inputs - they're global variables that we load from
-        for (param_name, input_var, type_id) in builtin_inputs {
-            let builtin_value = Value {
-                id: input_var,
-                type_id,
-            };
-            self.variable_cache.insert(param_name.clone(), builtin_value);
-            // Note: We don't store the type in variable_types for builtin inputs since they're not regular parameters
-        }
 
         // Generate function body (this will queue variables)
         let result = self.generate_expression(&decl.body)?;
