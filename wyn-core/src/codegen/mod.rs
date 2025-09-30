@@ -1,9 +1,11 @@
+mod global;
+
 use crate::ast::AttrExt;
 use crate::ast::TypeName;
 use crate::ast::*;
 use crate::builtins::BuiltinManager;
-use crate::codegen_global::GlobalBuilder;
 use crate::error::{CompilerError, Result};
+use self::global::GlobalBuilder;
 use rspirv::binary::Assemble;
 use rspirv::dr::{Builder, Module as SpirvModule};
 use rspirv::spirv::{self, AddressingModel, Capability, ExecutionModel, MemoryModel, StorageClass};
