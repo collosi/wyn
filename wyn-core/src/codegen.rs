@@ -60,53 +60,6 @@ impl Pipeline {
     }
 }
 
-// Macros for binary operations to reduce repetition
-macro_rules! arithmetic_op {
-    ($self:ident, $left:ident, $right:ident, $int_op:ident, $float_op:ident, $op_name:literal) => {
-        if $left.type_id == $self.i32_type && $right.type_id == $self.i32_type {
-            let result_id = $self.builder.$int_op($self.i32_type, None, $left.id, $right.id)?;
-            Ok(Value {
-                id: result_id,
-                type_id: $self.i32_type,
-            })
-        } else if $left.type_id == $self.f32_type && $right.type_id == $self.f32_type {
-            let result_id = $self.builder.$float_op($self.f32_type, None, $left.id, $right.id)?;
-            Ok(Value {
-                id: result_id,
-                type_id: $self.f32_type,
-            })
-        } else {
-            Err(CompilerError::SpirvError(format!(
-                "Type mismatch in {}: operands must be both int or both float",
-                $op_name
-            )))
-        }
-    };
-}
-
-macro_rules! comparison_op {
-    ($self:ident, $left:ident, $right:ident, $int_op:ident, $float_op:ident, $op_name:literal) => {
-        if $left.type_id == $self.i32_type && $right.type_id == $self.i32_type {
-            let result_id = $self.builder.$int_op($self.bool_type, None, $left.id, $right.id)?;
-            Ok(Value {
-                id: result_id,
-                type_id: $self.bool_type,
-            })
-        } else if $left.type_id == $self.f32_type && $right.type_id == $self.f32_type {
-            let result_id = $self.builder.$float_op($self.bool_type, None, $left.id, $right.id)?;
-            Ok(Value {
-                id: result_id,
-                type_id: $self.bool_type,
-            })
-        } else {
-            Err(CompilerError::SpirvError(format!(
-                "Type mismatch in {}: operands must be both int or both float",
-                $op_name
-            )))
-        }
-    };
-}
-
 /// Value represents a SPIR-V value with its type and ID
 #[derive(Debug, Clone, Copy)]
 pub struct Value {
@@ -274,6 +227,49 @@ impl CodeGenerator {
             self.builder.constant_composite(ty, elems)
         };
         Ok(Value { id, type_id: ty })
+    }
+
+    /// Generic binary operation handler that dispatches to int or float operations
+    fn binop(
+        &mut self,
+        left: Value,
+        right: Value,
+        int_op: impl FnOnce(
+            &mut Builder,
+            spirv::Word,
+            Option<spirv::Word>,
+            spirv::Word,
+            spirv::Word,
+        ) -> std::result::Result<spirv::Word, rspirv::dr::Error>,
+        float_op: impl FnOnce(
+            &mut Builder,
+            spirv::Word,
+            Option<spirv::Word>,
+            spirv::Word,
+            spirv::Word,
+        ) -> std::result::Result<spirv::Word, rspirv::dr::Error>,
+        out_ty_int: spirv::Word,
+        out_ty_float: spirv::Word,
+        op_name: &str,
+    ) -> Result<Value> {
+        if left.type_id == self.i32_type && right.type_id == self.i32_type {
+            let id = int_op(&mut self.builder, out_ty_int, None, left.id, right.id)?;
+            Ok(Value {
+                id,
+                type_id: out_ty_int,
+            })
+        } else if left.type_id == self.f32_type && right.type_id == self.f32_type {
+            let id = float_op(&mut self.builder, out_ty_float, None, left.id, right.id)?;
+            Ok(Value {
+                id,
+                type_id: out_ty_float,
+            })
+        } else {
+            Err(CompilerError::SpirvError(format!(
+                "Type mismatch in {}: operands must be both int or both float",
+                op_name
+            )))
+        }
     }
 
     pub fn generate(mut self, program: &Program) -> Result<Vec<u32>> {
@@ -804,68 +800,95 @@ impl CodeGenerator {
 
                 // Use unified operator string instead of enum variants
                 match op.op.as_str() {
-                    "+" => arithmetic_op!(self, left_val, right_val, i_add, f_add, "addition"),
-                    "-" => arithmetic_op!(self, left_val, right_val, i_sub, f_sub, "subtraction"),
-                    "*" => {
-                        arithmetic_op!(self, left_val, right_val, i_mul, f_mul, "multiplication")
-                    }
-                    "/" => {
-                        // Division - only support float for now
-                        if left_val.type_id == self.f32_type && right_val.type_id == self.f32_type {
-                            let result_id =
-                                self.builder.f_div(self.f32_type, None, left_val.id, right_val.id)?;
-                            Ok(Value {
-                                id: result_id,
-                                type_id: self.f32_type,
-                            })
-                        } else {
-                            Err(CompilerError::SpirvError(
-                                "Division currently only supported for float types".to_string(),
-                            ))
-                        }
-                    }
-                    "==" => {
-                        comparison_op!(self, left_val, right_val, i_equal, f_ord_equal, "equality")
-                    }
-                    "!=" => comparison_op!(
-                        self,
+                    "+" => self.binop(
                         left_val,
                         right_val,
-                        i_not_equal,
-                        f_ord_not_equal,
-                        "inequality"
+                        Builder::i_add,
+                        Builder::f_add,
+                        self.i32_type,
+                        self.f32_type,
+                        "addition",
                     ),
-                    "<" => comparison_op!(
-                        self,
+                    "-" => self.binop(
                         left_val,
                         right_val,
-                        s_less_than,
-                        f_ord_less_than,
-                        "less than"
+                        Builder::i_sub,
+                        Builder::f_sub,
+                        self.i32_type,
+                        self.f32_type,
+                        "subtraction",
                     ),
-                    ">" => comparison_op!(
-                        self,
+                    "*" => self.binop(
                         left_val,
                         right_val,
-                        s_greater_than,
-                        f_ord_greater_than,
-                        "greater than"
+                        Builder::i_mul,
+                        Builder::f_mul,
+                        self.i32_type,
+                        self.f32_type,
+                        "multiplication",
                     ),
-                    "<=" => comparison_op!(
-                        self,
+                    "/" => self.binop(
                         left_val,
                         right_val,
-                        s_less_than_equal,
-                        f_ord_less_than_equal,
-                        "less than equal"
+                        Builder::s_div,
+                        Builder::f_div,
+                        self.i32_type,
+                        self.f32_type,
+                        "division",
                     ),
-                    ">=" => comparison_op!(
-                        self,
+                    "==" => self.binop(
                         left_val,
                         right_val,
-                        s_greater_than_equal,
-                        f_ord_greater_than_equal,
-                        "greater than equal"
+                        Builder::i_equal,
+                        Builder::f_ord_equal,
+                        self.bool_type,
+                        self.bool_type,
+                        "equality",
+                    ),
+                    "!=" => self.binop(
+                        left_val,
+                        right_val,
+                        Builder::i_not_equal,
+                        Builder::f_ord_not_equal,
+                        self.bool_type,
+                        self.bool_type,
+                        "inequality",
+                    ),
+                    "<" => self.binop(
+                        left_val,
+                        right_val,
+                        Builder::s_less_than,
+                        Builder::f_ord_less_than,
+                        self.bool_type,
+                        self.bool_type,
+                        "less than",
+                    ),
+                    ">" => self.binop(
+                        left_val,
+                        right_val,
+                        Builder::s_greater_than,
+                        Builder::f_ord_greater_than,
+                        self.bool_type,
+                        self.bool_type,
+                        "greater than",
+                    ),
+                    "<=" => self.binop(
+                        left_val,
+                        right_val,
+                        Builder::s_less_than_equal,
+                        Builder::f_ord_less_than_equal,
+                        self.bool_type,
+                        self.bool_type,
+                        "less than or equal",
+                    ),
+                    ">=" => self.binop(
+                        left_val,
+                        right_val,
+                        Builder::s_greater_than_equal,
+                        Builder::f_ord_greater_than_equal,
+                        self.bool_type,
+                        self.bool_type,
+                        "greater than or equal",
                     ),
                     _ => Err(CompilerError::SpirvError(format!(
                         "Unknown binary operator: {}",

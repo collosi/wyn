@@ -1,0 +1,38 @@
+-- Test all binary operators
+
+#[vertex] def test_operators(#[builtin(vertex_index)] idx: i32): #[builtin(position)] vec4 =
+  -- Arithmetic operators on integers
+  let iadd: i32 = 5 + 3 in
+  let isub: i32 = 10 - 4 in
+  let imul: i32 = 6 * 7 in
+  let idiv: i32 = 20 / 4 in
+
+  -- Arithmetic operators on floats
+  let fadd: f32 = 1.5f32 + 2.5f32 in
+  let fsub: f32 = 5.0f32 - 2.0f32 in
+  let fmul: f32 = 3.0f32 * 4.0f32 in
+  let fdiv: f32 = 10.0f32 / 2.0f32 in
+
+  -- Comparison operators on integers
+  let ieq: i32 = if 5 == 5 then 1 else 0 in
+  let ine: i32 = if 5 != 3 then 1 else 0 in
+  let ilt: i32 = if 3 < 5 then 1 else 0 in
+  let igt: i32 = if 5 > 3 then 1 else 0 in
+  let ile: i32 = if 3 <= 5 then 1 else 0 in
+  let ige: i32 = if 5 >= 3 then 1 else 0 in
+
+  -- Comparison operators on floats
+  let feq: i32 = if 1.0f32 == 1.0f32 then 1 else 0 in
+  let fne: i32 = if 1.0f32 != 2.0f32 then 1 else 0 in
+  let flt: i32 = if 1.0f32 < 2.0f32 then 1 else 0 in
+  let fgt: i32 = if 2.0f32 > 1.0f32 then 1 else 0 in
+  let fle: i32 = if 1.0f32 <= 2.0f32 then 1 else 0 in
+  let fge: i32 = if 2.0f32 >= 1.0f32 then 1 else 0 in
+
+  -- Use the results to generate a position
+  let x: f32 = if idx == 0 then -0.5f32 else 0.5f32 in
+  let y: f32 = if idx < 2 then -0.5f32 else 0.5f32 in
+  vec4 x y 0.0f32 1.0f32
+
+#[fragment] def test_frag(): #[location(0)] vec4 =
+  vec4 1.0f32 1.0f32 1.0f32 1.0f32
