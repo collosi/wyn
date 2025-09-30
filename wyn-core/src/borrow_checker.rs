@@ -105,44 +105,44 @@ impl BorrowChecker {
                     )?;
                 } else {
                     // Function declaration or def variable
-                let block_id = BlockId(*block_counter);
-                *block_counter += 1;
-                fact_writer
-                    .write_block_fact(block_id)
-                    .map_err(Self::io_error)?;
-
-                // Parameters create lifetimes
-                for param in &decl.params {
-                    let param_name = match param {
-                        DeclParam::Untyped(name) => name,
-                        DeclParam::Typed(p) => &p.name,
-                    };
-                    let lifetime_id = self.get_next_lifetime_id();
-                    let location_id = *location_counter;
-                    *location_counter += 1;
-
-                    let location = Location {
-                        block: block_id,
-                        index: 0,
-                    };
+                    let block_id = BlockId(*block_counter);
+                    *block_counter += 1;
                     fact_writer
-                        .write_location_fact(location_id, &location)
+                        .write_block_fact(block_id)
                         .map_err(Self::io_error)?;
-                    fact_writer
-                        .write_var_def_fact(location_id, param_name)
-                        .map_err(Self::io_error)?;
-                    fact_writer
-                        .write_lifetime_start_fact(lifetime_id, location_id, param_name)
-                        .map_err(Self::io_error)?;
-                }
 
-                // Analyze function body
-                self.extract_expression_facts(
-                    fact_writer,
-                    &decl.body,
-                    block_id,
-                    location_counter,
-                )?;
+                    // Parameters create lifetimes
+                    for param in &decl.params {
+                        let param_name = match param {
+                            DeclParam::Untyped(name) => name,
+                            DeclParam::Typed(p) => &p.name,
+                        };
+                        let lifetime_id = self.get_next_lifetime_id();
+                        let location_id = *location_counter;
+                        *location_counter += 1;
+
+                        let location = Location {
+                            block: block_id,
+                            index: 0,
+                        };
+                        fact_writer
+                            .write_location_fact(location_id, &location)
+                            .map_err(Self::io_error)?;
+                        fact_writer
+                            .write_var_def_fact(location_id, param_name)
+                            .map_err(Self::io_error)?;
+                        fact_writer
+                            .write_lifetime_start_fact(lifetime_id, location_id, param_name)
+                            .map_err(Self::io_error)?;
+                    }
+
+                    // Analyze function body
+                    self.extract_expression_facts(
+                        fact_writer,
+                        &decl.body,
+                        block_id,
+                        location_counter,
+                    )?;
                 }
             }
             Declaration::Val(_) => {
@@ -313,17 +313,27 @@ impl BorrowChecker {
             // Literals don't create borrows or lifetimes
             Expression::IntLiteral(_) | Expression::FloatLiteral(_) => {}
             Expression::FieldAccess(expr, _field) => {
+                self.extract_expression_facts(fact_writer, expr, current_block, location_counter)?;
+            }
+            Expression::If(if_expr) => {
                 self.extract_expression_facts(
                     fact_writer,
-                    expr,
+                    &if_expr.condition,
                     current_block,
                     location_counter,
                 )?;
-            }
-            Expression::If(if_expr) => {
-                self.extract_expression_facts(fact_writer, &if_expr.condition, current_block, location_counter)?;
-                self.extract_expression_facts(fact_writer, &if_expr.then_branch, current_block, location_counter)?;
-                self.extract_expression_facts(fact_writer, &if_expr.else_branch, current_block, location_counter)?;
+                self.extract_expression_facts(
+                    fact_writer,
+                    &if_expr.then_branch,
+                    current_block,
+                    location_counter,
+                )?;
+                self.extract_expression_facts(
+                    fact_writer,
+                    &if_expr.else_branch,
+                    current_block,
+                    location_counter,
+                )?;
             }
         }
 

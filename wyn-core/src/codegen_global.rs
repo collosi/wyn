@@ -6,7 +6,7 @@ use std::collections::HashMap;
 pub struct GlobalBuilder {
     // Track created builtin variables by (builtin, storage_class) -> variable_id
     builtin_variables: HashMap<(spirv::BuiltIn, StorageClass), spirv::Word>,
-    // Track created location-based variables by (location, storage_class) -> variable_id  
+    // Track created location-based variables by (location, storage_class) -> variable_id
     location_variables: HashMap<(u32, StorageClass), spirv::Word>,
 }
 
@@ -53,7 +53,10 @@ impl GlobalBuilder {
         // Store for future lookups
         self.builtin_variables.insert(key, var_id);
 
-        println!("DEBUG: Created {:?} builtin {:?} for {:?}", storage_class, builtin, execution_model);
+        println!(
+            "DEBUG: Created {:?} builtin {:?} for {:?}",
+            storage_class, builtin, execution_model
+        );
         Ok(Some(var_id))
     }
 
@@ -74,12 +77,19 @@ impl GlobalBuilder {
         // Create the location variable
         let ptr_type = builder.type_pointer(None, storage_class, type_id);
         let var_id = builder.variable(ptr_type, None, storage_class, None);
-        builder.decorate(var_id, Decoration::Location, vec![Operand::LiteralBit32(location)]);
+        builder.decorate(
+            var_id,
+            Decoration::Location,
+            vec![Operand::LiteralBit32(location)],
+        );
 
         // Store for future lookups
         self.location_variables.insert(key, var_id);
 
-        println!("DEBUG: Created {:?} location {} variable", storage_class, location);
+        println!(
+            "DEBUG: Created {:?} location {} variable",
+            storage_class, location
+        );
         Ok(var_id)
     }
 
@@ -194,11 +204,19 @@ impl GlobalBuilder {
         &self,
         execution_model: ExecutionModel,
     ) -> Vec<spirv::Word> {
-        let vars: Vec<spirv::Word> = self.builtin_variables
+        let vars: Vec<spirv::Word> = self
+            .builtin_variables
             .iter()
             .filter_map(|((builtin, storage_class), &var_id)| {
-                let is_valid = self.is_builtin_valid_for_execution_model(*builtin, *storage_class, execution_model);
-                println!("DEBUG: Builtin {:?} {:?} for {:?}: valid={}", builtin, storage_class, execution_model, is_valid);
+                let is_valid = self.is_builtin_valid_for_execution_model(
+                    *builtin,
+                    *storage_class,
+                    execution_model,
+                );
+                println!(
+                    "DEBUG: Builtin {:?} {:?} for {:?}: valid={}",
+                    builtin, storage_class, execution_model, is_valid
+                );
                 if is_valid {
                     Some(var_id)
                 } else {
@@ -206,12 +224,19 @@ impl GlobalBuilder {
                 }
             })
             .collect();
-        println!("DEBUG: get_builtin_interface_variables for {:?} returning {} variables", execution_model, vars.len());
+        println!(
+            "DEBUG: get_builtin_interface_variables for {:?} returning {} variables",
+            execution_model,
+            vars.len()
+        );
         vars
     }
 
     /// Get all created location variables for interface lists
-    pub fn get_location_interface_variables(&self, storage_class: StorageClass) -> Vec<spirv::Word> {
+    pub fn get_location_interface_variables(
+        &self,
+        storage_class: StorageClass,
+    ) -> Vec<spirv::Word> {
         self.location_variables
             .iter()
             .filter_map(|((_, sc), &var_id)| {

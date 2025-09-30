@@ -3,9 +3,11 @@ use crate::ast::*;
 use crate::builtins::BuiltinManager;
 use crate::codegen_global::GlobalBuilder;
 use crate::error::{CompilerError, Result};
-use rspirv::dr::{Builder, Module as SpirvModule};
-use rspirv::spirv::{self, StorageClass, Decoration, Capability, AddressingModel, MemoryModel, ExecutionModel};
 use rspirv::binary::Assemble;
+use rspirv::dr::{Builder, Module as SpirvModule};
+use rspirv::spirv::{
+    self, AddressingModel, Capability, Decoration, ExecutionModel, MemoryModel, StorageClass,
+};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -20,17 +22,25 @@ impl Pipeline {
     pub fn from_program(program: &Program) -> Result<Option<Pipeline>> {
         let mut vertex_shader = None;
         let mut fragment_shader = None;
-        
+
         for decl in &program.declarations {
             if let Declaration::Decl(decl_node) = decl {
-                if decl_node.attributes.iter().any(|attr| matches!(attr, Attribute::Vertex)) {
+                if decl_node
+                    .attributes
+                    .iter()
+                    .any(|attr| matches!(attr, Attribute::Vertex))
+                {
                     vertex_shader = Some(decl_node.clone());
-                } else if decl_node.attributes.iter().any(|attr| matches!(attr, Attribute::Fragment)) {
+                } else if decl_node
+                    .attributes
+                    .iter()
+                    .any(|attr| matches!(attr, Attribute::Fragment))
+                {
                     fragment_shader = Some(decl_node.clone());
                 }
             }
         }
-        
+
         match (vertex_shader, fragment_shader) {
             (Some(v), Some(f)) => Ok(Some(Pipeline::VertexFragment {
                 vertex_shader: v,
@@ -39,20 +49,23 @@ impl Pipeline {
             _ => Ok(None), // No complete pipeline found
         }
     }
-    
+
     pub fn get_vertex_location_outputs(&self) -> Vec<(u32, Type)> {
         match self {
             Pipeline::VertexFragment { vertex_shader, .. } => {
                 if let Some(attributed_types) = &vertex_shader.attributed_return_type {
-                    attributed_types.iter().filter_map(|attr_type| {
-                        // Find location attributes
-                        for attr in &attr_type.attributes {
-                            if let Attribute::Location(loc) = attr {
-                                return Some((*loc, attr_type.ty.clone()));
+                    attributed_types
+                        .iter()
+                        .filter_map(|attr_type| {
+                            // Find location attributes
+                            for attr in &attr_type.attributes {
+                                if let Attribute::Location(loc) = attr {
+                                    return Some((*loc, attr_type.ty.clone()));
+                                }
                             }
-                        }
-                        None
-                    }).collect()
+                            None
+                        })
+                        .collect()
                 } else {
                     Vec::new()
                 }
@@ -61,18 +74,30 @@ impl Pipeline {
     }
 }
 
-
 // Macros for binary operations to reduce repetition
 macro_rules! arithmetic_op {
     ($self:ident, $left:ident, $right:ident, $int_op:ident, $float_op:ident, $op_name:literal) => {
         if $left.type_id == $self.i32_type && $right.type_id == $self.i32_type {
-            let result_id = $self.builder.$int_op($self.i32_type, None, $left.id, $right.id)?;
-            Ok(Value { id: result_id, type_id: $self.i32_type })
+            let result_id = $self
+                .builder
+                .$int_op($self.i32_type, None, $left.id, $right.id)?;
+            Ok(Value {
+                id: result_id,
+                type_id: $self.i32_type,
+            })
         } else if $left.type_id == $self.f32_type && $right.type_id == $self.f32_type {
-            let result_id = $self.builder.$float_op($self.f32_type, None, $left.id, $right.id)?;
-            Ok(Value { id: result_id, type_id: $self.f32_type })
+            let result_id = $self
+                .builder
+                .$float_op($self.f32_type, None, $left.id, $right.id)?;
+            Ok(Value {
+                id: result_id,
+                type_id: $self.f32_type,
+            })
         } else {
-            Err(CompilerError::SpirvError(format!("Type mismatch in {}: operands must be both int or both float", $op_name)))
+            Err(CompilerError::SpirvError(format!(
+                "Type mismatch in {}: operands must be both int or both float",
+                $op_name
+            )))
         }
     };
 }
@@ -80,13 +105,26 @@ macro_rules! arithmetic_op {
 macro_rules! comparison_op {
     ($self:ident, $left:ident, $right:ident, $int_op:ident, $float_op:ident, $op_name:literal) => {
         if $left.type_id == $self.i32_type && $right.type_id == $self.i32_type {
-            let result_id = $self.builder.$int_op($self.bool_type, None, $left.id, $right.id)?;
-            Ok(Value { id: result_id, type_id: $self.bool_type })
+            let result_id = $self
+                .builder
+                .$int_op($self.bool_type, None, $left.id, $right.id)?;
+            Ok(Value {
+                id: result_id,
+                type_id: $self.bool_type,
+            })
         } else if $left.type_id == $self.f32_type && $right.type_id == $self.f32_type {
-            let result_id = $self.builder.$float_op($self.bool_type, None, $left.id, $right.id)?;
-            Ok(Value { id: result_id, type_id: $self.bool_type })
+            let result_id = $self
+                .builder
+                .$float_op($self.bool_type, None, $left.id, $right.id)?;
+            Ok(Value {
+                id: result_id,
+                type_id: $self.bool_type,
+            })
         } else {
-            Err(CompilerError::SpirvError(format!("Type mismatch in {}: operands must be both int or both float", $op_name)))
+            Err(CompilerError::SpirvError(format!(
+                "Type mismatch in {}: operands must be both int or both float",
+                $op_name
+            )))
         }
     };
 }
@@ -123,7 +161,7 @@ pub struct CodeGenerator {
     output_globals: HashMap<String, (Value, u32, spirv::Word, bool)>, // (value, location, component_type, is_builtin)
     builtin_inputs: HashMap<String, Value>,
     pending_variables: Vec<(spirv::Word, spirv::Word)>, // (variable_id, type_id) for OpVariable instructions
-    
+
     // Type IDs for common types
     void_type: spirv::Word,
     bool_type: spirv::Word,
@@ -160,17 +198,21 @@ impl CodeGenerator {
     }
 
     fn output_variable_name(exec_model: ExecutionModel, index: usize) -> String {
-        format!("{}_output_{}", Self::execution_model_name(exec_model), index)
+        format!(
+            "{}_output_{}",
+            Self::execution_model_name(exec_model),
+            index
+        )
     }
 
     fn create_fragment_inputs(&mut self) -> Result<()> {
         // Get vertex location outputs from the pipeline (if we have one)
         if let Some(pipeline) = &self.pipeline {
             let vertex_outputs = pipeline.get_vertex_location_outputs();
-            
+
             for (location, var_type) in vertex_outputs {
                 let type_info = self.get_or_create_type(&var_type)?;
-                
+
                 // Create fragment input variable at the same location
                 let _input_var_id = self.global_builder.create_or_lookup_location(
                     &mut self.builder,
@@ -178,26 +220,29 @@ impl CodeGenerator {
                     StorageClass::Input,
                     type_info.id,
                 )?;
-                
-                println!("DEBUG: Created fragment input at location {} with type {:?}", location, var_type);
+
+                println!(
+                    "DEBUG: Created fragment input at location {} with type {:?}",
+                    location, var_type
+                );
             }
         }
-        
+
         Ok(())
     }
 
     pub fn new(_module_name: &str) -> Self {
         let mut builder = Builder::new();
-        
+
         // Set up SPIR-V header
         builder.set_version(1, 0);
-        
+
         // Add capabilities
         builder.capability(Capability::Shader);
-        
+
         // Add memory model
         builder.memory_model(AddressingModel::Logical, MemoryModel::GLSL450);
-        
+
         let mut generator = CodeGenerator {
             module: SpirvModule::new(),
             builder,
@@ -216,7 +261,7 @@ impl CodeGenerator {
             output_globals: HashMap::new(),
             builtin_inputs: HashMap::new(),
             pending_variables: Vec::new(),
-            
+
             // Will be initialized in setup_common_types
             void_type: 0,
             bool_type: 0,
@@ -228,7 +273,7 @@ impl CodeGenerator {
             ptr_function_f32_type: 0,
             ptr_function_i32_type: 0,
         };
-        
+
         generator.setup_common_types();
         generator
     }
@@ -239,21 +284,32 @@ impl CodeGenerator {
         self.bool_type = self.builder.type_bool();
         self.i32_type = self.builder.type_int(32, 1);
         self.f32_type = self.builder.type_float(32);
-        
+
         // Create pointer types for different storage classes
-        self.ptr_input_f32_type = self.builder.type_pointer(None, StorageClass::Input, self.f32_type);
-        self.ptr_output_f32_type = self.builder.type_pointer(None, StorageClass::Output, self.f32_type);
-        self.ptr_uniform_f32_type = self.builder.type_pointer(None, StorageClass::Uniform, self.f32_type);
-        self.ptr_function_f32_type = self.builder.type_pointer(None, StorageClass::Function, self.f32_type);
-        self.ptr_function_i32_type = self.builder.type_pointer(None, StorageClass::Function, self.i32_type);
+        self.ptr_input_f32_type =
+            self.builder
+                .type_pointer(None, StorageClass::Input, self.f32_type);
+        self.ptr_output_f32_type =
+            self.builder
+                .type_pointer(None, StorageClass::Output, self.f32_type);
+        self.ptr_uniform_f32_type =
+            self.builder
+                .type_pointer(None, StorageClass::Uniform, self.f32_type);
+        self.ptr_function_f32_type =
+            self.builder
+                .type_pointer(None, StorageClass::Function, self.f32_type);
+        self.ptr_function_i32_type =
+            self.builder
+                .type_pointer(None, StorageClass::Function, self.i32_type);
     }
 
     pub fn generate(mut self, program: &Program) -> Result<Vec<u32>> {
         // Try to create a pipeline from the program
         self.pipeline = Pipeline::from_program(program)?;
-        
+
         // Load builtin functions into the module
-        self.builtin_manager.load_builtins_into_module(&mut self.builder)?;
+        self.builtin_manager
+            .load_builtins_into_module(&mut self.builder)?;
 
         // Process all declarations
         for decl in &program.declarations {
@@ -268,7 +324,6 @@ impl CodeGenerator {
             self.add_spirv_entry_point_metadata(name, exec_model)?;
         }
 
-
         // Build the module and return SPIR-V words
         self.emit_spirv()
     }
@@ -277,24 +332,29 @@ impl CodeGenerator {
         match decl {
             Declaration::Decl(decl_node) => {
                 // Check if this is an entry point (has Vertex or Fragment attribute)
-                let is_entry_point = decl_node.attributes.iter().any(|attr| 
-                    matches!(attr, Attribute::Vertex | Attribute::Fragment)
-                );
-                
+                let is_entry_point = decl_node
+                    .attributes
+                    .iter()
+                    .any(|attr| matches!(attr, Attribute::Vertex | Attribute::Fragment));
+
                 if is_entry_point {
                     self.generate_entry_point(decl_node)
                 } else if decl_node.params.is_empty() {
                     // Check if this is a uniform declaration
-                    let is_uniform = decl_node.attributes.iter().any(|attr| 
-                        matches!(attr, Attribute::Uniform)
-                    );
-                    
+                    let is_uniform = decl_node
+                        .attributes
+                        .iter()
+                        .any(|attr| matches!(attr, Attribute::Uniform));
+
                     if is_uniform {
                         self.generate_uniform_declaration(decl_node)
                     } else {
                         // Regular variable declaration: let/def name: type = value or let/def name = value
                         let ty = decl_node.ty.as_ref().ok_or_else(|| {
-                            CompilerError::SpirvError(format!("{} declaration must have explicit type", decl_node.keyword))
+                            CompilerError::SpirvError(format!(
+                                "{} declaration must have explicit type",
+                                decl_node.keyword
+                            ))
                         })?;
                         self.generate_declaration_helper(&decl_node.name, ty, &decl_node.body)
                     }
@@ -317,43 +377,61 @@ impl CodeGenerator {
 
         // Create a global variable for the uniform
         let type_info = self.get_or_create_type(ty)?;
-        let ptr_type = self.builder.type_pointer(None, StorageClass::Uniform, type_info.id);
-        let global_id = self.builder.variable(ptr_type, None, StorageClass::Uniform, None);
-        
+        let ptr_type = self
+            .builder
+            .type_pointer(None, StorageClass::Uniform, type_info.id);
+        let global_id = self
+            .builder
+            .variable(ptr_type, None, StorageClass::Uniform, None);
+
         let value = Value {
             id: global_id,
             type_id: ptr_type,
         };
-        
+
         // Store in variable cache so it can be referenced by other code
         self.variable_cache.insert(decl.name.clone(), value);
         self.variable_types.insert(decl.name.clone(), ty.clone());
-        
+
         // Store for SPIR-V decoration generation
         self.uniform_globals.insert(decl.name.clone(), value);
-        
-        println!("DEBUG: Generated uniform variable '{}' with type {:?}", decl.name, ty);
-        
+
+        println!(
+            "DEBUG: Generated uniform variable '{}' with type {:?}",
+            decl.name, ty
+        );
+
         Ok(())
     }
 
-    fn generate_declaration_helper(&mut self, name: &str, ty: &Type, value_expr: &Expression) -> Result<()> {
+    fn generate_declaration_helper(
+        &mut self,
+        name: &str,
+        ty: &Type,
+        value_expr: &Expression,
+    ) -> Result<()> {
         // For global variables, allow literal constants including arrays
         match value_expr {
-            Expression::IntLiteral(_) | Expression::FloatLiteral(_) | Expression::ArrayLiteral(_) => {
+            Expression::IntLiteral(_)
+            | Expression::FloatLiteral(_)
+            | Expression::ArrayLiteral(_) => {
                 // Generate the constant expression value
                 let value = self.generate_expression(value_expr)?;
-                
+
                 // Create a global variable with the correct type
                 let type_info = self.get_or_create_type(ty)?;
-                let ptr_type = self.builder.type_pointer(None, StorageClass::Private, type_info.id);
-                let global_id = self.builder.variable(ptr_type, None, StorageClass::Private, Some(value.id));
-                
+                let ptr_type = self
+                    .builder
+                    .type_pointer(None, StorageClass::Private, type_info.id);
+                let global_id =
+                    self.builder
+                        .variable(ptr_type, None, StorageClass::Private, Some(value.id));
+
                 let global_value = Value {
                     id: global_id,
                     type_id: ptr_type,
                 };
-                
+
                 // Store in variable cache
                 self.variable_cache.insert(name.to_string(), global_value);
                 self.variable_types.insert(name.to_string(), ty.clone());
@@ -395,17 +473,23 @@ impl CodeGenerator {
         let return_type_ast = decl.ty.as_ref().ok_or_else(|| {
             CompilerError::SpirvError("Entry point must have return type".to_string())
         })?;
-        
+
         // Handle shader-specific variable creation
         match exec_model {
             ExecutionModel::Fragment => {
                 // Fragment shaders need inputs that match vertex outputs (if we have a pipeline)
                 self.create_fragment_inputs()?;
-                
+
                 // Fragment shaders also need their own outputs
-                if matches!(return_type_ast, Type::Constructed(TypeName::Str("attributed_tuple"), _)) {
+                if matches!(
+                    return_type_ast,
+                    Type::Constructed(TypeName::Str("attributed_tuple"), _)
+                ) {
                     if let Some(attributed_return_type) = &decl.attributed_return_type {
-                        self.create_output_globals_from_attributes(attributed_return_type, exec_model)?;
+                        self.create_output_globals_from_attributes(
+                            attributed_return_type,
+                            exec_model,
+                        )?;
                     } else {
                         self.create_output_globals(return_type_ast)?;
                     }
@@ -413,36 +497,52 @@ impl CodeGenerator {
             }
             _ => {
                 // Vertex and other shaders just create outputs
-                if matches!(return_type_ast, Type::Constructed(TypeName::Str("attributed_tuple"), _)) {
+                if matches!(
+                    return_type_ast,
+                    Type::Constructed(TypeName::Str("attributed_tuple"), _)
+                ) {
                     if let Some(attributed_return_type) = &decl.attributed_return_type {
-                        self.create_output_globals_from_attributes(attributed_return_type, exec_model)?;
+                        self.create_output_globals_from_attributes(
+                            attributed_return_type,
+                            exec_model,
+                        )?;
                     } else {
                         self.create_output_globals(return_type_ast)?;
                     }
                 }
             }
         }
-        
+
         let return_type_info = self.get_or_create_type(return_type_ast)?;
 
         // Build parameter types and handle builtin inputs in a single pass
         let mut param_type_ids = Vec::new();
         let mut builtin_inputs = Vec::new();
         let mut regular_params = Vec::new(); // (name, type, type_info) for regular parameters
-        
+
         for param in &decl.params {
             match param {
                 DeclParam::Typed(p) => {
                     // Check if this parameter has builtin attributes
-                    let has_builtin = p.attributes.iter().any(|attr| matches!(attr, Attribute::BuiltIn(_)));
-                    println!("DEBUG: Parameter '{}' has_builtin={}, attributes: {:?}", p.name, has_builtin, p.attributes);
-                    
+                    let has_builtin = p
+                        .attributes
+                        .iter()
+                        .any(|attr| matches!(attr, Attribute::BuiltIn(_)));
+                    println!(
+                        "DEBUG: Parameter '{}' has_builtin={}, attributes: {:?}",
+                        p.name, has_builtin, p.attributes
+                    );
+
                     if has_builtin {
                         // Handle as builtin input variable - don't add to function parameters
                         let param_type_info = self.get_or_create_type(&p.ty)?;
-                        
+
                         // Find the builtin type
-                        if let Some(Attribute::BuiltIn(builtin)) = p.attributes.iter().find(|attr| matches!(attr, Attribute::BuiltIn(_))) {
+                        if let Some(Attribute::BuiltIn(builtin)) = p
+                            .attributes
+                            .iter()
+                            .find(|attr| matches!(attr, Attribute::BuiltIn(_)))
+                        {
                             // Use GlobalBuilder to create or lookup the builtin variable
                             if let Some(input_var) = self.global_builder.create_or_lookup_builtin(
                                 &mut self.builder,
@@ -450,13 +550,20 @@ impl CodeGenerator {
                                 StorageClass::Input,
                                 exec_model,
                             )? {
-                                builtin_inputs.push((p.name.clone(), input_var, param_type_info.id));
-                                
+                                builtin_inputs.push((
+                                    p.name.clone(),
+                                    input_var,
+                                    param_type_info.id,
+                                ));
+
                                 // Also store globally for entry point interface
-                                self.builtin_inputs.insert(p.name.clone(), Value {
-                                    id: input_var,
-                                    type_id: param_type_info.id,
-                                });
+                                self.builtin_inputs.insert(
+                                    p.name.clone(),
+                                    Value {
+                                        id: input_var,
+                                        type_id: param_type_info.id,
+                                    },
+                                );
                             } else {
                                 return Err(CompilerError::SpirvError(format!(
                                     "Builtin {:?} is not valid for {:?} input",
@@ -473,20 +580,25 @@ impl CodeGenerator {
                 }
                 DeclParam::Untyped(_) => {
                     return Err(CompilerError::SpirvError(
-                        "Entry point parameters must have explicit types".to_string()
+                        "Entry point parameters must have explicit types".to_string(),
                     ));
                 }
             }
         }
 
         // Create function type - entry points return void and use output variables
-        let actual_return_type = if matches!(return_type_ast, Type::Constructed(TypeName::Str("attributed_tuple"), _)) {
+        let actual_return_type = if matches!(
+            return_type_ast,
+            Type::Constructed(TypeName::Str("attributed_tuple"), _)
+        ) {
             self.void_type
         } else {
             return_type_info.id
         };
-        let fn_type = self.builder.type_function(actual_return_type, param_type_ids);
-        
+        let fn_type = self
+            .builder
+            .type_function(actual_return_type, param_type_ids);
+
         // Create the function
         let function_id = self.builder.begin_function(
             actual_return_type,
@@ -494,7 +606,7 @@ impl CodeGenerator {
             spirv::FunctionControl::NONE,
             fn_type,
         )?;
-        
+
         self.function_cache.insert(decl.name.clone(), function_id);
         self.current_function = Some(function_id);
 
@@ -509,18 +621,22 @@ impl CodeGenerator {
         // Create entry block
         let entry_label = self.builder.begin_block(None)?;
         self.current_block = Some(entry_label);
-        
+
         // Save the entry block index for later
         self.function_entry_block_index = self.builder.selected_block();
-        
+
         // Clear pending variables at the start of each function
         self.pending_variables.clear();
-        
+
         // Store regular parameters in local variables (must be done after begin_block)
         for (param_name, param_type, param_id, param_type_info) in params_to_store {
             // Create local variable for the parameter
-            let ptr_type = self.builder.type_pointer(None, StorageClass::Function, param_type_info.id);
-            let local_var = self.builder.variable(ptr_type, None, StorageClass::Function, None);
+            let ptr_type =
+                self.builder
+                    .type_pointer(None, StorageClass::Function, param_type_info.id);
+            let local_var = self
+                .builder
+                .variable(ptr_type, None, StorageClass::Function, None);
             self.builder.store(local_var, param_id, None, vec![])?;
 
             let param_value = Value {
@@ -531,20 +647,21 @@ impl CodeGenerator {
             self.variable_cache.insert(param_name.clone(), param_value);
             self.variable_types.insert(param_name, param_type);
         }
-        
+
         // Handle builtin inputs - they're global variables that we load from
         for (param_name, input_var, type_id) in builtin_inputs {
             let builtin_value = Value {
                 id: input_var,
                 type_id,
             };
-            self.variable_cache.insert(param_name.clone(), builtin_value);
+            self.variable_cache
+                .insert(param_name.clone(), builtin_value);
             // Note: We don't store the type in variable_types for builtin inputs since they're not regular parameters
         }
 
         // Generate function body (this will queue variables)
         let result = self.generate_expression(&decl.body)?;
-        
+
         // Now emit all pending variables at the beginning of the entry block
         self.emit_pending_variables_at_entry_block()?;
 
@@ -557,7 +674,7 @@ impl CodeGenerator {
             // Regular function - return the result
             self.builder.ret_value(result.id)?;
         }
-        
+
         self.builder.end_function()?;
         self.current_function = None;
         self.current_block = None;
@@ -565,21 +682,22 @@ impl CodeGenerator {
 
         Ok(())
     }
-    
+
     /// Emit all pending OpVariable instructions at the beginning of the entry block
     fn emit_pending_variables_at_entry_block(&mut self) -> Result<()> {
-        use rspirv::dr::{Instruction, InsertPoint, Operand};
-        
+        use rspirv::dr::{InsertPoint, Instruction, Operand};
+
         // Save current block position
         let current_block_index = self.builder.selected_block();
-        
+
         // Get entry block index
-        let entry_block_index = self.function_entry_block_index
+        let entry_block_index = self
+            .function_entry_block_index
             .ok_or_else(|| CompilerError::SpirvError("No entry block index saved".to_string()))?;
-        
+
         // Switch to entry block
         self.builder.select_block(Some(entry_block_index))?;
-        
+
         // Insert all pending variables at the beginning of the entry block
         // We need to reverse the order since we're inserting at the beginning
         for (var_id, type_id) in self.pending_variables.drain(..).rev() {
@@ -588,23 +706,26 @@ impl CodeGenerator {
                 spirv::Op::Variable,
                 Some(type_id),
                 Some(var_id),
-                vec![
-                    Operand::StorageClass(StorageClass::Function),
-                ]
+                vec![Operand::StorageClass(StorageClass::Function)],
             );
-            
+
             // Insert at the beginning of the block (right after the label)
             self.builder.insert_into_block(InsertPoint::Begin, inst)?;
         }
-        
+
         // Restore original block position
         self.builder.select_block(current_block_index)?;
-        
+
         Ok(())
     }
 
     /// Generate the entry point coda that writes return values to builtin/location outputs
-    fn generate_entry_point_coda(&mut self, decl: &Decl, result: &Value, exec_model: ExecutionModel) -> Result<()> {
+    fn generate_entry_point_coda(
+        &mut self,
+        decl: &Decl,
+        result: &Value,
+        exec_model: ExecutionModel,
+    ) -> Result<()> {
         if let Some(attributed_return_type) = &decl.attributed_return_type {
             // Handle attributed return types (new system)
             if attributed_return_type.len() == 1 {
@@ -620,7 +741,7 @@ impl CodeGenerator {
                         component_type_info.id,
                         None,
                         result.id,
-                        vec![index as u32]
+                        vec![index as u32],
                     )?;
                     let component_value = Value {
                         id: component_id,
@@ -637,24 +758,29 @@ impl CodeGenerator {
                         // Extract each component from the result tuple and store in corresponding output
                         for (index, _component_type) in args.iter().enumerate() {
                             let output_name = Self::output_variable_name(exec_model, index);
-                            if let Some((output_global, _, stored_component_type, _)) = self.output_globals.get(&output_name) {
+                            if let Some((output_global, _, stored_component_type, _)) =
+                                self.output_globals.get(&output_name)
+                            {
                                 // Extract the component from the result tuple
                                 let component_id = self.builder.composite_extract(
                                     *stored_component_type,
                                     None,
                                     result.id,
-                                    vec![index as u32]
+                                    vec![index as u32],
                                 )?;
-                                
+
                                 // Store in the output global
-                                self.builder.store(output_global.id, component_id, None, vec![])?;
+                                self.builder
+                                    .store(output_global.id, component_id, None, vec![])?;
                             }
                         }
                     }
                     _ => {
                         // Single return value case - store directly if there's an output variable
-                        if let Some((output_global, _, _, _)) = self.output_globals.values().next() {
-                            self.builder.store(output_global.id, result.id, None, vec![])?;
+                        if let Some((output_global, _, _, _)) = self.output_globals.values().next()
+                        {
+                            self.builder
+                                .store(output_global.id, result.id, None, vec![])?;
                         }
                     }
                 }
@@ -664,7 +790,12 @@ impl CodeGenerator {
     }
 
     /// Store a single attributed value to the appropriate builtin or location output
-    fn store_attributed_value(&mut self, value: &Value, attributed_type: &AttributedType, exec_model: ExecutionModel) -> Result<()> {
+    fn store_attributed_value(
+        &mut self,
+        value: &Value,
+        attributed_type: &AttributedType,
+        exec_model: ExecutionModel,
+    ) -> Result<()> {
         for attribute in &attributed_type.attributes {
             match attribute {
                 Attribute::BuiltIn(builtin) => {
@@ -725,7 +856,13 @@ impl CodeGenerator {
                         // The type_id in builtin_value.type_id is the pointer type, we need the pointed-to type
                         // Since we know builtins like vertex_index are i32, we can determine the pointed-to type
                         let pointed_type = self.i32_type; // For now, assume vertex_index is i32
-                        let loaded_id = self.builder.load(pointed_type, None, builtin_value.id, None, vec![])?;
+                        let loaded_id = self.builder.load(
+                            pointed_type,
+                            None,
+                            builtin_value.id,
+                            None,
+                            vec![],
+                        )?;
                         Ok(Value {
                             id: loaded_id,
                             type_id: pointed_type,
@@ -746,7 +883,9 @@ impl CodeGenerator {
                         let type_info = self.get_or_create_type(&var_type)?;
 
                         // Load the value from the pointer
-                        let loaded_id = self.builder.load(type_info.id, None, value.id, None, vec![])?;
+                        let loaded_id =
+                            self.builder
+                                .load(type_info.id, None, value.id, None, vec![])?;
                         Ok(Value {
                             id: loaded_id,
                             type_id: type_info.id,
@@ -764,27 +903,75 @@ impl CodeGenerator {
                 match op.op.as_str() {
                     "+" => arithmetic_op!(self, left_val, right_val, i_add, f_add, "addition"),
                     "-" => arithmetic_op!(self, left_val, right_val, i_sub, f_sub, "subtraction"),
-                    "*" => arithmetic_op!(self, left_val, right_val, i_mul, f_mul, "multiplication"),
+                    "*" => {
+                        arithmetic_op!(self, left_val, right_val, i_mul, f_mul, "multiplication")
+                    }
                     "/" => {
                         // Division - only support float for now
                         if left_val.type_id == self.f32_type && right_val.type_id == self.f32_type {
-                            let result_id = self.builder.f_div(self.f32_type, None, left_val.id, right_val.id)?;
-                            Ok(Value { id: result_id, type_id: self.f32_type })
+                            let result_id = self.builder.f_div(
+                                self.f32_type,
+                                None,
+                                left_val.id,
+                                right_val.id,
+                            )?;
+                            Ok(Value {
+                                id: result_id,
+                                type_id: self.f32_type,
+                            })
                         } else {
-                            Err(CompilerError::SpirvError("Division currently only supported for float types".to_string()))
+                            Err(CompilerError::SpirvError(
+                                "Division currently only supported for float types".to_string(),
+                            ))
                         }
                     }
-                    "==" => comparison_op!(self, left_val, right_val, i_equal, f_ord_equal, "equality"),
-                    "!=" => comparison_op!(self, left_val, right_val, i_not_equal, f_ord_not_equal, "inequality"),
-                    "<" => comparison_op!(self, left_val, right_val, s_less_than, f_ord_less_than, "less than"),
-                    ">" => comparison_op!(self, left_val, right_val, s_greater_than, f_ord_greater_than, "greater than"),
-                    "<=" => comparison_op!(self, left_val, right_val, s_less_than_equal, f_ord_less_than_equal, "less than equal"),
-                    ">=" => comparison_op!(self, left_val, right_val, s_greater_than_equal, f_ord_greater_than_equal, "greater than equal"),
-                    _ => {
-                        Err(CompilerError::SpirvError(format!(
-                            "Unknown binary operator: {}", op.op
-                        )))
+                    "==" => {
+                        comparison_op!(self, left_val, right_val, i_equal, f_ord_equal, "equality")
                     }
+                    "!=" => comparison_op!(
+                        self,
+                        left_val,
+                        right_val,
+                        i_not_equal,
+                        f_ord_not_equal,
+                        "inequality"
+                    ),
+                    "<" => comparison_op!(
+                        self,
+                        left_val,
+                        right_val,
+                        s_less_than,
+                        f_ord_less_than,
+                        "less than"
+                    ),
+                    ">" => comparison_op!(
+                        self,
+                        left_val,
+                        right_val,
+                        s_greater_than,
+                        f_ord_greater_than,
+                        "greater than"
+                    ),
+                    "<=" => comparison_op!(
+                        self,
+                        left_val,
+                        right_val,
+                        s_less_than_equal,
+                        f_ord_less_than_equal,
+                        "less than equal"
+                    ),
+                    ">=" => comparison_op!(
+                        self,
+                        left_val,
+                        right_val,
+                        s_greater_than_equal,
+                        f_ord_greater_than_equal,
+                        "greater than equal"
+                    ),
+                    _ => Err(CompilerError::SpirvError(format!(
+                        "Unknown binary operator: {}",
+                        op.op
+                    ))),
                 }
             }
             Expression::FunctionCall(func_name, args) => {
@@ -795,18 +982,21 @@ impl CodeGenerator {
                             "length requires exactly one argument".to_string(),
                         ));
                     }
-                    
+
                     // For arrays, return the compile-time known size
                     let array_expr = &args[0];
-                    
+
                     // If it's an array identifier, get its type and return the size
                     if let Expression::Identifier(array_name) = array_expr {
-                        let array_type = self.variable_types.get(array_name)
+                        let array_type = self
+                            .variable_types
+                            .get(array_name)
                             .ok_or_else(|| CompilerError::UndefinedVariable(array_name.clone()))?;
-                        
+
                         match array_type {
                             Type::Constructed(TypeName::Array("array", size), _) => {
-                                let const_id = self.builder.constant_bit32(self.i32_type, *size as u32);
+                                let const_id =
+                                    self.builder.constant_bit32(self.i32_type, *size as u32);
                                 Ok(Value {
                                     id: const_id,
                                     type_id: self.i32_type,
@@ -821,20 +1011,23 @@ impl CodeGenerator {
                                 })
                             }
                             _ => Err(CompilerError::SpirvError(
-                                "length can only be applied to arrays".to_string()
-                            ))
+                                "length can only be applied to arrays".to_string(),
+                            )),
                         }
                     } else {
                         // For array literals, count the elements
                         if let Expression::ArrayLiteral(elements) = array_expr {
-                            let const_id = self.builder.constant_bit32(self.i32_type, elements.len() as u32);
+                            let const_id = self
+                                .builder
+                                .constant_bit32(self.i32_type, elements.len() as u32);
                             Ok(Value {
                                 id: const_id,
                                 type_id: self.i32_type,
                             })
                         } else {
                             Err(CompilerError::SpirvError(
-                                "length can only be applied to array variables or literals".to_string()
+                                "length can only be applied to array variables or literals"
+                                    .to_string(),
                             ))
                         }
                     }
@@ -903,12 +1096,13 @@ impl CodeGenerator {
                     let struct_type = self.builder.type_struct(element_type_ids);
                     let struct_id = if self.current_block.is_some() {
                         // Inside function - use runtime composite construct
-                        self.builder.composite_construct(struct_type, None, element_values)?
+                        self.builder
+                            .composite_construct(struct_type, None, element_values)?
                     } else {
                         // Global constant - use constant composite
                         self.builder.constant_composite(struct_type, element_values)
                     };
-                    
+
                     Ok(Value {
                         id: struct_id,
                         type_id: struct_type,
@@ -926,12 +1120,14 @@ impl CodeGenerator {
                 });
 
                 let type_info = self.get_or_create_type(&var_type)?;
-                let ptr_type = self.builder.type_pointer(None, StorageClass::Function, type_info.id);
-                
+                let ptr_type =
+                    self.builder
+                        .type_pointer(None, StorageClass::Function, type_info.id);
+
                 // Create the variable ID but queue the OpVariable instruction
                 let local_var = self.builder.id();
                 self.pending_variables.push((local_var, ptr_type));
-                
+
                 self.builder.store(local_var, value.id, None, vec![])?;
 
                 // Store in variable cache
@@ -953,27 +1149,30 @@ impl CodeGenerator {
             }
             Expression::FieldAccess(expr, field) => {
                 let record_value = self.generate_expression(expr)?;
-                
+
                 // Map field name to vector component index (for built-in vector types)
                 let component_index = match field.as_str() {
                     "x" => 0,
                     "y" => 1,
                     "z" => 2,
                     "w" => 3,
-                    _ => return Err(CompilerError::SpirvError(format!(
-                        "Field access for '{}' not yet implemented for non-vector types", field
-                    ))),
+                    _ => {
+                        return Err(CompilerError::SpirvError(format!(
+                            "Field access for '{}' not yet implemented for non-vector types",
+                            field
+                        )))
+                    }
                 };
-                
+
                 // Use SPIR-V CompositeExtract for vectors
                 // For vec3/vec4, the component type is f32
                 let extracted_id = self.builder.composite_extract(
-                    self.f32_type, 
-                    None, 
-                    record_value.id, 
-                    vec![component_index]
+                    self.f32_type,
+                    None,
+                    record_value.id,
+                    vec![component_index],
                 )?;
-                
+
                 Ok(Value {
                     id: extracted_id,
                     type_id: self.f32_type,
@@ -981,7 +1180,9 @@ impl CodeGenerator {
             }
             Expression::ArrayLiteral(elements) => {
                 if elements.is_empty() {
-                    return Err(CompilerError::SpirvError("Empty array literals not supported".to_string()));
+                    return Err(CompilerError::SpirvError(
+                        "Empty array literals not supported".to_string(),
+                    ));
                 }
 
                 // Generate all element values
@@ -996,15 +1197,18 @@ impl CodeGenerator {
                 }
 
                 let elem_type = element_type_id.unwrap();
-                
+
                 // Create array type
-                let length_id = self.builder.constant_bit32(self.i32_type, elements.len() as u32);
+                let length_id = self
+                    .builder
+                    .constant_bit32(self.i32_type, elements.len() as u32);
                 let array_type = self.builder.type_array(elem_type, length_id);
 
                 // Build the array using appropriate instruction based on context
                 let array_id = if self.current_block.is_some() {
                     // Inside function - use runtime composite construct
-                    self.builder.composite_construct(array_type, None, element_values)?
+                    self.builder
+                        .composite_construct(array_type, None, element_values)?
                 } else {
                     // Global constant - use constant composite
                     self.builder.constant_composite(array_type, element_values)
@@ -1015,9 +1219,11 @@ impl CodeGenerator {
                     type_id: array_type,
                 })
             }
-            Expression::If(if_expr) => {
-                self.generate_if_then_else(&if_expr.condition, &if_expr.then_branch, &if_expr.else_branch)
-            }
+            Expression::If(if_expr) => self.generate_if_then_else(
+                &if_expr.condition,
+                &if_expr.then_branch,
+                &if_expr.else_branch,
+            ),
             Expression::ArrayIndex(array_expr, index_expr) => {
                 let array_name = match array_expr.as_ref() {
                     Expression::Identifier(name) => name,
@@ -1061,18 +1267,22 @@ impl CodeGenerator {
                 let element_type_info = self.get_or_create_type(&element_type)?;
 
                 // Create pointer type for array element access
-                let element_ptr_type = self.builder.type_pointer(None, StorageClass::Function, element_type_info.id);
-                
+                let element_ptr_type =
+                    self.builder
+                        .type_pointer(None, StorageClass::Function, element_type_info.id);
+
                 // Use AccessChain to get element pointer
                 let element_ptr = self.builder.access_chain(
                     element_ptr_type,
                     None,
                     array_value.id,
-                    vec![index.id]
+                    vec![index.id],
                 )?;
 
                 // Load the element
-                let element_id = self.builder.load(element_type_info.id, None, element_ptr, None, vec![])?;
+                let element_id =
+                    self.builder
+                        .load(element_type_info.id, None, element_ptr, None, vec![])?;
 
                 Ok(Value {
                     id: element_id,
@@ -1105,8 +1315,10 @@ impl CodeGenerator {
         let merge_block = self.builder.id();
 
         // Create selection merge and branch
-        self.builder.selection_merge(merge_block, spirv::SelectionControl::NONE)?;
-        self.builder.branch_conditional(condition_val.id, then_block, else_block, vec![])?;
+        self.builder
+            .selection_merge(merge_block, spirv::SelectionControl::NONE)?;
+        self.builder
+            .branch_conditional(condition_val.id, then_block, else_block, vec![])?;
 
         // Generate then block
         self.builder.begin_block(Some(then_block))?;
@@ -1117,7 +1329,7 @@ impl CodeGenerator {
         })?;
         self.builder.branch(merge_block)?;
 
-        // Generate else block  
+        // Generate else block
         self.builder.begin_block(Some(else_block))?;
         self.current_block = Some(else_block);
         let else_val = self.generate_expression(else_expr)?;
@@ -1135,10 +1347,7 @@ impl CodeGenerator {
         let phi_id = self.builder.phi(
             result_type,
             None,
-            vec![
-                (then_val.id, then_end_block),
-                (else_val.id, else_end_block),
-            ]
+            vec![(then_val.id, then_end_block), (else_val.id, else_end_block)],
         )?;
 
         Ok(Value {
@@ -1147,11 +1356,7 @@ impl CodeGenerator {
         })
     }
 
-    fn generate_vector_constructor(
-        &mut self,
-        size: u32,
-        args: &[Expression],
-    ) -> Result<Value> {
+    fn generate_vector_constructor(&mut self, size: u32, args: &[Expression]) -> Result<Value> {
         // Check argument count
         if args.len() != size as usize {
             return Err(CompilerError::SpirvError(format!(
@@ -1193,14 +1398,17 @@ impl CodeGenerator {
         // Extract elements from the array and build vector
         let mut elements = Vec::new();
         for i in 0..4 {
-            let element_id = self.builder.composite_extract(self.f32_type, None, array_val.id, vec![i])?;
+            let element_id =
+                self.builder
+                    .composite_extract(self.f32_type, None, array_val.id, vec![i])?;
             elements.push(element_id);
         }
 
         // Build the vector using appropriate instruction based on context
         let vector_id = if self.current_block.is_some() {
             // Inside function - use runtime composite construct
-            self.builder.composite_construct(vec4_type, None, elements)?
+            self.builder
+                .composite_construct(vec4_type, None, elements)?
         } else {
             // Global constant - use constant composite
             self.builder.constant_composite(vec4_type, elements)
@@ -1222,7 +1430,7 @@ impl CodeGenerator {
                 match name {
                     TypeName::Str("int") => (self.i32_type, 4),
                     TypeName::Str("float") => (self.f32_type, 4),
-                    
+
                     // f32 vector types
                     TypeName::Str("vec2") => {
                         let vec_type = self.builder.type_vector(self.f32_type, 2);
@@ -1236,7 +1444,7 @@ impl CodeGenerator {
                         let vec_type = self.builder.type_vector(self.f32_type, 4);
                         (vec_type, 16)
                     }
-                    
+
                     // i32 vector types
                     TypeName::Str("ivec2") => {
                         let vec_type = self.builder.type_vector(self.i32_type, 2);
@@ -1304,7 +1512,7 @@ impl CodeGenerator {
             id: type_id,
             size_bytes,
         };
-        
+
         self.type_cache.insert(ty.clone(), type_info.clone());
         Ok(type_info)
     }
@@ -1315,40 +1523,48 @@ impl CodeGenerator {
         exec_model: &spirv::ExecutionModel,
     ) -> Result<()> {
         // Add SPIR-V entry point
-        let func_id = self
-            .function_cache
-            .get(name)
-            .copied()
-            .ok_or_else(|| CompilerError::SpirvError(format!("Entry point {} not found", name)))?;
+        let func_id =
+            self.function_cache.get(name).copied().ok_or_else(|| {
+                CompilerError::SpirvError(format!("Entry point {} not found", name))
+            })?;
 
         // Get interface variables using GlobalBuilder
         let mut interface_vars = Vec::new();
-        
+
         // Add uniform variables
         for value in self.uniform_globals.values() {
             interface_vars.push(value.id);
         }
-        
+
         // Add builtin variables for this execution model
-        let builtin_vars = self.global_builder.get_builtin_interface_variables(*exec_model);
+        let builtin_vars = self
+            .global_builder
+            .get_builtin_interface_variables(*exec_model);
         interface_vars.extend(builtin_vars);
-        
+
         // Add location-based variables for outputs
-        let output_location_vars = self.global_builder.get_location_interface_variables(StorageClass::Output);
+        let output_location_vars = self
+            .global_builder
+            .get_location_interface_variables(StorageClass::Output);
         interface_vars.extend(output_location_vars);
 
-        self.builder.entry_point(*exec_model, func_id, name, interface_vars);
-        
+        self.builder
+            .entry_point(*exec_model, func_id, name, interface_vars);
+
         // Add execution modes for specific shader types
         match exec_model {
             spirv::ExecutionModel::Fragment => {
                 // Fragment shaders need coordinate origin mode
-                self.builder.execution_mode(func_id, spirv::ExecutionMode::OriginUpperLeft, vec![]);
+                self.builder
+                    .execution_mode(func_id, spirv::ExecutionMode::OriginUpperLeft, vec![]);
             }
             _ => {} // Other execution models don't need special modes for now
         }
-        
-        println!("DEBUG: Added SPIR-V entry point metadata for '{}' with execution model {:?}", name, exec_model);
+
+        println!(
+            "DEBUG: Added SPIR-V entry point metadata for '{}' with execution model {:?}",
+            name, exec_model
+        );
 
         Ok(())
     }
@@ -1359,56 +1575,76 @@ impl CodeGenerator {
             // For each component in the attributed tuple, create an output global
             for (index, component_type) in args.iter().enumerate() {
                 let global_name = format!("output_{}", index);
-                
+
                 // Only create if it doesn't already exist
                 if !self.output_globals.contains_key(&global_name) {
                     // Extract location from the component type if it has attributes
                     // For now, use sequential locations starting from 0
                     let location = index as u32;
-                    
+
                     // Create a global output variable for this component
                     let type_info = self.get_or_create_type(component_type)?;
-                    let ptr_type = self.builder.type_pointer(None, StorageClass::Output, type_info.id);
-                    let global_id = self.builder.variable(ptr_type, None, StorageClass::Output, None);
-                    
+                    let ptr_type =
+                        self.builder
+                            .type_pointer(None, StorageClass::Output, type_info.id);
+                    let global_id =
+                        self.builder
+                            .variable(ptr_type, None, StorageClass::Output, None);
+
                     let global_value = Value {
                         id: global_id,
                         type_id: ptr_type,
                     };
-                    
+
                     // Store for decoration later
-                    self.output_globals.insert(global_name.clone(), (global_value, location, type_info.id, false));
-                    println!("DEBUG: Created output global '{}' at location {}", global_name, location);
+                    self.output_globals.insert(
+                        global_name.clone(),
+                        (global_value, location, type_info.id, false),
+                    );
+                    println!(
+                        "DEBUG: Created output global '{}' at location {}",
+                        global_name, location
+                    );
                 } else {
-                    println!("DEBUG: Output global '{}' already exists, skipping creation", global_name);
+                    println!(
+                        "DEBUG: Output global '{}' already exists, skipping creation",
+                        global_name
+                    );
                 }
             }
         }
         Ok(())
     }
-    
-    fn create_output_globals_from_attributes(&mut self, attributed_types: &[AttributedType], exec_model: ExecutionModel) -> Result<()> {
+
+    fn create_output_globals_from_attributes(
+        &mut self,
+        attributed_types: &[AttributedType],
+        exec_model: ExecutionModel,
+    ) -> Result<()> {
         // Create output globals based on the actual attributes in the attributed tuple
-        
+
         for (index, attributed_type) in attributed_types.iter().enumerate() {
             let global_name = Self::output_variable_name(exec_model, index);
-            
+
             // Only create if it doesn't already exist
             if !self.output_globals.contains_key(&global_name) {
                 let type_info = self.get_or_create_type(&attributed_type.ty)?;
-                
+
                 // Check if this is a builtin or location attribute
                 let mut is_builtin = false;
                 let mut location = 0u32;
-                
+
                 for attr in &attributed_type.attributes {
                     match attr {
                         Attribute::BuiltIn(builtin) => {
                             // For builtin attributes, we create the global but don't add it to output_globals
                             // because builtins are handled differently (e.g., position is implicit)
                             is_builtin = true;
-                            println!("DEBUG: Found builtin attribute {:?} for output component {}", builtin, index);
-                            
+                            println!(
+                                "DEBUG: Found builtin attribute {:?} for output component {}",
+                                builtin, index
+                            );
+
                             // Use GlobalBuilder to create or lookup the builtin variable
                             if let Some(global_id) = self.global_builder.create_or_lookup_builtin(
                                 &mut self.builder,
@@ -1416,15 +1652,21 @@ impl CodeGenerator {
                                 StorageClass::Output,
                                 exec_model,
                             )? {
-                                
-                                let ptr_type = self.builder.type_pointer(None, StorageClass::Output, type_info.id);
+                                let ptr_type = self.builder.type_pointer(
+                                    None,
+                                    StorageClass::Output,
+                                    type_info.id,
+                                );
                                 let global_value = Value {
                                     id: global_id,
                                     type_id: ptr_type,
                                 };
-                                
+
                                 // Store as a special builtin output (location doesn't matter for builtins)
-                                self.output_globals.insert(global_name.clone(), (global_value, 0, type_info.id, true));
+                                self.output_globals.insert(
+                                    global_name.clone(),
+                                    (global_value, 0, type_info.id, true),
+                                );
                                 println!("DEBUG: Using builtin output global '{}' with BuiltIn {:?} decoration", global_name, builtin);
                             } else {
                                 return Err(CompilerError::SpirvError(format!(
@@ -1440,7 +1682,7 @@ impl CodeGenerator {
                         _ => {}
                     }
                 }
-                
+
                 // If it's not a builtin, create a regular location-based output
                 if !is_builtin {
                     let global_id = self.global_builder.create_or_lookup_location(
@@ -1449,29 +1691,43 @@ impl CodeGenerator {
                         StorageClass::Output,
                         type_info.id,
                     )?;
-                    
-                    let ptr_type = self.builder.type_pointer(None, StorageClass::Output, type_info.id);
+
+                    let ptr_type =
+                        self.builder
+                            .type_pointer(None, StorageClass::Output, type_info.id);
                     let global_value = Value {
                         id: global_id,
                         type_id: ptr_type,
                     };
-                    
+
                     // Store for decoration later
-                    self.output_globals.insert(global_name.clone(), (global_value, location, type_info.id, false));
-                    println!("DEBUG: Created location-based output global '{}' at location {}", global_name, location);
+                    self.output_globals.insert(
+                        global_name.clone(),
+                        (global_value, location, type_info.id, false),
+                    );
+                    println!(
+                        "DEBUG: Created location-based output global '{}' at location {}",
+                        global_name, location
+                    );
                 }
             } else {
-                println!("DEBUG: Output global '{}' already exists, skipping creation", global_name);
+                println!(
+                    "DEBUG: Output global '{}' already exists, skipping creation",
+                    global_name
+                );
             }
         }
         Ok(())
     }
 
-
     /// Check if a builtin variable already exists in the module
-    fn find_existing_builtin(&self, builtin: spirv::BuiltIn, storage_class: StorageClass) -> Option<spirv::Word> {
+    fn find_existing_builtin(
+        &self,
+        builtin: spirv::BuiltIn,
+        storage_class: StorageClass,
+    ) -> Option<spirv::Word> {
         let module = self.builder.module_ref();
-        
+
         // Look through all global instructions for OpVariable with BuiltIn decoration
         for instruction in &module.types_global_values {
             if instruction.class.opcode == spirv::Op::Variable {
@@ -1484,14 +1740,24 @@ impl CodeGenerator {
                                 // Look for BuiltIn decoration on this variable
                                 for decoration in &module.annotations {
                                     if decoration.class.opcode == spirv::Op::Decorate {
-                                        if let (Some(target_id), Some(decoration_operand)) = 
-                                            (decoration.operands.first(), decoration.operands.get(1)) {
-                                            if let (rspirv::dr::Operand::IdRef(id), rspirv::dr::Operand::Decoration(dec)) = 
-                                                (target_id, decoration_operand) {
+                                        if let (Some(target_id), Some(decoration_operand)) = (
+                                            decoration.operands.first(),
+                                            decoration.operands.get(1),
+                                        ) {
+                                            if let (
+                                                rspirv::dr::Operand::IdRef(id),
+                                                rspirv::dr::Operand::Decoration(dec),
+                                            ) = (target_id, decoration_operand)
+                                            {
                                                 if *id == var_id && *dec == Decoration::BuiltIn {
                                                     // Check if the builtin type matches
-                                                    if let Some(builtin_operand) = decoration.operands.get(2) {
-                                                        if let rspirv::dr::Operand::BuiltIn(existing_builtin) = builtin_operand {
+                                                    if let Some(builtin_operand) =
+                                                        decoration.operands.get(2)
+                                                    {
+                                                        if let rspirv::dr::Operand::BuiltIn(
+                                                            existing_builtin,
+                                                        ) = builtin_operand
+                                                        {
                                                             if *existing_builtin == builtin {
                                                                 return Some(var_id);
                                                             }
@@ -1510,17 +1776,16 @@ impl CodeGenerator {
         }
         None
     }
-    
-    
+
     fn emit_spirv(mut self) -> Result<Vec<u32>> {
         // Build the module (takes ownership of builder)
         self.module = self.builder.module();
-        
+
         // Convert module to SPIR-V words
         let words = self.module.assemble();
-        
+
         println!("DEBUG: Generated {} words of SPIR-V", words.len());
-        
+
         Ok(words)
     }
 }

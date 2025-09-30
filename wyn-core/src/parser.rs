@@ -51,9 +51,14 @@ impl Parser {
         match keyword {
             "let" => self.expect(Token::Let)?,
             "def" => self.expect(Token::Def)?,
-            _ => return Err(CompilerError::ParseError(format!("Invalid keyword: {}", keyword))),
+            _ => {
+                return Err(CompilerError::ParseError(format!(
+                    "Invalid keyword: {}",
+                    keyword
+                )))
+            }
         }
-        
+
         let name = self.expect_identifier()?;
 
         // Check if we have typed parameters (for entry points with parentheses)
@@ -72,7 +77,7 @@ impl Parser {
                         name: param_name,
                         ty: param_ty,
                     }));
-                    
+
                     if !self.check(&Token::Comma) {
                         break;
                     }
@@ -81,13 +86,13 @@ impl Parser {
             }
             self.expect(Token::RightParen)?;
             self.expect(Token::Colon)?;
-            
+
             // Parse return type with optional attributes
             let (ty, attributed_return_type) = self.parse_return_type()?;
-            
+
             self.expect(Token::Assign)?;
             let body = self.parse_expression()?;
-            
+
             Ok(Decl {
                 keyword,
                 attributes,
@@ -104,15 +109,17 @@ impl Parser {
             // Typed declaration: let/def name: type = value or let/def name: type (uniform)
             self.expect(Token::Colon)?;
             let ty = Some(self.parse_type()?);
-            
+
             // Check if this is a uniform declaration (no initializer allowed)
-            let has_uniform_attr = attributes.iter().any(|attr| matches!(attr, Attribute::Uniform));
-            
+            let has_uniform_attr = attributes
+                .iter()
+                .any(|attr| matches!(attr, Attribute::Uniform));
+
             let body = if has_uniform_attr {
                 // Uniforms don't have initializers - use a placeholder expression
                 if self.check(&Token::Assign) {
                     return Err(CompilerError::ParseError(
-                        "Uniform declarations cannot have initializer values".to_string()
+                        "Uniform declarations cannot have initializer values".to_string(),
                     ));
                 }
                 // Use a placeholder expression for uniforms
@@ -122,7 +129,7 @@ impl Parser {
                 self.expect(Token::Assign)?;
                 self.parse_expression()?
             };
-            
+
             Ok(Decl {
                 keyword,
                 attributes,
@@ -142,7 +149,7 @@ impl Parser {
             }
             self.expect(Token::Assign)?;
             let body = self.parse_expression()?;
-            
+
             Ok(Decl {
                 keyword,
                 attributes,
@@ -155,8 +162,6 @@ impl Parser {
             })
         }
     }
-
-
 
     fn parse_val_decl(&mut self) -> Result<ValDecl> {
         self.expect(Token::Val)?;
@@ -200,14 +205,11 @@ impl Parser {
         } else {
             vec![]
         };
-        
+
         // Parse the type
         let ty = self.parse_type()?;
-        
-        Ok(AttributedType {
-            attributes,
-            ty,
-        })
+
+        Ok(AttributedType { attributes, ty })
     }
 
     fn parse_return_type(&mut self) -> Result<(Option<Type>, Option<Vec<AttributedType>>)> {
@@ -229,14 +231,14 @@ impl Parser {
             }
 
             self.expect(Token::RightParen)?;
-            
+
             // Create a tuple type from the attributed types for the type system
             let tuple_type = types::attributed_tuple(attributed_types.clone());
             Ok((Some(tuple_type), Some(attributed_types)))
         } else if self.check(&Token::AttributeStart) {
             // Single attributed type: #[attribute] type
             let attributed_type = self.parse_attributed_type()?;
-            
+
             // Return as a single-element attributed tuple
             let attributed_types = vec![attributed_type];
             let tuple_type = types::attributed_tuple(attributed_types.clone());
@@ -250,7 +252,7 @@ impl Parser {
 
     fn parse_attribute(&mut self) -> Result<Attribute> {
         let attr_name = self.expect_identifier()?;
-        
+
         match attr_name.as_str() {
             "vertex" => {
                 self.expect(Token::RightBracket)?;
@@ -298,12 +300,10 @@ impl Parser {
                 self.expect(Token::RightBracket)?;
                 Ok(Attribute::Location(location))
             }
-            _ => {
-                Err(CompilerError::ParseError(format!(
-                    "Unknown attribute: {}",
-                    attr_name
-                )))
-            }
+            _ => Err(CompilerError::ParseError(format!(
+                "Unknown attribute: {}",
+                attr_name
+            ))),
         }
     }
 
@@ -385,7 +385,7 @@ impl Parser {
                 self.advance();
                 Ok(types::f32())
             }
-            // Vector types  
+            // Vector types
             Some(Token::Identifier(name)) if name == "vec2" => {
                 self.advance();
                 Ok(types::vec2())
@@ -451,14 +451,17 @@ impl Parser {
         // Returns (precedence, is_left_associative)
         // Higher precedence binds tighter
         match op {
-            "*" | "/" => Some((3, true)),           // Multiplication and division
-            "+" | "-" => Some((2, true)),           // Addition and subtraction  
+            "*" | "/" => Some((3, true)), // Multiplication and division
+            "+" | "-" => Some((2, true)), // Addition and subtraction
             "==" | "!=" | "<" | ">" | "<=" | ">=" => Some((1, true)), // Comparison operators
             _ => None,
         }
     }
 
-    fn parse_binary_expression_with_precedence(&mut self, min_precedence: i32) -> Result<Expression> {
+    fn parse_binary_expression_with_precedence(
+        &mut self,
+        min_precedence: i32,
+    ) -> Result<Expression> {
         let mut left = self.parse_application_expression()?;
 
         loop {
@@ -484,19 +487,16 @@ impl Parser {
 
             // Parse right side with appropriate precedence
             let next_min_precedence = if is_left_assoc {
-                precedence + 1  // For left-associative, parse with higher precedence
+                precedence + 1 // For left-associative, parse with higher precedence
             } else {
-                precedence      // For right-associative, parse with same precedence
+                precedence // For right-associative, parse with same precedence
             };
 
             let right = self.parse_binary_expression_with_precedence(next_min_precedence)?;
 
             // Build the binary operation
-            left = Expression::BinaryOp(
-                BinaryOp { op: op_string },
-                Box::new(left),
-                Box::new(right),
-            );
+            left =
+                Expression::BinaryOp(BinaryOp { op: op_string }, Box::new(left), Box::new(right));
         }
 
         Ok(left)
@@ -632,16 +632,16 @@ impl Parser {
             Some(Token::LeftBracket) => self.parse_array_literal(),
             Some(Token::LeftParen) => {
                 self.advance(); // consume '('
-                
+
                 // Check for empty tuple
                 if self.check(&Token::RightParen) {
                     self.advance();
                     return Ok(Expression::Tuple(vec![]));
                 }
-                
+
                 // Parse first expression
                 let first_expr = self.parse_expression()?;
-                
+
                 // Check if it's a tuple or just a parenthesized expression
                 if self.check(&Token::Comma) {
                     // It's a tuple
@@ -765,14 +765,14 @@ impl Parser {
 
     fn parse_if_then_else(&mut self) -> Result<Expression> {
         use crate::ast::IfExpr;
-        
+
         self.expect(Token::If)?;
         let condition = Box::new(self.parse_expression()?);
         self.expect(Token::Then)?;
         let then_branch = Box::new(self.parse_expression()?);
         self.expect(Token::Else)?;
         let else_branch = Box::new(self.parse_expression()?);
-        
+
         Ok(Expression::If(IfExpr {
             condition,
             then_branch,
@@ -1011,10 +1011,7 @@ mod tests {
                         }
                         if let Some(ref ty) = decl.ty {
                             if *ty != crate::ast::types::sized_array(4, crate::ast::types::f32()) {
-                                return Err(format!(
-                                    "Expected [4]f32 return type, got {:?}",
-                                    ty
-                                ));
+                                return Err(format!("Expected [4]f32 return type, got {:?}", ty));
                             }
                         } else {
                             return Err("Expected return type".to_string());
@@ -1086,10 +1083,7 @@ mod tests {
                         }
                         Ok(())
                     }
-                    _ => Err(format!(
-                        "Expected BinaryOp expression, got {:?}",
-                        decl.body
-                    )),
+                    _ => Err(format!("Expected BinaryOp expression, got {:?}", decl.body)),
                 },
                 _ => Err("Expected Let declaration".to_string()),
             }
@@ -1125,32 +1119,29 @@ mod tests {
 
     #[test]
     fn test_parse_fragment_attribute() {
-        expect_parse(
-            "#[fragment] def frag(): [4]f32 = result",
-            |declarations| {
-                if declarations.len() != 1 {
-                    return Err(format!(
-                        "Expected 1 declaration, got {}",
-                        declarations.len()
-                    ));
-                }
-                match &declarations[0] {
-                    Declaration::Decl(decl) => {
-                        if decl.attributes != vec![Attribute::Fragment] {
-                            return Err(format!(
-                                "Expected Fragment attribute, got {:?}",
-                                decl.attributes
-                            ));
-                        }
-                        if decl.name != "frag" {
-                            return Err(format!("Expected name 'frag', got '{}'", decl.name));
-                        }
-                        Ok(())
+        expect_parse("#[fragment] def frag(): [4]f32 = result", |declarations| {
+            if declarations.len() != 1 {
+                return Err(format!(
+                    "Expected 1 declaration, got {}",
+                    declarations.len()
+                ));
+            }
+            match &declarations[0] {
+                Declaration::Decl(decl) => {
+                    if decl.attributes != vec![Attribute::Fragment] {
+                        return Err(format!(
+                            "Expected Fragment attribute, got {:?}",
+                            decl.attributes
+                        ));
                     }
-                    _ => Err("Expected Decl declaration".to_string()),
+                    if decl.name != "frag" {
+                        return Err(format!("Expected name 'frag', got '{}'", decl.name));
+                    }
+                    Ok(())
                 }
-            },
-        );
+                _ => Err("Expected Decl declaration".to_string()),
+            }
+        });
     }
 
     #[test]
@@ -1161,41 +1152,68 @@ mod tests {
         // Should parse as: ((a + (b * c)) - (d / e)) + f
         expect_parse("def result: i32 = a + b * c - d / e + f", |declarations| {
             if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+                return Err(format!(
+                    "Expected 1 declaration, got {}",
+                    declarations.len()
+                ));
             }
             match &declarations[0] {
                 Declaration::Decl(decl) => {
                     // The outermost operation should be the last + (left-associative)
                     match &decl.body {
-                        Expression::BinaryOp(outer_op, outer_left, outer_right) if outer_op.op == "+" => {
+                        Expression::BinaryOp(outer_op, outer_left, outer_right)
+                            if outer_op.op == "+" =>
+                        {
                             // Right side should be 'f'
-                            if !matches!(**outer_right, Expression::Identifier(ref name) if name == "f") {
-                                return Err(format!("Expected right side to be 'f', got {:?}", outer_right));
+                            if !matches!(**outer_right, Expression::Identifier(ref name) if name == "f")
+                            {
+                                return Err(format!(
+                                    "Expected right side to be 'f', got {:?}",
+                                    outer_right
+                                ));
                             }
-                            
+
                             // Left side should be (a + (b * c)) - (d / e)
                             match &**outer_left {
-                                Expression::BinaryOp(sub_op, sub_left, sub_right) if sub_op.op == "-" => {
+                                Expression::BinaryOp(sub_op, sub_left, sub_right)
+                                    if sub_op.op == "-" =>
+                                {
                                     // Right side of subtraction should be (d / e)
                                     match &**sub_right {
-                                        Expression::BinaryOp(div_op, div_left, div_right) if div_op.op == "/" => {
-                                            if !matches!(**div_left, Expression::Identifier(ref name) if name == "d") {
-                                                return Err(format!("Expected 'd' in division left, got {:?}", div_left));
+                                        Expression::BinaryOp(div_op, div_left, div_right)
+                                            if div_op.op == "/" =>
+                                        {
+                                            if !matches!(**div_left, Expression::Identifier(ref name) if name == "d")
+                                            {
+                                                return Err(format!(
+                                                    "Expected 'd' in division left, got {:?}",
+                                                    div_left
+                                                ));
                                             }
-                                            if !matches!(**div_right, Expression::Identifier(ref name) if name == "e") {
-                                                return Err(format!("Expected 'e' in division right, got {:?}", div_right));
+                                            if !matches!(**div_right, Expression::Identifier(ref name) if name == "e")
+                                            {
+                                                return Err(format!(
+                                                    "Expected 'e' in division right, got {:?}",
+                                                    div_right
+                                                ));
                                             }
                                         }
-                                        _ => return Err(format!("Expected division on right of subtraction, got {:?}", sub_right))
+                                        _ => return Err(format!(
+                                            "Expected division on right of subtraction, got {:?}",
+                                            sub_right
+                                        )),
                                     }
-                                    
+
                                     // Left side of subtraction should be a + (b * c)
                                     match &**sub_left {
-                                        Expression::BinaryOp(add_op, add_left, add_right) if add_op.op == "+" => {
-                                            if !matches!(**add_left, Expression::Identifier(ref name) if name == "a") {
+                                        Expression::BinaryOp(add_op, add_left, add_right)
+                                            if add_op.op == "+" =>
+                                        {
+                                            if !matches!(**add_left, Expression::Identifier(ref name) if name == "a")
+                                            {
                                                 return Err(format!("Expected 'a' on left of first addition, got {:?}", add_left));
                                             }
-                                            
+
                                             // Right side should be (b * c)
                                             match &**add_right {
                                                 Expression::BinaryOp(mul_op, mul_left, mul_right) if mul_op.op == "*" => {
@@ -1210,16 +1228,25 @@ mod tests {
                                                 _ => Err(format!("Expected multiplication on right of first addition, got {:?}", add_right))
                                             }
                                         }
-                                        _ => Err(format!("Expected addition on left of subtraction, got {:?}", sub_left))
+                                        _ => Err(format!(
+                                            "Expected addition on left of subtraction, got {:?}",
+                                            sub_left
+                                        )),
                                     }
                                 }
-                                _ => Err(format!("Expected subtraction on left of final addition, got {:?}", outer_left))
+                                _ => Err(format!(
+                                    "Expected subtraction on left of final addition, got {:?}",
+                                    outer_left
+                                )),
                             }
                         }
-                        _ => Err(format!("Expected outermost operation to be addition, got {:?}", decl.body))
+                        _ => Err(format!(
+                            "Expected outermost operation to be addition, got {:?}",
+                            decl.body
+                        )),
                     }
                 }
-                _ => Err("Expected Decl declaration".to_string())
+                _ => Err("Expected Decl declaration".to_string()),
             }
         });
     }
@@ -1250,7 +1277,9 @@ mod tests {
                                     attributed_types.len()
                                 ));
                             }
-                            if attributed_types[0].attributes != vec![Attribute::BuiltIn(spirv::BuiltIn::Position)] {
+                            if attributed_types[0].attributes
+                                != vec![Attribute::BuiltIn(spirv::BuiltIn::Position)]
+                            {
                                 return Err(format!(
                                     "Expected Position builtin on return type, got {:?}",
                                     attributed_types[0].attributes
@@ -1259,9 +1288,11 @@ mod tests {
                         } else {
                             return Err("Expected attributed return type".to_string());
                         }
-                        // Check the type within the attributed return type  
+                        // Check the type within the attributed return type
                         if let Some(ref attributed_types) = decl.attributed_return_type {
-                            if attributed_types[0].ty != crate::ast::types::sized_array(4, crate::ast::types::f32()) {
+                            if attributed_types[0].ty
+                                != crate::ast::types::sized_array(4, crate::ast::types::f32())
+                            {
                                 return Err(format!(
                                     "Expected [4]f32 return type, got {:?}",
                                     attributed_types[0].ty
@@ -1326,27 +1357,43 @@ mod tests {
             "#[vertex] def vertex_main(): ([builtin(position)] vec4, [location(0)] vec3) = result",
             |declarations| {
                 if declarations.len() != 1 {
-                    return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+                    return Err(format!(
+                        "Expected 1 declaration, got {}",
+                        declarations.len()
+                    ));
                 }
-                
+
                 if let Declaration::Decl(decl) = &declarations[0] {
                     if let Some(attributed_types) = &decl.attributed_return_type {
                         if attributed_types.len() != 2 {
-                            return Err(format!("Expected 2 attributed types, got {}", attributed_types.len()));
+                            return Err(format!(
+                                "Expected 2 attributed types, got {}",
+                                attributed_types.len()
+                            ));
                         }
-                        
+
                         // Check first element: [builtin(position)] vec4
                         let first = &attributed_types[0];
-                        if !first.attributes.iter().any(|a| matches!(a, Attribute::BuiltIn(spirv::BuiltIn::Position))) {
-                            return Err("First element missing builtin(position) attribute".to_string());
+                        if !first
+                            .attributes
+                            .iter()
+                            .any(|a| matches!(a, Attribute::BuiltIn(spirv::BuiltIn::Position)))
+                        {
+                            return Err(
+                                "First element missing builtin(position) attribute".to_string()
+                            );
                         }
-                        
+
                         // Check second element: [location(0)] vec3
                         let second = &attributed_types[1];
-                        if !second.attributes.iter().any(|a| matches!(a, Attribute::Location(0))) {
+                        if !second
+                            .attributes
+                            .iter()
+                            .any(|a| matches!(a, Attribute::Location(0)))
+                        {
                             return Err("Second element missing location(0) attribute".to_string());
                         }
-                        
+
                         Ok(())
                     } else {
                         Err("Missing attributed return type".to_string())
@@ -1365,15 +1412,18 @@ mod tests {
             "def helper(): vec4 = vec4 1.0f32 0.0f32 0.0f32 1.0f32",
             |declarations| {
                 if declarations.len() != 1 {
-                    return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+                    return Err(format!(
+                        "Expected 1 declaration, got {}",
+                        declarations.len()
+                    ));
                 }
-                
+
                 if let Declaration::Decl(decl) = &declarations[0] {
                     // Should have no attributed_return_type
                     if decl.attributed_return_type.is_some() {
                         return Err("Unexpected attributed return type".to_string());
                     }
-                    
+
                     // Should have a regular type
                     if let Some(ty) = &decl.ty {
                         match ty {
@@ -1427,7 +1477,9 @@ mod tests {
                         }
                         // Check the type within the attributed return type
                         if let Some(ref attributed_types) = decl.attributed_return_type {
-                            if attributed_types[0].ty != crate::ast::types::sized_array(4, crate::ast::types::f32()) {
+                            if attributed_types[0].ty
+                                != crate::ast::types::sized_array(4, crate::ast::types::f32())
+                            {
                                 return Err(format!(
                                     "Expected [4]f32 return type, got {:?}",
                                     attributed_types[0].ty
@@ -1515,7 +1567,9 @@ mod tests {
                                         param.name
                                     ));
                                 }
-                                if param.ty != crate::ast::types::sized_array(3, crate::ast::types::f32()) {
+                                if param.ty
+                                    != crate::ast::types::sized_array(3, crate::ast::types::f32())
+                                {
                                     return Err(format!(
                                         "Expected [3]f32 param type, got {:?}",
                                         param.ty
@@ -1691,13 +1745,11 @@ mod tests {
             ("a * b + c", "(a * b) + c"),
             ("a + b / c", "a + (b / c)"),
             ("a / b + c", "(a / b) + c"),
-            
             // Left associativity tests
             ("a - b + c", "(a - b) + c"),
             ("a + b - c", "(a + b) - c"),
             ("a * b / c", "(a * b) / c"),
             ("a / b * c", "(a / b) * c"),
-            
             // Complex expression
             ("a + b * c - d / e + f", "((a + (b * c)) - (d / e)) + f"),
         ];
@@ -1706,11 +1758,9 @@ mod tests {
             let parsed_expr = parse_expr(expr);
             let parsed_expected = parse_expr(expected);
             assert_eq!(
-                parsed_expr, 
-                parsed_expected, 
-                "{} should parse the same as {}", 
-                expr, 
-                expected
+                parsed_expr, parsed_expected,
+                "{} should parse the same as {}",
+                expr, expected
             );
         }
 
@@ -1724,11 +1774,9 @@ mod tests {
             let parsed_expr1 = parse_expr(expr1);
             let parsed_expr2 = parse_expr(expr2);
             assert_ne!(
-                parsed_expr1,
-                parsed_expr2,
+                parsed_expr1, parsed_expr2,
                 "{} should NOT parse the same as {}",
-                expr1,
-                expr2
+                expr1, expr2
             );
         }
     }
@@ -1997,53 +2045,71 @@ def fragment_main(): [4]f32 = SKY_RGBA
                     declarations.len()
                 ));
             }
-            
+
             // First should be def verts
             match &declarations[0] {
                 Declaration::Decl(decl) if decl.keyword == "def" => {
                     if decl.name != "verts" {
-                        return Err(format!("Expected first def to be 'verts', got '{}'", decl.name));
+                        return Err(format!(
+                            "Expected first def to be 'verts', got '{}'",
+                            decl.name
+                        ));
                     }
                 }
                 _ => return Err("Expected first declaration to be Def".to_string()),
             }
-            
+
             // Second should be vertex entry point (now a Decl with vertex attribute)
             match &declarations[1] {
                 Declaration::Decl(decl) => {
                     if decl.name != "vertex_main" {
-                        return Err(format!("Expected vertex entry to be 'vertex_main', got '{}'", decl.name));
+                        return Err(format!(
+                            "Expected vertex entry to be 'vertex_main', got '{}'",
+                            decl.name
+                        ));
                     }
                     if !decl.attributes.contains(&Attribute::Vertex) {
-                        return Err(format!("Expected vertex attribute on vertex_main, got {:?}", decl.attributes));
+                        return Err(format!(
+                            "Expected vertex attribute on vertex_main, got {:?}",
+                            decl.attributes
+                        ));
                     }
                 }
                 _ => return Err("Expected second declaration to be Decl".to_string()),
             }
-            
+
             // Third should be def SKY_RGBA
             match &declarations[2] {
                 Declaration::Decl(decl) if decl.keyword == "def" => {
                     if decl.name != "SKY_RGBA" {
-                        return Err(format!("Expected third def to be 'SKY_RGBA', got '{}'", decl.name));
+                        return Err(format!(
+                            "Expected third def to be 'SKY_RGBA', got '{}'",
+                            decl.name
+                        ));
                     }
                 }
                 _ => return Err("Expected third declaration to be Def".to_string()),
             }
-            
+
             // Fourth should be fragment entry point (now a Decl with fragment attribute)
             match &declarations[3] {
                 Declaration::Decl(decl) => {
                     if decl.name != "fragment_main" {
-                        return Err(format!("Expected fragment entry to be 'fragment_main', got '{}'", decl.name));
+                        return Err(format!(
+                            "Expected fragment entry to be 'fragment_main', got '{}'",
+                            decl.name
+                        ));
                     }
                     if !decl.attributes.contains(&Attribute::Fragment) {
-                        return Err(format!("Expected fragment attribute on fragment_main, got {:?}", decl.attributes));
+                        return Err(format!(
+                            "Expected fragment attribute on fragment_main, got {:?}",
+                            decl.attributes
+                        ));
                     }
                 }
                 _ => return Err("Expected fourth declaration to be Decl".to_string()),
             }
-            
+
             Ok(())
         });
     }
@@ -2065,11 +2131,17 @@ def fragment_main(): [4]f32 = SKY_RGBA
                                     } else {
                                         Err(format!("Expected identifier 'v', got '{}'", name))
                                     }
-                                },
-                                _ => Err(format!("Expected identifier in field access, got: {:?}", expr)),
+                                }
+                                _ => Err(format!(
+                                    "Expected identifier in field access, got: {:?}",
+                                    expr
+                                )),
                             }
                         }
-                        _ => Err(format!("Expected field access expression, got: {:?}", decl.body)),
+                        _ => Err(format!(
+                            "Expected field access expression, got: {:?}",
+                            decl.body
+                        )),
                     }
                 }
                 _ => Err("Expected Decl declaration".to_string()),
@@ -2091,8 +2163,11 @@ def fragment_main(): [4]f32 = SKY_RGBA
                             } else {
                                 Err(format!("Expected identifier 'y', got '{}'", name))
                             }
-                        },
-                        _ => Err(format!("Expected identifier expression, got: {:?}", decl.body)),
+                        }
+                        _ => Err(format!(
+                            "Expected identifier expression, got: {:?}",
+                            decl.body
+                        )),
                     }
                 }
                 _ => Err("Expected Decl declaration".to_string()),
@@ -2102,49 +2177,63 @@ def fragment_main(): [4]f32 = SKY_RGBA
 
     #[test]
     fn test_vector_field_access_file() {
-        expect_parse("def v: vec3 = vec3 1.0f32 2.0f32 3.0f32\ndef x: f32 = v.x", |declarations| {
-            assert_eq!(declarations.len(), 2);
-            
-            // Check first declaration: def v: vec3 = vec3 1.0f32 2.0f32 3.0f32
-            match &declarations[0] {
-                Declaration::Decl(decl) => {
-                    assert_eq!(decl.name, "v");
-                    // Body should be a function call: vec3 1.0f32 2.0f32 3.0f32
-                    match &decl.body {
-                        Expression::FunctionCall(func_name, args) => {
-                            assert_eq!(func_name, "vec3");
-                            assert_eq!(args.len(), 3);
-                        }
-                        _ => return Err(format!("Expected function call for vec3 constructor, got: {:?}", decl.body)),
-                    }
-                }
-                _ => return Err("Expected first declaration to be Decl".to_string()),
-            }
+        expect_parse(
+            "def v: vec3 = vec3 1.0f32 2.0f32 3.0f32\ndef x: f32 = v.x",
+            |declarations| {
+                assert_eq!(declarations.len(), 2);
 
-            // Check second declaration: def x: f32 = v.x
-            match &declarations[1] {
-                Declaration::Decl(decl) => {
-                    assert_eq!(decl.name, "x");
-                    match &decl.body {
-                        Expression::FieldAccess(expr, field) => {
-                            assert_eq!(field, "x");
-                            match expr.as_ref() {
-                                Expression::Identifier(name) => {
-                                    if name == "v" {
-                                        Ok(())
-                                    } else {
-                                        Err(format!("Expected identifier 'v', got '{}'", name))
-                                    }
-                                },
-                                _ => Err(format!("Expected identifier in field access, got: {:?}", expr)),
+                // Check first declaration: def v: vec3 = vec3 1.0f32 2.0f32 3.0f32
+                match &declarations[0] {
+                    Declaration::Decl(decl) => {
+                        assert_eq!(decl.name, "v");
+                        // Body should be a function call: vec3 1.0f32 2.0f32 3.0f32
+                        match &decl.body {
+                            Expression::FunctionCall(func_name, args) => {
+                                assert_eq!(func_name, "vec3");
+                                assert_eq!(args.len(), 3);
+                            }
+                            _ => {
+                                return Err(format!(
+                                    "Expected function call for vec3 constructor, got: {:?}",
+                                    decl.body
+                                ))
                             }
                         }
-                        _ => Err(format!("Expected field access expression, got: {:?}", decl.body)),
                     }
+                    _ => return Err("Expected first declaration to be Decl".to_string()),
                 }
-                _ => Err("Expected second declaration to be Decl".to_string()),
-            }
-        });
+
+                // Check second declaration: def x: f32 = v.x
+                match &declarations[1] {
+                    Declaration::Decl(decl) => {
+                        assert_eq!(decl.name, "x");
+                        match &decl.body {
+                            Expression::FieldAccess(expr, field) => {
+                                assert_eq!(field, "x");
+                                match expr.as_ref() {
+                                    Expression::Identifier(name) => {
+                                        if name == "v" {
+                                            Ok(())
+                                        } else {
+                                            Err(format!("Expected identifier 'v', got '{}'", name))
+                                        }
+                                    }
+                                    _ => Err(format!(
+                                        "Expected identifier in field access, got: {:?}",
+                                        expr
+                                    )),
+                                }
+                            }
+                            _ => Err(format!(
+                                "Expected field access expression, got: {:?}",
+                                decl.body
+                            )),
+                        }
+                    }
+                    _ => Err("Expected second declaration to be Decl".to_string()),
+                }
+            },
+        );
     }
 
     #[test]
@@ -2174,7 +2263,10 @@ def fragment_main(): [4]f32 = SKY_RGBA
                 match &declarations[0] {
                     Declaration::Decl(decl) => {
                         if decl.name != "test_vector_arithmetic" {
-                            return Err(format!("Expected name 'test_vector_arithmetic', got '{}'", decl.name));
+                            return Err(format!(
+                                "Expected name 'test_vector_arithmetic', got '{}'",
+                                decl.name
+                            ));
                         }
                         if decl.ty != Some(crate::ast::types::f32()) {
                             return Err(format!("Expected f32 type, got {:?}", decl.ty));
@@ -2207,7 +2299,10 @@ def fragment_main(): [4]f32 = SKY_RGBA
                 match &declarations[0] {
                     Declaration::Decl(decl) => {
                         if decl.name != "material_color" {
-                            return Err(format!("Expected name 'material_color', got '{}'", decl.name));
+                            return Err(format!(
+                                "Expected name 'material_color', got '{}'",
+                                decl.name
+                            ));
                         }
                         if decl.attributes != vec![Attribute::Uniform] {
                             return Err(format!(
@@ -2242,7 +2337,10 @@ def fragment_main(): [4]f32 = SKY_RGBA
                 match &declarations[0] {
                     Declaration::Decl(decl) => {
                         if decl.name != "material_color" {
-                            return Err(format!("Expected name 'material_color', got '{}'", decl.name));
+                            return Err(format!(
+                                "Expected name 'material_color', got '{}'",
+                                decl.name
+                            ));
                         }
                         if decl.attributes != vec![Attribute::Uniform] {
                             return Err(format!(
@@ -2268,11 +2366,16 @@ def fragment_main(): [4]f32 = SKY_RGBA
             r#"
             #[uniform] def material_color: vec3 = vec3 1.0f32 0.5f32 0.2f32
             "#,
-            |error| {
-                match error {
-                    CompilerError::ParseError(msg) if msg.contains("Uniform declarations cannot have initializer values") => Ok(()),
-                    _ => Err(format!("Expected parse error about uniform initializer, got: {:?}", error)),
+            |error| match error {
+                CompilerError::ParseError(msg)
+                    if msg.contains("Uniform declarations cannot have initializer values") =>
+                {
+                    Ok(())
                 }
+                _ => Err(format!(
+                    "Expected parse error about uniform initializer, got: {:?}",
+                    error
+                )),
             },
         );
     }
@@ -2288,35 +2391,55 @@ def fragment_main(): [4]f32 = SKY_RGBA
             "#,
             |declarations| {
                 if declarations.len() != 1 {
-                    return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+                    return Err(format!(
+                        "Expected 1 declaration, got {}",
+                        declarations.len()
+                    ));
                 }
                 match &declarations[0] {
                     Declaration::Decl(decl) => {
                         if decl.name != "fragment_main" {
-                            return Err(format!("Expected name 'fragment_main', got '{}'", decl.name));
+                            return Err(format!(
+                                "Expected name 'fragment_main', got '{}'",
+                                decl.name
+                            ));
                         }
                         if !decl.attributes.contains(&Attribute::Fragment) {
-                            return Err(format!("Expected Fragment attribute, got {:?}", decl.attributes));
+                            return Err(format!(
+                                "Expected Fragment attribute, got {:?}",
+                                decl.attributes
+                            ));
                         }
                         // Check that we have attributed return type
                         if decl.attributed_return_type.is_none() {
-                            return Err("Expected attributed return type for multiple outputs".to_string());
+                            return Err(
+                                "Expected attributed return type for multiple outputs".to_string()
+                            );
                         }
                         let attributed_types = decl.attributed_return_type.as_ref().unwrap();
                         if attributed_types.len() != 2 {
-                            return Err(format!("Expected 2 output components, got {}", attributed_types.len()));
+                            return Err(format!(
+                                "Expected 2 output components, got {}",
+                                attributed_types.len()
+                            ));
                         }
-                        
+
                         // Check first output: [location(0)] vec4
                         if attributed_types[0].attributes != vec![Attribute::Location(0)] {
-                            return Err(format!("Expected Location(0) on first output, got {:?}", attributed_types[0].attributes));
+                            return Err(format!(
+                                "Expected Location(0) on first output, got {:?}",
+                                attributed_types[0].attributes
+                            ));
                         }
-                        
-                        // Check second output: [location(1)] vec3  
+
+                        // Check second output: [location(1)] vec3
                         if attributed_types[1].attributes != vec![Attribute::Location(1)] {
-                            return Err(format!("Expected Location(1) on second output, got {:?}", attributed_types[1].attributes));
+                            return Err(format!(
+                                "Expected Location(1) on second output, got {:?}",
+                                attributed_types[1].attributes
+                            ));
                         }
-                        
+
                         Ok(())
                     }
                     _ => Err("Expected Decl declaration".to_string()),
@@ -2348,13 +2471,18 @@ def fragment_main(): [4]f32 = SKY_RGBA
             "#,
             |declarations| {
                 if declarations.len() != 4 {
-                    return Err(format!("Expected 4 declarations, got {}", declarations.len()));
+                    return Err(format!(
+                        "Expected 4 declarations, got {}",
+                        declarations.len()
+                    ));
                 }
 
                 // Check uniform declarations
                 match &declarations[0] {
                     Declaration::Decl(decl) => {
-                        if decl.name != "material_color" || !decl.attributes.contains(&Attribute::Uniform) {
+                        if decl.name != "material_color"
+                            || !decl.attributes.contains(&Attribute::Uniform)
+                        {
                             return Err("Expected uniform material_color".to_string());
                         }
                     }
@@ -2373,11 +2501,15 @@ def fragment_main(): [4]f32 = SKY_RGBA
                 // Check vertex shader with multiple outputs
                 match &declarations[2] {
                     Declaration::Decl(decl) => {
-                        if decl.name != "vertex_main" || !decl.attributes.contains(&Attribute::Vertex) {
+                        if decl.name != "vertex_main"
+                            || !decl.attributes.contains(&Attribute::Vertex)
+                        {
                             return Err("Expected vertex shader".to_string());
                         }
                         if decl.attributed_return_type.is_none() {
-                            return Err("Expected attributed return type for vertex shader".to_string());
+                            return Err(
+                                "Expected attributed return type for vertex shader".to_string()
+                            );
                         }
                     }
                     _ => return Err("Expected vertex declaration".to_string()),
@@ -2386,11 +2518,15 @@ def fragment_main(): [4]f32 = SKY_RGBA
                 // Check fragment shader with multiple outputs
                 match &declarations[3] {
                     Declaration::Decl(decl) => {
-                        if decl.name != "fragment_main" || !decl.attributes.contains(&Attribute::Fragment) {
+                        if decl.name != "fragment_main"
+                            || !decl.attributes.contains(&Attribute::Fragment)
+                        {
                             return Err("Expected fragment shader".to_string());
                         }
                         if decl.attributed_return_type.is_none() {
-                            return Err("Expected attributed return type for fragment shader".to_string());
+                            return Err(
+                                "Expected attributed return type for fragment shader".to_string()
+                            );
                         }
                     }
                     _ => return Err("Expected fragment declaration".to_string()),
@@ -2406,15 +2542,18 @@ def fragment_main(): [4]f32 = SKY_RGBA
         // Test simple if-then-else
         expect_parse("def test: i32 = if x == 0 then 1 else 2", |declarations| {
             if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+                return Err(format!(
+                    "Expected 1 declaration, got {}",
+                    declarations.len()
+                ));
             }
-            
+
             match &declarations[0] {
                 Declaration::Decl(decl) => {
                     if decl.name != "test" {
                         return Err(format!("Expected name 'test', got '{}'", decl.name));
                     }
-                    
+
                     // Check the if-then-else expression structure
                     match &decl.body {
                         Expression::If(if_expr) => {
@@ -2422,39 +2561,62 @@ def fragment_main(): [4]f32 = SKY_RGBA
                             match &*if_expr.condition {
                                 Expression::BinaryOp(op, left, right) => {
                                     if op.op != "==" {
-                                        return Err(format!("Expected '==' operator, got '{}'", op.op));
+                                        return Err(format!(
+                                            "Expected '==' operator, got '{}'",
+                                            op.op
+                                        ));
                                     }
-                                    
+
                                     // Check left side is identifier 'x'
                                     match &**left {
                                         Expression::Identifier(name) if name == "x" => {},
                                         _ => return Err(format!("Expected identifier 'x' on left side of comparison, got {:?}", left)),
                                     }
-                                    
+
                                     // Check right side is literal 0
                                     match &**right {
                                         Expression::IntLiteral(0) => {},
                                         _ => return Err(format!("Expected literal 0 on right side of comparison, got {:?}", right)),
                                     }
                                 }
-                                _ => return Err(format!("Expected comparison expression in if condition, got {:?}", if_expr.condition)),
+                                _ => {
+                                    return Err(format!(
+                                        "Expected comparison expression in if condition, got {:?}",
+                                        if_expr.condition
+                                    ))
+                                }
                             }
-                            
+
                             // Check then branch is literal 1
                             match &*if_expr.then_branch {
-                                Expression::IntLiteral(1) => {},
-                                _ => return Err(format!("Expected literal 1 in then branch, got {:?}", if_expr.then_branch)),
+                                Expression::IntLiteral(1) => {}
+                                _ => {
+                                    return Err(format!(
+                                        "Expected literal 1 in then branch, got {:?}",
+                                        if_expr.then_branch
+                                    ))
+                                }
                             }
-                            
+
                             // Check else branch is literal 2
                             match &*if_expr.else_branch {
-                                Expression::IntLiteral(2) => {},
-                                _ => return Err(format!("Expected literal 2 in else branch, got {:?}", if_expr.else_branch)),
+                                Expression::IntLiteral(2) => {}
+                                _ => {
+                                    return Err(format!(
+                                        "Expected literal 2 in else branch, got {:?}",
+                                        if_expr.else_branch
+                                    ))
+                                }
                             }
                         }
-                        _ => return Err(format!("Expected if-then-else expression, got {:?}", decl.body)),
+                        _ => {
+                            return Err(format!(
+                                "Expected if-then-else expression, got {:?}",
+                                decl.body
+                            ))
+                        }
                     }
-                    
+
                     Ok(())
                 }
                 _ => Err("Expected Decl declaration".to_string()),
@@ -2464,13 +2626,19 @@ def fragment_main(): [4]f32 = SKY_RGBA
     #[test]
     fn test_array_literal() {
         // Test simple if-then-else
-        expect_parse("#[vertex] def test(): #[builtin(position)] [4]f32 = [0.0f32, 0.5f32, 0.0f32, 1.0f32]", |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            Ok(())
-            });
-            }
+        expect_parse(
+            "#[vertex] def test(): #[builtin(position)] [4]f32 = [0.0f32, 0.5f32, 0.0f32, 1.0f32]",
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!(
+                        "Expected 1 declaration, got {}",
+                        declarations.len()
+                    ));
+                }
+                Ok(())
+            },
+        );
+    }
 
     #[test]
     fn test_parse_array_type_directly() {

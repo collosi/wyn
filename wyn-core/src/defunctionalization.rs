@@ -75,7 +75,11 @@ impl Defunctionalizer {
                 keyword: "def",
                 attributes: vec![],
                 name: func.name.clone(),
-                params: func.params.iter().map(|p| DeclParam::Untyped(p.name.clone())).collect(),
+                params: func
+                    .params
+                    .iter()
+                    .map(|p| DeclParam::Untyped(p.name.clone()))
+                    .collect(),
                 ty: None, // Function definitions don't have explicit type annotations
                 return_attributes: vec![],
                 attributed_return_type: None,
@@ -111,7 +115,6 @@ impl Defunctionalizer {
 
         Ok((transformed_decl, sv))
     }
-
 
     fn defunctionalize_expression(
         &mut self,
@@ -287,16 +290,20 @@ impl Defunctionalizer {
                 ))
             }
             Expression::FieldAccess(expr, field) => {
-                let (transformed_expr, expr_sv) = self.defunctionalize_expression(expr, scope_stack)?;
+                let (transformed_expr, expr_sv) =
+                    self.defunctionalize_expression(expr, scope_stack)?;
                 Ok((
                     Expression::FieldAccess(Box::new(transformed_expr), field.clone()),
                     expr_sv, // Field access doesn't change the static value representation
                 ))
             }
             Expression::If(if_expr) => {
-                let (condition, _condition_sv) = self.defunctionalize_expression(&if_expr.condition, scope_stack)?;
-                let (then_branch, _then_sv) = self.defunctionalize_expression(&if_expr.then_branch, scope_stack)?;
-                let (else_branch, _else_sv) = self.defunctionalize_expression(&if_expr.else_branch, scope_stack)?;
+                let (condition, _condition_sv) =
+                    self.defunctionalize_expression(&if_expr.condition, scope_stack)?;
+                let (then_branch, _then_sv) =
+                    self.defunctionalize_expression(&if_expr.then_branch, scope_stack)?;
+                let (else_branch, _else_sv) =
+                    self.defunctionalize_expression(&if_expr.else_branch, scope_stack)?;
                 Ok((
                     Expression::If(IfExpr {
                         condition: Box::new(condition),

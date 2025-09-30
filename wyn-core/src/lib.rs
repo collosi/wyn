@@ -57,7 +57,7 @@ impl Compiler {
         // Generate SPIR-V using rspirv
         let codegen = codegen::CodeGenerator::new("wyn_module");
         let raw_spirv = codegen.generate(&defunctionalized_program)?;
-        
+
         // Post-process SPIR-V to fix compatibility issues (now handled within rspirv backend)
         Ok(raw_spirv)
     }

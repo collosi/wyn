@@ -3,7 +3,10 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use thiserror::Error;
-use wyn_core::{annotator::CodeAnnotator, borrow_checker::BorrowChecker, cfg_nemo::CfgNemoExtractor, lexer, parser::Parser as WynParser, Compiler};
+use wyn_core::{
+    annotator::CodeAnnotator, borrow_checker::BorrowChecker, cfg_nemo::CfgNemoExtractor, lexer,
+    parser::Parser as WynParser, Compiler,
+};
 
 #[derive(Parser)]
 #[command(name = "wyn")]
@@ -87,9 +90,22 @@ fn main() -> Result<(), DriverError> {
             borrow_check,
             verbose,
         } => {
-            compile_file(input, output, output_annotated, output_nemo, borrow_check, verbose)?;
+            compile_file(
+                input,
+                output,
+                output_annotated,
+                output_nemo,
+                borrow_check,
+                verbose,
+            )?;
         }
-        Commands::Check { input, output_annotated, output_nemo, borrow_check, verbose } => {
+        Commands::Check {
+            input,
+            output_annotated,
+            output_nemo,
+            borrow_check,
+            verbose,
+        } => {
             check_file(input, output_annotated, output_nemo, borrow_check, verbose)?;
         }
     }
@@ -97,7 +113,14 @@ fn main() -> Result<(), DriverError> {
     Ok(())
 }
 
-fn compile_file(input: PathBuf, output: Option<PathBuf>, output_annotated: Option<PathBuf>, output_nemo: Option<PathBuf>, borrow_check: bool, verbose: bool) -> Result<(), DriverError> {
+fn compile_file(
+    input: PathBuf,
+    output: Option<PathBuf>,
+    output_annotated: Option<PathBuf>,
+    output_nemo: Option<PathBuf>,
+    borrow_check: bool,
+    verbose: bool,
+) -> Result<(), DriverError> {
     if verbose {
         println!("Compiling {}...", input.display());
     }
@@ -146,7 +169,13 @@ fn compile_file(input: PathBuf, output: Option<PathBuf>, output_annotated: Optio
     Ok(())
 }
 
-fn check_file(input: PathBuf, output_annotated: Option<PathBuf>, output_nemo: Option<PathBuf>, borrow_check: bool, verbose: bool) -> Result<(), DriverError> {
+fn check_file(
+    input: PathBuf,
+    output_annotated: Option<PathBuf>,
+    output_nemo: Option<PathBuf>,
+    borrow_check: bool,
+    verbose: bool,
+) -> Result<(), DriverError> {
     if verbose {
         println!("Checking {}...", input.display());
     }
@@ -180,41 +209,49 @@ fn check_file(input: PathBuf, output_annotated: Option<PathBuf>, output_nemo: Op
     Ok(())
 }
 
-fn generate_annotated_source(source: &str, output_path: &PathBuf, verbose: bool) -> Result<(), DriverError> {
+fn generate_annotated_source(
+    source: &str,
+    output_path: &PathBuf,
+    verbose: bool,
+) -> Result<(), DriverError> {
     // Parse the source to get the AST
     let tokens = lexer::tokenize(source).map_err(wyn_core::error::CompilerError::ParseError)?;
     let mut parser = WynParser::new(tokens);
     let program = parser.parse()?;
-    
+
     // Generate annotated code
     let mut annotator = CodeAnnotator::new();
     let annotated = annotator.annotate_program(&program);
-    
+
     // Write annotated source
     fs::write(output_path, annotated)?;
-    
+
     if verbose {
         println!("Generated annotated source: {}", output_path.display());
     }
-    
+
     Ok(())
 }
 
-fn generate_nemo_facts(source: &str, output_path: &PathBuf, verbose: bool) -> Result<(), DriverError> {
+fn generate_nemo_facts(
+    source: &str,
+    output_path: &PathBuf,
+    verbose: bool,
+) -> Result<(), DriverError> {
     // Parse the source to get the AST
     let tokens = lexer::tokenize(source).map_err(wyn_core::error::CompilerError::ParseError)?;
     let mut parser = WynParser::new(tokens);
     let program = parser.parse()?;
-    
+
     // Generate Nemo facts
     let mut file = fs::File::create(output_path)?;
     let extractor = CfgNemoExtractor::new(&mut file, verbose);
     extractor.extract_cfg(&program)?;
-    
+
     if verbose {
         println!("Generated Nemo facts: {}", output_path.display());
     }
-    
+
     Ok(())
 }
 
@@ -223,20 +260,20 @@ fn run_borrow_checking(source: &str, verbose: bool) -> Result<(), DriverError> {
     let tokens = lexer::tokenize(source).map_err(wyn_core::error::CompilerError::ParseError)?;
     let mut parser = WynParser::new(tokens);
     let program = parser.parse()?;
-    
+
     // Run borrow checking
     let mut checker = BorrowChecker::new(verbose);
     let result = checker.check_program(&program)?;
-    
+
     if result.has_errors() {
         println!("Borrow check errors found:");
         result.print_errors();
         return Err(DriverError::CompilationError(
-            wyn_core::error::CompilerError::SpirvError("Borrow check failed".to_string())
+            wyn_core::error::CompilerError::SpirvError("Borrow check failed".to_string()),
         ));
     } else if verbose {
         println!("✓ Borrow checking passed");
     }
-    
+
     Ok(())
 }

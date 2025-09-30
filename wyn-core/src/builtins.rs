@@ -1,6 +1,6 @@
 use crate::ast::{Type, TypeName};
-use crate::error::{CompilerError, Result};
 use crate::codegen::Value;
+use crate::error::{CompilerError, Result};
 use rspirv::dr::Builder;
 use rspirv::spirv;
 use std::collections::HashMap;
@@ -17,7 +17,7 @@ pub enum BuiltinType {
 /// Manages builtin function implementations using rspirv
 pub struct BuiltinManager {
     builtin_registry: HashMap<String, BuiltinType>, // Maps builtin name to implementation type
-    glsl_ext_inst_id: Option<spirv::Word>, // ID for GLSL.std.450 extension
+    glsl_ext_inst_id: Option<spirv::Word>,          // ID for GLSL.std.450 extension
 }
 
 impl Default for BuiltinManager {
@@ -29,18 +29,18 @@ impl Default for BuiltinManager {
 impl BuiltinManager {
     pub fn new() -> Self {
         let mut registry = HashMap::new();
-        
+
         // Register builtin functions with their implementation types
-        
+
         // GLSL extended instructions (GLSL.std.450)
         registry.insert("sin".to_string(), BuiltinType::ExtInstruction(13)); // GLSL Sin
-        registry.insert("cos".to_string(), BuiltinType::ExtInstruction(14)); // GLSL Cos  
+        registry.insert("cos".to_string(), BuiltinType::ExtInstruction(14)); // GLSL Cos
         registry.insert("tan".to_string(), BuiltinType::ExtInstruction(15)); // GLSL Tan
         registry.insert("sqrt".to_string(), BuiltinType::ExtInstruction(31)); // GLSL Sqrt
         registry.insert("abs".to_string(), BuiltinType::ExtInstruction(4)); // GLSL FAbs
         registry.insert("floor".to_string(), BuiltinType::ExtInstruction(8)); // GLSL Floor
         registry.insert("ceil".to_string(), BuiltinType::ExtInstruction(9)); // GLSL Ceil
-        
+
         Self {
             builtin_registry: registry,
             glsl_ext_inst_id: None,
@@ -51,7 +51,7 @@ impl BuiltinManager {
     pub fn load_builtins_into_module(&mut self, builder: &mut Builder) -> Result<()> {
         // Import GLSL.std.450 extension instruction set
         self.glsl_ext_inst_id = Some(builder.ext_inst_import("GLSL.std.450"));
-        
+
         println!("DEBUG: Imported GLSL.std.450 extension instruction set");
         Ok(())
     }
@@ -60,7 +60,7 @@ impl BuiltinManager {
     pub fn is_builtin(&self, name: &str) -> bool {
         self.builtin_registry.contains_key(name)
     }
-    
+
     /// Get the builtin type for a given name
     pub fn get_builtin_type(&self, name: &str) -> Option<&BuiltinType> {
         self.builtin_registry.get(name)
@@ -76,9 +76,10 @@ impl BuiltinManager {
         match self.builtin_registry.get(func_name) {
             Some(BuiltinType::ExtInstruction(inst_num)) => {
                 if args.is_empty() {
-                    return Err(CompilerError::SpirvError(
-                        format!("{} builtin requires at least one argument", func_name)
-                    ));
+                    return Err(CompilerError::SpirvError(format!(
+                        "{} builtin requires at least one argument",
+                        func_name
+                    )));
                 }
 
                 let glsl_ext_id = self.glsl_ext_inst_id.ok_or_else(|| {
@@ -87,17 +88,13 @@ impl BuiltinManager {
 
                 // For most GLSL functions, the result type is the same as the first argument
                 let result_type = args[0].type_id;
-                let arg_operands: Vec<rspirv::dr::Operand> = args.iter()
+                let arg_operands: Vec<rspirv::dr::Operand> = args
+                    .iter()
                     .map(|v| rspirv::dr::Operand::IdRef(v.id))
                     .collect();
 
-                let result_id = builder.ext_inst(
-                    result_type,
-                    None,
-                    glsl_ext_id,
-                    *inst_num,
-                    arg_operands,
-                )?;
+                let result_id =
+                    builder.ext_inst(result_type, None, glsl_ext_id, *inst_num, arg_operands)?;
 
                 Ok(Value {
                     id: result_id,

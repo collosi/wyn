@@ -2,8 +2,7 @@ use crate::ast::*;
 use crate::error::{CompilerError, Result};
 
 /// Constant folder that performs compile-time evaluation of constant expressions
-pub struct ConstantFolder {
-}
+pub struct ConstantFolder {}
 
 impl Default for ConstantFolder {
     fn default() -> Self {
@@ -19,12 +18,12 @@ impl ConstantFolder {
     /// Fold constants in an entire program
     pub fn fold_program(&mut self, program: &Program) -> Result<Program> {
         let mut folded_declarations = Vec::new();
-        
+
         for decl in &program.declarations {
             let folded_decl = self.fold_declaration(decl)?;
             folded_declarations.push(folded_decl);
         }
-        
+
         Ok(Program {
             declarations: folded_declarations,
         })
@@ -60,7 +59,7 @@ impl ConstantFolder {
             Expression::BinaryOp(op, left, right) => {
                 let folded_left = self.fold_expression(left)?;
                 let folded_right = self.fold_expression(right)?;
-                
+
                 // Try to evaluate if both sides are literals
                 match (&folded_left, &folded_right) {
                     (Expression::FloatLiteral(l), Expression::FloatLiteral(r)) => {
@@ -70,14 +69,20 @@ impl ConstantFolder {
                             "*" => Ok(Expression::FloatLiteral(l * r)),
                             "/" => {
                                 if *r == 0.0 {
-                                    Err(CompilerError::TypeError("Division by zero in constant expression".to_string()))
+                                    Err(CompilerError::TypeError(
+                                        "Division by zero in constant expression".to_string(),
+                                    ))
                                 } else {
                                     Ok(Expression::FloatLiteral(l / r))
                                 }
                             }
                             _ => {
                                 // Non-arithmetic operations, keep as binary op
-                                Ok(Expression::BinaryOp(op.clone(), Box::new(folded_left), Box::new(folded_right)))
+                                Ok(Expression::BinaryOp(
+                                    op.clone(),
+                                    Box::new(folded_left),
+                                    Box::new(folded_right),
+                                ))
                             }
                         }
                     }
@@ -88,20 +93,30 @@ impl ConstantFolder {
                             "*" => Ok(Expression::IntLiteral(l * r)),
                             "/" => {
                                 if *r == 0 {
-                                    Err(CompilerError::TypeError("Division by zero in constant expression".to_string()))
+                                    Err(CompilerError::TypeError(
+                                        "Division by zero in constant expression".to_string(),
+                                    ))
                                 } else {
                                     Ok(Expression::IntLiteral(l / r))
                                 }
                             }
                             _ => {
                                 // Non-arithmetic operations, keep as binary op
-                                Ok(Expression::BinaryOp(op.clone(), Box::new(folded_left), Box::new(folded_right)))
+                                Ok(Expression::BinaryOp(
+                                    op.clone(),
+                                    Box::new(folded_left),
+                                    Box::new(folded_right),
+                                ))
                             }
                         }
                     }
                     _ => {
                         // Can't fold, but use folded children
-                        Ok(Expression::BinaryOp(op.clone(), Box::new(folded_left), Box::new(folded_right)))
+                        Ok(Expression::BinaryOp(
+                            op.clone(),
+                            Box::new(folded_left),
+                            Box::new(folded_right),
+                        ))
                     }
                 }
             }
@@ -138,7 +153,7 @@ impl ConstantFolder {
                 let folded_condition = self.fold_expression(&if_expr.condition)?;
                 let folded_then = self.fold_expression(&if_expr.then_branch)?;
                 let folded_else = self.fold_expression(&if_expr.else_branch)?;
-                
+
                 Ok(Expression::If(IfExpr {
                     condition: Box::new(folded_condition),
                     then_branch: Box::new(folded_then),
@@ -150,7 +165,7 @@ impl ConstantFolder {
             Expression::LetIn(let_in) => {
                 let folded_value = self.fold_expression(&let_in.value)?;
                 let folded_body = self.fold_expression(&let_in.body)?;
-                
+
                 Ok(Expression::LetIn(LetInExpr {
                     name: let_in.name.clone(),
                     ty: let_in.ty.clone(),
@@ -162,7 +177,7 @@ impl ConstantFolder {
             // Handle lambdas - fold body
             Expression::Lambda(lambda) => {
                 let folded_body = self.fold_expression(&lambda.body)?;
-                
+
                 Ok(Expression::Lambda(LambdaExpr {
                     params: lambda.params.clone(),
                     return_type: lambda.return_type.clone(),
@@ -184,7 +199,10 @@ impl ConstantFolder {
             Expression::ArrayIndex(array, index) => {
                 let folded_array = self.fold_expression(array)?;
                 let folded_index = self.fold_expression(index)?;
-                Ok(Expression::ArrayIndex(Box::new(folded_array), Box::new(folded_index)))
+                Ok(Expression::ArrayIndex(
+                    Box::new(folded_array),
+                    Box::new(folded_index),
+                ))
             }
 
             // Handle field access - fold the object
@@ -194,9 +212,9 @@ impl ConstantFolder {
             }
 
             // Literals and identifiers don't need folding
-            Expression::Identifier(_) | 
-            Expression::IntLiteral(_) | 
-            Expression::FloatLiteral(_) => Ok(expr.clone()),
+            Expression::Identifier(_) | Expression::IntLiteral(_) | Expression::FloatLiteral(_) => {
+                Ok(expr.clone())
+            }
         }
     }
 }
@@ -208,16 +226,18 @@ mod tests {
     #[test]
     fn test_float_division_folding() {
         let mut folder = ConstantFolder::new();
-        
+
         // Test 135f32 / 255f32
         let expr = Expression::BinaryOp(
-            BinaryOp { op: "/".to_string() },
+            BinaryOp {
+                op: "/".to_string(),
+            },
             Box::new(Expression::FloatLiteral(135.0)),
             Box::new(Expression::FloatLiteral(255.0)),
         );
-        
+
         let result = folder.fold_expression(&expr).unwrap();
-        
+
         match result {
             Expression::FloatLiteral(val) => {
                 // Should be approximately 0.529411765
@@ -230,28 +250,32 @@ mod tests {
     #[test]
     fn test_array_with_division_folding() {
         let mut folder = ConstantFolder::new();
-        
+
         // Test [135f32/255f32, 206f32/255f32, 1.0f32]
         let expr = Expression::ArrayLiteral(vec![
             Expression::BinaryOp(
-                BinaryOp { op: "/".to_string() },
+                BinaryOp {
+                    op: "/".to_string(),
+                },
                 Box::new(Expression::FloatLiteral(135.0)),
                 Box::new(Expression::FloatLiteral(255.0)),
             ),
             Expression::BinaryOp(
-                BinaryOp { op: "/".to_string() },
+                BinaryOp {
+                    op: "/".to_string(),
+                },
                 Box::new(Expression::FloatLiteral(206.0)),
                 Box::new(Expression::FloatLiteral(255.0)),
             ),
             Expression::FloatLiteral(1.0),
         ]);
-        
+
         let result = folder.fold_expression(&expr).unwrap();
-        
+
         match result {
             Expression::ArrayLiteral(elements) => {
                 assert_eq!(elements.len(), 3);
-                
+
                 // First element should be folded
                 match &elements[0] {
                     Expression::FloatLiteral(val) => {
@@ -259,7 +283,7 @@ mod tests {
                     }
                     _ => panic!("Expected folded float literal"),
                 }
-                
+
                 // Second element should be folded
                 match &elements[1] {
                     Expression::FloatLiteral(val) => {
@@ -267,7 +291,7 @@ mod tests {
                     }
                     _ => panic!("Expected folded float literal"),
                 }
-                
+
                 // Third element should remain unchanged
                 match &elements[2] {
                     Expression::FloatLiteral(val) => {

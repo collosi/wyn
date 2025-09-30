@@ -10,7 +10,7 @@ mod tests {
     #[test]
     fn test_full_example_program() {
         let _guard = LLVM_TEST_MUTEX.lock().unwrap();
-        
+
         let source = r#"
 -- Full-screen triangle in NDC (like classic shader demos).
 def verts: [3][4]f32 =
@@ -49,7 +49,7 @@ def fragment_main () : [4]f32 =
     #[test]
     fn test_vertex_shader_only() {
         let _guard = LLVM_TEST_MUTEX.lock().unwrap();
-        
+
         let source = r#"
 let positions: [3][4]f32 =
   [[0.0f32, 0.5f32, 0.0f32, 1.0f32],
@@ -68,7 +68,7 @@ def vertex_main(vertex_id: i32): [4]f32 = positions[vertex_id]
     #[test]
     fn test_fragment_shader_only() {
         let _guard = LLVM_TEST_MUTEX.lock().unwrap();
-        
+
         let source = r#"
 let red: [4]f32 = [1.0f32, 0.0f32, 0.0f32, 1.0f32]
 #[fragment]
@@ -83,7 +83,7 @@ def fragment_main(): [4]f32 = red
     #[test]
     fn test_division_in_array() {
         let _guard = LLVM_TEST_MUTEX.lock().unwrap();
-        
+
         let source = r#"
 let normalized_color: [3]f32 = [128f32/255f32, 64f32/255f32, 32f32/255f32]
 #[fragment]

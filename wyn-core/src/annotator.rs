@@ -51,8 +51,13 @@ impl CodeAnnotator {
                 let block = self.new_block();
                 self.enter_block(block);
 
-                write!(self.output, "#B{}.0 {} {}", block.0, decl_node.keyword, decl_node.name).unwrap();
-                
+                write!(
+                    self.output,
+                    "#B{}.0 {} {}",
+                    block.0, decl_node.keyword, decl_node.name
+                )
+                .unwrap();
+
                 // Add parameters if this is a function
                 if !decl_node.params.is_empty() {
                     self.output.push('(');
@@ -67,19 +72,18 @@ impl CodeAnnotator {
                     }
                     self.output.push(')');
                 }
-                
+
                 // Add type annotation if present
                 if let Some(ref ty) = decl_node.ty {
                     self.output.push_str(": ");
                     self.write_type(ty);
                 }
-                
+
                 self.output.push_str(" = ");
                 self.annotate_expression(&decl_node.body);
 
                 self.exit_block();
             }
-
 
             Declaration::Val(val) => {
                 write!(self.output, "val {}: ", val.name).unwrap();

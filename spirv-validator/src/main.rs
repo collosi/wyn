@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
     } else {
         Backends::VULKAN | Backends::METAL | Backends::DX12
     };
-    
+
     let instance = Instance::new(&InstanceDescriptor {
         backends,
         ..Default::default()
@@ -81,24 +81,27 @@ async fn main() -> Result<()> {
     println!("🎮 Backend: {:?}", adapter.get_info().backend);
 
     // Check if passthrough is supported
-    let spirv_passthrough_supported = adapter.features().contains(Features::SPIRV_SHADER_PASSTHROUGH);
-    println!("🔧 SPIR-V Passthrough supported: {}", spirv_passthrough_supported);
+    let spirv_passthrough_supported = adapter
+        .features()
+        .contains(Features::SPIRV_SHADER_PASSTHROUGH);
+    println!(
+        "🔧 SPIR-V Passthrough supported: {}",
+        spirv_passthrough_supported
+    );
 
     // Request device
     let (device, _queue) = adapter
-        .request_device(
-            &DeviceDescriptor {
-                label: Some("SPIR-V Validator Device"),
-                required_features: if spirv_passthrough_supported {
-                    Features::SPIRV_SHADER_PASSTHROUGH
-                } else {
-                    Features::empty()
-                },
-                required_limits: Limits::default(),
-                memory_hints: MemoryHints::default(),
-                trace: Trace::Off,
+        .request_device(&DeviceDescriptor {
+            label: Some("SPIR-V Validator Device"),
+            required_features: if spirv_passthrough_supported {
+                Features::SPIRV_SHADER_PASSTHROUGH
+            } else {
+                Features::empty()
             },
-        )
+            required_limits: Limits::default(),
+            memory_hints: MemoryHints::default(),
+            trace: Trace::Off,
+        })
         .await
         .context("Failed to create GPU device")?;
 
@@ -106,8 +109,13 @@ async fn main() -> Result<()> {
 
     // Test SPIR-V loading
     println!("🧪 Testing SPIR-V shader loading...");
-    
-    match test_spirv_loading(&device, &spirv_words, args.compute, spirv_passthrough_supported) {
+
+    match test_spirv_loading(
+        &device,
+        &spirv_words,
+        args.compute,
+        spirv_passthrough_supported,
+    ) {
         Ok(()) => {
             println!("✅ SPIR-V validation PASSED! 🎉");
             println!("   The shader loaded successfully in wgpu");
@@ -115,9 +123,12 @@ async fn main() -> Result<()> {
         Err(e) => {
             println!("❌ SPIR-V validation FAILED:");
             println!("   Error: {}", e);
-            
+
             // Try with passthrough if available
-            if device.features().contains(Features::SPIRV_SHADER_PASSTHROUGH) {
+            if device
+                .features()
+                .contains(Features::SPIRV_SHADER_PASSTHROUGH)
+            {
                 println!("🔄 Trying with SPIR-V passthrough...");
                 match test_spirv_passthrough(&device, &spirv_words) {
                     Ok(()) => {
@@ -132,7 +143,7 @@ async fn main() -> Result<()> {
             } else {
                 println!("ℹ️  SPIR-V passthrough not available on this device");
             }
-            
+
             return Err(e);
         }
     }
@@ -140,7 +151,12 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn test_spirv_loading(device: &Device, spirv_words: &[u32], compute: bool, has_passthrough: bool) -> Result<()> {
+fn test_spirv_loading(
+    device: &Device,
+    spirv_words: &[u32],
+    compute: bool,
+    has_passthrough: bool,
+) -> Result<()> {
     let shader_module = if has_passthrough {
         println!("🔄 Using SPIR-V passthrough...");
         // Try to create shader module using SPIR-V passthrough
@@ -149,7 +165,7 @@ fn test_spirv_loading(device: &Device, spirv_words: &[u32], compute: bool, has_p
                 ShaderModuleDescriptorSpirV {
                     label: Some("Test SPIR-V Shader"),
                     source: std::borrow::Cow::Borrowed(spirv_words),
-                }
+                },
             ))
         }
     } else {
@@ -159,7 +175,7 @@ fn test_spirv_loading(device: &Device, spirv_words: &[u32], compute: bool, has_p
             .iter()
             .flat_map(|word| word.to_le_bytes())
             .collect();
-        
+
         let source = wgpu::util::make_spirv(&bytes);
         device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Test SPIR-V Shader"),
@@ -181,7 +197,7 @@ fn test_spirv_loading(device: &Device, spirv_words: &[u32], compute: bool, has_p
     } else {
         // Test as graphics shader (vertex + fragment)
         println!("🎨 Testing as graphics shader...");
-        
+
         // Try to create a basic render pipeline
         let _render_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("Test Graphics Pipeline"),
@@ -220,9 +236,7 @@ fn test_spirv_passthrough(device: &Device, spirv_words: &[u32]) -> Result<()> {
     });
 
     // Use passthrough to bypass wgpu validation
-    let _shader_module = unsafe {
-        device.create_shader_module_passthrough(shader_descriptor)
-    };
+    let _shader_module = unsafe { device.create_shader_module_passthrough(shader_descriptor) };
 
     println!("✅ SPIR-V passthrough succeeded (validation bypassed)");
     Ok(())
