@@ -1,2 +1,0 @@
-let f: i32 -> i32 = \x -> x + 1
-let g: i32 -> i32 = \y -> f y

@@ -1,6 +1,0 @@
--- Test vector field access
-def test_vec3: vec3 = vec3 1.0f32 2.0f32 3.0f32
-
-def test_x: f32 = test_vec3.x
-def test_y: f32 = test_vec3.y  
-def test_z: f32 = test_vec3.z

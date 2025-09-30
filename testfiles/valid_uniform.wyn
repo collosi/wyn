@@ -1,0 +1,5 @@
+#[uniform] def material_color: vec3
+
+def test: f32 = 
+  let color_sum: f32 = material_color.x + material_color.y + material_color.z in
+  color_sum
