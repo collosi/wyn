@@ -33,7 +33,7 @@ impl BuiltinManager {
 
         // Register builtin functions with their implementation types
 
-        // GLSL extended instructions (GLSL.std.450)
+        // GLSL extended instructions (GLSL.std.450) - Basic math
         registry.insert("sin".to_string(), BuiltinType::ExtInstruction(13)); // GLSL Sin
         registry.insert("cos".to_string(), BuiltinType::ExtInstruction(14)); // GLSL Cos
         registry.insert("tan".to_string(), BuiltinType::ExtInstruction(15)); // GLSL Tan
@@ -41,6 +41,23 @@ impl BuiltinManager {
         registry.insert("abs".to_string(), BuiltinType::ExtInstruction(4)); // GLSL FAbs
         registry.insert("floor".to_string(), BuiltinType::ExtInstruction(8)); // GLSL Floor
         registry.insert("ceil".to_string(), BuiltinType::ExtInstruction(9)); // GLSL Ceil
+
+        // GLSL extended instructions - Geometric operations
+        registry.insert("length".to_string(), BuiltinType::ExtInstruction(66)); // GLSL Length
+        registry.insert("distance".to_string(), BuiltinType::ExtInstruction(67)); // GLSL Distance
+        registry.insert("cross".to_string(), BuiltinType::ExtInstruction(68)); // GLSL Cross
+        registry.insert("normalize".to_string(), BuiltinType::ExtInstruction(69)); // GLSL Normalize
+        registry.insert("faceforward".to_string(), BuiltinType::ExtInstruction(70)); // GLSL FaceForward
+        registry.insert("reflect".to_string(), BuiltinType::ExtInstruction(71)); // GLSL Reflect
+        registry.insert("refract".to_string(), BuiltinType::ExtInstruction(72)); // GLSL Refract
+
+        // GLSL extended instructions - Matrix operations
+        registry.insert("determinant".to_string(), BuiltinType::ExtInstruction(33)); // GLSL Determinant
+        registry.insert("inverse".to_string(), BuiltinType::ExtInstruction(34)); // GLSL MatrixInverse
+
+        // Core SPIR-V instructions
+        registry.insert("dot".to_string(), BuiltinType::SpirvIntrinsic("OpDot".to_string()));
+        registry.insert("outer".to_string(), BuiltinType::SpirvIntrinsic("OpOuterProduct".to_string()));
 
         Self {
             builtin_registry: registry,
@@ -100,12 +117,42 @@ impl BuiltinManager {
                     type_id: result_type,
                 })
             }
-            Some(BuiltinType::SpirvIntrinsic(_)) => {
-                // Handle other SPIR-V intrinsics if needed
-                Err(CompilerError::SpirvError(format!(
-                    "SPIR-V intrinsic {} not yet implemented",
-                    func_name
-                )))
+            Some(BuiltinType::SpirvIntrinsic(op_name)) => {
+                match op_name.as_str() {
+                    "OpDot" => {
+                        // dot(vec, vec) -> scalar
+                        if args.len() != 2 {
+                            return Err(CompilerError::SpirvError(
+                                "dot requires exactly 2 vector arguments".to_string(),
+                            ));
+                        }
+                        // Result type is the component type of the vector
+                        // For now, assume f32 (will need proper type introspection later)
+                        let result_type = builder.type_float(32);
+                        let result_id = builder.dot(result_type, None, args[0].id, args[1].id)?;
+                        Ok(Value {
+                            id: result_id,
+                            type_id: result_type,
+                        })
+                    }
+                    "OpOuterProduct" => {
+                        // outer(vec, vec) -> matrix
+                        if args.len() != 2 {
+                            return Err(CompilerError::SpirvError(
+                                "outer requires exactly 2 vector arguments".to_string(),
+                            ));
+                        }
+                        // Result type is a matrix - for now we'll need type inference
+                        // This is tricky without full type information
+                        return Err(CompilerError::SpirvError(
+                            "outer product not yet fully implemented - needs matrix type support".to_string(),
+                        ));
+                    }
+                    _ => Err(CompilerError::SpirvError(format!(
+                        "SPIR-V intrinsic {} not yet implemented",
+                        op_name
+                    ))),
+                }
             }
             None => Err(CompilerError::SpirvError(format!(
                 "Unknown builtin function: {}",
@@ -115,16 +162,72 @@ impl BuiltinManager {
     }
 
     /// Get type signature for builtin functions
+    /// Note: This is a simplified type checker. Actual types are polymorphic and work
+    /// with vec2, vec3, vec4, etc. Proper type checking should be done during compilation.
     pub fn get_builtin_type_signature(
         &self,
         name: &str,
         _element_type: Option<&Type>,
     ) -> Result<(Vec<Type>, Type)> {
+        let float_type = Type::Constructed(TypeName::Str("float"), vec![]);
+
+        // For now, use a generic "vec" type as a placeholder
+        // In practice, the actual vector size will be inferred from usage
+        let vec_type = Type::Constructed(TypeName::Str("vec"), vec![]);
+
         match name {
+            // Basic math: float -> float
             "sin" | "cos" | "tan" | "sqrt" | "abs" | "floor" | "ceil" => {
-                // These functions take float and return float
-                let float_type = Type::Constructed(TypeName::Str("float"), vec![]);
                 Ok((vec![float_type.clone()], float_type))
+            }
+            // Vector operations that return scalar
+            "length" => {
+                // length(vecN) -> float (works for vec2, vec3, vec4)
+                Ok((vec![vec_type.clone()], float_type))
+            }
+            "distance" | "dot" => {
+                // distance(vecN, vecN) -> float
+                // dot(vecN, vecN) -> float
+                // Works for vec2, vec3, vec4
+                Ok((vec![vec_type.clone(), vec_type.clone()], float_type))
+            }
+            // Vector operations that return vector
+            "normalize" => {
+                // normalize(vecN) -> vecN (preserves type)
+                Ok((vec![vec_type.clone()], vec_type))
+            }
+            "cross" => {
+                // cross(vec3, vec3) -> vec3 (only for vec3)
+                // TODO: Should validate vec3 specifically
+                Ok((vec![vec_type.clone(), vec_type.clone()], vec_type))
+            }
+            "reflect" => {
+                // reflect(vecN, vecN) -> vecN
+                Ok((vec![vec_type.clone(), vec_type.clone()], vec_type))
+            }
+            "refract" => {
+                // refract(vecN, vecN, float) -> vecN
+                Ok((vec![vec_type.clone(), vec_type.clone(), float_type], vec_type))
+            }
+            "faceforward" => {
+                // faceforward(vecN, vecN, vecN) -> vecN
+                Ok((vec![vec_type.clone(), vec_type.clone(), vec_type.clone()], vec_type))
+            }
+            // Matrix operations
+            "determinant" => {
+                // determinant(matNxN) -> float
+                // TODO: Need matrix type support
+                Err(CompilerError::TypeError("determinant needs matrix type support".to_string()))
+            }
+            "inverse" => {
+                // inverse(matNxN) -> matNxN
+                // TODO: Need matrix type support
+                Err(CompilerError::TypeError("inverse needs matrix type support".to_string()))
+            }
+            "outer" => {
+                // outer(vecN, vecM) -> matNxM
+                // TODO: Need matrix type support
+                Err(CompilerError::TypeError("outer needs matrix type support".to_string()))
             }
             _ => Err(CompilerError::TypeError(format!("Unknown builtin: {}", name))),
         }

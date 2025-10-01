@@ -924,6 +924,16 @@ impl CodeGenerator {
                         "ivec2" => self.generate_vec_ctor(2, self.i32_type, args),
                         "ivec3" => self.generate_vec_ctor(3, self.i32_type, args),
                         "ivec4" => self.generate_vec_ctor(4, self.i32_type, args),
+                        // Matrix constructors (column-major)
+                        "mat2" => self.generate_mat_ctor(2, 2, args),
+                        "mat3" => self.generate_mat_ctor(3, 3, args),
+                        "mat4" => self.generate_mat_ctor(4, 4, args),
+                        "mat2x3" => self.generate_mat_ctor(2, 3, args),
+                        "mat2x4" => self.generate_mat_ctor(2, 4, args),
+                        "mat3x2" => self.generate_mat_ctor(3, 2, args),
+                        "mat3x4" => self.generate_mat_ctor(3, 4, args),
+                        "mat4x2" => self.generate_mat_ctor(4, 2, args),
+                        "mat4x3" => self.generate_mat_ctor(4, 3, args),
                         _ => Err(CompilerError::SpirvError(format!(
                             "Function call '{}' not supported",
                             func_name
@@ -1191,6 +1201,56 @@ impl CodeGenerator {
         self.make_composite(vty, elems)
     }
 
+    fn generate_mat_ctor(
+        &mut self,
+        cols: u32,
+        rows: u32,
+        args: &[Expression],
+    ) -> Result<Value> {
+        // Matrix constructors can take either:
+        // 1. cols*rows scalars (column-major order)
+        // 2. cols column vectors
+
+        let expected_scalars = (cols * rows) as usize;
+        let expected_vectors = cols as usize;
+
+        if args.len() == expected_scalars {
+            // Scalar initialization - build column vectors first
+            let vec_type = self.builder.type_vector(self.f32_type, rows);
+            let mut column_ids = Vec::new();
+
+            for col in 0..cols {
+                let mut column_elems = Vec::new();
+                for row in 0..rows {
+                    let idx = (col * rows + row) as usize;
+                    let elem = self.generate_expression(&args[idx])?;
+                    column_elems.push(elem.id);
+                }
+                let col_id = self.make_composite(vec_type, column_elems)?.id;
+                column_ids.push(col_id);
+            }
+
+            let mat_type = self.builder.type_matrix(vec_type, cols);
+            self.make_composite(mat_type, column_ids)
+        } else if args.len() == expected_vectors {
+            // Column vector initialization
+            let mut column_ids = Vec::new();
+            for arg in args {
+                let col_val = self.generate_expression(arg)?;
+                column_ids.push(col_val.id);
+            }
+
+            let vec_type = self.builder.type_vector(self.f32_type, rows);
+            let mat_type = self.builder.type_matrix(vec_type, cols);
+            self.make_composite(mat_type, column_ids)
+        } else {
+            Err(CompilerError::SpirvError(format!(
+                "Matrix{}x{} constructor expects {} scalars or {} column vectors, got {} args",
+                cols, rows, expected_scalars, expected_vectors, args.len()
+            )))
+        }
+    }
+
     fn convert_array_to_vec4(&mut self, array_val: Value) -> Result<Value> {
         // For rspirv, we need to extract array elements and build a vector
         let vec4_type = self.builder.type_vector(self.f32_type, 4);
@@ -1234,6 +1294,54 @@ impl CodeGenerator {
                         let vec_type = self.builder.type_vector(self.i32_type, n);
                         (vec_type, 4 * n)
                     }
+
+                    // Matrix types (f32, column-major)
+                    TypeName::Str("mat2") => {
+                        let vec_type = self.builder.type_vector(self.f32_type, 2);
+                        let mat_type = self.builder.type_matrix(vec_type, 2);
+                        (mat_type, 16) // 2 cols * 2 rows * 4 bytes
+                    }
+                    TypeName::Str("mat3") => {
+                        let vec_type = self.builder.type_vector(self.f32_type, 3);
+                        let mat_type = self.builder.type_matrix(vec_type, 3);
+                        (mat_type, 36) // 3 cols * 3 rows * 4 bytes
+                    }
+                    TypeName::Str("mat4") => {
+                        let vec_type = self.builder.type_vector(self.f32_type, 4);
+                        let mat_type = self.builder.type_matrix(vec_type, 4);
+                        (mat_type, 64) // 4 cols * 4 rows * 4 bytes
+                    }
+                    TypeName::Str("mat2x3") => {
+                        let vec_type = self.builder.type_vector(self.f32_type, 3);
+                        let mat_type = self.builder.type_matrix(vec_type, 2);
+                        (mat_type, 24) // 2 cols * 3 rows * 4 bytes
+                    }
+                    TypeName::Str("mat2x4") => {
+                        let vec_type = self.builder.type_vector(self.f32_type, 4);
+                        let mat_type = self.builder.type_matrix(vec_type, 2);
+                        (mat_type, 32) // 2 cols * 4 rows * 4 bytes
+                    }
+                    TypeName::Str("mat3x2") => {
+                        let vec_type = self.builder.type_vector(self.f32_type, 2);
+                        let mat_type = self.builder.type_matrix(vec_type, 3);
+                        (mat_type, 24) // 3 cols * 2 rows * 4 bytes
+                    }
+                    TypeName::Str("mat3x4") => {
+                        let vec_type = self.builder.type_vector(self.f32_type, 4);
+                        let mat_type = self.builder.type_matrix(vec_type, 3);
+                        (mat_type, 48) // 3 cols * 4 rows * 4 bytes
+                    }
+                    TypeName::Str("mat4x2") => {
+                        let vec_type = self.builder.type_vector(self.f32_type, 2);
+                        let mat_type = self.builder.type_matrix(vec_type, 4);
+                        (mat_type, 32) // 4 cols * 2 rows * 4 bytes
+                    }
+                    TypeName::Str("mat4x3") => {
+                        let vec_type = self.builder.type_vector(self.f32_type, 3);
+                        let mat_type = self.builder.type_matrix(vec_type, 4);
+                        (mat_type, 48) // 4 cols * 3 rows * 4 bytes
+                    }
+
                     TypeName::Str("array") => {
                         let elem_ty = args.first().ok_or_else(|| {
                             CompilerError::SpirvError("Array type missing element type".to_string())

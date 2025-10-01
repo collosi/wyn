@@ -401,6 +401,43 @@ impl Parser {
                 self.advance();
                 Ok(types::ivec4())
             }
+            // Matrix types
+            Some(Token::Identifier(name)) if name == "mat2" => {
+                self.advance();
+                Ok(types::mat2())
+            }
+            Some(Token::Identifier(name)) if name == "mat3" => {
+                self.advance();
+                Ok(types::mat3())
+            }
+            Some(Token::Identifier(name)) if name == "mat4" => {
+                self.advance();
+                Ok(types::mat4())
+            }
+            Some(Token::Identifier(name)) if name == "mat2x3" => {
+                self.advance();
+                Ok(types::mat2x3())
+            }
+            Some(Token::Identifier(name)) if name == "mat2x4" => {
+                self.advance();
+                Ok(types::mat2x4())
+            }
+            Some(Token::Identifier(name)) if name == "mat3x2" => {
+                self.advance();
+                Ok(types::mat3x2())
+            }
+            Some(Token::Identifier(name)) if name == "mat3x4" => {
+                self.advance();
+                Ok(types::mat3x4())
+            }
+            Some(Token::Identifier(name)) if name == "mat4x2" => {
+                self.advance();
+                Ok(types::mat4x2())
+            }
+            Some(Token::Identifier(name)) if name == "mat4x3" => {
+                self.advance();
+                Ok(types::mat4x3())
+            }
             Some(Token::Identifier(name)) if name.starts_with('\'') => {
                 // Type variable like 't1, 't2
                 let type_var = self.parse_type_variable()?;

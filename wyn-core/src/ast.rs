@@ -279,6 +279,43 @@ pub mod types {
         Type::Constructed(TypeName::Str("f16vec4"), vec![])
     }
 
+    // Matrix types (f32) - column-major, CxR naming
+    pub fn mat2() -> Type {
+        Type::Constructed(TypeName::Str("mat2"), vec![])
+    }
+
+    pub fn mat3() -> Type {
+        Type::Constructed(TypeName::Str("mat3"), vec![])
+    }
+
+    pub fn mat4() -> Type {
+        Type::Constructed(TypeName::Str("mat4"), vec![])
+    }
+
+    pub fn mat2x3() -> Type {
+        Type::Constructed(TypeName::Str("mat2x3"), vec![])
+    }
+
+    pub fn mat2x4() -> Type {
+        Type::Constructed(TypeName::Str("mat2x4"), vec![])
+    }
+
+    pub fn mat3x2() -> Type {
+        Type::Constructed(TypeName::Str("mat3x2"), vec![])
+    }
+
+    pub fn mat3x4() -> Type {
+        Type::Constructed(TypeName::Str("mat3x4"), vec![])
+    }
+
+    pub fn mat4x2() -> Type {
+        Type::Constructed(TypeName::Str("mat4x2"), vec![])
+    }
+
+    pub fn mat4x3() -> Type {
+        Type::Constructed(TypeName::Str("mat4x3"), vec![])
+    }
+
     pub fn sized_array(size: usize, elem_type: Type) -> Type {
         Type::Constructed(TypeName::Array("array", size), vec![elem_type])
     }
