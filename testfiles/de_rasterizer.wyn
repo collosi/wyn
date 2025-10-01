@@ -1,0 +1,177 @@
+
+-- Constants (changed to def for top-level, using vec3 constructors)
+def RED : vec3 = vec3 1.0f32 0.0f32 0.0f32
+def GREEN : vec3 = vec3 0.0f32 1.0f32 0.0f32
+def BLUE : vec3 = vec3 0.0f32 0.8f32 1.0f32
+def WHITE : vec3 = vec3 1.0f32 1.0f32 0.97f32
+def YELLOW : vec3 = vec3 1.0f32 1.0f32 0.0f32
+
+-- Rasterize helpers
+let line (WEIGHT:f32) (p:vec2) (p0:vec2) (p1:vec2) (w:f32) : f32 =
+  let d = [p1[0]-p0[0], p1[1]-p0[1]]
+  let denom = dot2 d d
+  let t_raw = if denom == 0.0f32 then 0.0f32 else (dot2 d [p[0]-p0[0], p[1]-p0[1]] / denom)
+  let t = clamp t_raw 0.0f32 1.0f32
+  let proj = [ p0[0] + d[0]*t, p0[1] + d[1]*t ]
+  let dist = length2 [ p[0]-proj[0], p[1]-proj[1] ]
+  let s = (if dist == 0.0f32 then 0.0f32 else (1.0f32 / dist)) * WEIGHT * w
+  in f32.min (s*s) 1.0f32
+
+let circle (WEIGHT:f32) (p:vec2) (c:vec2) (r:f32) (w:f32) : f32 =
+  let dist = f32.abs (length2 [p[0]-c[0], p[1]-c[1]]) + r
+  let s = (if dist == 0.0f32 then 0.0f32 else (1.0f32 / dist)) * WEIGHT * w
+  in f32.min (s*s) 1.0f32
+
+-- Matrices
+let getRotMatrix (a:vec3) : mat4 =
+  let s = [ f32.sin a[0], f32.sin a[1], f32.sin a[2] ]
+  let c = [ f32.cos a[0], f32.cos a[1], f32.cos a[2] ]
+  -- Columns ret[0..3], matching GLSL code:
+  let c0 : vec4 = [ c[1]*c[2],           c[1]*s[2],           -s[1],     0.0f32 ]
+  let c1 : vec4 = [ s[0]*s[1]*c[2]-c[0]*s[2],  s[0]*s[1]*s[2]+c[0]*c[2],  s[0]*c[1], 0.0f32 ]
+  let c2 : vec4 = [ c[0]*s[1]*c[2]+s[0]*s[2],  c[0]*s[1]*s[2]-s[0]*c[2],  c[0]*c[1], 0.0f32 ]
+  let c3 : vec4 = [ 0.0f32, 0.0f32, 0.0f32, 1.0f32 ]
+  in [c0,c1,c2,c3]
+
+let getPosMatrix (p:vec3) : mat4 =
+  let c0 : vec4 = [1.0f32, 0.0f32, 0.0f32, p[0]]
+  let c1 : vec4 = [0.0f32, 1.0f32, 0.0f32, p[1]]
+  let c2 : vec4 = [0.0f32, 0.0f32, 1.0f32, p[2]]
+  let c3 : vec4 = [0.0f32, 0.0f32, 0.0f32, 1.0f32]
+  in [c0,c1,c2,c3]
+
+-- utils
+let mix3 (a:vec3) (b:vec3) (c:vec3) (t:f32) : vec3 =
+  if t > 0.5f32
+  then mix3v b c (t*2.0f32 - 1.0f32)
+  else mix3v a b (t*2.0f32)
+
+let fragment (p:vec3) (iTime:f32) : vec3 =
+  let t = f32.sin(p[0]*0.8f32 + iTime*0.5f32)*0.5f32 + 0.5f32
+  let fog = f32.min (p[2]*p[2]*p[2]*400.0f32) 1.0f32
+  in map (* fog) (mix3 RED GREEN BLUE t)
+
+-- Main per-fragment function
+-- Inputs:
+--   iResolution : [w, h]
+--   iTime       : time in seconds
+--   fragCoord   : pixel coordinate [x, y]
+-- Output: vec4 color
+let main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2) : vec4 =
+  let WEIGHT = 3.0f32 / iResolution[0]
+
+  -- Normalized, centered UV with aspect correction
+  let uv0 : vec2 = [ fragCoord[0] / iResolution[0], fragCoord[1] / iResolution[1] ]
+  let uv1 : vec2 = [ uv0[0]*2.0f32 - 1.0f32, uv0[1]*2.0f32 - 1.0f32 ]
+  let uv  : vec2 = [ uv1[0] * (iResolution[0]/iResolution[1]), uv1[1] ]
+
+  let line_width = 0.4f32
+  let time = iTime * 0.31415f32
+
+  let base_col = mix3v [0.19f32,0.13f32,0.10f32] [1.0f32,1.0f32,1.0f32]
+                         (0.5f32 * f32.pow (length2 uv * 0.5f32, 2.0f32))
+  let cam = getPosMatrix [0.0f32, 0.0f32, 10.0f32]
+
+  -- #define LINEAR_ROTATION
+  let rot = getRotMatrix [ time, time*0.86f32, time*0.473f32 ]
+
+  -- Instances (first batch, 18 boxes)
+  let instA : [18]vec3 =
+    [ [ 0.0f32, 0.0f32,-1.0f32],
+      [-1.0f32, 0.0f32,-1.0f32],
+      [ 1.0f32, 0.0f32,-1.0f32],
+      [ 0.0f32, 1.0f32,-1.0f32],
+      [ 0.0f32,-1.0f32,-1.0f32],
+      [-1.0f32, 0.0f32, 0.0f32],
+      [ 1.0f32, 0.0f32, 0.0f32],
+      [ 0.0f32, 1.0f32, 0.0f32],
+      [ 0.0f32,-1.0f32, 0.0f32],
+      [-1.0f32,-1.0f32, 0.0f32],
+      [ 1.0f32, 1.0f32, 0.0f32],
+      [-1.0f32, 1.0f32, 0.0f32],
+      [ 1.0f32,-1.0f32, 0.0f32],
+      [ 0.0f32, 0.0f32, 1.0f32],
+      [-1.0f32, 0.0f32, 1.0f32],
+      [ 1.0f32, 0.0f32, 1.0f32],
+      [ 0.0f32, 1.0f32, 1.0f32],
+      [ 0.0f32,-1.0f32, 1.0f32] ]
+
+  -- Accumulate color
+  let (c_box:vec3) =
+    loop (idx = 0i32, acc = base_col) while idx < 18 do
+      let pos  = getPosMatrix (map (* 4.0f32) instA[idx])
+      let mat  : mat4 = mul_mat4 (mul_mat4 pos rot) cam
+
+      -- 8 cube corners in object space
+      let verts0 : [8]vec3 =
+        [ [-1.0f32,-1.0f32, 1.0f32],
+          [-1.0f32, 1.0f32, 1.0f32],
+          [ 1.0f32, 1.0f32, 1.0f32],
+          [ 1.0f32,-1.0f32, 1.0f32],
+          [-1.0f32,-1.0f32,-1.0f32],
+          [-1.0f32, 1.0f32,-1.0f32],
+          [ 1.0f32, 1.0f32,-1.0f32],
+          [ 1.0f32,-1.0f32,-1.0f32] ]
+
+      -- Transform & perspective
+      let verts1 : [8]vec3 =
+        let v4s = map (\v -> mul_rowvec_mat4 [v[0],v[1],v[2],1.0f32] mat) verts0
+        in map (\q ->
+                  let zinv = 1.0f32 / q[2]
+                  in [ q[0]*zinv, q[1]*zinv, zinv ])
+               v4s
+
+      -- Rasterize edges
+      let edges : [12][2]i32 =
+        [ [0,1],[1,2],[2,3],[3,0],
+          [4,5],[5,6],[6,7],[7,4],
+          [0,4],[1,5],[2,6],[3,7] ]
+
+      let i_sum =
+        f32.sum (map (\e ->
+          let a = verts1[e[0]]
+          let b = verts1[e[1]]
+          in line WEIGHT uv [a[0],a[1]] [b[0],b[1]] line_width)
+          edges)
+
+      let shade = fragment verts1[0] iTime
+      let acc' = map2 (+) acc (map (* (f32.min i_sum 1.0f32)) shade)
+      in (idx + 1, acc')
+    |> (\(_,acc) -> acc)
+
+  -- Second instances (8 circles)
+  let instB : [8]vec3 =
+    [ [-1.0f32, 1.0f32,-1.0f32],
+      [ 1.0f32, 1.0f32,-1.0f32],
+      [-1.0f32,-1.0f32,-1.0f32],
+      [ 1.0f32,-1.0f32,-1.0f32],
+      [-1.0f32, 1.0f32, 1.0f32],
+      [ 1.0f32, 1.0f32, 1.0f32],
+      [-1.0f32,-1.0f32, 1.0f32],
+      [ 1.0f32,-1.0f32, 1.0f32] ]
+
+  let c_final : vec3 =
+    loop (idx = 0i32, acc = c_box) while idx < 8 do
+      let pos = getPosMatrix (map (* 4.0f32) instB[idx])
+      let mat : mat4 = mul_mat4 (mul_mat4 pos rot) cam
+      let v4  : vec4 = mul_rowvec_mat4 [0.0f32,0.0f32,0.0f32,1.0f32] mat
+      let zinv = 1.0f32 / v4[2]
+      let vert : vec3 = [ v4[0]*zinv, v4[1]*zinv, zinv ]
+      let sh  = fragment vert iTime
+      let cov = circle WEIGHT uv [vert[0], vert[1]] (-vert[2]) line_width
+      let acc' = map2 (+) acc (map (* cov) sh)
+      in (idx + 1, acc')
+    |> (\(_,acc) -> acc)
+
+  in [ c_final[0], c_final[1], c_final[2], 1.0f32 ]
+
+-- (Optional) Example image entry point:
+-- Generate an image for a whole viewport. This mirrors ShaderToy-style dispatch.
+-- width, height are integers; time is seconds.
+entry render (width:i32) (height:i32) (time:f32) : [height][width][4]f32 =
+  let res : [2]f32 = [ f32 width, f32 height ]
+  in map (\y ->
+       map (\x ->
+         main_image res time [ f32 x, f32 (height - 1 - y) ])
+       (iota width))
+     (iota height)

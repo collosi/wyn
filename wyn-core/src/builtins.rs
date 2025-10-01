@@ -41,6 +41,12 @@ impl BuiltinManager {
         registry.insert("abs".to_string(), BuiltinType::ExtInstruction(4)); // GLSL FAbs
         registry.insert("floor".to_string(), BuiltinType::ExtInstruction(8)); // GLSL Floor
         registry.insert("ceil".to_string(), BuiltinType::ExtInstruction(9)); // GLSL Ceil
+        registry.insert("pow".to_string(), BuiltinType::ExtInstruction(26)); // GLSL Pow
+        registry.insert("exp".to_string(), BuiltinType::ExtInstruction(27)); // GLSL Exp
+        registry.insert("log".to_string(), BuiltinType::ExtInstruction(28)); // GLSL Log
+        registry.insert("min".to_string(), BuiltinType::ExtInstruction(37)); // GLSL FMin
+        registry.insert("max".to_string(), BuiltinType::ExtInstruction(40)); // GLSL FMax
+        registry.insert("clamp".to_string(), BuiltinType::ExtInstruction(43)); // GLSL FClamp
 
         // GLSL extended instructions - Geometric operations
         registry.insert("length".to_string(), BuiltinType::ExtInstruction(66)); // GLSL Length
@@ -56,8 +62,22 @@ impl BuiltinManager {
         registry.insert("inverse".to_string(), BuiltinType::ExtInstruction(34)); // GLSL MatrixInverse
 
         // Core SPIR-V instructions
-        registry.insert("dot".to_string(), BuiltinType::SpirvIntrinsic("OpDot".to_string()));
-        registry.insert("outer".to_string(), BuiltinType::SpirvIntrinsic("OpOuterProduct".to_string()));
+        registry.insert(
+            "dot".to_string(),
+            BuiltinType::SpirvIntrinsic("OpDot".to_string()),
+        );
+        registry.insert(
+            "outer".to_string(),
+            BuiltinType::SpirvIntrinsic("OpOuterProduct".to_string()),
+        );
+
+        // Convenience aliases (2D versions are same as regular, just naming convention)
+        registry.insert(
+            "dot2".to_string(),
+            BuiltinType::SpirvIntrinsic("OpDot".to_string()),
+        );
+        registry.insert("length2".to_string(), BuiltinType::ExtInstruction(66)); // Same as length
+        registry.insert("mix3v".to_string(), BuiltinType::ExtInstruction(46)); // GLSL Mix
 
         Self {
             builtin_registry: registry,
@@ -145,7 +165,8 @@ impl BuiltinManager {
                         // Result type is a matrix - for now we'll need type inference
                         // This is tricky without full type information
                         return Err(CompilerError::SpirvError(
-                            "outer product not yet fully implemented - needs matrix type support".to_string(),
+                            "outer product not yet fully implemented - needs matrix type support"
+                                .to_string(),
                         ));
                     }
                     _ => Err(CompilerError::SpirvError(format!(
@@ -176,21 +197,30 @@ impl BuiltinManager {
         let vec_type = Type::Constructed(TypeName::Str("vec"), vec![]);
 
         match name {
-            // Basic math: float -> float
-            "sin" | "cos" | "tan" | "sqrt" | "abs" | "floor" | "ceil" => {
+            // Basic math: float -> float (single arg)
+            "sin" | "cos" | "tan" | "sqrt" | "abs" | "floor" | "ceil" | "exp" | "log" => {
                 Ok((vec![float_type.clone()], float_type))
             }
+            // Basic math: (float, float) -> float
+            "pow" | "min" | "max" => Ok((vec![float_type.clone(), float_type.clone()], float_type)),
+            // clamp: (float, float, float) -> float
+            "clamp" => Ok((
+                vec![float_type.clone(), float_type.clone(), float_type.clone()],
+                float_type,
+            )),
             // Vector operations that return scalar
-            "length" => {
+            "length" | "length2" => {
                 // length(vecN) -> float (works for vec2, vec3, vec4)
                 Ok((vec![vec_type.clone()], float_type))
             }
-            "distance" | "dot" => {
+            "distance" | "dot" | "dot2" => {
                 // distance(vecN, vecN) -> float
                 // dot(vecN, vecN) -> float
                 // Works for vec2, vec3, vec4
                 Ok((vec![vec_type.clone(), vec_type.clone()], float_type))
             }
+            // mix3v: (vec3, vec3, float) -> vec3
+            "mix3v" => Ok((vec![vec_type.clone(), vec_type.clone(), float_type], vec_type)),
             // Vector operations that return vector
             "normalize" => {
                 // normalize(vecN) -> vecN (preserves type)
@@ -211,23 +241,32 @@ impl BuiltinManager {
             }
             "faceforward" => {
                 // faceforward(vecN, vecN, vecN) -> vecN
-                Ok((vec![vec_type.clone(), vec_type.clone(), vec_type.clone()], vec_type))
+                Ok((
+                    vec![vec_type.clone(), vec_type.clone(), vec_type.clone()],
+                    vec_type,
+                ))
             }
             // Matrix operations
             "determinant" => {
                 // determinant(matNxN) -> float
                 // TODO: Need matrix type support
-                Err(CompilerError::TypeError("determinant needs matrix type support".to_string()))
+                Err(CompilerError::TypeError(
+                    "determinant needs matrix type support".to_string(),
+                ))
             }
             "inverse" => {
                 // inverse(matNxN) -> matNxN
                 // TODO: Need matrix type support
-                Err(CompilerError::TypeError("inverse needs matrix type support".to_string()))
+                Err(CompilerError::TypeError(
+                    "inverse needs matrix type support".to_string(),
+                ))
             }
             "outer" => {
                 // outer(vecN, vecM) -> matNxM
                 // TODO: Need matrix type support
-                Err(CompilerError::TypeError("outer needs matrix type support".to_string()))
+                Err(CompilerError::TypeError(
+                    "outer needs matrix type support".to_string(),
+                ))
             }
             _ => Err(CompilerError::TypeError(format!("Unknown builtin: {}", name))),
         }
