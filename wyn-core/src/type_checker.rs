@@ -10,6 +10,7 @@ pub struct TypeChecker {
     scope_stack: ScopeStack<TypeScheme<TypeName>>, // Store polymorphic types
     context: Context<TypeName>,                    // Polytype unification context
     record_field_map: HashMap<(String, String), Type>, // Map (type_name, field_name) -> field_type
+    builtins: crate::builtins::BuiltinManager,     // Builtin function registry
 }
 
 impl Default for TypeChecker {
@@ -36,6 +37,7 @@ impl TypeChecker {
             scope_stack: ScopeStack::new(),
             context: Context::default(),
             record_field_map: HashMap::new(),
+            builtins: crate::builtins::BuiltinManager::new(),
         };
 
         // Load built-in functions from builtins.wyn file
@@ -288,10 +290,7 @@ impl TypeChecker {
     fn check_declaration(&mut self, decl: &Declaration) -> Result<()> {
         match decl {
             Declaration::Decl(decl_node) => {
-                debug!(
-                    "Checking {} declaration: {}",
-                    decl_node.keyword, decl_node.name
-                );
+                debug!("Checking {} declaration: {}", decl_node.keyword, decl_node.name);
                 self.check_decl(decl_node)
             }
             Declaration::Val(val_decl) => {
@@ -607,6 +606,29 @@ impl TypeChecker {
                 Ok(func_type.apply(&self.context))
             }
             Expression::FieldAccess(expr, field) => {
+                // Check if this is a qualified name (namespace.function)
+                // e.g., f32.sin where f32 is a namespace, not a variable
+                if let Expression::Identifier(name) = expr.as_ref() {
+                    // Check if this looks like a namespace (currently just "f32")
+                    let qualified_name = format!("{}.{}", name, field);
+
+                    // Check if this is a known builtin function
+                    if self.builtins.is_builtin(&qualified_name) {
+                        // Get the type signature for this builtin
+                        let (arg_types, ret_type) =
+                            self.builtins.get_builtin_type_signature(&qualified_name, None)?;
+
+                        // Build function type: arg1 -> arg2 -> ... -> ret
+                        let func_type = arg_types
+                            .into_iter()
+                            .rev()
+                            .fold(ret_type, |acc, arg_ty| Type::arrow(arg_ty, acc));
+
+                        return Ok(func_type);
+                    }
+                }
+
+                // Not a qualified name, proceed with normal field access
                 let expr_type = self.infer_expression(expr)?;
 
                 // Extract the type name from the expression type

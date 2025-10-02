@@ -103,7 +103,13 @@ impl Parser {
         else if self.check(&Token::Colon) {
             // Typed declaration: let/def name: type = value or let/def name: type (uniform)
             self.expect(Token::Colon)?;
-            let ty = Some(self.parse_type()?);
+
+            // Check if this is an attributed return type
+            let (ty, attributed_return_type) = if self.check(&Token::AttributeStart) {
+                self.parse_return_type()?
+            } else {
+                (Some(self.parse_type()?), None)
+            };
 
             // Check if this is a uniform declaration (no initializer allowed)
             let has_uniform_attr = attributes.iter().any(|attr| matches!(attr, Attribute::Uniform));
@@ -130,7 +136,7 @@ impl Parser {
                 params: vec![], // No parameters for typed declarations
                 ty,
                 return_attributes: vec![],
-                attributed_return_type: None,
+                attributed_return_type,
                 body,
             })
         } else {
@@ -368,11 +374,11 @@ impl Parser {
 
     fn parse_base_type(&mut self) -> Result<Type> {
         match self.peek() {
-            Some(Token::I32Type) => {
+            Some(Token::Identifier(name)) if name == "i32" => {
                 self.advance();
                 Ok(types::i32())
             }
-            Some(Token::F32Type) => {
+            Some(Token::Identifier(name)) if name == "f32" => {
                 self.advance();
                 Ok(types::f32())
             }
@@ -2548,5 +2554,33 @@ def fragment_main(): [4]f32 = SKY_RGBA
                 panic!("Failed to parse array literal: {:?}", e);
             }
         }
+    }
+
+    #[test]
+    fn test_parse_attributed_return_type() {
+        let input = r#"#[vertex]
+def test_vertex : #[builtin(position)] vec4 =
+  let angle = 1.0f32 in
+  let s = f32.sin angle in
+  vec4 s s 0.0f32 1.0f32"#;
+
+        expect_parse(input, |declarations| {
+            if declarations.len() != 1 {
+                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+            }
+
+            match &declarations[0] {
+                Declaration::Decl(decl) => {
+                    if decl.name != "test_vertex" {
+                        return Err(format!("Expected 'test_vertex', got '{}'", decl.name));
+                    }
+                    if decl.attributed_return_type.is_none() {
+                        return Err("Expected attributed return type".to_string());
+                    }
+                    Ok(())
+                }
+                _ => Err("Expected Decl".to_string()),
+            }
+        });
     }
 }

@@ -1,11 +1,11 @@
 mod global;
 
+use self::global::GlobalBuilder;
 use crate::ast::AttrExt;
 use crate::ast::TypeName;
 use crate::ast::*;
 use crate::builtins::BuiltinManager;
 use crate::error::{CompilerError, Result};
-use self::global::GlobalBuilder;
 use log::debug;
 use rspirv::binary::Assemble;
 use rspirv::dr::{Builder, Module as SpirvModule};
@@ -461,10 +461,7 @@ impl CodeGenerator {
         // Store for SPIR-V decoration generation
         self.uniform_globals.insert(decl.name.clone(), value);
 
-        debug!(
-            "Generated uniform variable '{}' with type {:?}",
-            decl.name, ty
-        );
+        debug!("Generated uniform variable '{}' with type {:?}", decl.name, ty);
 
         Ok(())
     }
@@ -555,11 +552,8 @@ impl CodeGenerator {
         let param_type_ids = self.prepare_params(exec_model, &decl.params)?;
 
         // Create function type - entry points return void and use output variables
-        let actual_return_type = if Self::is_attributed_tuple(return_type_ast) {
-            self.void_type
-        } else {
-            return_type_info.id
-        };
+        let actual_return_type =
+            if Self::is_attributed_tuple(return_type_ast) { self.void_type } else { return_type_info.id };
         let fn_type = self.builder.type_function(actual_return_type, param_type_ids.clone());
 
         // Create the function
@@ -680,6 +674,35 @@ impl CodeGenerator {
         let output_var = self.resolve_output_var(&attributed_type.attributes, value.type_id, exec_model)?;
         self.builder.store(output_var, value.id, None, vec![])?;
         Ok(())
+    }
+
+    /// Flatten nested Application expressions to get the base function and all arguments
+    /// For example: Application(Application(f, [x]), [y]) becomes (f, [x, y])
+    fn flatten_application<'a>(
+        &self,
+        func_expr: &'a Expression,
+        args: &'a [Expression],
+    ) -> (&'a Expression, Vec<&'a Expression>) {
+        let mut all_args = Vec::new();
+        let mut current_func = func_expr;
+
+        // Collect arguments from nested Applications
+        loop {
+            if let Expression::Application(inner_func, inner_args) = current_func {
+                // Prepend inner arguments (they come first in the application chain)
+                for arg in inner_args.iter().rev() {
+                    all_args.insert(0, arg);
+                }
+                current_func = inner_func.as_ref();
+            } else {
+                break;
+            }
+        }
+
+        // Add the final arguments
+        all_args.extend(args.iter());
+
+        (current_func, all_args)
     }
 
     fn generate_expression(&mut self, expr: &Expression) -> Result<Value> {
@@ -1053,6 +1076,46 @@ impl CodeGenerator {
             Expression::If(if_expr) => {
                 self.generate_if_then_else(&if_expr.condition, &if_expr.then_branch, &if_expr.else_branch)
             }
+            Expression::Application(func_expr, args) => {
+                // Flatten nested applications (for curried calls like f x y z)
+                let (base_func, all_args) = self.flatten_application(func_expr, args);
+
+                // Check if this is a qualified builtin call like f32.sin
+                if let Expression::FieldAccess(base_expr, method_name) = base_func {
+                    if let Expression::Identifier(namespace) = base_expr.as_ref() {
+                        let qualified_name = format!("{}.{}", namespace, method_name);
+
+                        // Check if it's a builtin
+                        if self.builtin_manager.is_builtin(&qualified_name) {
+                            // Generate arguments
+                            let mut arg_values = Vec::new();
+                            for arg in &all_args {
+                                arg_values.push(self.generate_expression(arg)?);
+                            }
+
+                            // Call the builtin
+                            return self.builtin_manager.generate_builtin_call(
+                                &mut self.builder,
+                                &qualified_name,
+                                &arg_values,
+                            );
+                        }
+                    }
+                }
+
+                // Check if it's a simple identifier - treat like FunctionCall
+                if let Expression::Identifier(func_name) = base_func {
+                    let owned_args: Vec<Expression> = all_args.iter().map(|&arg| arg.clone()).collect();
+                    return self
+                        .generate_expression(&Expression::FunctionCall(func_name.clone(), owned_args));
+                }
+
+                // General higher-order function application not yet implemented
+                Err(CompilerError::SpirvError(format!(
+                    "General higher-order function application not yet implemented: base_func = {:?}",
+                    base_func
+                )))
+            }
             Expression::ArrayIndex(array_expr, index_expr) => {
                 let array_name = match array_expr.as_ref() {
                     Expression::Identifier(name) => name,
@@ -1201,12 +1264,7 @@ impl CodeGenerator {
         self.make_composite(vty, elems)
     }
 
-    fn generate_mat_ctor(
-        &mut self,
-        cols: u32,
-        rows: u32,
-        args: &[Expression],
-    ) -> Result<Value> {
+    fn generate_mat_ctor(&mut self, cols: u32, rows: u32, args: &[Expression]) -> Result<Value> {
         // Matrix constructors can take either:
         // 1. cols*rows scalars (column-major order)
         // 2. cols column vectors
@@ -1246,7 +1304,11 @@ impl CodeGenerator {
         } else {
             Err(CompilerError::SpirvError(format!(
                 "Matrix{}x{} constructor expects {} scalars or {} column vectors, got {} args",
-                cols, rows, expected_scalars, expected_vectors, args.len()
+                cols,
+                rows,
+                expected_scalars,
+                expected_vectors,
+                args.len()
             )))
         }
     }

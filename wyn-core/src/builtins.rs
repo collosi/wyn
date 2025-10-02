@@ -33,20 +33,21 @@ impl BuiltinManager {
 
         // Register builtin functions with their implementation types
 
-        // GLSL extended instructions (GLSL.std.450) - Basic math
-        registry.insert("sin".to_string(), BuiltinType::ExtInstruction(13)); // GLSL Sin
-        registry.insert("cos".to_string(), BuiltinType::ExtInstruction(14)); // GLSL Cos
-        registry.insert("tan".to_string(), BuiltinType::ExtInstruction(15)); // GLSL Tan
-        registry.insert("sqrt".to_string(), BuiltinType::ExtInstruction(31)); // GLSL Sqrt
-        registry.insert("abs".to_string(), BuiltinType::ExtInstruction(4)); // GLSL FAbs
-        registry.insert("floor".to_string(), BuiltinType::ExtInstruction(8)); // GLSL Floor
-        registry.insert("ceil".to_string(), BuiltinType::ExtInstruction(9)); // GLSL Ceil
-        registry.insert("pow".to_string(), BuiltinType::ExtInstruction(26)); // GLSL Pow
-        registry.insert("exp".to_string(), BuiltinType::ExtInstruction(27)); // GLSL Exp
-        registry.insert("log".to_string(), BuiltinType::ExtInstruction(28)); // GLSL Log
-        registry.insert("min".to_string(), BuiltinType::ExtInstruction(37)); // GLSL FMin
-        registry.insert("max".to_string(), BuiltinType::ExtInstruction(40)); // GLSL FMax
-        registry.insert("clamp".to_string(), BuiltinType::ExtInstruction(43)); // GLSL FClamp
+        // f32 module - monomorphic functions for f32 type
+        // Following Futhark convention: no polymorphic versions, only namespaced
+        registry.insert("f32.sin".to_string(), BuiltinType::ExtInstruction(13));
+        registry.insert("f32.cos".to_string(), BuiltinType::ExtInstruction(14));
+        registry.insert("f32.tan".to_string(), BuiltinType::ExtInstruction(15));
+        registry.insert("f32.sqrt".to_string(), BuiltinType::ExtInstruction(31));
+        registry.insert("f32.abs".to_string(), BuiltinType::ExtInstruction(4));
+        registry.insert("f32.floor".to_string(), BuiltinType::ExtInstruction(8));
+        registry.insert("f32.ceil".to_string(), BuiltinType::ExtInstruction(9));
+        registry.insert("f32.pow".to_string(), BuiltinType::ExtInstruction(26));
+        registry.insert("f32.exp".to_string(), BuiltinType::ExtInstruction(27));
+        registry.insert("f32.log".to_string(), BuiltinType::ExtInstruction(28));
+        registry.insert("f32.min".to_string(), BuiltinType::ExtInstruction(37));
+        registry.insert("f32.max".to_string(), BuiltinType::ExtInstruction(40));
+        registry.insert("f32.clamp".to_string(), BuiltinType::ExtInstruction(43));
 
         // GLSL extended instructions - Geometric operations
         registry.insert("length".to_string(), BuiltinType::ExtInstruction(66)); // GLSL Length
@@ -197,14 +198,15 @@ impl BuiltinManager {
         let vec_type = Type::Constructed(TypeName::Str("vec"), vec![]);
 
         match name {
-            // Basic math: float -> float (single arg)
-            "sin" | "cos" | "tan" | "sqrt" | "abs" | "floor" | "ceil" | "exp" | "log" => {
-                Ok((vec![float_type.clone()], float_type))
+            // f32 module: float -> float (single arg)
+            "f32.sin" | "f32.cos" | "f32.tan" | "f32.sqrt" | "f32.abs" | "f32.floor" | "f32.ceil"
+            | "f32.exp" | "f32.log" => Ok((vec![float_type.clone()], float_type)),
+            // f32 module: (float, float) -> float
+            "f32.pow" | "f32.min" | "f32.max" => {
+                Ok((vec![float_type.clone(), float_type.clone()], float_type))
             }
-            // Basic math: (float, float) -> float
-            "pow" | "min" | "max" => Ok((vec![float_type.clone(), float_type.clone()], float_type)),
-            // clamp: (float, float, float) -> float
-            "clamp" => Ok((
+            // f32.clamp: (float, float, float) -> float
+            "f32.clamp" => Ok((
                 vec![float_type.clone(), float_type.clone(), float_type.clone()],
                 float_type,
             )),
@@ -281,10 +283,10 @@ mod tests {
     fn test_builtin_manager_creation() {
         let manager = BuiltinManager::new();
 
-        assert!(manager.is_builtin("sin"));
-        assert!(manager.is_builtin("cos"));
-        assert!(manager.is_builtin("tan"));
-        assert!(manager.is_builtin("sqrt"));
+        assert!(manager.is_builtin("f32.sin"));
+        assert!(manager.is_builtin("f32.cos"));
+        assert!(manager.is_builtin("f32.tan"));
+        assert!(manager.is_builtin("f32.sqrt"));
         assert!(!manager.is_builtin("unknown"));
     }
 
@@ -292,7 +294,7 @@ mod tests {
     fn test_builtin_type_signatures() {
         let manager = BuiltinManager::new();
 
-        let (args, ret) = manager.get_builtin_type_signature("sin", None).unwrap();
+        let (args, ret) = manager.get_builtin_type_signature("f32.sin", None).unwrap();
         assert_eq!(args.len(), 1);
         match &args[0] {
             Type::Constructed(TypeName::Str("float"), _) => (),

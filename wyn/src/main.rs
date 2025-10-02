@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use log::{info, error};
+use log::{error, info};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;

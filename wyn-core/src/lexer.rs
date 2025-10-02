@@ -24,10 +24,6 @@ pub enum Token {
     IntLiteral(i32),
     FloatLiteral(f32),
 
-    // Types
-    I32Type,
-    F32Type,
-
     // Operators
     Assign,
     BinOp(String), // Binary operators: +, -, *, /
@@ -79,13 +75,8 @@ fn parse_keyword(input: &str) -> IResult<&str, Token> {
     ))(input)
 }
 
-fn parse_type(input: &str) -> IResult<&str, Token> {
-    alt((
-        // Base types
-        value(Token::I32Type, tag("i32")),
-        value(Token::F32Type, tag("f32")),
-    ))(input)
-}
+// Removed parse_type - i32 and f32 are now treated as regular identifiers
+// They are only special in type position (handled by parser) and as suffixes on literals
 
 fn parse_type_variable(input: &str) -> IResult<&str, Token> {
     map(
@@ -169,7 +160,6 @@ fn parse_token(input: &str) -> IResult<&str, Token> {
         alt((
             parse_comment,
             parse_keyword,
-            parse_type,
             parse_float_literal,
             parse_type_variable,
             parse_identifier,
@@ -222,7 +212,13 @@ mod tests {
     fn test_tokenize_types() {
         let input = "i32 f32";
         let tokens = tokenize(input).unwrap();
-        assert_eq!(tokens, vec![Token::I32Type, Token::F32Type]);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("i32".to_string()),
+                Token::Identifier("f32".to_string())
+            ]
+        );
     }
 
     #[test]
@@ -281,7 +277,7 @@ mod tests {
                 Token::LeftBracket,
                 Token::IntLiteral(4),
                 Token::RightBracket,
-                Token::F32Type,
+                Token::Identifier("f32".to_string()),
             ]
         );
     }

@@ -87,10 +87,7 @@ impl GlobalBuilder {
         // Store for future lookups
         self.location_variables.insert(key, var_id);
 
-        debug!(
-            "Created {:?} location {} variable",
-            storage_class, location
-        );
+        debug!("Created {:?} location {} variable", storage_class, location);
         Ok(var_id)
     }
 
