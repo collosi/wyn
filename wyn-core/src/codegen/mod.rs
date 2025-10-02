@@ -117,6 +117,19 @@ impl CodeGenerator {
         matches!(ty, Type::Constructed(TypeName::Str("attributed_tuple"), _))
     }
 
+    /// Validate that all return types for an entry point are properly attributed
+    /// Each element must have @location or @builtin attribute
+    fn validate_entry_point_return_types(attributed_types: &[AttributedType]) -> Result<()> {
+        // Check if any type is missing attributes
+        if attributed_types.iter().any(|at| at.attributes.is_empty()) {
+            Err(CompilerError::SpirvError(
+                "Entry point return values must all be attributed with @location or @builtin".to_string()
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     fn create_fragment_inputs(&mut self) -> Result<()> {
         // Get vertex location outputs from the pipeline (if we have one)
         if let Some(pipeline) = &self.pipeline {
@@ -207,6 +220,162 @@ impl CodeGenerator {
             self.builder.constant_composite(ty, elems)
         };
         Ok(Value { id, type_id: ty })
+    }
+
+    /// Check if a function name is a composite constructor that can be used in constant expressions
+    fn is_const_composite_constructor(name: &str) -> bool {
+        name.starts_with("vec") ||   // vec2, vec3, vec4
+        name.starts_with("mat") ||   // mat2, mat3, mat4
+        name == "array"
+    }
+
+    /// Evaluate a composite constructor (vec, mat, array) as a constant
+    fn evaluate_const_composite_constructor(&mut self, func_name: &str, args: &[Expression]) -> Result<Value> {
+        if !Self::is_const_composite_constructor(func_name) {
+            return Err(CompilerError::SpirvError(format!(
+                "Unsupported constant expression: function call to {}",
+                func_name
+            )));
+        }
+
+        // Evaluate all arguments as constants
+        let mut elem_vals = Vec::new();
+        for arg in args {
+            let elem_val = self.evaluate_constant_expression(arg)?;
+            elem_vals.push(elem_val);
+        }
+
+        // Determine the composite type based on constructor name
+        if func_name.starts_with("vec") {
+            let component_count = func_name[3..].parse::<usize>()
+                .map_err(|_| CompilerError::SpirvError(format!("Invalid vector constructor: {}", func_name)))?;
+
+            if elem_vals.len() != component_count {
+                return Err(CompilerError::SpirvError(format!(
+                    "Vector constructor {} expects {} arguments, got {}",
+                    func_name, component_count, elem_vals.len()
+                )));
+            }
+
+            let vec_type = self.builder.type_vector(self.f32_type, component_count as u32);
+            let elem_ids: Vec<spirv::Word> = elem_vals.iter().map(|v| v.id).collect();
+            let const_id = self.builder.constant_composite(vec_type, elem_ids);
+
+            Ok(Value {
+                id: const_id,
+                type_id: vec_type,
+            })
+        } else if func_name.starts_with("mat") {
+            // Matrix constructors (mat2, mat3, mat4)
+            let dim = func_name[3..].parse::<usize>()
+                .map_err(|_| CompilerError::SpirvError(format!("Invalid matrix constructor: {}", func_name)))?;
+
+            // Matrices are column vectors
+            if elem_vals.len() != dim {
+                return Err(CompilerError::SpirvError(format!(
+                    "Matrix constructor {} expects {} column vectors, got {}",
+                    func_name, dim, elem_vals.len()
+                )));
+            }
+
+            // Create column vector type
+            let col_type = self.builder.type_vector(self.f32_type, dim as u32);
+            // Create matrix type
+            let mat_type = self.builder.type_matrix(col_type, dim as u32);
+            let elem_ids: Vec<spirv::Word> = elem_vals.iter().map(|v| v.id).collect();
+            let const_id = self.builder.constant_composite(mat_type, elem_ids);
+
+            Ok(Value {
+                id: const_id,
+                type_id: mat_type,
+            })
+        } else {
+            // array constructor
+            if elem_vals.is_empty() {
+                return Err(CompilerError::SpirvError(
+                    "Array constructor requires at least one element".to_string()
+                ));
+            }
+
+            let elem_type = elem_vals[0].type_id;
+            let array_type = self.builder.type_array(elem_type, elem_vals.len() as u32);
+            let elem_ids: Vec<spirv::Word> = elem_vals.iter().map(|v| v.id).collect();
+            let const_id = self.builder.constant_composite(array_type, elem_ids);
+
+            Ok(Value {
+                id: const_id,
+                type_id: array_type,
+            })
+        }
+    }
+
+    /// Evaluate a constant expression at compile time (outside function context)
+    /// Returns the SPIR-V constant value
+    fn evaluate_constant_expression(&mut self, expr: &Expression) -> Result<Value> {
+        match expr {
+            Expression::IntLiteral(n) => {
+                let const_id = self.builder.constant_bit32(self.i32_type, *n as u32);
+                Ok(Value {
+                    id: const_id,
+                    type_id: self.i32_type,
+                })
+            }
+            Expression::FloatLiteral(f) => {
+                let const_id = self.builder.constant_bit32(self.f32_type, f.to_bits());
+                Ok(Value {
+                    id: const_id,
+                    type_id: self.f32_type,
+                })
+            }
+            Expression::FunctionCall(func_name, args) => {
+                // Handle composite constructors (vec, mat, array)
+                self.evaluate_const_composite_constructor(func_name, args)
+            }
+            Expression::Application(func, args) => {
+                // Check if this is a constructor application
+                if let Expression::Identifier(func_name) = func.as_ref() {
+                    self.evaluate_const_composite_constructor(func_name, args)
+                } else {
+                    Err(CompilerError::SpirvError(
+                        "Constant expressions only support direct constructor calls".to_string()
+                    ))
+                }
+            }
+            Expression::ArrayLiteral(elems) => {
+                if elems.is_empty() {
+                    return Err(CompilerError::SpirvError(
+                        "Empty array literals not supported for constants".to_string()
+                    ));
+                }
+
+                // Evaluate all elements as constants
+                let mut elem_vals = Vec::new();
+                for elem_expr in elems {
+                    let elem_val = self.evaluate_constant_expression(elem_expr)?;
+                    elem_vals.push(elem_val);
+                }
+
+                // All elements must have the same type
+                let elem_type = elem_vals[0].type_id;
+                let elem_ids: Vec<spirv::Word> = elem_vals.iter().map(|v| v.id).collect();
+
+                // Create array type
+                let array_type = self.builder.type_array(elem_type, elem_ids.len() as u32);
+
+                // Use constant_composite for array
+                let const_id = self.builder.constant_composite(array_type, elem_ids);
+                Ok(Value {
+                    id: const_id,
+                    type_id: array_type,
+                })
+            }
+            _ => {
+                Err(CompilerError::SpirvError(format!(
+                    "Unsupported constant expression: {:?}",
+                    expr
+                )))
+            }
+        }
     }
 
     /// Generic binary operation handler that dispatches to int or float operations
@@ -470,35 +639,17 @@ impl CodeGenerator {
         ty: &Type,
         value_expr: &Expression,
     ) -> Result<()> {
-        // For global variables, allow literal constants including arrays
-        match value_expr {
-            Expression::IntLiteral(_) | Expression::FloatLiteral(_) | Expression::ArrayLiteral(_) => {
-                // Generate the constant expression value
-                let value = self.generate_expression(value_expr)?;
-
-                // Create a global variable with the correct type
-                let type_info = self.get_or_create_type(ty)?;
-                let ptr_type = self.ptr_of(StorageClass::Private, type_info.id);
-                let global_id =
-                    self.builder.variable(ptr_type, None, StorageClass::Private, Some(value.id));
-
-                let global_value = Value {
-                    id: global_id,
-                    type_id: ptr_type,
-                };
-
-                // Store in environment
-                self.environment.define_local(name.to_string(), global_value, ty.clone());
-
+        // Try to evaluate as a constant expression
+        match self.evaluate_constant_expression(value_expr) {
+            Ok(const_value) => {
+                // Successfully evaluated as a constant
+                // Store directly in the global scope (no pointer needed for constants)
+                self.environment.define_global(name.to_string(), const_value, ty.clone());
                 Ok(())
             }
-            _ => {
-                // For complex expressions, skip global variable generation
-                // In shader programming, complex calculations should be in functions
-                log::warn!(
-                    "Skipping global variable '{}' with complex initializer - use literals only for globals",
-                    name
-                );
+            Err(_) => {
+                // Not a constant expression - skip silently
+                // (only constant expressions are supported for global declarations)
                 Ok(())
             }
         }
@@ -545,12 +696,20 @@ impl CodeGenerator {
 
         let return_type_info = self.get_or_create_type(return_type_ast)?;
 
+        // Validate that return type is properly attributed
+        if let Some(attributed_returns) = &decl.attributed_return_type {
+            Self::validate_entry_point_return_types(attributed_returns)?;
+        } else {
+            return Err(CompilerError::SpirvError(
+                "Entry point must have attributed return type (e.g., (vec4 @location(0)))".to_string()
+            ));
+        }
+
         // Prepare parameters (handles both builtins and regular params)
         let param_type_ids = self.prepare_params(exec_model, &decl.params)?;
 
-        // Create function type - entry points return void and use output variables
-        let actual_return_type =
-            if Self::is_attributed_tuple(return_type_ast) { self.void_type } else { return_type_info.id };
+        // Create function type - entry points always return void and use output variables
+        let actual_return_type = self.void_type;
         let fn_type = self.builder.type_function(actual_return_type, param_type_ids.clone());
 
         // Create the function
@@ -739,8 +898,17 @@ impl CodeGenerator {
                             id: loaded_id,
                             type_id: builtin_value.type_id,
                         })
+                    } else if self.current_block.is_none() {
+                        // We're at module level - this must be a constant, return it directly
+                        Ok(value)
                     } else {
-                        // Regular variable - get its type from the binding
+                        // We're inside a function - check if this is a constant or a variable
+                        // Global constants have their Value stored directly, local variables are pointers
+
+                        // Check if this value came from the global scope by seeing if it's in the local scopes
+                        // For now, we'll use a heuristic: if the type_id matches what we expect for the type,
+                        // it's a constant; otherwise it's a pointer that needs loading
+
                         let var_type = binding.ty.as_ref()
                             .ok_or_else(|| {
                                 CompilerError::SpirvError(format!("No type info for variable: {}", name))
@@ -749,12 +917,18 @@ impl CodeGenerator {
 
                         let type_info = self.get_or_create_type(&var_type)?;
 
-                        // Load the value from the pointer
-                        let loaded_id = self.builder.load(type_info.id, None, value.id, None, vec![])?;
-                        Ok(Value {
-                            id: loaded_id,
-                            type_id: type_info.id,
-                        })
+                        // If type_id matches the expected type, it's a constant value
+                        if value.type_id == type_info.id {
+                            // It's a constant - return it directly
+                            Ok(value)
+                        } else {
+                            // It's a pointer - load from it
+                            let loaded_id = self.builder.load(type_info.id, None, value.id, None, vec![])?;
+                            Ok(Value {
+                                id: loaded_id,
+                                type_id: type_info.id,
+                            })
+                        }
                     }
                 } else {
                     Err(CompilerError::UndefinedVariable(name.clone()))
@@ -994,8 +1168,15 @@ impl CodeGenerator {
 
                 // Create a local variable for the let binding
                 let var_type = let_in.ty.clone().unwrap_or_else(|| {
-                    // For now, use i32 as default type if not specified
-                    crate::ast::types::i32()
+                    // TODO: Type checker should fill in inferred types in the AST
+                    // Currently the AST is immutable during type checking, so let-in expressions
+                    // without explicit type annotations have ty=None even after type checking.
+                    // This causes incorrect codegen (defaults to i32 instead of actual type).
+                    // Solution: Either make AST mutable or return annotated AST from type checker.
+                    panic!("BUG: let-in expression '{}' missing type annotation. \
+                            Type checker should have filled this in but AST is immutable. \
+                            Workaround: add explicit type annotation like 'let {} : type = ...'",
+                           let_in.name, let_in.name);
                 });
 
                 let type_info = self.get_or_create_type(&var_type)?;

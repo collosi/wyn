@@ -266,20 +266,7 @@ impl TypeChecker {
     }
 
     pub fn check_program(&mut self, program: &Program) -> Result<()> {
-        // First pass: collect all function declarations
-        for decl in &program.declarations {
-            if let Declaration::Decl(decl_node) = decl {
-                if decl_node.keyword == "def" && !decl_node.params.is_empty() {
-                    // This is a function definition
-                    // Create a placeholder type for this function
-                    let func_type = self.context.new_variable();
-                    let type_scheme = TypeScheme::Monotype(func_type);
-                    self.scope_stack.insert(decl_node.name.clone(), type_scheme);
-                }
-            }
-        }
-
-        // Second pass: infer types for all declarations
+        // Process declarations in order - each can only refer to preceding declarations
         for decl in &program.declarations {
             self.check_declaration(decl)?;
         }
