@@ -1,6 +1,8 @@
 mod global;
+mod scope;
 
 use self::global::GlobalBuilder;
+use self::scope::Environment;
 use crate::ast::AttrExt;
 use crate::ast::TypeName;
 use crate::ast::*;
@@ -90,8 +92,7 @@ pub struct CodeGenerator {
     builtin_manager: BuiltinManager,
     global_builder: GlobalBuilder,
     pipeline: Option<Pipeline>,
-    variable_cache: HashMap<String, Value>,
-    variable_types: HashMap<String, Type>,
+    environment: Environment, // Replaces variable_cache and variable_types with proper scoping
     function_cache: HashMap<String, spirv::Word>,
     type_cache: HashMap<Type, TypeInfo>,
     ptr_cache: HashMap<PtrKey, spirv::Word>,
@@ -160,8 +161,7 @@ impl CodeGenerator {
             builtin_manager: BuiltinManager::new(),
             global_builder: GlobalBuilder::new(),
             pipeline: None,
-            variable_cache: HashMap::new(),
-            variable_types: HashMap::new(),
+            environment: Environment::new(),
             function_cache: HashMap::new(),
             type_cache: HashMap::new(),
             ptr_cache: HashMap::new(),
@@ -325,7 +325,7 @@ impl CodeGenerator {
                     id: input_var,
                     type_id: ty_info.id,
                 };
-                self.variable_cache.insert(p.name.clone(), val);
+                self.environment.define_local(p.name.clone(), val, p.ty.clone());
                 self.builtin_inputs.insert(p.name.clone(), val);
             } else {
                 // Regular parameter - add to function signature
@@ -370,8 +370,7 @@ impl CodeGenerator {
                 id: local_var,
                 type_id: ptr_type,
             };
-            self.variable_cache.insert(p.name.clone(), value_ptr);
-            self.variable_types.insert(p.name.clone(), p.ty.clone());
+            self.environment.define_local(p.name.clone(), value_ptr, p.ty.clone());
         }
 
         Ok(())
@@ -454,9 +453,8 @@ impl CodeGenerator {
             type_id: ptr_type,
         };
 
-        // Store in variable cache so it can be referenced by other code
-        self.variable_cache.insert(decl.name.clone(), value);
-        self.variable_types.insert(decl.name.clone(), ty.clone());
+        // Store in environment so it can be referenced by other code
+        self.environment.define_local(decl.name.clone(), value, ty.clone());
 
         // Store for SPIR-V decoration generation
         self.uniform_globals.insert(decl.name.clone(), value);
@@ -489,9 +487,8 @@ impl CodeGenerator {
                     type_id: ptr_type,
                 };
 
-                // Store in variable cache
-                self.variable_cache.insert(name.to_string(), global_value);
-                self.variable_types.insert(name.to_string(), ty.clone());
+                // Store in environment
+                self.environment.define_local(name.to_string(), global_value, ty.clone());
 
                 Ok(())
             }
@@ -562,6 +559,9 @@ impl CodeGenerator {
 
         self.function_cache.insert(decl.name.clone(), function_id);
         self.current_function = Some(function_id);
+
+        // Clear local scopes for the new function
+        self.environment.clear_locals();
 
         // Create function parameters BEFORE begin_block
         let param_ids = self.create_fn_params(&param_type_ids)?;
@@ -722,11 +722,12 @@ impl CodeGenerator {
                 })
             }
             Expression::Identifier(name) => {
-                if let Some(&value) = self.variable_cache.get(name) {
-                    // Check if this is a builtin input variable (which doesn't have a type in variable_types)
+                if let Some(binding) = self.environment.lookup(name) {
+                    let value = binding.value;
+
+                    // Check if this is a builtin input variable
                     if let Some(builtin_value) = self.builtin_inputs.get(name) {
                         // For builtin inputs, we need to load from the global variable
-                        // Use the actual type from builtin_value
                         let loaded_id = self.builder.load(
                             builtin_value.type_id,
                             None,
@@ -739,12 +740,10 @@ impl CodeGenerator {
                             type_id: builtin_value.type_id,
                         })
                     } else {
-                        // Regular variable - get its type from variable_types
-                        let var_type = self
-                            .variable_types
-                            .get(name)
+                        // Regular variable - get its type from the binding
+                        let var_type = binding.ty.as_ref()
                             .ok_or_else(|| {
-                                CompilerError::SpirvError(format!("Unknown variable type for: {}", name))
+                                CompilerError::SpirvError(format!("No type info for variable: {}", name))
                             })?
                             .clone();
 
@@ -877,10 +876,10 @@ impl CodeGenerator {
 
                     // If it's an array identifier, get its type and return the size
                     if let Expression::Identifier(array_name) = array_expr {
-                        let array_type = self
-                            .variable_types
-                            .get(array_name)
+                        let binding = self.environment.lookup(array_name)
                             .ok_or_else(|| CompilerError::UndefinedVariable(array_name.clone()))?;
+                        let array_type = binding.ty.as_ref()
+                            .ok_or_else(|| CompilerError::SpirvError(format!("No type info for: {}", array_name)))?;
 
                         match array_type {
                             Type::Constructed(TypeName::Array("array", size), _) => {
@@ -1013,15 +1012,16 @@ impl CodeGenerator {
                     id: local_var,
                     type_id: ptr_type,
                 };
-                self.variable_cache.insert(let_in.name.clone(), local_value);
-                self.variable_types.insert(let_in.name.clone(), var_type);
+
+                // Push a new scope for the let binding
+                self.environment.push_scope();
+                self.environment.define_local(let_in.name.clone(), local_value, var_type);
 
                 // Generate code for the body expression
                 let result = self.generate_expression(&let_in.body)?;
 
-                // Clean up variable from cache
-                self.variable_cache.remove(&let_in.name);
-                self.variable_types.remove(&let_in.name);
+                // Pop the scope to clean up the let binding
+                self.environment.pop_scope();
 
                 Ok(result)
             }
@@ -1126,22 +1126,19 @@ impl CodeGenerator {
                     }
                 };
 
-                let array_value = if let Some(&value) = self.variable_cache.get(array_name) {
-                    value
-                } else {
-                    return Err(CompilerError::UndefinedVariable(array_name.clone()));
-                };
+                let binding = self.environment.lookup(array_name)
+                    .ok_or_else(|| CompilerError::UndefinedVariable(array_name.clone()))?;
 
-                let index = self.generate_expression(index_expr)?;
+                let array_value = binding.value;
 
-                // Get the array type
-                let array_type = self
-                    .variable_types
-                    .get(array_name)
+                // Get the array type from the binding and clone it before generate_expression
+                let array_type = binding.ty.as_ref()
                     .ok_or_else(|| {
-                        CompilerError::SpirvError(format!("Unknown array type for: {}", array_name))
+                        CompilerError::SpirvError(format!("No type info for array: {}", array_name))
                     })?
                     .clone();
+
+                let index = self.generate_expression(index_expr)?;
 
                 let element_type = match &array_type {
                     Type::Constructed(name, args)
