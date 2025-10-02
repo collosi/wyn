@@ -10,7 +10,7 @@ pub struct TypeChecker {
     scope_stack: ScopeStack<TypeScheme<TypeName>>, // Store polymorphic types
     context: Context<TypeName>,                    // Polytype unification context
     record_field_map: HashMap<(String, String), Type>, // Map (type_name, field_name) -> field_type
-    builtins: crate::builtins::BuiltinManager,     // Builtin function registry
+    builtin_registry: crate::builtin_registry::BuiltinRegistry, // Centralized builtin registry
 }
 
 impl Default for TypeChecker {
@@ -33,21 +33,18 @@ impl TypeChecker {
     }
 
     pub fn new() -> Self {
-        let mut checker = TypeChecker {
+        TypeChecker {
             scope_stack: ScopeStack::new(),
             context: Context::default(),
             record_field_map: HashMap::new(),
-            builtins: crate::builtins::BuiltinManager::new(),
-        };
-
-        // Load built-in functions from builtins.wyn file
-        if let Err(e) = checker.load_builtins() {
-            warn!("Could not load builtins: {}", e);
+            builtin_registry: crate::builtin_registry::BuiltinRegistry::new(),
         }
-
-        checker
     }
 
+    // TODO: Polymorphic builtins (map, zip, length) need special handling
+    // They should either be added to BuiltinRegistry with TypeScheme support,
+    // or kept separate with manual registration here
+    #[allow(dead_code)]
     fn load_builtins(&mut self) -> Result<()> {
         // Add builtin function types directly using manual construction
 
@@ -600,18 +597,19 @@ impl TypeChecker {
                     let qualified_name = format!("{}.{}", name, field);
 
                     // Check if this is a known builtin function
-                    if self.builtins.is_builtin(&qualified_name) {
-                        // Get the type signature for this builtin
-                        let (arg_types, ret_type) =
-                            self.builtins.get_builtin_type_signature(&qualified_name, None)?;
+                    if self.builtin_registry.is_builtin(&qualified_name) {
+                        // Get the builtin descriptor with type signature
+                        if let Some(desc) = self.builtin_registry.get(&qualified_name) {
+                            // Build function type: arg1 -> arg2 -> ... -> ret
+                            let func_type = desc.param_types
+                                .iter()
+                                .rev()
+                                .fold(desc.return_type.clone(), |acc, arg_ty| {
+                                    Type::arrow(arg_ty.clone(), acc)
+                                });
 
-                        // Build function type: arg1 -> arg2 -> ... -> ret
-                        let func_type = arg_types
-                            .into_iter()
-                            .rev()
-                            .fold(ret_type, |acc, arg_ty| Type::arrow(arg_ty, acc));
-
-                        return Ok(func_type);
+                            return Ok(func_type);
+                        }
                     }
                 }
 

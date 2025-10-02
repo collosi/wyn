@@ -6,7 +6,7 @@ use self::scope::Environment;
 use crate::ast::AttrExt;
 use crate::ast::TypeName;
 use crate::ast::*;
-use crate::builtins::BuiltinManager;
+use crate::builtin_registry::{BuiltinImpl, BuiltinRegistry, SpirvOp};
 use crate::error::{CompilerError, Result};
 use log::debug;
 use rspirv::binary::Assemble;
@@ -89,7 +89,8 @@ struct PtrKey {
 pub struct CodeGenerator {
     builder: Builder,
     module: SpirvModule,
-    builtin_manager: BuiltinManager,
+    builtin_registry: BuiltinRegistry,
+    glsl_ext_inst_id: Option<spirv::Word>, // ID for GLSL.std.450 extension
     global_builder: GlobalBuilder,
     pipeline: Option<Pipeline>,
     environment: Environment, // Replaces variable_cache and variable_types with proper scoping
@@ -171,7 +172,8 @@ impl CodeGenerator {
         let mut generator = CodeGenerator {
             module: SpirvModule::new(),
             builder,
-            builtin_manager: BuiltinManager::new(),
+            builtin_registry: BuiltinRegistry::new(),
+            glsl_ext_inst_id: None,
             global_builder: GlobalBuilder::new(),
             pipeline: None,
             environment: Environment::new(),
@@ -203,6 +205,95 @@ impl CodeGenerator {
         self.bool_type = self.builder.type_bool();
         self.i32_type = self.builder.type_int(32, 1);
         self.f32_type = self.builder.type_float(32);
+    }
+
+    /// Generate a call to a builtin function
+    fn generate_builtin_call(&mut self, name: &str, args: &[Value]) -> Result<Value> {
+        let implementation = self.builtin_registry.get(name)
+            .ok_or_else(|| CompilerError::SpirvError(format!("Unknown builtin function: {}", name)))?
+            .implementation.clone();
+
+        match &implementation {
+            BuiltinImpl::GlslExt(inst_num) => {
+                let glsl_ext_id = self.glsl_ext_inst_id.ok_or_else(|| {
+                    CompilerError::SpirvError("GLSL.std.450 extension not initialized".to_string())
+                })?;
+
+                if args.is_empty() {
+                    return Err(CompilerError::SpirvError(format!(
+                        "{} builtin requires at least one argument",
+                        name
+                    )));
+                }
+
+                // Result type is the same as the first argument for most GLSL functions
+                let result_type = args[0].type_id;
+                let arg_operands: Vec<rspirv::dr::Operand> =
+                    args.iter().map(|v| rspirv::dr::Operand::IdRef(v.id)).collect();
+
+                let result_id =
+                    self.builder.ext_inst(result_type, None, glsl_ext_id, *inst_num, arg_operands)?;
+
+                Ok(Value {
+                    id: result_id,
+                    type_id: result_type,
+                })
+            }
+            BuiltinImpl::SpirvOp(op) => self.generate_spirv_op(op, args, name),
+            BuiltinImpl::Custom(_) => Err(CompilerError::SpirvError(format!(
+                "Custom builtin implementations not yet supported: {}",
+                name
+            ))),
+        }
+    }
+
+    /// Generate code for a SPIR-V core operation
+    fn generate_spirv_op(&mut self, op: &SpirvOp, args: &[Value], name: &str) -> Result<Value> {
+        match op {
+            SpirvOp::Dot => {
+                if args.len() != 2 {
+                    return Err(CompilerError::SpirvError(
+                        "dot requires exactly 2 vector arguments".to_string(),
+                    ));
+                }
+                // Result type is the component type (f32)
+                let result_type = self.f32_type;
+                let result_id = self.builder.dot(result_type, None, args[0].id, args[1].id)?;
+                Ok(Value {
+                    id: result_id,
+                    type_id: result_type,
+                })
+            }
+            SpirvOp::FAdd => self.generate_binary_op(args, |b, rt, a, c| b.f_add(rt, None, a, c)),
+            SpirvOp::FSub => self.generate_binary_op(args, |b, rt, a, c| b.f_sub(rt, None, a, c)),
+            SpirvOp::FMul => self.generate_binary_op(args, |b, rt, a, c| b.f_mul(rt, None, a, c)),
+            SpirvOp::FDiv => self.generate_binary_op(args, |b, rt, a, c| b.f_div(rt, None, a, c)),
+            SpirvOp::IAdd => self.generate_binary_op(args, |b, rt, a, c| b.i_add(rt, None, a, c)),
+            SpirvOp::ISub => self.generate_binary_op(args, |b, rt, a, c| b.i_sub(rt, None, a, c)),
+            SpirvOp::IMul => self.generate_binary_op(args, |b, rt, a, c| b.i_mul(rt, None, a, c)),
+            _ => Err(CompilerError::SpirvError(format!(
+                "SPIR-V operation {:?} not yet implemented for builtin: {}",
+                op, name
+            ))),
+        }
+    }
+
+    /// Helper for generating binary operations
+    fn generate_binary_op<F>(&mut self, args: &[Value], op: F) -> Result<Value>
+    where
+        F: FnOnce(&mut Builder, spirv::Word, spirv::Word, spirv::Word) -> std::result::Result<spirv::Word, rspirv::dr::Error>,
+    {
+        if args.len() != 2 {
+            return Err(CompilerError::SpirvError(
+                "Binary operation requires exactly 2 arguments".to_string(),
+            ));
+        }
+        let result_type = args[0].type_id;
+        let result_id = op(&mut self.builder, result_type, args[0].id, args[1].id)?;
+        Ok(Value {
+            id: result_id,
+            type_id: result_type,
+        })
     }
 
     /// Get or create a pointer type for the given storage class and pointee type
@@ -549,8 +640,8 @@ impl CodeGenerator {
         // Try to create a pipeline from the program
         self.pipeline = Pipeline::from_program(program)?;
 
-        // Load builtin functions into the module
-        self.builtin_manager.load_builtins_into_module(&mut self.builder)?;
+        // Import GLSL.std.450 extension instruction set
+        self.glsl_ext_inst_id = Some(self.builder.ext_inst_import("GLSL.std.450"));
 
         // Process all declarations
         for decl in &program.declarations {
@@ -1092,15 +1183,15 @@ impl CodeGenerator {
                     }
                 }
                 // Check if it's a builtin function
-                else if self.builtin_manager.is_builtin(func_name) {
+                else if self.builtin_registry.is_builtin(func_name) {
                     // Generate arguments first
                     let mut arg_values = Vec::new();
                     for arg in args {
                         arg_values.push(self.generate_expression(arg)?);
                     }
 
-                    // Call the builtin through the manager
-                    self.builtin_manager.generate_builtin_call(&mut self.builder, func_name, &arg_values)
+                    // Call the builtin
+                    self.generate_builtin_call(func_name, &arg_values)
                 } else {
                     match func_name.as_str() {
                         "to_vec4_f32" => {
@@ -1267,7 +1358,7 @@ impl CodeGenerator {
                         let qualified_name = format!("{}.{}", namespace, method_name);
 
                         // Check if it's a builtin
-                        if self.builtin_manager.is_builtin(&qualified_name) {
+                        if self.builtin_registry.is_builtin(&qualified_name) {
                             // Generate arguments
                             let mut arg_values = Vec::new();
                             for arg in &all_args {
@@ -1275,11 +1366,7 @@ impl CodeGenerator {
                             }
 
                             // Call the builtin
-                            return self.builtin_manager.generate_builtin_call(
-                                &mut self.builder,
-                                &qualified_name,
-                                &arg_values,
-                            );
+                            return self.generate_builtin_call(&qualified_name, &arg_values);
                         }
                     }
                 }

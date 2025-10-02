@@ -1,7 +1,7 @@
 pub mod annotator;
 pub mod ast;
 pub mod borrow_checker;
-pub mod builtins;
+pub mod builtin_registry;
 pub mod cfg;
 pub mod cfg_nemo;
 pub mod codegen;
