@@ -299,7 +299,7 @@ impl TypeChecker {
             }
 
             // Check that the body is the placeholder (indicating no initializer was provided)
-            if !matches!(decl.body, Expression::Identifier(ref id) if id == "__uniform_placeholder") {
+            if !matches!(decl.body.kind, ExprKind::Identifier(ref id) if id == "__uniform_placeholder") {
                 return Err(CompilerError::TypeError(format!(
                     "Uniform declaration '{}' cannot have an initializer value. Uniforms must be provided by the host application.",
                     decl.name
@@ -398,10 +398,10 @@ impl TypeChecker {
     }
 
     fn infer_expression(&mut self, expr: &Expression) -> Result<Type> {
-        match expr {
-            Expression::IntLiteral(_) => Ok(types::i32()),
-            Expression::FloatLiteral(_) => Ok(types::f32()),
-            Expression::Identifier(name) => {
+        match &expr.kind {
+            ExprKind::IntLiteral(_) => Ok(types::i32()),
+            ExprKind::FloatLiteral(_) => Ok(types::f32()),
+            ExprKind::Identifier(name) => {
                 let type_scheme = self.scope_stack.lookup(name).ok_or_else(|| {
                     debug!("Variable lookup failed for '{}'", name);
                     CompilerError::UndefinedVariable(name.clone())
@@ -409,7 +409,7 @@ impl TypeChecker {
                 // Instantiate the type scheme to get a concrete type
                 Ok(type_scheme.instantiate(&mut self.context))
             }
-            Expression::ArrayLiteral(elements) => {
+            ExprKind::ArrayLiteral(elements) => {
                 if elements.is_empty() {
                     return Err(CompilerError::TypeError(
                         "Cannot infer type of empty array".to_string(),
@@ -428,7 +428,7 @@ impl TypeChecker {
 
                 Ok(types::sized_array(elements.len(), first_type))
             }
-            Expression::ArrayIndex(array_expr, _index_expr) => {
+            ExprKind::ArrayIndex(array_expr, _index_expr) => {
                 let array_type = self.infer_expression(array_expr)?;
                 Ok(match array_type {
                     Type::Constructed(name, args)
@@ -444,7 +444,7 @@ impl TypeChecker {
                     }
                 })
             }
-            Expression::BinaryOp(op, left, right) => {
+            ExprKind::BinaryOp(op, left, right) => {
                 let left_type = self.infer_expression(left)?;
                 let right_type = self.infer_expression(right)?;
 
@@ -476,7 +476,7 @@ impl TypeChecker {
 
                 Ok(return_type)
             }
-            Expression::FunctionCall(func_name, args) => {
+            ExprKind::FunctionCall(func_name, args) => {
                 // Get function type scheme and instantiate it
                 let type_scheme = self
                     .scope_stack
@@ -505,13 +505,13 @@ impl TypeChecker {
 
                 Ok(func_type.apply(&self.context))
             }
-            Expression::Tuple(elements) => {
+            ExprKind::Tuple(elements) => {
                 let elem_types: Result<Vec<Type>> =
                     elements.iter().map(|e| self.infer_expression(e)).collect();
 
                 Ok(types::tuple(elem_types?))
             }
-            Expression::Lambda(lambda) => {
+            ExprKind::Lambda(lambda) => {
                 // Push new scope for lambda parameters
                 self.scope_stack.push_scope();
 
@@ -540,7 +540,7 @@ impl TypeChecker {
 
                 Ok(func_type)
             }
-            Expression::LetIn(let_in) => {
+            ExprKind::LetIn(let_in) => {
                 // Infer type of the value expression
                 let value_type = self.infer_expression(&let_in.value)?;
 
@@ -568,7 +568,7 @@ impl TypeChecker {
 
                 Ok(body_type)
             }
-            Expression::Application(func, args) => {
+            ExprKind::Application(func, args) => {
                 let mut func_type = self.infer_expression(func)?;
 
                 // Apply function to each argument
@@ -592,10 +592,10 @@ impl TypeChecker {
 
                 Ok(func_type.apply(&self.context))
             }
-            Expression::FieldAccess(expr, field) => {
+            ExprKind::FieldAccess(expr, field) => {
                 // Check if this is a qualified name (namespace.function)
                 // e.g., f32.sin where f32 is a namespace, not a variable
-                if let Expression::Identifier(name) = expr.as_ref() {
+                if let ExprKind::Identifier(name) = &expr.kind {
                     // Check if this looks like a namespace (currently just "f32")
                     let qualified_name = format!("{}.{}", name, field);
 
@@ -639,7 +639,7 @@ impl TypeChecker {
                     ))),
                 }
             }
-            Expression::If(if_expr) => {
+            ExprKind::If(if_expr) => {
                 // Infer condition type - should be bool
                 let condition_ty = self.infer_expression(&if_expr.condition)?;
                 let bool_ty = Type::Constructed(TypeName::Str("bool"), vec![]);

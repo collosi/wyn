@@ -312,28 +312,28 @@ impl CodeGenerator {
     /// Evaluate a constant expression at compile time (outside function context)
     /// Returns the SPIR-V constant value
     fn evaluate_constant_expression(&mut self, expr: &Expression) -> Result<Value> {
-        match expr {
-            Expression::IntLiteral(n) => {
+        match &expr.kind {
+            ExprKind::IntLiteral(n) => {
                 let const_id = self.builder.constant_bit32(self.i32_type, *n as u32);
                 Ok(Value {
                     id: const_id,
                     type_id: self.i32_type,
                 })
             }
-            Expression::FloatLiteral(f) => {
+            ExprKind::FloatLiteral(f) => {
                 let const_id = self.builder.constant_bit32(self.f32_type, f.to_bits());
                 Ok(Value {
                     id: const_id,
                     type_id: self.f32_type,
                 })
             }
-            Expression::FunctionCall(func_name, args) => {
+            ExprKind::FunctionCall(func_name, args) => {
                 // Handle composite constructors (vec, mat, array)
                 self.evaluate_const_composite_constructor(func_name, args)
             }
-            Expression::Application(func, args) => {
+            ExprKind::Application(func, args) => {
                 // Check if this is a constructor application
-                if let Expression::Identifier(func_name) = func.as_ref() {
+                if let ExprKind::Identifier(func_name) = &func.kind {
                     self.evaluate_const_composite_constructor(func_name, args)
                 } else {
                     Err(CompilerError::SpirvError(
@@ -341,7 +341,7 @@ impl CodeGenerator {
                     ))
                 }
             }
-            Expression::ArrayLiteral(elems) => {
+            ExprKind::ArrayLiteral(elems) => {
                 if elems.is_empty() {
                     return Err(CompilerError::SpirvError(
                         "Empty array literals not supported for constants".to_string()
@@ -847,7 +847,7 @@ impl CodeGenerator {
 
         // Collect arguments from nested Applications
         loop {
-            if let Expression::Application(inner_func, inner_args) = current_func {
+            if let ExprKind::Application(inner_func, inner_args) = &current_func.kind {
                 // Prepend inner arguments (they come first in the application chain)
                 for arg in inner_args.iter().rev() {
                     all_args.insert(0, arg);
@@ -865,22 +865,22 @@ impl CodeGenerator {
     }
 
     fn generate_expression(&mut self, expr: &Expression) -> Result<Value> {
-        match expr {
-            Expression::IntLiteral(n) => {
+        match &expr.kind {
+            ExprKind::IntLiteral(n) => {
                 let const_id = self.builder.constant_bit32(self.i32_type, *n as u32);
                 Ok(Value {
                     id: const_id,
                     type_id: self.i32_type,
                 })
             }
-            Expression::FloatLiteral(f) => {
+            ExprKind::FloatLiteral(f) => {
                 let const_id = self.builder.constant_bit32(self.f32_type, f.to_bits());
                 Ok(Value {
                     id: const_id,
                     type_id: self.f32_type,
                 })
             }
-            Expression::Identifier(name) => {
+            ExprKind::Identifier(name) => {
                 if let Some(binding) = self.environment.lookup(name) {
                     let value = binding.value;
 
@@ -934,7 +934,7 @@ impl CodeGenerator {
                     Err(CompilerError::UndefinedVariable(name.clone()))
                 }
             }
-            Expression::BinaryOp(op, left, right) => {
+            ExprKind::BinaryOp(op, left, right) => {
                 let left_val = self.generate_expression(left)?;
                 let right_val = self.generate_expression(right)?;
 
@@ -1036,7 +1036,7 @@ impl CodeGenerator {
                     ))),
                 }
             }
-            Expression::FunctionCall(func_name, args) => {
+            ExprKind::FunctionCall(func_name, args) => {
                 // Handle length as a compiler intrinsic
                 if func_name == "length" {
                     if args.len() != 1 {
@@ -1049,7 +1049,7 @@ impl CodeGenerator {
                     let array_expr = &args[0];
 
                     // If it's an array identifier, get its type and return the size
-                    if let Expression::Identifier(array_name) = array_expr {
+                    if let ExprKind::Identifier(array_name) = &array_expr.kind {
                         let binding = self.environment.lookup(array_name)
                             .ok_or_else(|| CompilerError::UndefinedVariable(array_name.clone()))?;
                         let array_type = binding.ty.as_ref()
@@ -1077,7 +1077,7 @@ impl CodeGenerator {
                         }
                     } else {
                         // For array literals, count the elements
-                        if let Expression::ArrayLiteral(elements) = array_expr {
+                        if let ExprKind::ArrayLiteral(elements) = &array_expr.kind {
                             let const_id =
                                 self.builder.constant_bit32(self.i32_type, elements.len() as u32);
                             Ok(Value {
@@ -1137,7 +1137,7 @@ impl CodeGenerator {
                     }
                 }
             }
-            Expression::Tuple(elements) => {
+            ExprKind::Tuple(elements) => {
                 // Generate values for all tuple elements
                 let mut element_values = Vec::new();
                 let mut element_type_ids = Vec::new();
@@ -1162,7 +1162,7 @@ impl CodeGenerator {
                     self.make_composite(struct_type, element_values)
                 }
             }
-            Expression::LetIn(let_in) => {
+            ExprKind::LetIn(let_in) => {
                 // Generate code for the value expression
                 let value = self.generate_expression(&let_in.value)?;
 
@@ -1206,7 +1206,7 @@ impl CodeGenerator {
 
                 Ok(result)
             }
-            Expression::FieldAccess(expr, field) => {
+            ExprKind::FieldAccess(expr, field) => {
                 let record_value = self.generate_expression(expr)?;
 
                 // Map field name to vector component index (for built-in vector types)
@@ -1227,7 +1227,7 @@ impl CodeGenerator {
                 let elem_ty = self.element_type_of_vector(record_value.type_id);
                 self.extract_component(record_value, elem_ty, component_index)
             }
-            Expression::ArrayLiteral(elements) => {
+            ExprKind::ArrayLiteral(elements) => {
                 if elements.is_empty() {
                     return Err(CompilerError::SpirvError(
                         "Empty array literals not supported".to_string(),
@@ -1254,16 +1254,16 @@ impl CodeGenerator {
                 // Build the array
                 self.make_composite(array_type, element_values)
             }
-            Expression::If(if_expr) => {
+            ExprKind::If(if_expr) => {
                 self.generate_if_then_else(&if_expr.condition, &if_expr.then_branch, &if_expr.else_branch)
             }
-            Expression::Application(func_expr, args) => {
+            ExprKind::Application(func_expr, args) => {
                 // Flatten nested applications (for curried calls like f x y z)
                 let (base_func, all_args) = self.flatten_application(func_expr, args);
 
                 // Check if this is a qualified builtin call like f32.sin
-                if let Expression::FieldAccess(base_expr, method_name) = base_func {
-                    if let Expression::Identifier(namespace) = base_expr.as_ref() {
+                if let ExprKind::FieldAccess(base_expr, method_name) = &base_func.kind {
+                    if let ExprKind::Identifier(namespace) = &base_expr.kind {
                         let qualified_name = format!("{}.{}", namespace, method_name);
 
                         // Check if it's a builtin
@@ -1285,10 +1285,13 @@ impl CodeGenerator {
                 }
 
                 // Check if it's a simple identifier - treat like FunctionCall
-                if let Expression::Identifier(func_name) = base_func {
+                if let ExprKind::Identifier(func_name) = &base_func.kind {
                     let owned_args: Vec<Expression> = all_args.iter().map(|&arg| arg.clone()).collect();
-                    return self
-                        .generate_expression(&Expression::FunctionCall(func_name.clone(), owned_args));
+                    let temp_expr = Expression {
+                        h: Header { id: NodeId(0) }, // Temporary node ID for codegen
+                        kind: ExprKind::FunctionCall(func_name.clone(), owned_args)
+                    };
+                    return self.generate_expression(&temp_expr);
                 }
 
                 // General higher-order function application not yet implemented
@@ -1297,9 +1300,9 @@ impl CodeGenerator {
                     base_func
                 )))
             }
-            Expression::ArrayIndex(array_expr, index_expr) => {
-                let array_name = match array_expr.as_ref() {
-                    Expression::Identifier(name) => name,
+            ExprKind::ArrayIndex(array_expr, index_expr) => {
+                let array_name = match &array_expr.kind {
+                    ExprKind::Identifier(name) => name,
                     _ => {
                         return Err(CompilerError::SpirvError(
                             "Only variable array indexing supported".to_string(),

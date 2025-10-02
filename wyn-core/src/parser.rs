@@ -5,11 +5,24 @@ use crate::lexer::Token;
 pub struct Parser {
     tokens: Vec<Token>,
     current: usize,
+    node_counter: NodeCounter,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, current: 0 }
+        Parser {
+            tokens,
+            current: 0,
+            node_counter: NodeCounter::new(),
+        }
+    }
+
+    pub fn new_with_counter(tokens: Vec<Token>, node_counter: NodeCounter) -> Self {
+        Parser {
+            tokens,
+            current: 0,
+            node_counter,
+        }
     }
 
     pub fn parse(&mut self) -> Result<Program> {
@@ -122,7 +135,7 @@ impl Parser {
                     ));
                 }
                 // Use a placeholder expression for uniforms
-                Expression::Identifier("__uniform_placeholder".to_string())
+                self.node_counter.mk_node(ExprKind::Identifier("__uniform_placeholder".to_string()))
             } else {
                 // Regular typed declaration requires an initializer
                 self.expect(Token::Assign)?;
@@ -526,7 +539,11 @@ impl Parser {
             let right = self.parse_binary_expression_with_precedence(next_min_precedence)?;
 
             // Build the binary operation
-            left = Expression::BinaryOp(BinaryOp { op: op_string }, Box::new(left), Box::new(right));
+            left = self.node_counter.mk_node(ExprKind::BinaryOp(
+                BinaryOp { op: op_string },
+                Box::new(left),
+                Box::new(right),
+            ));
         }
 
         Ok(left)
@@ -559,19 +576,19 @@ impl Parser {
             let arg = self.parse_postfix_expression()?;
 
             // Convert to FunctionCall or Application
-            match expr {
-                Expression::Identifier(name) => {
+            match expr.kind {
+                ExprKind::Identifier(name) => {
                     // First argument: convert identifier to function call
-                    expr = Expression::FunctionCall(name, vec![arg]);
+                    expr = self.node_counter.mk_node(ExprKind::FunctionCall(name, vec![arg]));
                 }
-                Expression::FunctionCall(name, mut args) => {
+                ExprKind::FunctionCall(name, mut args) => {
                     // Additional arguments: extend existing function call
                     args.push(arg);
-                    expr = Expression::FunctionCall(name, args);
+                    expr = self.node_counter.mk_node(ExprKind::FunctionCall(name, args));
                 }
                 _ => {
                     // Higher-order function application: use Application node
-                    expr = Expression::Application(Box::new(expr), vec![arg]);
+                    expr = self.node_counter.mk_node(ExprKind::Application(Box::new(expr), vec![arg]));
                 }
             }
         }
@@ -603,14 +620,14 @@ impl Parser {
                     self.advance();
                     let index = self.parse_expression()?;
                     self.expect(Token::RightBracket)?;
-                    expr = Expression::ArrayIndex(Box::new(expr), Box::new(index));
+                    expr = self.node_counter.mk_node(ExprKind::ArrayIndex(Box::new(expr), Box::new(index)));
                 }
                 Some(Token::Dot) => {
                     // Field access (e.g., v.x, v.y, v.z, v.w)
                     self.advance();
                     if let Some(Token::Identifier(field_name)) = self.peek().cloned() {
                         self.advance();
-                        expr = Expression::FieldAccess(Box::new(expr), field_name);
+                        expr = self.node_counter.mk_node(ExprKind::FieldAccess(Box::new(expr), field_name));
                     } else {
                         return Err(CompilerError::ParseError(
                             "Expected field name after '.'".to_string(),
@@ -633,7 +650,7 @@ impl Parser {
                     }
 
                     self.expect(Token::RightParen)?;
-                    expr = Expression::Application(Box::new(expr), args);
+                    expr = self.node_counter.mk_node(ExprKind::Application(Box::new(expr), args));
                 }
                 _ => break,
             }
@@ -647,17 +664,17 @@ impl Parser {
             Some(Token::IntLiteral(n)) => {
                 let n = *n;
                 self.advance();
-                Ok(Expression::IntLiteral(n))
+                Ok(self.node_counter.mk_node(ExprKind::IntLiteral(n)))
             }
             Some(Token::FloatLiteral(f)) => {
                 let f = *f;
                 self.advance();
-                Ok(Expression::FloatLiteral(f))
+                Ok(self.node_counter.mk_node(ExprKind::FloatLiteral(f)))
             }
             Some(Token::Identifier(name)) => {
                 let name = name.clone();
                 self.advance();
-                Ok(Expression::Identifier(name))
+                Ok(self.node_counter.mk_node(ExprKind::Identifier(name)))
             }
             Some(Token::LeftBracket) => self.parse_array_literal(),
             Some(Token::LeftParen) => {
@@ -666,7 +683,7 @@ impl Parser {
                 // Check for empty tuple
                 if self.check(&Token::RightParen) {
                     self.advance();
-                    return Ok(Expression::Tuple(vec![]));
+                    return Ok(self.node_counter.mk_node(ExprKind::Tuple(vec![])));
                 }
 
                 // Parse first expression
@@ -684,7 +701,7 @@ impl Parser {
                         elements.push(self.parse_expression()?);
                     }
                     self.expect(Token::RightParen)?;
-                    Ok(Expression::Tuple(elements))
+                    Ok(self.node_counter.mk_node(ExprKind::Tuple(elements)))
                 } else {
                     // Just a parenthesized expression
                     self.expect(Token::RightParen)?;
@@ -713,7 +730,7 @@ impl Parser {
         }
 
         self.expect(Token::RightBracket)?;
-        Ok(Expression::ArrayLiteral(elements))
+        Ok(self.node_counter.mk_node(ExprKind::ArrayLiteral(elements)))
     }
 
     fn parse_lambda(&mut self) -> Result<Expression> {
@@ -759,11 +776,11 @@ impl Parser {
         // Parse body expression
         let body = Box::new(self.parse_expression()?);
 
-        Ok(Expression::Lambda(LambdaExpr {
+        Ok(self.node_counter.mk_node(ExprKind::Lambda(LambdaExpr {
             params,
             return_type,
             body,
-        }))
+        })))
     }
 
     fn parse_let_in(&mut self) -> Result<Expression> {
@@ -785,12 +802,12 @@ impl Parser {
         self.expect(Token::In)?;
         let body = Box::new(self.parse_expression()?);
 
-        Ok(Expression::LetIn(LetInExpr {
+        Ok(self.node_counter.mk_node(ExprKind::LetIn(LetInExpr {
             name,
             ty,
             value,
             body,
-        }))
+        })))
     }
 
     fn parse_if_then_else(&mut self) -> Result<Expression> {
@@ -803,11 +820,11 @@ impl Parser {
         self.expect(Token::Else)?;
         let else_branch = Box::new(self.parse_expression()?);
 
-        Ok(Expression::If(IfExpr {
+        Ok(self.node_counter.mk_node(ExprKind::If(IfExpr {
             condition,
             then_branch,
             else_branch,
-        }))
+        })))
     }
 
     // Helper methods
@@ -925,7 +942,7 @@ mod tests {
                     if decl.ty != Some(crate::ast::types::i32()) {
                         return Err(format!("Expected i32 type, got {:?}", decl.ty));
                     }
-                    if decl.body != Expression::IntLiteral(42) {
+                    if decl.body.kind != ExprKind::IntLiteral(42) {
                         return Err(format!("Expected IntLiteral(42), got {:?}", decl.body));
                     }
                     Ok(())
@@ -1052,12 +1069,12 @@ mod tests {
                 return Err(format!("Expected 1 declaration, got {}", declarations.len()));
             }
             match &declarations[0] {
-                Declaration::Decl(decl) => match &decl.body {
-                    Expression::ArrayIndex(arr, idx) => {
-                        if **arr != Expression::Identifier("arr".to_string()) {
+                Declaration::Decl(decl) => match &decl.body.kind {
+                    ExprKind::ArrayIndex(arr, idx) => {
+                        if arr.kind != ExprKind::Identifier("arr".to_string()) {
                             return Err(format!("Expected array identifier 'arr', got {:?}", **arr));
                         }
-                        if **idx != Expression::IntLiteral(0) {
+                        if idx.kind != ExprKind::IntLiteral(0) {
                             return Err(format!("Expected index 0, got {:?}", **idx));
                         }
                         Ok(())
@@ -1076,12 +1093,12 @@ mod tests {
                 return Err(format!("Expected 1 declaration, got {}", declarations.len()));
             }
             match &declarations[0] {
-                Declaration::Decl(decl) => match &decl.body {
-                    Expression::BinaryOp(op, left, right) if op.op == "/" => {
-                        if **left != Expression::FloatLiteral(135.0) {
+                Declaration::Decl(decl) => match &decl.body.kind {
+                    ExprKind::BinaryOp(op, left, right) if op.op == "/" => {
+                        if left.kind != ExprKind::FloatLiteral(135.0) {
                             return Err(format!("Expected left operand 135.0, got {:?}", **left));
                         }
-                        if **right != Expression::FloatLiteral(255.0) {
+                        if right.kind != ExprKind::FloatLiteral(255.0) {
                             return Err(format!("Expected right operand 255.0, got {:?}", **right));
                         }
                         Ok(())
@@ -1148,10 +1165,10 @@ mod tests {
             match &declarations[0] {
                 Declaration::Decl(decl) => {
                     // The outermost operation should be the last + (left-associative)
-                    match &decl.body {
-                        Expression::BinaryOp(outer_op, outer_left, outer_right) if outer_op.op == "+" => {
+                    match &decl.body.kind {
+                        ExprKind::BinaryOp(outer_op, outer_left, outer_right) if outer_op.op == "+" => {
                             // Right side should be 'f'
-                            if !matches!(**outer_right, Expression::Identifier(ref name) if name == "f") {
+                            if !matches!(outer_right.kind, ExprKind::Identifier(ref name) if name == "f") {
                                 return Err(format!(
                                     "Expected right side to be 'f', got {:?}",
                                     outer_right
@@ -1159,21 +1176,21 @@ mod tests {
                             }
 
                             // Left side should be (a + (b * c)) - (d / e)
-                            match &**outer_left {
-                                Expression::BinaryOp(sub_op, sub_left, sub_right) if sub_op.op == "-" => {
+                            match &outer_left.kind {
+                                ExprKind::BinaryOp(sub_op, sub_left, sub_right) if sub_op.op == "-" => {
                                     // Right side of subtraction should be (d / e)
-                                    match &**sub_right {
-                                        Expression::BinaryOp(div_op, div_left, div_right)
+                                    match &sub_right.kind {
+                                        ExprKind::BinaryOp(div_op, div_left, div_right)
                                             if div_op.op == "/" =>
                                         {
-                                            if !matches!(**div_left, Expression::Identifier(ref name) if name == "d")
+                                            if !matches!(div_left.kind, ExprKind::Identifier(ref name) if name == "d")
                                             {
                                                 return Err(format!(
                                                     "Expected 'd' in division left, got {:?}",
                                                     div_left
                                                 ));
                                             }
-                                            if !matches!(**div_right, Expression::Identifier(ref name) if name == "e")
+                                            if !matches!(div_right.kind, ExprKind::Identifier(ref name) if name == "e")
                                             {
                                                 return Err(format!(
                                                     "Expected 'e' in division right, got {:?}",
@@ -1190,11 +1207,11 @@ mod tests {
                                     }
 
                                     // Left side of subtraction should be a + (b * c)
-                                    match &**sub_left {
-                                        Expression::BinaryOp(add_op, add_left, add_right)
+                                    match &sub_left.kind {
+                                        ExprKind::BinaryOp(add_op, add_left, add_right)
                                             if add_op.op == "+" =>
                                         {
-                                            if !matches!(**add_left, Expression::Identifier(ref name) if name == "a")
+                                            if !matches!(add_left.kind, ExprKind::Identifier(ref name) if name == "a")
                                             {
                                                 return Err(format!(
                                                     "Expected 'a' on left of first addition, got {:?}",
@@ -1203,18 +1220,18 @@ mod tests {
                                             }
 
                                             // Right side should be (b * c)
-                                            match &**add_right {
-                                                Expression::BinaryOp(mul_op, mul_left, mul_right)
+                                            match &add_right.kind {
+                                                ExprKind::BinaryOp(mul_op, mul_left, mul_right)
                                                     if mul_op.op == "*" =>
                                                 {
-                                                    if !matches!(**mul_left, Expression::Identifier(ref name) if name == "b")
+                                                    if !matches!(mul_left.kind, ExprKind::Identifier(ref name) if name == "b")
                                                     {
                                                         return Err(format!(
                                                             "Expected 'b' in multiplication left, got {:?}",
                                                             mul_left
                                                         ));
                                                     }
-                                                    if !matches!(**mul_right, Expression::Identifier(ref name) if name == "c")
+                                                    if !matches!(mul_right.kind, ExprKind::Identifier(ref name) if name == "c")
                                                     {
                                                         return Err(format!(
                                                             "Expected 'c' in multiplication right, got {:?}",
@@ -1654,8 +1671,8 @@ mod tests {
                     if decl.name != "f" {
                         return Err(format!("Expected name 'f', got '{}'", decl.name));
                     }
-                    match &decl.body {
-                        Expression::Lambda(lambda) => {
+                    match &decl.body.kind {
+                        ExprKind::Lambda(lambda) => {
                             if lambda.params.len() != 1 {
                                 return Err(format!(
                                     "Expected 1 lambda param, got {}",
@@ -1680,8 +1697,8 @@ mod tests {
                                     lambda.return_type
                                 ));
                             }
-                            match lambda.body.as_ref() {
-                                Expression::Identifier(name) => {
+                            match lambda.body.kind {
+                                ExprKind::Identifier(ref name) => {
                                     if name != "x" {
                                         return Err(format!(
                                             "Expected identifier 'x' in lambda body, got '{}'",
@@ -1767,8 +1784,8 @@ mod tests {
                 return Err(format!("Expected 1 declaration, got {}", declarations.len()));
             }
             match &declarations[0] {
-                Declaration::Decl(decl) => match &decl.body {
-                    Expression::Lambda(lambda) => {
+                Declaration::Decl(decl) => match &decl.body.kind {
+                    ExprKind::Lambda(lambda) => {
                         if lambda.params.len() != 1 {
                             return Err(format!("Expected 1 lambda param, got {}", lambda.params.len()));
                         }
@@ -1790,8 +1807,8 @@ mod tests {
                                 lambda.return_type
                             ));
                         }
-                        match lambda.body.as_ref() {
-                            Expression::Identifier(name) => {
+                        match lambda.body.kind {
+                            ExprKind::Identifier(ref name) => {
                                 if name != "x" {
                                     return Err(format!(
                                         "Expected identifier 'x' in lambda body, got '{}'",
@@ -1822,8 +1839,8 @@ mod tests {
                 return Err(format!("Expected 1 declaration, got {}", declarations.len()));
             }
             match &declarations[0] {
-                Declaration::Decl(decl) => match &decl.body {
-                    Expression::Lambda(lambda) => {
+                Declaration::Decl(decl) => match &decl.body.kind {
+                    ExprKind::Lambda(lambda) => {
                         if lambda.params.len() != 2 {
                             return Err(format!("Expected 2 lambda params, got {}", lambda.params.len()));
                         }
@@ -1870,10 +1887,10 @@ mod tests {
                 return Err(format!("Expected 1 declaration, got {}", declarations.len()));
             }
             match &declarations[0] {
-                Declaration::Decl(decl) => match &decl.body {
-                    Expression::Application(func, args) => {
-                        match func.as_ref() {
-                            Expression::Identifier(name) => {
+                Declaration::Decl(decl) => match &decl.body.kind {
+                    ExprKind::Application(func, args) => {
+                        match func.kind {
+                            ExprKind::Identifier(ref name) => {
                                 if name != "f" {
                                     return Err(format!(
                                         "Expected function identifier 'f', got '{}'",
@@ -1886,8 +1903,8 @@ mod tests {
                         if args.len() != 2 {
                             return Err(format!("Expected 2 arguments, got {}", args.len()));
                         }
-                        match &args[0] {
-                            Expression::IntLiteral(n) => {
+                        match &args[0].kind {
+                            ExprKind::IntLiteral(n) => {
                                 if *n != 42 {
                                     return Err(format!("Expected first argument 42, got {}", n));
                                 }
@@ -1899,8 +1916,8 @@ mod tests {
                                 ));
                             }
                         }
-                        match &args[1] {
-                            Expression::IntLiteral(n) => {
+                        match &args[1].kind {
+                            ExprKind::IntLiteral(n) => {
                                 if *n != 24 {
                                     return Err(format!("Expected second argument 24, got {}", n));
                                 }
@@ -2065,11 +2082,11 @@ def fragment_main(): [4]f32 = SKY_RGBA
             match &declarations[0] {
                 Declaration::Decl(decl) => {
                     assert_eq!(decl.name, "x");
-                    match &decl.body {
-                        Expression::FieldAccess(expr, field) => {
+                    match &decl.body.kind {
+                        ExprKind::FieldAccess(expr, field) => {
                             assert_eq!(field, "x");
-                            match expr.as_ref() {
-                                Expression::Identifier(name) => {
+                            match expr.kind {
+                                ExprKind::Identifier(ref name) => {
                                     if name == "v" {
                                         Ok(())
                                     } else {
@@ -2094,8 +2111,8 @@ def fragment_main(): [4]f32 = SKY_RGBA
             match &declarations[0] {
                 Declaration::Decl(decl) => {
                     assert_eq!(decl.name, "x");
-                    match &decl.body {
-                        Expression::Identifier(name) => {
+                    match &decl.body.kind {
+                        ExprKind::Identifier(name) => {
                             if name == "y" {
                                 Ok(())
                             } else {
@@ -2122,8 +2139,8 @@ def fragment_main(): [4]f32 = SKY_RGBA
                     Declaration::Decl(decl) => {
                         assert_eq!(decl.name, "v");
                         // Body should be a function call: vec3 1.0f32 2.0f32 3.0f32
-                        match &decl.body {
-                            Expression::FunctionCall(func_name, args) => {
+                        match &decl.body.kind {
+                            ExprKind::FunctionCall(func_name, args) => {
                                 assert_eq!(func_name, "vec3");
                                 assert_eq!(args.len(), 3);
                             }
@@ -2142,11 +2159,11 @@ def fragment_main(): [4]f32 = SKY_RGBA
                 match &declarations[1] {
                     Declaration::Decl(decl) => {
                         assert_eq!(decl.name, "x");
-                        match &decl.body {
-                            Expression::FieldAccess(expr, field) => {
+                        match &decl.body.kind {
+                            ExprKind::FieldAccess(expr, field) => {
                                 assert_eq!(field, "x");
-                                match expr.as_ref() {
-                                    Expression::Identifier(name) => {
+                                match expr.kind {
+                                    ExprKind::Identifier(ref name) => {
                                         if name == "v" {
                                             Ok(())
                                         } else {
@@ -2200,8 +2217,8 @@ def fragment_main(): [4]f32 = SKY_RGBA
                             return Err(format!("Expected f32 type, got {:?}", decl.ty));
                         }
                         // Check that the body contains nested let-in expressions with binary operations
-                        match &decl.body {
-                            Expression::LetIn(_) => Ok(()),
+                        match &decl.body.kind {
+                            ExprKind::LetIn(_) => Ok(()),
                             _ => Err(format!("Expected LetIn expression, got {:?}", decl.body)),
                         }
                     }
@@ -2440,18 +2457,18 @@ def fragment_main(): [4]f32 = SKY_RGBA
                     }
 
                     // Check the if-then-else expression structure
-                    match &decl.body {
-                        Expression::If(if_expr) => {
+                    match &decl.body.kind {
+                        ExprKind::If(if_expr) => {
                             // Check condition is a comparison
-                            match &*if_expr.condition {
-                                Expression::BinaryOp(op, left, right) => {
+                            match &if_expr.condition.kind {
+                                ExprKind::BinaryOp(op, left, right) => {
                                     if op.op != "==" {
                                         return Err(format!("Expected '==' operator, got '{}'", op.op));
                                     }
 
                                     // Check left side is identifier 'x'
-                                    match &**left {
-                                        Expression::Identifier(name) if name == "x" => {}
+                                    match &left.kind {
+                                        ExprKind::Identifier(name) if name == "x" => {}
                                         _ => {
                                             return Err(format!(
                                                 "Expected identifier 'x' on left side of comparison, got {:?}",
@@ -2461,8 +2478,8 @@ def fragment_main(): [4]f32 = SKY_RGBA
                                     }
 
                                     // Check right side is literal 0
-                                    match &**right {
-                                        Expression::IntLiteral(0) => {}
+                                    match &right.kind {
+                                        ExprKind::IntLiteral(0) => {}
                                         _ => {
                                             return Err(format!(
                                                 "Expected literal 0 on right side of comparison, got {:?}",
@@ -2480,8 +2497,8 @@ def fragment_main(): [4]f32 = SKY_RGBA
                             }
 
                             // Check then branch is literal 1
-                            match &*if_expr.then_branch {
-                                Expression::IntLiteral(1) => {}
+                            match &if_expr.then_branch.kind {
+                                ExprKind::IntLiteral(1) => {}
                                 _ => {
                                     return Err(format!(
                                         "Expected literal 1 in then branch, got {:?}",
@@ -2491,8 +2508,8 @@ def fragment_main(): [4]f32 = SKY_RGBA
                             }
 
                             // Check else branch is literal 2
-                            match &*if_expr.else_branch {
-                                Expression::IntLiteral(2) => {}
+                            match &if_expr.else_branch.kind {
+                                ExprKind::IntLiteral(2) => {}
                                 _ => {
                                     return Err(format!(
                                         "Expected literal 2 in else branch, got {:?}",
@@ -2543,8 +2560,8 @@ def fragment_main(): [4]f32 = SKY_RGBA
             Ok(expr) => {
                 println!("Successfully parsed array literal: {:?}", expr);
                 // Check that it's actually an array literal
-                match expr {
-                    Expression::ArrayLiteral(_) => {
+                match expr.kind {
+                    ExprKind::ArrayLiteral(_) => {
                         // Good, this is what we expect
                     }
                     _ => panic!("Expected ArrayLiteral, got {:?}", expr),

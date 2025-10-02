@@ -91,23 +91,23 @@ impl CodeAnnotator {
     fn annotate_expression(&mut self, expr: &Expression) {
         let loc = self.current_location();
 
-        match expr {
-            Expression::IntLiteral(n) => {
+        match &expr.kind {
+            ExprKind::IntLiteral(n) => {
                 write!(self.output, "#B{}.{} {}", loc.block.0, loc.index, n).unwrap();
                 self.advance_index();
             }
 
-            Expression::FloatLiteral(f) => {
+            ExprKind::FloatLiteral(f) => {
                 write!(self.output, "#B{}.{} {}", loc.block.0, loc.index, f).unwrap();
                 self.advance_index();
             }
 
-            Expression::Identifier(name) => {
+            ExprKind::Identifier(name) => {
                 write!(self.output, "#B{}.{} {}", loc.block.0, loc.index, name).unwrap();
                 self.advance_index();
             }
 
-            Expression::ArrayLiteral(elements) => {
+            ExprKind::ArrayLiteral(elements) => {
                 write!(self.output, "#B{}.{} [", loc.block.0, loc.index).unwrap();
 
                 for (i, elem) in elements.iter().enumerate() {
@@ -120,7 +120,7 @@ impl CodeAnnotator {
                 self.output.push(']');
             }
 
-            Expression::ArrayIndex(array, index) => {
+            ExprKind::ArrayIndex(array, index) => {
                 write!(self.output, "#B{}.{} ", loc.block.0, loc.index).unwrap();
                 self.annotate_expression(array);
                 self.output.push('[');
@@ -128,7 +128,7 @@ impl CodeAnnotator {
                 self.output.push(']');
             }
 
-            Expression::BinaryOp(op, left, right) => {
+            ExprKind::BinaryOp(op, left, right) => {
                 write!(self.output, "#B{}.{} (", loc.block.0, loc.index).unwrap();
                 self.annotate_expression(left);
 
@@ -139,7 +139,7 @@ impl CodeAnnotator {
                 self.output.push(')');
             }
 
-            Expression::FunctionCall(name, args) => {
+            ExprKind::FunctionCall(name, args) => {
                 write!(self.output, "#B{}.{} {}(", loc.block.0, loc.index, name).unwrap();
 
                 for (i, arg) in args.iter().enumerate() {
@@ -152,7 +152,7 @@ impl CodeAnnotator {
                 self.output.push(')');
             }
 
-            Expression::Application(func, args) => {
+            ExprKind::Application(func, args) => {
                 write!(self.output, "#B{}.{} ", loc.block.0, loc.index).unwrap();
                 self.annotate_expression(func);
 
@@ -162,7 +162,7 @@ impl CodeAnnotator {
                 }
             }
 
-            Expression::Tuple(elements) => {
+            ExprKind::Tuple(elements) => {
                 write!(self.output, "#B{}.{} (", loc.block.0, loc.index).unwrap();
 
                 for (i, elem) in elements.iter().enumerate() {
@@ -175,7 +175,7 @@ impl CodeAnnotator {
                 self.output.push(')');
             }
 
-            Expression::Lambda(lambda) => {
+            ExprKind::Lambda(lambda) => {
                 write!(self.output, "#B{}.{} \\", loc.block.0, loc.index).unwrap();
 
                 // Parameters
@@ -212,7 +212,7 @@ impl CodeAnnotator {
                 self.advance_index();
             }
 
-            Expression::LetIn(let_in) => {
+            ExprKind::LetIn(let_in) => {
                 write!(
                     self.output,
                     "#B{}.{} let {} = ",
@@ -224,10 +224,10 @@ impl CodeAnnotator {
                 self.annotate_expression(&let_in.body);
                 self.advance_index();
             }
-            Expression::FieldAccess(expr, _field) => {
+            ExprKind::FieldAccess(expr, _field) => {
                 self.annotate_expression(expr);
             }
-            Expression::If(if_expr) => {
+            ExprKind::If(if_expr) => {
                 self.output.push_str("if ");
                 self.annotate_expression(&if_expr.condition);
                 self.output.push_str(" then ");

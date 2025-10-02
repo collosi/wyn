@@ -190,20 +190,20 @@ impl<W: Write> NemoFactWriter<W> {
 
 /// Extract expression type name for fact generation
 pub fn expr_type_name(expr: &Expression) -> &'static str {
-    match expr {
-        Expression::IntLiteral(_) => "int_literal",
-        Expression::FloatLiteral(_) => "float_literal",
-        Expression::Identifier(_) => "identifier",
-        Expression::ArrayLiteral(_) => "array_literal",
-        Expression::ArrayIndex(..) => "array_index",
-        Expression::BinaryOp(..) => "binary_op",
-        Expression::FunctionCall(..) => "function_call",
-        Expression::Application(..) => "application",
-        Expression::Tuple(_) => "tuple",
-        Expression::Lambda(_) => "lambda",
-        Expression::LetIn(_) => "let_in",
-        Expression::FieldAccess(..) => "field_access",
-        Expression::If(..) => "if_expr",
+    match &expr.kind {
+        ExprKind::IntLiteral(_) => "int_literal",
+        ExprKind::FloatLiteral(_) => "float_literal",
+        ExprKind::Identifier(_) => "identifier",
+        ExprKind::ArrayLiteral(_) => "array_literal",
+        ExprKind::ArrayIndex(..) => "array_index",
+        ExprKind::BinaryOp(..) => "binary_op",
+        ExprKind::FunctionCall(..) => "function_call",
+        ExprKind::Application(..) => "application",
+        ExprKind::Tuple(_) => "tuple",
+        ExprKind::Lambda(_) => "lambda",
+        ExprKind::LetIn(_) => "let_in",
+        ExprKind::FieldAccess(..) => "field_access",
+        ExprKind::If(..) => "if_expr",
     }
 }
 

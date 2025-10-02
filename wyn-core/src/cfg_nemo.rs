@@ -78,42 +78,42 @@ impl<W: Write> CfgNemoExtractor<W> {
             self.current_index += 1;
         }
 
-        match expr {
-            Expression::Identifier(name) => {
+        match &expr.kind {
+            ExprKind::Identifier(name) => {
                 // Variable reference
                 self.nemo_writer.write_var_ref_fact(location_id, name).map_err(Self::io_error)?;
             }
-            Expression::BinaryOp(_, left, right) => {
+            ExprKind::BinaryOp(_, left, right) => {
                 self.extract_expression_cfg(left)?;
                 self.extract_expression_cfg(right)?;
             }
-            Expression::ArrayLiteral(elements) => {
+            ExprKind::ArrayLiteral(elements) => {
                 for element in elements {
                     self.extract_expression_cfg(element)?;
                 }
             }
-            Expression::ArrayIndex(array, index) => {
+            ExprKind::ArrayIndex(array, index) => {
                 self.extract_expression_cfg(array)?;
                 self.extract_expression_cfg(index)?;
             }
-            Expression::FunctionCall(_, args) => {
+            ExprKind::FunctionCall(_, args) => {
                 for arg in args {
                     self.extract_expression_cfg(arg)?;
                 }
             }
-            Expression::Application(func, args) => {
+            ExprKind::Application(func, args) => {
                 self.extract_expression_cfg(func)?;
                 for arg in args {
                     self.extract_expression_cfg(arg)?;
                 }
             }
-            Expression::Tuple(elements) => {
+            ExprKind::Tuple(elements) => {
                 for element in elements {
                     self.extract_expression_cfg(element)?;
                 }
             }
             // Lambda expressions create new basic blocks for their body
-            Expression::Lambda(lambda) => {
+            ExprKind::Lambda(lambda) => {
                 // Capture the current block BEFORE creating the new one
                 let parent_block = self.current_block;
                 let lambda_block = self.start_new_block()?;
@@ -148,16 +148,16 @@ impl<W: Write> CfgNemoExtractor<W> {
                 }
             }
             // Let-in expressions
-            Expression::LetIn(let_in) => {
+            ExprKind::LetIn(let_in) => {
                 self.extract_expression_cfg(&let_in.value)?;
                 self.extract_expression_cfg(&let_in.body)?;
             }
             // Literals don't require further processing
-            Expression::IntLiteral(_) | Expression::FloatLiteral(_) => {}
-            Expression::FieldAccess(expr, _field) => {
+            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) => {}
+            ExprKind::FieldAccess(expr, _field) => {
                 self.extract_expression_cfg(expr)?;
             }
-            Expression::If(if_expr) => {
+            ExprKind::If(if_expr) => {
                 self.extract_expression_cfg(&if_expr.condition)?;
                 self.extract_expression_cfg(&if_expr.then_branch)?;
                 self.extract_expression_cfg(&if_expr.else_branch)?;

@@ -137,8 +137,8 @@ impl BorrowChecker {
         };
         fact_writer.write_location_fact(location_id, &location).map_err(Self::io_error)?;
 
-        match expr {
-            Expression::Identifier(name) => {
+        match &expr.kind {
+            ExprKind::Identifier(name) => {
                 // Variable reference - this is a potential borrow
                 fact_writer.write_var_ref_fact(location_id, name).map_err(Self::io_error)?;
 
@@ -149,24 +149,24 @@ impl BorrowChecker {
                     .write_borrow_fact(borrow_id, location_id, name, lifetime_id)
                     .map_err(Self::io_error)?;
             }
-            Expression::BinaryOp(_, left, right) => {
+            ExprKind::BinaryOp(_, left, right) => {
                 self.extract_expression_facts(fact_writer, left, current_block, location_counter)?;
                 self.extract_expression_facts(fact_writer, right, current_block, location_counter)?;
             }
-            Expression::ArrayLiteral(elements) => {
+            ExprKind::ArrayLiteral(elements) => {
                 for element in elements {
                     self.extract_expression_facts(fact_writer, element, current_block, location_counter)?;
                 }
             }
-            Expression::ArrayIndex(array, index) => {
+            ExprKind::ArrayIndex(array, index) => {
                 self.extract_expression_facts(fact_writer, array, current_block, location_counter)?;
                 self.extract_expression_facts(fact_writer, index, current_block, location_counter)?;
             }
-            Expression::FunctionCall(func_name, args) => {
+            ExprKind::FunctionCall(func_name, args) => {
                 let arg_names: Vec<&str> = args
                     .iter()
-                    .filter_map(|arg| match arg {
-                        Expression::Identifier(name) => Some(name.as_str()),
+                    .filter_map(|arg| match &arg.kind {
+                        ExprKind::Identifier(name) => Some(name.as_str()),
                         _ => None,
                     })
                     .collect();
@@ -177,18 +177,18 @@ impl BorrowChecker {
                     self.extract_expression_facts(fact_writer, arg, current_block, location_counter)?;
                 }
             }
-            Expression::Application(func, args) => {
+            ExprKind::Application(func, args) => {
                 self.extract_expression_facts(fact_writer, func, current_block, location_counter)?;
                 for arg in args {
                     self.extract_expression_facts(fact_writer, arg, current_block, location_counter)?;
                 }
             }
-            Expression::Tuple(elements) => {
+            ExprKind::Tuple(elements) => {
                 for element in elements {
                     self.extract_expression_facts(fact_writer, element, current_block, location_counter)?;
                 }
             }
-            Expression::Lambda(lambda) => {
+            ExprKind::Lambda(lambda) => {
                 // Lambda creates a new block
                 let lambda_block = BlockId(current_block.0 + 1000); // Offset to avoid conflicts
                 fact_writer.write_block_fact(lambda_block).map_err(Self::io_error)?;
@@ -218,7 +218,7 @@ impl BorrowChecker {
                 // Analyze lambda body
                 self.extract_expression_facts(fact_writer, &lambda.body, lambda_block, location_counter)?;
             }
-            Expression::LetIn(let_in) => {
+            ExprKind::LetIn(let_in) => {
                 // Let binding creates a lifetime
                 let lifetime_id = self.get_next_lifetime_id();
                 fact_writer.write_var_def_fact(location_id, &let_in.name).map_err(Self::io_error)?;
@@ -233,11 +233,11 @@ impl BorrowChecker {
                 self.extract_expression_facts(fact_writer, &let_in.body, current_block, location_counter)?;
             }
             // Literals don't create borrows or lifetimes
-            Expression::IntLiteral(_) | Expression::FloatLiteral(_) => {}
-            Expression::FieldAccess(expr, _field) => {
+            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) => {}
+            ExprKind::FieldAccess(expr, _field) => {
                 self.extract_expression_facts(fact_writer, expr, current_block, location_counter)?;
             }
-            Expression::If(if_expr) => {
+            ExprKind::If(if_expr) => {
                 self.extract_expression_facts(
                     fact_writer,
                     &if_expr.condition,

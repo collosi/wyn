@@ -1,6 +1,77 @@
 pub use polytype::TypeScheme;
 pub use spirv;
 
+/// Unique identifier for AST nodes (expressions)
+/// Used to look up inferred types in the type table
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NodeId(pub u32);
+
+impl NodeId {
+    pub fn new(id: u32) -> Self {
+        NodeId(id)
+    }
+}
+
+impl From<u32> for NodeId {
+    fn from(value: u32) -> Self {
+        NodeId(value)
+    }
+}
+
+/// Counter for generating unique node IDs across compilation phases
+#[derive(Debug, Clone)]
+pub struct NodeCounter {
+    next_id: u32,
+}
+
+impl NodeCounter {
+    pub fn new() -> Self {
+        NodeCounter { next_id: 0 }
+    }
+
+    pub fn next(&mut self) -> NodeId {
+        let id = self.next_id;
+        self.next_id += 1;
+        NodeId(id)
+    }
+
+    pub fn mk_node<T>(&mut self, kind: T) -> Node<T> {
+        Node {
+            h: Header { id: self.next() },
+            kind,
+        }
+    }
+}
+
+impl Default for NodeCounter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Header {
+    pub id: NodeId,
+    //pub span: Span,          // or Option<Span>
+    // hygiene, source file id, etc.
+}
+
+#[derive(Clone, Debug)]
+pub struct Node<T> {
+    pub h: Header,
+    pub kind: T,
+}
+
+impl<T> PartialEq for Node<T>
+where
+    T: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+    }
+}
+pub type Expression = Node<ExprKind>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeName {
     Str(&'static str),          // "int", "float", "tuple"
@@ -140,7 +211,7 @@ pub struct ValDecl {
 // We now use polytype::Type instead of our own Type enum
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expression {
+pub enum ExprKind {
     IntLiteral(i32),
     FloatLiteral(f32),
     Identifier(String),

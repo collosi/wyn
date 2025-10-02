@@ -28,6 +28,7 @@ pub struct DefunctionalizedFunction {
 pub struct Defunctionalizer {
     next_function_id: usize,
     generated_functions: Vec<DefunctionalizedFunction>,
+    node_counter: NodeCounter,
 }
 
 impl Default for Defunctionalizer {
@@ -41,6 +42,15 @@ impl Defunctionalizer {
         Defunctionalizer {
             next_function_id: 0,
             generated_functions: Vec::new(),
+            node_counter: NodeCounter::new(),
+        }
+    }
+
+    pub fn new_with_counter(node_counter: NodeCounter) -> Self {
+        Defunctionalizer {
+            next_function_id: 0,
+            generated_functions: Vec::new(),
+            node_counter,
         }
     }
 
@@ -117,42 +127,42 @@ impl Defunctionalizer {
         expr: &Expression,
         scope_stack: &mut ScopeStack<StaticValue>,
     ) -> Result<(Expression, StaticValue)> {
-        match expr {
-            Expression::IntLiteral(n) => Ok((Expression::IntLiteral(*n), StaticValue::Dyn(types::i32()))),
-            Expression::FloatLiteral(f) => {
-                Ok((Expression::FloatLiteral(*f), StaticValue::Dyn(types::f32())))
+        match &expr.kind {
+            ExprKind::IntLiteral(n) => Ok((self.node_counter.mk_node(ExprKind::IntLiteral(*n)), StaticValue::Dyn(types::i32()))),
+            ExprKind::FloatLiteral(f) => {
+                Ok((self.node_counter.mk_node(ExprKind::FloatLiteral(*f)), StaticValue::Dyn(types::f32())))
             }
-            Expression::Identifier(name) => {
+            ExprKind::Identifier(name) => {
                 if let Some(sv) = scope_stack.lookup(name) {
                     match sv {
                         StaticValue::Dyn(_) => {
                             // Regular variable reference
-                            Ok((Expression::Identifier(name.clone()), sv.clone()))
+                            Ok((self.node_counter.mk_node(ExprKind::Identifier(name.clone())), sv.clone()))
                         }
                         StaticValue::Lam(_, _, _) => {
                             // Reference to a function - this would need special handling
                             // For now, keep as identifier
-                            Ok((Expression::Identifier(name.clone()), sv.clone()))
+                            Ok((self.node_counter.mk_node(ExprKind::Identifier(name.clone())), sv.clone()))
                         }
                         StaticValue::Rcd(_) => {
                             // Reference to a closure record
-                            Ok((Expression::Identifier(name.clone()), sv.clone()))
+                            Ok((self.node_counter.mk_node(ExprKind::Identifier(name.clone())), sv.clone()))
                         }
-                        StaticValue::Arr(_) => Ok((Expression::Identifier(name.clone()), sv.clone())),
+                        StaticValue::Arr(_) => Ok((self.node_counter.mk_node(ExprKind::Identifier(name.clone())), sv.clone())),
                     }
                 } else {
                     // Unknown variable - assume dynamic with type variable
                     Ok((
-                        Expression::Identifier(name.clone()),
+                        self.node_counter.mk_node(ExprKind::Identifier(name.clone())),
                         StaticValue::Dyn(polytype::Type::Variable(0)),
                     ))
                 }
             }
-            Expression::Lambda(lambda) => self.defunctionalize_lambda(lambda, scope_stack),
-            Expression::Application(func, args) => {
+            ExprKind::Lambda(lambda) => self.defunctionalize_lambda(lambda, scope_stack),
+            ExprKind::Application(func, args) => {
                 self.defunctionalize_application(func, args, scope_stack)
             }
-            Expression::ArrayLiteral(elements) => {
+            ExprKind::ArrayLiteral(elements) => {
                 let mut transformed_elements = Vec::new();
                 let mut element_sv = None;
 
@@ -168,19 +178,19 @@ impl Defunctionalizer {
 
                 let array_sv =
                     StaticValue::Arr(Box::new(element_sv.unwrap_or(StaticValue::Dyn(types::i32()))));
-                Ok((Expression::ArrayLiteral(transformed_elements), array_sv))
+                Ok((self.node_counter.mk_node(ExprKind::ArrayLiteral(transformed_elements)), array_sv))
             }
-            Expression::ArrayIndex(array, index) => {
+            ExprKind::ArrayIndex(array, index) => {
                 let (transformed_array, _array_sv) = self.defunctionalize_expression(array, scope_stack)?;
                 let (transformed_index, _index_sv) = self.defunctionalize_expression(index, scope_stack)?;
 
                 // Result type depends on array element type - for now, assume dynamic
                 Ok((
-                    Expression::ArrayIndex(Box::new(transformed_array), Box::new(transformed_index)),
+                    self.node_counter.mk_node(ExprKind::ArrayIndex(Box::new(transformed_array), Box::new(transformed_index))),
                     StaticValue::Dyn(polytype::Type::Variable(1)),
                 ))
             }
-            Expression::BinaryOp(op, left, right) => {
+            ExprKind::BinaryOp(op, left, right) => {
                 let (transformed_left, left_sv) = self.defunctionalize_expression(left, scope_stack)?;
                 let (transformed_right, right_sv) = self.defunctionalize_expression(right, scope_stack)?;
 
@@ -202,15 +212,15 @@ impl Defunctionalizer {
                 };
 
                 Ok((
-                    Expression::BinaryOp(
+                    self.node_counter.mk_node(ExprKind::BinaryOp(
                         op.clone(),
                         Box::new(transformed_left),
                         Box::new(transformed_right),
-                    ),
+                    )),
                     StaticValue::Dyn(result_type),
                 ))
             }
-            Expression::FunctionCall(name, args) => {
+            ExprKind::FunctionCall(name, args) => {
                 // Regular function calls (first-order) remain unchanged
                 let mut transformed_args = Vec::new();
                 for arg in args {
@@ -219,11 +229,11 @@ impl Defunctionalizer {
                 }
 
                 Ok((
-                    Expression::FunctionCall(name.clone(), transformed_args),
+                    self.node_counter.mk_node(ExprKind::FunctionCall(name.clone(), transformed_args)),
                     StaticValue::Dyn(polytype::Type::Variable(2)),
                 ))
             }
-            Expression::Tuple(elements) => {
+            ExprKind::Tuple(elements) => {
                 let mut transformed_elements = Vec::new();
                 let mut element_types = Vec::new();
 
@@ -240,11 +250,11 @@ impl Defunctionalizer {
                 }
 
                 Ok((
-                    Expression::Tuple(transformed_elements),
+                    self.node_counter.mk_node(ExprKind::Tuple(transformed_elements)),
                     StaticValue::Dyn(types::tuple(element_types)),
                 ))
             }
-            Expression::LetIn(let_in) => {
+            ExprKind::LetIn(let_in) => {
                 // Transform the value expression
                 let (transformed_value, value_sv) =
                     self.defunctionalize_expression(&let_in.value, scope_stack)?;
@@ -261,23 +271,23 @@ impl Defunctionalizer {
                 scope_stack.pop_scope();
 
                 Ok((
-                    Expression::LetIn(crate::ast::LetInExpr {
+                    self.node_counter.mk_node(ExprKind::LetIn(crate::ast::LetInExpr {
                         name: let_in.name.clone(),
                         ty: let_in.ty.clone(),
                         value: Box::new(transformed_value),
                         body: Box::new(transformed_body),
-                    }),
+                    })),
                     body_sv,
                 ))
             }
-            Expression::FieldAccess(expr, field) => {
+            ExprKind::FieldAccess(expr, field) => {
                 let (transformed_expr, expr_sv) = self.defunctionalize_expression(expr, scope_stack)?;
                 Ok((
-                    Expression::FieldAccess(Box::new(transformed_expr), field.clone()),
+                    self.node_counter.mk_node(ExprKind::FieldAccess(Box::new(transformed_expr), field.clone())),
                     expr_sv, // Field access doesn't change the static value representation
                 ))
             }
-            Expression::If(if_expr) => {
+            ExprKind::If(if_expr) => {
                 let (condition, _condition_sv) =
                     self.defunctionalize_expression(&if_expr.condition, scope_stack)?;
                 let (then_branch, _then_sv) =
@@ -285,11 +295,11 @@ impl Defunctionalizer {
                 let (else_branch, _else_sv) =
                     self.defunctionalize_expression(&if_expr.else_branch, scope_stack)?;
                 Ok((
-                    Expression::If(IfExpr {
+                    self.node_counter.mk_node(ExprKind::If(IfExpr {
                         condition: Box::new(condition),
                         then_branch: Box::new(then_branch),
                         else_branch: Box::new(else_branch),
-                    }),
+                    })),
                     StaticValue::Dyn(Type::Constructed(TypeName::Str("unknown"), vec![])), // If expressions are runtime values
                 ))
             }
@@ -363,7 +373,7 @@ impl Defunctionalizer {
         if free_vars.is_empty() {
             // No free variables - just return function name
             Ok((
-                Expression::Identifier(func_name),
+                self.node_counter.mk_node(ExprKind::Identifier(func_name)),
                 StaticValue::Lam("__unused".to_string(), (*lambda.body).clone(), HashMap::new()),
             ))
         } else {
@@ -391,11 +401,11 @@ impl Defunctionalizer {
             StaticValue::Lam(_param, _body, _closure_env) => {
                 // Direct lambda application - inline if simple enough
                 // For now, convert to function call
-                match transformed_func {
-                    Expression::Identifier(func_name) => {
+                match &transformed_func.kind {
+                    ExprKind::Identifier(func_name) => {
                         // Function call without closure
                         Ok((
-                            Expression::FunctionCall(func_name, transformed_args),
+                            self.node_counter.mk_node(ExprKind::FunctionCall(func_name.clone(), transformed_args)),
                             StaticValue::Dyn(polytype::Type::Variable(2)),
                         ))
                     }
@@ -417,9 +427,9 @@ impl Defunctionalizer {
             }
             _ => {
                 // Regular function call
-                match transformed_func {
-                    Expression::Identifier(func_name) => Ok((
-                        Expression::FunctionCall(func_name, transformed_args),
+                match &transformed_func.kind {
+                    ExprKind::Identifier(func_name) => Ok((
+                        self.node_counter.mk_node(ExprKind::FunctionCall(func_name.clone(), transformed_args)),
                         StaticValue::Dyn(polytype::Type::Variable(2)),
                     )),
                     _ => Err(CompilerError::SpirvError(
@@ -447,49 +457,49 @@ impl Defunctionalizer {
         bound_vars: &HashSet<String>,
         free_vars: &mut HashSet<String>,
     ) -> Result<()> {
-        match expr {
-            Expression::Identifier(name) => {
+        match &expr.kind {
+            ExprKind::Identifier(name) => {
                 if !bound_vars.contains(name) {
                     free_vars.insert(name.clone());
                 }
             }
-            Expression::Lambda(lambda) => {
+            ExprKind::Lambda(lambda) => {
                 let mut extended_bound = bound_vars.clone();
                 for param in &lambda.params {
                     extended_bound.insert(param.name.clone());
                 }
                 self.collect_free_variables(&lambda.body, &extended_bound, free_vars)?;
             }
-            Expression::Application(func, args) => {
+            ExprKind::Application(func, args) => {
                 self.collect_free_variables(func, bound_vars, free_vars)?;
                 for arg in args {
                     self.collect_free_variables(arg, bound_vars, free_vars)?;
                 }
             }
-            Expression::ArrayLiteral(elements) => {
+            ExprKind::ArrayLiteral(elements) => {
                 for elem in elements {
                     self.collect_free_variables(elem, bound_vars, free_vars)?;
                 }
             }
-            Expression::ArrayIndex(array, index) => {
+            ExprKind::ArrayIndex(array, index) => {
                 self.collect_free_variables(array, bound_vars, free_vars)?;
                 self.collect_free_variables(index, bound_vars, free_vars)?;
             }
-            Expression::BinaryOp(_, left, right) => {
+            ExprKind::BinaryOp(_, left, right) => {
                 self.collect_free_variables(left, bound_vars, free_vars)?;
                 self.collect_free_variables(right, bound_vars, free_vars)?;
             }
-            Expression::FunctionCall(_, args) => {
+            ExprKind::FunctionCall(_, args) => {
                 for arg in args {
                     self.collect_free_variables(arg, bound_vars, free_vars)?;
                 }
             }
-            Expression::Tuple(elements) => {
+            ExprKind::Tuple(elements) => {
                 for elem in elements {
                     self.collect_free_variables(elem, bound_vars, free_vars)?;
                 }
             }
-            Expression::LetIn(let_in) => {
+            ExprKind::LetIn(let_in) => {
                 // Collect free variables from value expression
                 self.collect_free_variables(&let_in.value, bound_vars, free_vars)?;
 
@@ -498,13 +508,13 @@ impl Defunctionalizer {
                 extended_bound.insert(let_in.name.clone());
                 self.collect_free_variables(&let_in.body, &extended_bound, free_vars)?;
             }
-            Expression::IntLiteral(_) | Expression::FloatLiteral(_) => {
+            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) => {
                 // No free variables in literals
             }
-            Expression::FieldAccess(expr, _field) => {
+            ExprKind::FieldAccess(expr, _field) => {
                 self.collect_free_variables(expr, bound_vars, free_vars)?;
             }
-            Expression::If(if_expr) => {
+            ExprKind::If(if_expr) => {
                 self.collect_free_variables(&if_expr.condition, bound_vars, free_vars)?;
                 self.collect_free_variables(&if_expr.then_branch, bound_vars, free_vars)?;
                 self.collect_free_variables(&if_expr.else_branch, bound_vars, free_vars)?;
@@ -513,18 +523,18 @@ impl Defunctionalizer {
         Ok(())
     }
 
-    fn create_closure_record(&self, func_name: &str, free_vars: &HashSet<String>) -> Result<Expression> {
+    fn create_closure_record(&mut self, func_name: &str, free_vars: &HashSet<String>) -> Result<Expression> {
         // For now, create a simple record-like structure
         // In a full implementation, this would create a proper record expression
         // For SPIR-V compatibility, we might need to represent this as an array or struct
 
         // Create a tuple with function name and free variables
-        let mut elements = vec![Expression::Identifier(func_name.to_string())];
+        let mut elements = vec![self.node_counter.mk_node(ExprKind::Identifier(func_name.to_string()))];
         for var in free_vars {
-            elements.push(Expression::Identifier(var.clone()));
+            elements.push(self.node_counter.mk_node(ExprKind::Identifier(var.clone())));
         }
 
-        Ok(Expression::Tuple(elements))
+        Ok(self.node_counter.mk_node(ExprKind::Tuple(elements)))
     }
 }
 
