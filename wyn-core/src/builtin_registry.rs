@@ -125,6 +125,23 @@ impl BuiltinRegistry {
         self.builtins.get(name)
     }
 
+    /// Get the type of a field on a given type (e.g., vec3.x returns f32)
+    pub fn get_field_type(&self, type_name: &str, field_name: &str) -> Option<Type> {
+        match (type_name, field_name) {
+            // f32 vectors
+            ("vec2", "x" | "y") => Some(Self::ty("f32")),
+            ("vec3", "x" | "y" | "z") => Some(Self::ty("f32")),
+            ("vec4", "x" | "y" | "z" | "w") => Some(Self::ty("f32")),
+
+            // i32 vectors
+            ("ivec2", "x" | "y") => Some(Self::ty("i32")),
+            ("ivec3", "x" | "y" | "z") => Some(Self::ty("i32")),
+            ("ivec4", "x" | "y" | "z" | "w") => Some(Self::ty("i32")),
+
+            _ => None,
+        }
+    }
+
     /// Register a builtin function
     fn register(&mut self, desc: BuiltinDescriptor) {
         self.builtins.insert(desc.name.clone(), desc);

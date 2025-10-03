@@ -680,16 +680,27 @@ impl TypeChecker {
 
                 // Extract the type name from the expression type
                 match expr_type {
-                    Type::Constructed(TypeName::Str(type_name), _) => {
-                        // Look up the field in our record field mapping
+                    Type::Constructed(type_name, _) => {
+                        // Get the type name as a string
+                        let type_name_str = match &type_name {
+                            TypeName::Str(s) => s.to_string(),
+                            TypeName::Array(s, _) => s.to_string(),
+                        };
+
+                        // Look up field in builtin registry (for vector types)
+                        if let Some(field_type) = self.builtin_registry.get_field_type(&type_name_str, field) {
+                            return Ok(field_type);
+                        }
+
+                        // Fall back to record field mapping (for user-defined types)
                         if let Some(field_type) =
-                            self.record_field_map.get(&(type_name.to_string(), field.clone()))
+                            self.record_field_map.get(&(type_name_str.clone(), field.clone()))
                         {
                             Ok(field_type.clone())
                         } else {
                             Err(CompilerError::TypeError(format!(
                                 "Type '{}' has no field '{}'",
-                                type_name, field
+                                type_name_str, field
                             )))
                         }
                     }
