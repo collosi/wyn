@@ -6,7 +6,7 @@ use self::scope::Environment;
 use crate::ast::AttrExt;
 use crate::ast::TypeName;
 use crate::ast::*;
-use crate::builtin_registry::{BuiltinImpl, BuiltinRegistry, SpirvOp};
+use crate::builtin_registry::{BuiltinImpl, BuiltinRegistry, CustomImpl, SpirvOp};
 use crate::error::{CompilerError, Result};
 use log::debug;
 use rspirv::binary::Assemble;
@@ -240,10 +240,42 @@ impl CodeGenerator {
                 })
             }
             BuiltinImpl::SpirvOp(op) => self.generate_spirv_op(op, args, name),
-            BuiltinImpl::Custom(_) => Err(CompilerError::SpirvError(format!(
-                "Custom builtin implementations not yet supported: {}",
-                name
-            ))),
+            BuiltinImpl::Custom(custom_impl) => self.generate_custom_builtin(custom_impl, args, name),
+        }
+    }
+
+    /// Generate code for custom builtin implementations
+    fn generate_custom_builtin(&mut self, custom_impl: &CustomImpl, args: &[Value], name: &str) -> Result<Value> {
+        match custom_impl {
+            CustomImpl::Placeholder => {
+                // Vector constructors (vec2, vec3, vec4, ivec2, ivec3, ivec4)
+                // Use OpCompositeConstruct to build the vector from scalar components
+
+                // Determine result type from builtin name
+                let result_type_ast = match name {
+                    "vec2" => Type::Constructed(TypeName::Str("vec2"), vec![]),
+                    "vec3" => Type::Constructed(TypeName::Str("vec3"), vec![]),
+                    "vec4" => Type::Constructed(TypeName::Str("vec4"), vec![]),
+                    "ivec2" => Type::Constructed(TypeName::Str("ivec2"), vec![]),
+                    "ivec3" => Type::Constructed(TypeName::Str("ivec3"), vec![]),
+                    "ivec4" => Type::Constructed(TypeName::Str("ivec4"), vec![]),
+                    _ => return Err(CompilerError::SpirvError(format!(
+                        "Unknown custom builtin: {}",
+                        name
+                    ))),
+                };
+
+                let result_type_info = self.get_or_create_type(&result_type_ast)?;
+
+                // Build composite from constituents
+                let constituent_ids: Vec<spirv::Word> = args.iter().map(|v| v.id).collect();
+                let result_id = self.builder.composite_construct(result_type_info.id, None, constituent_ids)?;
+
+                Ok(Value {
+                    id: result_id,
+                    type_id: result_type_info.id,
+                })
+            }
         }
     }
 
@@ -612,11 +644,17 @@ impl CodeGenerator {
         for param in params {
             let DeclParam::Typed(p) = param else { continue };
 
-            // Skip builtins - they were handled in prepare_params
+            // Handle builtin parameters specially - they reference global builtin inputs
             if p.attributes.first_builtin().is_some() {
+                // The builtin global was already created in prepare_params
+                // Add the parameter name to environment pointing to the builtin input
+                if let Some(builtin_value) = self.builtin_inputs.get(&p.name) {
+                    self.environment.define_local(p.name.clone(), *builtin_value, p.ty.clone());
+                }
                 continue;
             }
 
+            // Regular parameters: create local variable and store parameter value
             let ty_info = self.get_or_create_type(&p.ty)?;
             let param_id = param_ids[param_index];
             param_index += 1;
@@ -1604,8 +1642,8 @@ impl CodeGenerator {
         let (type_id, size_bytes) = match ty {
             Type::Constructed(name, args) => {
                 match name {
-                    TypeName::Str("int") => (self.i32_type, 4),
-                    TypeName::Str("float") => (self.f32_type, 4),
+                    TypeName::Str("i32") => (self.i32_type, 4),
+                    TypeName::Str("f32") => (self.f32_type, 4),
 
                     // f32 vector types
                     TypeName::Str(s) if s.starts_with("vec") && s.len() == 4 => {

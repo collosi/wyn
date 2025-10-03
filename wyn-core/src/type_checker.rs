@@ -362,11 +362,15 @@ impl TypeChecker {
                     DeclParam::Typed(p) => p.name.clone(),
                 };
                 let type_scheme = TypeScheme::Monotype(param_type.clone());
+                debug!("Adding parameter '{}' to scope with type: {:?}", param_name, param_type);
                 self.scope_stack.insert(param_name, type_scheme);
             }
 
             // Infer body type
+            debug!("About to infer body type for function '{}'", decl.name);
+            debug!("Scope depth before body inference: {}", self.scope_stack.depth());
             let body_type = self.infer_expression(&decl.body)?;
+            debug!("Successfully inferred body type for '{}': {:?}", decl.name, body_type);
 
             // Pop parameter scope
             self.scope_stack.pop_scope();
@@ -399,12 +403,38 @@ impl TypeChecker {
             ExprKind::IntLiteral(_) => Ok(types::i32()),
             ExprKind::FloatLiteral(_) => Ok(types::f32()),
             ExprKind::Identifier(name) => {
-                let type_scheme = self.scope_stack.lookup(name).ok_or_else(|| {
-                    debug!("Variable lookup failed for '{}'", name);
-                    CompilerError::UndefinedVariable(name.clone())
-                })?;
-                // Instantiate the type scheme to get a concrete type
-                Ok(type_scheme.instantiate(&mut self.context))
+                debug!("Looking up identifier '{}'", name);
+                debug!("Current scope depth: {}", self.scope_stack.depth());
+
+                // First check scope stack for variables
+                if let Some(type_scheme) = self.scope_stack.lookup(name) {
+                    debug!("Found '{}' in scope stack with type: {:?}", name, type_scheme);
+                    // Instantiate the type scheme to get a concrete type
+                    return Ok(type_scheme.instantiate(&mut self.context));
+                }
+
+                debug!("'{}' not found in scope stack, checking builtin registry", name);
+
+                // Then check builtin registry for builtin functions/constructors
+                if self.builtin_registry.is_builtin(name) {
+                    debug!("'{}' is a builtin", name);
+                    if let Some(desc) = self.builtin_registry.get(name) {
+                        // Build function type from param types and return type
+                        let func_type = desc.param_types
+                            .iter()
+                            .rev()
+                            .fold(desc.return_type.clone(), |acc, param_ty| {
+                                Type::arrow(param_ty.clone(), acc)
+                            });
+                        debug!("Built function type for builtin '{}': {:?}", name, func_type);
+                        return Ok(func_type);
+                    }
+                }
+
+                // Not found anywhere
+                debug!("Variable lookup failed for '{}' - not in scope or builtins", name);
+                debug!("Scope stack contents: {:?}", self.scope_stack);
+                Err(CompilerError::UndefinedVariable(name.clone()))
             }
             ExprKind::ArrayLiteral(elements) => {
                 if elements.is_empty() {
@@ -474,12 +504,24 @@ impl TypeChecker {
                 Ok(return_type)
             }
             ExprKind::FunctionCall(func_name, args) => {
-                // Get function type scheme and instantiate it
-                let type_scheme = self
-                    .scope_stack
-                    .lookup(func_name)
-                    .ok_or_else(|| CompilerError::UndefinedVariable(func_name.clone()))?;
-                let mut func_type = type_scheme.instantiate(&mut self.context);
+                // Get function type - check scope stack first, then builtin registry
+                let mut func_type = if let Some(type_scheme) = self.scope_stack.lookup(func_name) {
+                    type_scheme.instantiate(&mut self.context)
+                } else if self.builtin_registry.is_builtin(func_name) {
+                    // Get type from builtin registry
+                    if let Some(desc) = self.builtin_registry.get(func_name) {
+                        desc.param_types
+                            .iter()
+                            .rev()
+                            .fold(desc.return_type.clone(), |acc, param_ty| {
+                                Type::arrow(param_ty.clone(), acc)
+                            })
+                    } else {
+                        return Err(CompilerError::UndefinedVariable(func_name.clone()));
+                    }
+                } else {
+                    return Err(CompilerError::UndefinedVariable(func_name.clone()));
+                };
 
                 // Apply function to each argument using unification
                 for arg in args {

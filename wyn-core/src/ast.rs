@@ -265,11 +265,11 @@ pub mod types {
     use super::{Type, TypeName};
 
     pub fn i32() -> Type {
-        Type::Constructed(TypeName::Str("int"), vec![])
+        Type::Constructed(TypeName::Str("i32"), vec![])
     }
 
     pub fn f32() -> Type {
-        Type::Constructed(TypeName::Str("float"), vec![])
+        Type::Constructed(TypeName::Str("f32"), vec![])
     }
 
     // f32 vector types
