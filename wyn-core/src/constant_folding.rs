@@ -53,6 +53,10 @@ impl ConstantFolder {
                     attributed_return_type: d.attributed_return_type.clone(),
                 }))
             }
+            Declaration::Uniform(u) => {
+                // Uniform declarations don't have expressions to fold
+                Ok(Declaration::Uniform(u.clone()))
+            }
             Declaration::Val(v) => {
                 // Val declarations don't have expressions to fold
                 Ok(Declaration::Val(v.clone()))

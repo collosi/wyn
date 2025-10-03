@@ -72,6 +72,10 @@ impl Defunctionalizer {
                         new_declarations.push(Declaration::Decl(decl_node.clone()));
                     }
                 }
+                Declaration::Uniform(uniform_decl) => {
+                    // Uniform declarations have no body
+                    new_declarations.push(Declaration::Uniform(uniform_decl.clone()));
+                }
                 Declaration::Val(val_decl) => {
                     // Type signatures only
                     new_declarations.push(Declaration::Val(val_decl.clone()));

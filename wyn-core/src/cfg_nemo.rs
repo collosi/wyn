@@ -52,6 +52,9 @@ impl<W: Write> CfgNemoExtractor<W> {
                     self.extract_expression_cfg(&decl.body)?;
                 }
             }
+            Declaration::Uniform(_) => {
+                // Uniform declarations have no body to process
+            }
             Declaration::Val(_val_decl) => {
                 // Val declarations are type signatures, no body to process
             }

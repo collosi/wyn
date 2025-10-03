@@ -708,26 +708,21 @@ impl CodeGenerator {
                 if is_entry_point {
                     self.generate_entry_point(decl_node)
                 } else if decl_node.params.is_empty() {
-                    // Check if this is a uniform declaration
-                    let is_uniform =
-                        decl_node.attributes.iter().any(|attr| matches!(attr, Attribute::Uniform));
-
-                    if is_uniform {
-                        self.generate_uniform_declaration(decl_node)
-                    } else {
-                        // Regular variable declaration: let/def name: type = value or let/def name = value
-                        let ty = decl_node.ty.as_ref().ok_or_else(|| {
-                            CompilerError::SpirvError(format!(
-                                "{} declaration must have explicit type",
-                                decl_node.keyword
-                            ))
-                        })?;
-                        self.generate_declaration_helper(&decl_node.name, ty, &decl_node.body)
-                    }
+                    // Regular variable declaration: let/def name: type = value or let/def name = value
+                    let ty = decl_node.ty.as_ref().ok_or_else(|| {
+                        CompilerError::SpirvError(format!(
+                            "{} declaration must have explicit type",
+                            decl_node.keyword
+                        ))
+                    })?;
+                    self.generate_declaration_helper(&decl_node.name, ty, &decl_node.body)
                 } else {
                     // Function declaration: let/def name param1 param2 = body (skip for now)
                     Ok(())
                 }
+            }
+            Declaration::Uniform(uniform_decl) => {
+                self.generate_uniform_declaration(uniform_decl)
             }
             Declaration::Val(_val_decl) => {
                 // Type signatures only
@@ -736,10 +731,8 @@ impl CodeGenerator {
         }
     }
 
-    fn generate_uniform_declaration(&mut self, decl: &Decl) -> Result<()> {
-        let ty = decl.ty.as_ref().ok_or_else(|| {
-            CompilerError::SpirvError("Uniform declaration must have explicit type".to_string())
-        })?;
+    fn generate_uniform_declaration(&mut self, decl: &UniformDecl) -> Result<()> {
+        let ty = &decl.ty;
 
         // Create a global variable for the uniform
         let type_info = self.get_or_create_type(ty)?;

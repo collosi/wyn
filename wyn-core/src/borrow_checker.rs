@@ -114,6 +114,9 @@ impl BorrowChecker {
                     self.extract_expression_facts(fact_writer, &decl.body, block_id, location_counter)?;
                 }
             }
+            Declaration::Uniform(_) => {
+                // Uniform declarations don't create runtime lifetimes
+            }
             Declaration::Val(_) => {
                 // Val declarations don't create runtime lifetimes
             }

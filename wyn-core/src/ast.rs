@@ -128,7 +128,8 @@ pub struct Program {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Declaration {
-    Decl(Decl), // Unified let/def declarations
+    Decl(Decl),         // Unified let/def declarations
+    Uniform(UniformDecl), // Uniform declarations (no initializer)
     Val(ValDecl),
 }
 
@@ -206,6 +207,12 @@ pub struct ValDecl {
     pub size_params: Vec<String>, // Size parameters: [n], [m]
     pub type_params: Vec<String>, // Type parameters: 'a, 'b
     pub ty: Type,                 // The function type signature
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UniformDecl {
+    pub name: String,
+    pub ty: Type, // Uniforms always have an explicit type
 }
 
 // We now use polytype::Type instead of our own Type enum

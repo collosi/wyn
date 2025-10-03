@@ -277,6 +277,10 @@ impl TypeChecker {
                 debug!("Checking {} declaration: {}", decl_node.keyword, decl_node.name);
                 self.check_decl(decl_node)
             }
+            Declaration::Uniform(uniform_decl) => {
+                debug!("Checking Uniform declaration: {}", uniform_decl.name);
+                self.check_uniform_decl(uniform_decl)
+            }
             Declaration::Val(val_decl) => {
                 debug!("Checking Val declaration: {}", val_decl.name);
                 self.check_val_decl(val_decl)
@@ -284,34 +288,15 @@ impl TypeChecker {
         }
     }
 
+    fn check_uniform_decl(&mut self, decl: &UniformDecl) -> Result<()> {
+        // Add the uniform to scope with its declared type
+        let type_scheme = TypeScheme::Monotype(decl.ty.clone());
+        self.scope_stack.insert(decl.name.clone(), type_scheme);
+        debug!("Inserting uniform variable '{}' into scope", decl.name);
+        Ok(())
+    }
+
     fn check_decl(&mut self, decl: &Decl) -> Result<()> {
-        // Handle uniform declarations specially
-        if decl.attributes.contains(&Attribute::Uniform) {
-            // Uniforms must have a type annotation and no real initializer
-            if decl.ty.is_none() {
-                return Err(CompilerError::TypeError(format!(
-                    "Uniform declaration '{}' must have a type annotation",
-                    decl.name
-                )));
-            }
-
-            // Check that the body is the placeholder (indicating no initializer was provided)
-            if !matches!(decl.body.kind, ExprKind::Identifier(ref id) if id == "__uniform_placeholder") {
-                return Err(CompilerError::TypeError(format!(
-                    "Uniform declaration '{}' cannot have an initializer value. Uniforms must be provided by the host application.",
-                    decl.name
-                )));
-            }
-
-            // Add the uniform to scope with its declared type
-            let uniform_type = decl.ty.as_ref().unwrap().clone();
-            let type_scheme = TypeScheme::Monotype(uniform_type);
-            self.scope_stack.insert(decl.name.clone(), type_scheme);
-            debug!("Inserting uniform variable '{}' into scope", decl.name);
-
-            return Ok(());
-        }
-
         if decl.params.is_empty() {
             // Variable or entry point declaration: let/def name: type = value or let/def name = value
             let expr_type = self.infer_expression(&decl.body)?;
@@ -379,7 +364,27 @@ impl TypeChecker {
             let func_type = param_types
                 .into_iter()
                 .rev()
-                .fold(body_type, |acc, param_ty| types::function(param_ty, acc));
+                .fold(body_type.clone(), |acc, param_ty| types::function(param_ty, acc));
+
+            // Check against declared type if provided
+            if let Some(declared_type) = &decl.ty {
+                self.context.unify(&func_type, declared_type).map_err(|_| {
+                    CompilerError::TypeError(format!(
+                        "Function type mismatch for '{}': declared {:?}, inferred {:?}",
+                        decl.name, declared_type, func_type
+                    ))
+                })?;
+            }
+
+            // For entry points, check attributed return types
+            let is_entry_point = decl
+                .attributes
+                .iter()
+                .any(|attr| matches!(attr, Attribute::Vertex | Attribute::Fragment));
+
+            if is_entry_point && decl.attributed_return_type.is_some() {
+                self.check_attributed_return_type(&body_type, decl)?;
+            }
 
             // Update scope with inferred type
             let type_scheme = TypeScheme::Monotype(func_type.clone());
@@ -455,13 +460,28 @@ impl TypeChecker {
 
                 Ok(types::sized_array(elements.len(), first_type))
             }
-            ExprKind::ArrayIndex(array_expr, _index_expr) => {
+            ExprKind::ArrayIndex(array_expr, index_expr) => {
                 let array_type = self.infer_expression(array_expr)?;
-                Ok(match array_type {
+                let index_type = self.infer_expression(index_expr)?;
+
+                // Check index type is i32
+                self.context.unify(&index_type, &types::i32()).map_err(|_| {
+                    CompilerError::TypeError(format!(
+                        "Array index must be i32, got {:?}",
+                        index_type
+                    ))
+                })?;
+
+                Ok(match &array_type {
                     Type::Constructed(name, args)
                         if matches!(name, TypeName::Str("array") | TypeName::Array("array", _)) =>
                     {
-                        args.into_iter().next().unwrap_or_else(types::i32)
+                        args.get(0).cloned().ok_or_else(|| {
+                            CompilerError::TypeError(format!(
+                                "Array type has no element type: {:?}",
+                                array_type
+                            ))
+                        })?
                     }
                     _ => {
                         return Err(CompilerError::TypeError(format!(
@@ -708,9 +728,13 @@ impl TypeChecker {
 
     // Removed: fresh_var - now using polytype's context.new_variable()
 
-    fn types_match(&mut self, t1: &Type, t2: &Type) -> bool {
+    fn types_match(&self, t1: &Type, t2: &Type) -> bool {
+        // Apply current substitution without mutating context
+        let a = t1.apply(&self.context);
+        let b = t2.apply(&self.context);
+
         // Handle attributed_tuple vs tuple matching
-        match (t1, t2) {
+        match (&a, &b) {
             // Allow regular tuple to match attributed_tuple if component types match
             (
                 Type::Constructed(TypeName::Str("tuple"), actual_types),
@@ -720,10 +744,10 @@ impl TypeChecker {
                     && expected_types
                         .iter()
                         .zip(actual_types.iter())
-                        .all(|(e, a)| self.context.unify(a, e).is_ok())
+                        .all(|(e, a)| self.types_equal(a, e))
             }
-            // Regular case - use polytype's unification for proper type matching
-            _ => self.context.unify(t1, t2).is_ok(),
+            // Regular case - use structural equality after applying substitution
+            _ => self.types_equal(&a, &b),
         }
     }
 

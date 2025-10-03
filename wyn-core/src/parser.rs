@@ -41,12 +41,10 @@ impl Parser {
 
         match self.peek() {
             Some(Token::Let) => {
-                let decl = self.parse_decl("let", attributes)?;
-                Ok(Declaration::Decl(decl))
+                self.parse_decl("let", attributes)
             }
             Some(Token::Def) => {
-                let decl = self.parse_decl("def", attributes)?;
-                Ok(Declaration::Decl(decl))
+                self.parse_decl("def", attributes)
             }
             Some(Token::Val) => {
                 let mut decl = self.parse_val_decl()?;
@@ -59,7 +57,7 @@ impl Parser {
         }
     }
 
-    fn parse_decl(&mut self, keyword: &'static str, attributes: Vec<Attribute>) -> Result<Decl> {
+    fn parse_decl(&mut self, keyword: &'static str, attributes: Vec<Attribute>) -> Result<Declaration> {
         // Expect the keyword token (let or def)
         match keyword {
             "let" => self.expect(Token::Let)?,
@@ -101,7 +99,7 @@ impl Parser {
             self.expect(Token::Assign)?;
             let body = self.parse_expression()?;
 
-            Ok(Decl {
+            Ok(Declaration::Decl(Decl {
                 keyword,
                 attributes,
                 name,
@@ -110,7 +108,7 @@ impl Parser {
                 return_attributes: vec![], // No separate return attributes for now
                 attributed_return_type,
                 body,
-            })
+            }))
         }
         // Check if this is a typed declaration (name: type = value or name: type for uniforms)
         else if self.check(&Token::Colon) {
@@ -127,31 +125,36 @@ impl Parser {
             // Check if this is a uniform declaration (no initializer allowed)
             let has_uniform_attr = attributes.iter().any(|attr| matches!(attr, Attribute::Uniform));
 
-            let body = if has_uniform_attr {
-                // Uniforms don't have initializers - use a placeholder expression
+            if has_uniform_attr {
+                // Uniforms don't have initializers
                 if self.check(&Token::Assign) {
                     return Err(CompilerError::ParseError(
                         "Uniform declarations cannot have initializer values".to_string(),
                     ));
                 }
-                // Use a placeholder expression for uniforms
-                self.node_counter.mk_node(ExprKind::Identifier("__uniform_placeholder".to_string()))
+                // Return UniformDecl
+                Ok(Declaration::Uniform(UniformDecl {
+                    name,
+                    ty: ty.ok_or_else(|| CompilerError::ParseError(
+                        "Uniform must have explicit type annotation".to_string()
+                    ))?,
+                }))
             } else {
                 // Regular typed declaration requires an initializer
                 self.expect(Token::Assign)?;
-                self.parse_expression()?
-            };
+                let body = self.parse_expression()?;
 
-            Ok(Decl {
-                keyword,
-                attributes,
-                name,
-                params: vec![], // No parameters for typed declarations
-                ty,
-                return_attributes: vec![],
-                attributed_return_type,
-                body,
-            })
+                Ok(Declaration::Decl(Decl {
+                    keyword,
+                    attributes,
+                    name,
+                    params: vec![], // No parameters for typed declarations
+                    ty,
+                    return_attributes: vec![],
+                    attributed_return_type,
+                    body,
+                }))
+            }
         } else {
             // Function declaration: let/def name param1 param2 = body
             // OR simple variable: let/def name = value
@@ -162,7 +165,7 @@ impl Parser {
             self.expect(Token::Assign)?;
             let body = self.parse_expression()?;
 
-            Ok(Decl {
+            Ok(Declaration::Decl(Decl {
                 keyword,
                 attributes,
                 name,
@@ -171,7 +174,7 @@ impl Parser {
                 return_attributes: vec![],
                 attributed_return_type: None,
                 body,
-            })
+            }))
         }
     }
 

@@ -81,6 +81,11 @@ impl CodeAnnotator {
                 self.exit_block();
             }
 
+            Declaration::Uniform(uniform) => {
+                write!(self.output, "#[uniform] def {}: ", uniform.name).unwrap();
+                self.write_type(&uniform.ty);
+            }
+
             Declaration::Val(val) => {
                 write!(self.output, "val {}: ", val.name).unwrap();
                 self.write_type(&val.ty);
