@@ -40,12 +40,8 @@ impl Parser {
         let attributes = self.parse_attributes()?;
 
         match self.peek() {
-            Some(Token::Let) => {
-                self.parse_decl("let", attributes)
-            }
-            Some(Token::Def) => {
-                self.parse_decl("def", attributes)
-            }
+            Some(Token::Let) => self.parse_decl("let", attributes),
+            Some(Token::Def) => self.parse_decl("def", attributes),
             Some(Token::Val) => {
                 let mut decl = self.parse_val_decl()?;
                 decl.attributes = attributes;
@@ -104,7 +100,9 @@ impl Parser {
                 attributes,
                 name,
                 params,
-                ty,
+                // For functions with parameters, don't store attributed_tuple in ty
+                // The type checker will build the full function type from params and body
+                ty: if attributed_return_type.is_some() { None } else { ty },
                 return_attributes: vec![], // No separate return attributes for now
                 attributed_return_type,
                 body,
@@ -135,9 +133,9 @@ impl Parser {
                 // Return UniformDecl
                 Ok(Declaration::Uniform(UniformDecl {
                     name,
-                    ty: ty.ok_or_else(|| CompilerError::ParseError(
-                        "Uniform must have explicit type annotation".to_string()
-                    ))?,
+                    ty: ty.ok_or_else(|| {
+                        CompilerError::ParseError("Uniform must have explicit type annotation".to_string())
+                    })?,
                 }))
             } else {
                 // Regular typed declaration requires an initializer
@@ -2242,19 +2240,16 @@ def fragment_main(): [4]f32 = SKY_RGBA
                     return Err(format!("Expected 1 declaration, got {}", declarations.len()));
                 }
                 match &declarations[0] {
-                    Declaration::Decl(decl) => {
-                        if decl.name != "material_color" {
-                            return Err(format!("Expected name 'material_color', got '{}'", decl.name));
+                    Declaration::Uniform(uniform_decl) => {
+                        if uniform_decl.name != "material_color" {
+                            return Err(format!("Expected name 'material_color', got '{}'", uniform_decl.name));
                         }
-                        if decl.attributes != vec![Attribute::Uniform] {
-                            return Err(format!("Expected Uniform attribute, got {:?}", decl.attributes));
-                        }
-                        if decl.ty != Some(crate::ast::types::vec3()) {
-                            return Err(format!("Expected vec3 type, got {:?}", decl.ty));
+                        if uniform_decl.ty != crate::ast::types::vec3() {
+                            return Err(format!("Expected vec3 type, got {:?}", uniform_decl.ty));
                         }
                         Ok(())
                     }
-                    _ => Err("Expected Decl declaration".to_string()),
+                    _ => Err("Expected Uniform declaration".to_string()),
                 }
             },
         );
@@ -2271,20 +2266,17 @@ def fragment_main(): [4]f32 = SKY_RGBA
                     return Err(format!("Expected 1 declaration, got {}", declarations.len()));
                 }
                 match &declarations[0] {
-                    Declaration::Decl(decl) => {
-                        if decl.name != "material_color" {
-                            return Err(format!("Expected name 'material_color', got '{}'", decl.name));
+                    Declaration::Uniform(uniform_decl) => {
+                        if uniform_decl.name != "material_color" {
+                            return Err(format!("Expected name 'material_color', got '{}'", uniform_decl.name));
                         }
-                        if decl.attributes != vec![Attribute::Uniform] {
-                            return Err(format!("Expected Uniform attribute, got {:?}", decl.attributes));
+                        if uniform_decl.ty != crate::ast::types::vec3() {
+                            return Err(format!("Expected vec3 type, got {:?}", uniform_decl.ty));
                         }
-                        if decl.ty != Some(crate::ast::types::vec3()) {
-                            return Err(format!("Expected vec3 type, got {:?}", decl.ty));
-                        }
-                        // Check that there's no initializer (the body should be something like a placeholder)
+                        // Check that there's no initializer (uniforms don't have bodies)
                         Ok(())
                     }
-                    _ => Err("Expected Decl declaration".to_string()),
+                    _ => Err("Expected Uniform declaration".to_string()),
                 }
             },
         );

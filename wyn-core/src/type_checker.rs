@@ -32,6 +32,19 @@ impl TypeChecker {
         }
     }
 
+    /// Format a type for error messages by applying current substitution
+    fn format_type(&self, ty: &Type) -> String {
+        let applied = ty.apply(&self.context);
+        match applied {
+            Type::Constructed(name, args) if args.is_empty() => format!("{}", name),
+            Type::Constructed(name, args) => {
+                let arg_strs: Vec<String> = args.iter().map(|a| self.format_type(a)).collect();
+                format!("{}[{}]", name, arg_strs.join(", "))
+            }
+            Type::Variable(id) => format!("?{}", id),
+        }
+    }
+
     pub fn new() -> Self {
         TypeChecker {
             scope_stack: ScopeStack::new(),
@@ -313,8 +326,9 @@ impl TypeChecker {
                     self.check_attributed_return_type(&expr_type, decl)?;
                 } else if !self.types_match(&expr_type, declared_type) {
                     return Err(CompilerError::TypeError(format!(
-                        "Type mismatch: expected {:?}, got {:?}",
-                        declared_type, expr_type
+                        "Type mismatch: expected {}, got {}",
+                        self.format_type(declared_type),
+                        self.format_type(&expr_type)
                     )));
                 }
             }
@@ -347,7 +361,10 @@ impl TypeChecker {
                     DeclParam::Typed(p) => p.name.clone(),
                 };
                 let type_scheme = TypeScheme::Monotype(param_type.clone());
-                debug!("Adding parameter '{}' to scope with type: {:?}", param_name, param_type);
+                debug!(
+                    "Adding parameter '{}' to scope with type: {:?}",
+                    param_name, param_type
+                );
                 self.scope_stack.insert(param_name, type_scheme);
             }
 
@@ -355,7 +372,10 @@ impl TypeChecker {
             debug!("About to infer body type for function '{}'", decl.name);
             debug!("Scope depth before body inference: {}", self.scope_stack.depth());
             let body_type = self.infer_expression(&decl.body)?;
-            debug!("Successfully inferred body type for '{}': {:?}", decl.name, body_type);
+            debug!(
+                "Successfully inferred body type for '{}': {:?}",
+                decl.name, body_type
+            );
 
             // Pop parameter scope
             self.scope_stack.pop_scope();
@@ -367,21 +387,32 @@ impl TypeChecker {
                 .fold(body_type.clone(), |acc, param_ty| types::function(param_ty, acc));
 
             // Check against declared type if provided
+            let is_entry_point =
+                decl.attributes.iter().any(|attr| matches!(attr, Attribute::Vertex | Attribute::Fragment));
+
             if let Some(declared_type) = &decl.ty {
-                self.context.unify(&func_type, declared_type).map_err(|_| {
-                    CompilerError::TypeError(format!(
-                        "Function type mismatch for '{}': declared {:?}, inferred {:?}",
-                        decl.name, declared_type, func_type
-                    ))
-                })?;
+                // For entry points, ty is just the return type (not the full function type)
+                if is_entry_point {
+                    // Check return type matches
+                    if !self.types_match(&body_type, declared_type) {
+                        return Err(CompilerError::TypeError(format!(
+                            "Entry point return type mismatch for '{}': expected {}, got {}",
+                            decl.name, self.format_type(declared_type), self.format_type(&body_type)
+                        )));
+                    }
+                } else {
+                    // For regular functions, ty would be the full function type (but we don't use it)
+                    // We just infer the function type from params and body
+                    self.context.unify(&func_type, declared_type).map_err(|_| {
+                        CompilerError::TypeError(format!(
+                            "Function type mismatch for '{}': declared {:?}, inferred {:?}",
+                            decl.name, declared_type, func_type
+                        ))
+                    })?;
+                }
             }
 
             // For entry points, check attributed return types
-            let is_entry_point = decl
-                .attributes
-                .iter()
-                .any(|attr| matches!(attr, Attribute::Vertex | Attribute::Fragment));
-
             if is_entry_point && decl.attributed_return_type.is_some() {
                 self.check_attributed_return_type(&body_type, decl)?;
             }
@@ -425,7 +456,8 @@ impl TypeChecker {
                     debug!("'{}' is a builtin", name);
                     if let Some(desc) = self.builtin_registry.get(name) {
                         // Build function type from param types and return type
-                        let func_type = desc.param_types
+                        let func_type = desc
+                            .param_types
                             .iter()
                             .rev()
                             .fold(desc.return_type.clone(), |acc, param_ty| {
@@ -466,10 +498,7 @@ impl TypeChecker {
 
                 // Check index type is i32
                 self.context.unify(&index_type, &types::i32()).map_err(|_| {
-                    CompilerError::TypeError(format!(
-                        "Array index must be i32, got {:?}",
-                        index_type
-                    ))
+                    CompilerError::TypeError(format!("Array index must be i32, got {}", index_type))
                 })?;
 
                 Ok(match &array_type {
@@ -478,14 +507,14 @@ impl TypeChecker {
                     {
                         args.get(0).cloned().ok_or_else(|| {
                             CompilerError::TypeError(format!(
-                                "Array type has no element type: {:?}",
+                                "Array type has no element type: {}",
                                 array_type
                             ))
                         })?
                     }
                     _ => {
                         return Err(CompilerError::TypeError(format!(
-                            "Cannot index non-array type: got {:?}",
+                            "Cannot index non-array type: got {}",
                             array_type
                         )));
                     }
@@ -498,7 +527,7 @@ impl TypeChecker {
                 // Check that both operands have compatible types
                 self.context.unify(&left_type, &right_type).map_err(|_| {
                     CompilerError::TypeError(format!(
-                        "Binary operator '{}' requires operands of the same type, got {:?} and {:?}",
+                        "Binary operator '{}' requires operands of the same type, got {} and {}",
                         op.op, left_type, right_type
                     ))
                 })?;
@@ -530,12 +559,9 @@ impl TypeChecker {
                 } else if self.builtin_registry.is_builtin(func_name) {
                     // Get type from builtin registry
                     if let Some(desc) = self.builtin_registry.get(func_name) {
-                        desc.param_types
-                            .iter()
-                            .rev()
-                            .fold(desc.return_type.clone(), |acc, param_ty| {
-                                Type::arrow(param_ty.clone(), acc)
-                            })
+                        desc.param_types.iter().rev().fold(desc.return_type.clone(), |acc, param_ty| {
+                            Type::arrow(param_ty.clone(), acc)
+                        })
                     } else {
                         return Err(CompilerError::UndefinedVariable(func_name.clone()));
                     }
@@ -607,7 +633,7 @@ impl TypeChecker {
                 if let Some(declared_type) = &let_in.ty {
                     if !self.types_match(&value_type, declared_type) {
                         return Err(CompilerError::TypeError(format!(
-                            "Type mismatch in let binding: expected {:?}, got {:?}",
+                            "Type mismatch in let binding: expected {}, got {}",
                             declared_type, value_type
                         )));
                     }
@@ -663,7 +689,8 @@ impl TypeChecker {
                         // Get the builtin descriptor with type signature
                         if let Some(desc) = self.builtin_registry.get(&qualified_name) {
                             // Build function type: arg1 -> arg2 -> ... -> ret
-                            let func_type = desc.param_types
+                            let func_type = desc
+                                .param_types
                                 .iter()
                                 .rev()
                                 .fold(desc.return_type.clone(), |acc, arg_ty| {
@@ -688,7 +715,9 @@ impl TypeChecker {
                         };
 
                         // Look up field in builtin registry (for vector types)
-                        if let Some(field_type) = self.builtin_registry.get_field_type(&type_name_str, field) {
+                        if let Some(field_type) =
+                            self.builtin_registry.get_field_type(&type_name_str, field)
+                        {
                             return Ok(field_type);
                         }
 
@@ -705,7 +734,7 @@ impl TypeChecker {
                         }
                     }
                     _ => Err(CompilerError::TypeError(format!(
-                        "Field access '{}' not supported on type {:?}",
+                        "Field access '{}' not supported on type {}",
                         field, expr_type
                     ))),
                 }
@@ -752,10 +781,7 @@ impl TypeChecker {
                 Type::Constructed(TypeName::Str("attributed_tuple"), expected_types),
             ) => {
                 expected_types.len() == actual_types.len()
-                    && expected_types
-                        .iter()
-                        .zip(actual_types.iter())
-                        .all(|(e, a)| self.types_equal(a, e))
+                    && expected_types.iter().zip(actual_types.iter()).all(|(e, a)| self.types_equal(a, e))
             }
             // Regular case - use structural equality after applying substitution
             _ => self.types_equal(&a, &b),
@@ -770,7 +796,7 @@ impl TypeChecker {
                 let expected_type = &attributed_return_type[0].ty;
                 if !self.types_match(expr_type, expected_type) {
                     return Err(CompilerError::TypeError(format!(
-                        "Type mismatch in entry point: expected {:?}, got {:?}",
+                        "Type mismatch in entry point: expected {}, got {}",
                         expected_type, expr_type
                     )));
                 }
@@ -782,7 +808,7 @@ impl TypeChecker {
                 let expected_tuple_type = types::tuple(expected_inner_types);
                 if !self.types_match(expr_type, &expected_tuple_type) {
                     return Err(CompilerError::TypeError(format!(
-                        "Type mismatch in entry point: expected tuple {:?}, got {:?}",
+                        "Type mismatch in entry point: expected tuple {}, got {}",
                         expected_tuple_type, expr_type
                     )));
                 }
@@ -863,6 +889,7 @@ mod tests {
         let program = parser.parse().unwrap();
 
         let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
         match checker.check_program(&program) {
             Ok(_) => {
                 println!("Type checking succeeded!");

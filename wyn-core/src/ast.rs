@@ -87,26 +87,6 @@ impl std::fmt::Display for TypeName {
     }
 }
 
-impl std::str::FromStr for TypeName {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Some(at_pos) = s.find('@') {
-            let (name, size_str) = s.split_at(at_pos);
-            let size_str = &size_str[1..]; // Skip the '@'
-            let size =
-                size_str.parse::<usize>().map_err(|_| format!("Invalid array size: {}", size_str))?;
-            // We need to leak the string to get &'static str for now
-            let leaked_name = Box::leak(name.to_string().into_boxed_str());
-            Ok(TypeName::Array(leaked_name, size))
-        } else {
-            // We need to leak the string to get &'static str for now
-            let leaked_str = Box::leak(s.to_string().into_boxed_str());
-            Ok(TypeName::Str(leaked_str))
-        }
-    }
-}
-
 impl polytype::Name for TypeName {
     fn arrow() -> Self {
         TypeName::Str("->")
@@ -128,7 +108,7 @@ pub struct Program {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Declaration {
-    Decl(Decl),         // Unified let/def declarations
+    Decl(Decl),           // Unified let/def declarations
     Uniform(UniformDecl), // Uniform declarations (no initializer)
     Val(ValDecl),
 }

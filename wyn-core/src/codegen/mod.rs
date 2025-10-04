@@ -124,7 +124,7 @@ impl CodeGenerator {
         // Check if any type is missing attributes
         if attributed_types.iter().any(|at| at.attributes.is_empty()) {
             Err(CompilerError::SpirvError(
-                "Entry point return values must all be attributed with @location or @builtin".to_string()
+                "Entry point return values must all be attributed with @location or @builtin".to_string(),
             ))
         } else {
             Ok(())
@@ -209,9 +209,12 @@ impl CodeGenerator {
 
     /// Generate a call to a builtin function
     fn generate_builtin_call(&mut self, name: &str, args: &[Value]) -> Result<Value> {
-        let implementation = self.builtin_registry.get(name)
+        let implementation = self
+            .builtin_registry
+            .get(name)
             .ok_or_else(|| CompilerError::SpirvError(format!("Unknown builtin function: {}", name)))?
-            .implementation.clone();
+            .implementation
+            .clone();
 
         match &implementation {
             BuiltinImpl::GlslExt(inst_num) => {
@@ -245,7 +248,12 @@ impl CodeGenerator {
     }
 
     /// Generate code for custom builtin implementations
-    fn generate_custom_builtin(&mut self, custom_impl: &CustomImpl, args: &[Value], name: &str) -> Result<Value> {
+    fn generate_custom_builtin(
+        &mut self,
+        custom_impl: &CustomImpl,
+        args: &[Value],
+        name: &str,
+    ) -> Result<Value> {
         match custom_impl {
             CustomImpl::Placeholder => {
                 // Vector constructors (vec2, vec3, vec4, ivec2, ivec3, ivec4)
@@ -259,17 +267,20 @@ impl CodeGenerator {
                     "ivec2" => Type::Constructed(TypeName::Str("ivec2"), vec![]),
                     "ivec3" => Type::Constructed(TypeName::Str("ivec3"), vec![]),
                     "ivec4" => Type::Constructed(TypeName::Str("ivec4"), vec![]),
-                    _ => return Err(CompilerError::SpirvError(format!(
-                        "Unknown custom builtin: {}",
-                        name
-                    ))),
+                    _ => {
+                        return Err(CompilerError::SpirvError(format!(
+                            "Unknown custom builtin: {}",
+                            name
+                        )));
+                    }
                 };
 
                 let result_type_info = self.get_or_create_type(&result_type_ast)?;
 
                 // Build composite from constituents
                 let constituent_ids: Vec<spirv::Word> = args.iter().map(|v| v.id).collect();
-                let result_id = self.builder.composite_construct(result_type_info.id, None, constituent_ids)?;
+                let result_id =
+                    self.builder.composite_construct(result_type_info.id, None, constituent_ids)?;
 
                 Ok(Value {
                     id: result_id,
@@ -313,7 +324,12 @@ impl CodeGenerator {
     /// Helper for generating binary operations
     fn generate_binary_op<F>(&mut self, args: &[Value], op: F) -> Result<Value>
     where
-        F: FnOnce(&mut Builder, spirv::Word, spirv::Word, spirv::Word) -> std::result::Result<spirv::Word, rspirv::dr::Error>,
+        F: FnOnce(
+            &mut Builder,
+            spirv::Word,
+            spirv::Word,
+            spirv::Word,
+        ) -> std::result::Result<spirv::Word, rspirv::dr::Error>,
     {
         if args.len() != 2 {
             return Err(CompilerError::SpirvError(
@@ -353,7 +369,11 @@ impl CodeGenerator {
     }
 
     /// Evaluate a composite constructor (vec, mat, array) as a constant
-    fn evaluate_const_composite_constructor(&mut self, func_name: &str, args: &[Expression]) -> Result<Value> {
+    fn evaluate_const_composite_constructor(
+        &mut self,
+        func_name: &str,
+        args: &[Expression],
+    ) -> Result<Value> {
         if !Self::is_const_composite_constructor(func_name) {
             return Err(CompilerError::SpirvError(format!(
                 "Unsupported constant expression: function call to {}",
@@ -370,13 +390,16 @@ impl CodeGenerator {
 
         // Determine the composite type based on constructor name
         if func_name.starts_with("vec") {
-            let component_count = func_name[3..].parse::<usize>()
-                .map_err(|_| CompilerError::SpirvError(format!("Invalid vector constructor: {}", func_name)))?;
+            let component_count = func_name[3..].parse::<usize>().map_err(|_| {
+                CompilerError::SpirvError(format!("Invalid vector constructor: {}", func_name))
+            })?;
 
             if elem_vals.len() != component_count {
                 return Err(CompilerError::SpirvError(format!(
                     "Vector constructor {} expects {} arguments, got {}",
-                    func_name, component_count, elem_vals.len()
+                    func_name,
+                    component_count,
+                    elem_vals.len()
                 )));
             }
 
@@ -390,14 +413,17 @@ impl CodeGenerator {
             })
         } else if func_name.starts_with("mat") {
             // Matrix constructors (mat2, mat3, mat4)
-            let dim = func_name[3..].parse::<usize>()
-                .map_err(|_| CompilerError::SpirvError(format!("Invalid matrix constructor: {}", func_name)))?;
+            let dim = func_name[3..].parse::<usize>().map_err(|_| {
+                CompilerError::SpirvError(format!("Invalid matrix constructor: {}", func_name))
+            })?;
 
             // Matrices are column vectors
             if elem_vals.len() != dim {
                 return Err(CompilerError::SpirvError(format!(
                     "Matrix constructor {} expects {} column vectors, got {}",
-                    func_name, dim, elem_vals.len()
+                    func_name,
+                    dim,
+                    elem_vals.len()
                 )));
             }
 
@@ -416,7 +442,7 @@ impl CodeGenerator {
             // array constructor
             if elem_vals.is_empty() {
                 return Err(CompilerError::SpirvError(
-                    "Array constructor requires at least one element".to_string()
+                    "Array constructor requires at least one element".to_string(),
                 ));
             }
 
@@ -460,14 +486,14 @@ impl CodeGenerator {
                     self.evaluate_const_composite_constructor(func_name, args)
                 } else {
                     Err(CompilerError::SpirvError(
-                        "Constant expressions only support direct constructor calls".to_string()
+                        "Constant expressions only support direct constructor calls".to_string(),
                     ))
                 }
             }
             ExprKind::ArrayLiteral(elems) => {
                 if elems.is_empty() {
                     return Err(CompilerError::SpirvError(
-                        "Empty array literals not supported for constants".to_string()
+                        "Empty array literals not supported for constants".to_string(),
                     ));
                 }
 
@@ -492,12 +518,10 @@ impl CodeGenerator {
                     type_id: array_type,
                 })
             }
-            _ => {
-                Err(CompilerError::SpirvError(format!(
-                    "Unsupported constant expression: {:?}",
-                    expr
-                )))
-            }
+            _ => Err(CompilerError::SpirvError(format!(
+                "Unsupported constant expression: {:?}",
+                expr
+            ))),
         }
     }
 
@@ -721,9 +745,7 @@ impl CodeGenerator {
                     Ok(())
                 }
             }
-            Declaration::Uniform(uniform_decl) => {
-                self.generate_uniform_declaration(uniform_decl)
-            }
+            Declaration::Uniform(uniform_decl) => self.generate_uniform_declaration(uniform_decl),
             Declaration::Val(_val_decl) => {
                 // Type signatures only
                 Ok(())
@@ -791,11 +813,15 @@ impl CodeGenerator {
 
         self.entry_points.push((decl.name.clone(), exec_model));
 
-        // Create function signature and handle output variables
-        let return_type_ast = decl
-            .ty
-            .as_ref()
-            .ok_or_else(|| CompilerError::SpirvError("Entry point must have return type".to_string()))?;
+        // Validate that return type is properly attributed
+        // Entry points must have attributed return types for outputs
+        if let Some(attributed_returns) = &decl.attributed_return_type {
+            Self::validate_entry_point_return_types(attributed_returns)?;
+        } else {
+            return Err(CompilerError::SpirvError(
+                "Entry point must have attributed return type (e.g., (vec4 @location(0)))".to_string(),
+            ));
+        }
 
         // Handle shader-specific variable creation
         match exec_model {
@@ -814,17 +840,6 @@ impl CodeGenerator {
                     self.create_outputs(attributed_return_type, exec_model)?;
                 }
             }
-        }
-
-        let return_type_info = self.get_or_create_type(return_type_ast)?;
-
-        // Validate that return type is properly attributed
-        if let Some(attributed_returns) = &decl.attributed_return_type {
-            Self::validate_entry_point_return_types(attributed_returns)?;
-        } else {
-            return Err(CompilerError::SpirvError(
-                "Entry point must have attributed return type (e.g., (vec4 @location(0)))".to_string()
-            ));
         }
 
         // Prepare parameters (handles both builtins and regular params)
@@ -1031,7 +1046,9 @@ impl CodeGenerator {
                         // For now, we'll use a heuristic: if the type_id matches what we expect for the type,
                         // it's a constant; otherwise it's a pointer that needs loading
 
-                        let var_type = binding.ty.as_ref()
+                        let var_type = binding
+                            .ty
+                            .as_ref()
                             .ok_or_else(|| {
                                 CompilerError::SpirvError(format!("No type info for variable: {}", name))
                             })?
@@ -1045,7 +1062,8 @@ impl CodeGenerator {
                             Ok(value)
                         } else {
                             // It's a pointer - load from it
-                            let loaded_id = self.builder.load(type_info.id, None, value.id, None, vec![])?;
+                            let loaded_id =
+                                self.builder.load(type_info.id, None, value.id, None, vec![])?;
                             Ok(Value {
                                 id: loaded_id,
                                 type_id: type_info.id,
@@ -1172,10 +1190,13 @@ impl CodeGenerator {
 
                     // If it's an array identifier, get its type and return the size
                     if let ExprKind::Identifier(array_name) = &array_expr.kind {
-                        let binding = self.environment.lookup(array_name)
+                        let binding = self
+                            .environment
+                            .lookup(array_name)
                             .ok_or_else(|| CompilerError::UndefinedVariable(array_name.clone()))?;
-                        let array_type = binding.ty.as_ref()
-                            .ok_or_else(|| CompilerError::SpirvError(format!("No type info for: {}", array_name)))?;
+                        let array_type = binding.ty.as_ref().ok_or_else(|| {
+                            CompilerError::SpirvError(format!("No type info for: {}", array_name))
+                        })?;
 
                         match array_type {
                             Type::Constructed(TypeName::Array("array", size), _) => {
@@ -1295,10 +1316,12 @@ impl CodeGenerator {
                     // without explicit type annotations have ty=None even after type checking.
                     // This causes incorrect codegen (defaults to i32 instead of actual type).
                     // Solution: Either make AST mutable or return annotated AST from type checker.
-                    panic!("BUG: let-in expression '{}' missing type annotation. \
+                    panic!(
+                        "BUG: let-in expression '{}' missing type annotation. \
                             Type checker should have filled this in but AST is immutable. \
                             Workaround: add explicit type annotation like 'let {} : type = ...'",
-                           let_in.name, let_in.name);
+                        let_in.name, let_in.name
+                    );
                 });
 
                 let type_info = self.get_or_create_type(&var_type)?;
@@ -1407,7 +1430,7 @@ impl CodeGenerator {
                     let owned_args: Vec<Expression> = all_args.iter().map(|&arg| arg.clone()).collect();
                     let temp_expr = Expression {
                         h: Header { id: NodeId(0) }, // Temporary node ID for codegen
-                        kind: ExprKind::FunctionCall(func_name.clone(), owned_args)
+                        kind: ExprKind::FunctionCall(func_name.clone(), owned_args),
                     };
                     return self.generate_expression(&temp_expr);
                 }
@@ -1428,13 +1451,17 @@ impl CodeGenerator {
                     }
                 };
 
-                let binding = self.environment.lookup(array_name)
+                let binding = self
+                    .environment
+                    .lookup(array_name)
                     .ok_or_else(|| CompilerError::UndefinedVariable(array_name.clone()))?;
 
                 let array_value = binding.value;
 
                 // Get the array type from the binding and clone it before generate_expression
-                let array_type = binding.ty.as_ref()
+                let array_type = binding
+                    .ty
+                    .as_ref()
                     .ok_or_else(|| {
                         CompilerError::SpirvError(format!("No type info for array: {}", array_name))
                     })?

@@ -238,17 +238,20 @@ mod tests {
     #[test]
     fn test_float_division_folding() {
         let mut folder = ConstantFolder::new();
+        let mut counter = NodeCounter::new();
 
         // Test 135f32 / 255f32
-        let expr = ExprKind::BinaryOp(
+        let left = counter.mk_node(ExprKind::FloatLiteral(135.0));
+        let right = counter.mk_node(ExprKind::FloatLiteral(255.0));
+        let expr = counter.mk_node(ExprKind::BinaryOp(
             BinaryOp { op: "/".to_string() },
-            Box::new(ExprKind::FloatLiteral(135.0)),
-            Box::new(ExprKind::FloatLiteral(255.0)),
-        );
+            Box::new(left),
+            Box::new(right),
+        ));
 
         let result = folder.fold_expression(&expr).unwrap();
 
-        match result {
+        match result.kind {
             ExprKind::FloatLiteral(val) => {
                 // Should be approximately 0.529411765
                 assert!((val - 0.529411765).abs() < 0.000001);
@@ -260,30 +263,36 @@ mod tests {
     #[test]
     fn test_array_with_division_folding() {
         let mut folder = ConstantFolder::new();
+        let mut counter = NodeCounter::new();
 
         // Test [135f32/255f32, 206f32/255f32, 1.0f32]
-        let expr = ExprKind::ArrayLiteral(vec![
-            ExprKind::BinaryOp(
-                BinaryOp { op: "/".to_string() },
-                Box::new(ExprKind::FloatLiteral(135.0)),
-                Box::new(ExprKind::FloatLiteral(255.0)),
-            ),
-            ExprKind::BinaryOp(
-                BinaryOp { op: "/".to_string() },
-                Box::new(ExprKind::FloatLiteral(206.0)),
-                Box::new(ExprKind::FloatLiteral(255.0)),
-            ),
-            ExprKind::FloatLiteral(1.0),
-        ]);
+        let left1 = counter.mk_node(ExprKind::FloatLiteral(135.0));
+        let right1 = counter.mk_node(ExprKind::FloatLiteral(255.0));
+        let elem1 = counter.mk_node(ExprKind::BinaryOp(
+            BinaryOp { op: "/".to_string() },
+            Box::new(left1),
+            Box::new(right1),
+        ));
+
+        let left2 = counter.mk_node(ExprKind::FloatLiteral(206.0));
+        let right2 = counter.mk_node(ExprKind::FloatLiteral(255.0));
+        let elem2 = counter.mk_node(ExprKind::BinaryOp(
+            BinaryOp { op: "/".to_string() },
+            Box::new(left2),
+            Box::new(right2),
+        ));
+        let elem3 = counter.mk_node(ExprKind::FloatLiteral(1.0));
+
+        let expr = counter.mk_node(ExprKind::ArrayLiteral(vec![elem1, elem2, elem3]));
 
         let result = folder.fold_expression(&expr).unwrap();
 
-        match result {
+        match result.kind {
             ExprKind::ArrayLiteral(elements) => {
                 assert_eq!(elements.len(), 3);
 
                 // First element should be folded
-                match &elements[0] {
+                match &elements[0].kind {
                     ExprKind::FloatLiteral(val) => {
                         assert!((val - 0.529411765).abs() < 0.000001);
                     }
@@ -291,7 +300,7 @@ mod tests {
                 }
 
                 // Second element should be folded
-                match &elements[1] {
+                match &elements[1].kind {
                     ExprKind::FloatLiteral(val) => {
                         assert!((val - 0.807843137).abs() < 0.000001);
                     }
@@ -299,7 +308,7 @@ mod tests {
                 }
 
                 // Third element should remain unchanged
-                match &elements[2] {
+                match &elements[2].kind {
                     ExprKind::FloatLiteral(val) => {
                         assert_eq!(*val, 1.0);
                     }

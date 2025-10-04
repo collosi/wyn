@@ -173,124 +173,122 @@ impl BuiltinRegistry {
         self.register_numeric_ops("f64");
     }
 
-    fn register_numeric_ops(&mut self, ty_name: &'static str) {
+    /// Helper to register a binary operation
+    fn register_binop(&mut self, ty_name: &'static str, op: &str, impl_: BuiltinImpl) {
         let t = Self::ty(ty_name);
-        let bool_t = Self::ty("bool");
+        self.register(BuiltinDescriptor {
+            name: format!("{}.{}", ty_name, op),
+            param_types: vec![t.clone(), t.clone()],
+            return_type: t,
+            implementation: impl_,
+        });
+    }
 
+    /// Helper to register a comparison operation
+    fn register_cmp(&mut self, ty_name: &'static str, op: &str, impl_: BuiltinImpl) {
+        let t = Self::ty(ty_name);
+        self.register(BuiltinDescriptor {
+            name: format!("{}.{}", ty_name, op),
+            param_types: vec![t.clone(), t.clone()],
+            return_type: Self::ty("bool"),
+            implementation: impl_,
+        });
+    }
+
+    /// Helper to register a unary operation
+    fn register_unop(&mut self, ty_name: &'static str, op: &str, impl_: BuiltinImpl) {
+        let t = Self::ty(ty_name);
+        self.register(BuiltinDescriptor {
+            name: format!("{}.{}", ty_name, op),
+            param_types: vec![t.clone()],
+            return_type: t,
+            implementation: impl_,
+        });
+    }
+
+    fn register_numeric_ops(&mut self, ty_name: &'static str) {
         let is_float = ty_name.starts_with('f');
         let is_signed = ty_name.starts_with('i') || is_float;
 
         // Arithmetic operators
-        self.register(BuiltinDescriptor {
-            name: format!("{}.+", ty_name),
-            param_types: vec![t.clone(), t.clone()],
-            return_type: t.clone(),
-            implementation: if is_float { BuiltinImpl::SpirvOp(SpirvOp::FAdd) } else { BuiltinImpl::SpirvOp(SpirvOp::IAdd) },
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.-", ty_name),
-            param_types: vec![t.clone(), t.clone()],
-            return_type: t.clone(),
-            implementation: if is_float { BuiltinImpl::SpirvOp(SpirvOp::FSub) } else { BuiltinImpl::SpirvOp(SpirvOp::ISub) },
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.*", ty_name),
-            param_types: vec![t.clone(), t.clone()],
-            return_type: t.clone(),
-            implementation: if is_float { BuiltinImpl::SpirvOp(SpirvOp::FMul) } else { BuiltinImpl::SpirvOp(SpirvOp::IMul) },
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}./", ty_name),
-            param_types: vec![t.clone(), t.clone()],
-            return_type: t.clone(),
-            implementation: if is_float {
+        self.register_binop(
+            ty_name,
+            "+",
+            if is_float {
+                BuiltinImpl::SpirvOp(SpirvOp::FAdd)
+            } else {
+                BuiltinImpl::SpirvOp(SpirvOp::IAdd)
+            },
+        );
+        self.register_binop(
+            ty_name,
+            "-",
+            if is_float {
+                BuiltinImpl::SpirvOp(SpirvOp::FSub)
+            } else {
+                BuiltinImpl::SpirvOp(SpirvOp::ISub)
+            },
+        );
+        self.register_binop(
+            ty_name,
+            "*",
+            if is_float {
+                BuiltinImpl::SpirvOp(SpirvOp::FMul)
+            } else {
+                BuiltinImpl::SpirvOp(SpirvOp::IMul)
+            },
+        );
+        self.register_binop(
+            ty_name,
+            "/",
+            if is_float {
                 BuiltinImpl::SpirvOp(SpirvOp::FDiv)
             } else if is_signed {
                 BuiltinImpl::SpirvOp(SpirvOp::SDiv)
             } else {
                 BuiltinImpl::SpirvOp(SpirvOp::UDiv)
             },
-        });
+        );
 
         // Comparison operators
-        self.register(BuiltinDescriptor {
-            name: format!("{}.<", ty_name),
-            param_types: vec![t.clone(), t.clone()],
-            return_type: bool_t.clone(),
-            implementation: if is_float {
+        self.register_cmp(
+            ty_name,
+            "<",
+            if is_float {
                 BuiltinImpl::SpirvOp(SpirvOp::FOrdLessThan)
             } else if is_signed {
                 BuiltinImpl::SpirvOp(SpirvOp::SLessThan)
             } else {
                 BuiltinImpl::SpirvOp(SpirvOp::ULessThan)
             },
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.==", ty_name),
-            param_types: vec![t.clone(), t.clone()],
-            return_type: bool_t.clone(),
-            implementation: if is_float {
+        );
+        self.register_cmp(
+            ty_name,
+            "==",
+            if is_float {
                 BuiltinImpl::SpirvOp(SpirvOp::FOrdEqual)
             } else {
                 BuiltinImpl::SpirvOp(SpirvOp::IEqual)
             },
-        });
+        );
 
         // min, max, abs functions
         if is_float {
-            self.register(BuiltinDescriptor {
-                name: format!("{}.min", ty_name),
-                param_types: vec![t.clone(), t.clone()],
-                return_type: t.clone(),
-                implementation: BuiltinImpl::GlslExt(37), // FMin
-            });
-
-            self.register(BuiltinDescriptor {
-                name: format!("{}.max", ty_name),
-                param_types: vec![t.clone(), t.clone()],
-                return_type: t.clone(),
-                implementation: BuiltinImpl::GlslExt(40), // FMax
-            });
-
-            self.register(BuiltinDescriptor {
-                name: format!("{}.abs", ty_name),
-                param_types: vec![t.clone()],
-                return_type: t.clone(),
-                implementation: BuiltinImpl::GlslExt(4), // FAbs
-            });
+            self.register_binop(ty_name, "min", BuiltinImpl::GlslExt(37)); // FMin
+            self.register_binop(ty_name, "max", BuiltinImpl::GlslExt(40)); // FMax
+            self.register_unop(ty_name, "abs", BuiltinImpl::GlslExt(4)); // FAbs
         } else {
-            self.register(BuiltinDescriptor {
-                name: format!("{}.min", ty_name),
-                param_types: vec![t.clone(), t.clone()],
-                return_type: t.clone(),
-                implementation: if is_signed {
-                    BuiltinImpl::GlslExt(39) // SMin
-                } else {
-                    BuiltinImpl::GlslExt(38) // UMin
-                },
-            });
-
-            self.register(BuiltinDescriptor {
-                name: format!("{}.max", ty_name),
-                param_types: vec![t.clone(), t.clone()],
-                return_type: t.clone(),
-                implementation: if is_signed {
-                    BuiltinImpl::GlslExt(42) // SMax
-                } else {
-                    BuiltinImpl::GlslExt(41) // UMax
-                },
-            });
-
-            self.register(BuiltinDescriptor {
-                name: format!("{}.abs", ty_name),
-                param_types: vec![t.clone()],
-                return_type: t.clone(),
-                implementation: BuiltinImpl::GlslExt(5), // SAbs
-            });
+            self.register_binop(
+                ty_name,
+                "min",
+                if is_signed { BuiltinImpl::GlslExt(39) } else { BuiltinImpl::GlslExt(38) },
+            );
+            self.register_binop(
+                ty_name,
+                "max",
+                if is_signed { BuiltinImpl::GlslExt(42) } else { BuiltinImpl::GlslExt(41) },
+            );
+            self.register_unop(ty_name, "abs", BuiltinImpl::GlslExt(5)); // SAbs
         }
     }
 
@@ -307,47 +305,19 @@ impl BuiltinRegistry {
     }
 
     fn register_integral_ops(&mut self, ty_name: &'static str) {
-        let t = Self::ty(ty_name);
-
-        // Bitwise operators
-        self.register(BuiltinDescriptor {
-            name: format!("{}.&", ty_name),
-            param_types: vec![t.clone(), t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::SpirvOp(SpirvOp::BitwiseAnd),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.|", ty_name),
-            param_types: vec![t.clone(), t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::SpirvOp(SpirvOp::BitwiseOr),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.^", ty_name),
-            param_types: vec![t.clone(), t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::SpirvOp(SpirvOp::BitwiseXor),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.<<", ty_name),
-            param_types: vec![t.clone(), t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::SpirvOp(SpirvOp::ShiftLeftLogical),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.>>", ty_name),
-            param_types: vec![t.clone(), t.clone()],
-            return_type: t.clone(),
-            implementation: if ty_name.starts_with('i') {
+        self.register_binop(ty_name, "&", BuiltinImpl::SpirvOp(SpirvOp::BitwiseAnd));
+        self.register_binop(ty_name, "|", BuiltinImpl::SpirvOp(SpirvOp::BitwiseOr));
+        self.register_binop(ty_name, "^", BuiltinImpl::SpirvOp(SpirvOp::BitwiseXor));
+        self.register_binop(ty_name, "<<", BuiltinImpl::SpirvOp(SpirvOp::ShiftLeftLogical));
+        self.register_binop(
+            ty_name,
+            ">>",
+            if ty_name.starts_with('i') {
                 BuiltinImpl::SpirvOp(SpirvOp::ShiftRightArithmetic)
             } else {
                 BuiltinImpl::SpirvOp(SpirvOp::ShiftRightLogical)
             },
-        });
+        );
     }
 
     /// Register real (floating-point) module functions
@@ -357,130 +327,49 @@ impl BuiltinRegistry {
         self.register_real_ops("f64");
     }
 
-    fn register_real_ops(&mut self, ty_name: &'static str) {
+    /// Helper to register a ternary operation
+    fn register_ternop(&mut self, ty_name: &'static str, op: &str, impl_: BuiltinImpl) {
         let t = Self::ty(ty_name);
-        let bool_t = Self::ty("bool");
-
-        // Transcendental functions
         self.register(BuiltinDescriptor {
-            name: format!("{}.sin", ty_name),
-            param_types: vec![t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::GlslExt(13),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.cos", ty_name),
-            param_types: vec![t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::GlslExt(14),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.tan", ty_name),
-            param_types: vec![t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::GlslExt(15),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.asin", ty_name),
-            param_types: vec![t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::GlslExt(16),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.acos", ty_name),
-            param_types: vec![t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::GlslExt(17),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.atan", ty_name),
-            param_types: vec![t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::GlslExt(18),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.sqrt", ty_name),
-            param_types: vec![t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::GlslExt(31),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.exp", ty_name),
-            param_types: vec![t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::GlslExt(27),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.log", ty_name),
-            param_types: vec![t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::GlslExt(28),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.pow", ty_name),
-            param_types: vec![t.clone(), t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::GlslExt(26),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.floor", ty_name),
-            param_types: vec![t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::GlslExt(8),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.ceil", ty_name),
-            param_types: vec![t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::GlslExt(9),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.round", ty_name),
-            param_types: vec![t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::GlslExt(1),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.trunc", ty_name),
-            param_types: vec![t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::GlslExt(3),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.clamp", ty_name),
+            name: format!("{}.{}", ty_name, op),
             param_types: vec![t.clone(), t.clone(), t.clone()],
-            return_type: t.clone(),
-            implementation: BuiltinImpl::GlslExt(43),
+            return_type: t,
+            implementation: impl_,
         });
+    }
+
+    /// Helper to register a unary operation with bool return
+    fn register_bool_unop(&mut self, ty_name: &'static str, op: &str, impl_: BuiltinImpl) {
+        let t = Self::ty(ty_name);
+        self.register(BuiltinDescriptor {
+            name: format!("{}.{}", ty_name, op),
+            param_types: vec![t],
+            return_type: Self::ty("bool"),
+            implementation: impl_,
+        });
+    }
+
+    fn register_real_ops(&mut self, ty_name: &'static str) {
+        // Transcendental functions
+        self.register_unop(ty_name, "sin", BuiltinImpl::GlslExt(13));
+        self.register_unop(ty_name, "cos", BuiltinImpl::GlslExt(14));
+        self.register_unop(ty_name, "tan", BuiltinImpl::GlslExt(15));
+        self.register_unop(ty_name, "asin", BuiltinImpl::GlslExt(16));
+        self.register_unop(ty_name, "acos", BuiltinImpl::GlslExt(17));
+        self.register_unop(ty_name, "atan", BuiltinImpl::GlslExt(18));
+        self.register_unop(ty_name, "sqrt", BuiltinImpl::GlslExt(31));
+        self.register_unop(ty_name, "exp", BuiltinImpl::GlslExt(27));
+        self.register_unop(ty_name, "log", BuiltinImpl::GlslExt(28));
+        self.register_binop(ty_name, "pow", BuiltinImpl::GlslExt(26));
+        self.register_unop(ty_name, "floor", BuiltinImpl::GlslExt(8));
+        self.register_unop(ty_name, "ceil", BuiltinImpl::GlslExt(9));
+        self.register_unop(ty_name, "round", BuiltinImpl::GlslExt(1));
+        self.register_unop(ty_name, "trunc", BuiltinImpl::GlslExt(3));
+        self.register_ternop(ty_name, "clamp", BuiltinImpl::GlslExt(43));
 
         // isnan, isinf
-        self.register(BuiltinDescriptor {
-            name: format!("{}.isnan", ty_name),
-            param_types: vec![t.clone()],
-            return_type: bool_t.clone(),
-            implementation: BuiltinImpl::GlslExt(66), // IsNan
-        });
-
-        self.register(BuiltinDescriptor {
-            name: format!("{}.isinf", ty_name),
-            param_types: vec![t.clone()],
-            return_type: bool_t,
-            implementation: BuiltinImpl::GlslExt(67), // IsInf
-        });
+        self.register_bool_unop(ty_name, "isnan", BuiltinImpl::GlslExt(66));
+        self.register_bool_unop(ty_name, "isinf", BuiltinImpl::GlslExt(67));
     }
 
     /// Register float-specific module functions
@@ -571,54 +460,28 @@ impl BuiltinRegistry {
         });
     }
 
+    /// Helper to register a vector constructor
+    fn register_vec_constructor(&mut self, vec_name: &'static str, elem_type: &'static str, arity: usize) {
+        let elem_t = Self::ty(elem_type);
+        self.register(BuiltinDescriptor {
+            name: vec_name.to_string(),
+            param_types: vec![elem_t; arity],
+            return_type: Self::ty(vec_name),
+            implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
+        });
+    }
+
     /// Register vector constructor functions
     fn register_vector_constructors(&mut self) {
-        let f32_t = Self::ty("f32");
-        let i32_t = Self::ty("i32");
+        // f32 vectors
+        self.register_vec_constructor("vec2", "f32", 2);
+        self.register_vec_constructor("vec3", "f32", 3);
+        self.register_vec_constructor("vec4", "f32", 4);
 
-        // vec2, vec3, vec4 constructors
-        self.register(BuiltinDescriptor {
-            name: "vec2".to_string(),
-            param_types: vec![f32_t.clone(), f32_t.clone()],
-            return_type: Self::ty("vec2"),
-            implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: "vec3".to_string(),
-            param_types: vec![f32_t.clone(), f32_t.clone(), f32_t.clone()],
-            return_type: Self::ty("vec3"),
-            implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: "vec4".to_string(),
-            param_types: vec![f32_t.clone(), f32_t.clone(), f32_t.clone(), f32_t],
-            return_type: Self::ty("vec4"),
-            implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
-        });
-
-        // ivec2, ivec3, ivec4 constructors
-        self.register(BuiltinDescriptor {
-            name: "ivec2".to_string(),
-            param_types: vec![i32_t.clone(), i32_t.clone()],
-            return_type: Self::ty("ivec2"),
-            implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: "ivec3".to_string(),
-            param_types: vec![i32_t.clone(), i32_t.clone(), i32_t.clone()],
-            return_type: Self::ty("ivec3"),
-            implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
-        });
-
-        self.register(BuiltinDescriptor {
-            name: "ivec4".to_string(),
-            param_types: vec![i32_t.clone(), i32_t.clone(), i32_t.clone(), i32_t],
-            return_type: Self::ty("ivec4"),
-            implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
-        });
+        // i32 vectors
+        self.register_vec_constructor("ivec2", "i32", 2);
+        self.register_vec_constructor("ivec3", "i32", 3);
+        self.register_vec_constructor("ivec4", "i32", 4);
     }
 
     /// Register higher-order functions and array operations
