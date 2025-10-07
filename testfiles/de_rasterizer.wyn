@@ -7,7 +7,7 @@ def WHITE : vec3 = vec3 1.0f32 1.0f32 0.97f32
 def YELLOW : vec3 = vec3 1.0f32 1.0f32 0.0f32
 
 -- Rasterize helpers
-let line (WEIGHT:f32) (p:vec2) (p0:vec2) (p1:vec2) (w:f32) : f32 =
+def line (WEIGHT:f32) (p:vec2) (p0:vec2) (p1:vec2) (w:f32) : f32 =
   let d = [p1[0]-p0[0], p1[1]-p0[1]]
   let denom = dot2 d d
   let t_raw = if denom == 0.0f32 then 0.0f32 else (dot2 d [p[0]-p0[0], p[1]-p0[1]] / denom)
@@ -17,13 +17,13 @@ let line (WEIGHT:f32) (p:vec2) (p0:vec2) (p1:vec2) (w:f32) : f32 =
   let s = (if dist == 0.0f32 then 0.0f32 else (1.0f32 / dist)) * WEIGHT * w
   in f32.min (s*s) 1.0f32
 
-let circle (WEIGHT:f32) (p:vec2) (c:vec2) (r:f32) (w:f32) : f32 =
+def circle (WEIGHT:f32) (p:vec2) (c:vec2) (r:f32) (w:f32) : f32 =
   let dist = f32.abs (length2 [p[0]-c[0], p[1]-c[1]]) + r
   let s = (if dist == 0.0f32 then 0.0f32 else (1.0f32 / dist)) * WEIGHT * w
   in f32.min (s*s) 1.0f32
 
 -- Matrices
-let getRotMatrix (a:vec3) : mat4 =
+def getRotMatrix (a:vec3) : mat4 =
   let s = [ f32.sin a[0], f32.sin a[1], f32.sin a[2] ]
   let c = [ f32.cos a[0], f32.cos a[1], f32.cos a[2] ]
   -- Columns ret[0..3], matching GLSL code:
@@ -33,7 +33,7 @@ let getRotMatrix (a:vec3) : mat4 =
   let c3 : vec4 = [ 0.0f32, 0.0f32, 0.0f32, 1.0f32 ]
   in [c0,c1,c2,c3]
 
-let getPosMatrix (p:vec3) : mat4 =
+def getPosMatrix (p:vec3) : mat4 =
   let c0 : vec4 = [1.0f32, 0.0f32, 0.0f32, p[0]]
   let c1 : vec4 = [0.0f32, 1.0f32, 0.0f32, p[1]]
   let c2 : vec4 = [0.0f32, 0.0f32, 1.0f32, p[2]]
@@ -41,12 +41,12 @@ let getPosMatrix (p:vec3) : mat4 =
   in [c0,c1,c2,c3]
 
 -- utils
-let mix3 (a:vec3) (b:vec3) (c:vec3) (t:f32) : vec3 =
+def mix3 (a:vec3) (b:vec3) (c:vec3) (t:f32) : vec3 =
   if t > 0.5f32
   then mix3v b c (t*2.0f32 - 1.0f32)
   else mix3v a b (t*2.0f32)
 
-let fragment (p:vec3) (iTime:f32) : vec3 =
+def fragment (p:vec3) (iTime:f32) : vec3 =
   let t = f32.sin(p[0]*0.8f32 + iTime*0.5f32)*0.5f32 + 0.5f32
   let fog = f32.min (p[2]*p[2]*p[2]*400.0f32) 1.0f32
   in map (* fog) (mix3 RED GREEN BLUE t)
@@ -57,7 +57,7 @@ let fragment (p:vec3) (iTime:f32) : vec3 =
 --   iTime       : time in seconds
 --   fragCoord   : pixel coordinate [x, y]
 -- Output: vec4 color
-let main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2) : vec4 =
+def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2) : vec4 =
   let WEIGHT = 3.0f32 / iResolution[0]
 
   -- Normalized, centered UV with aspect correction
