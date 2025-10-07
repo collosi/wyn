@@ -2227,3 +2227,81 @@ fn test_parse_pattern_lowercase_not_constructor() {
         _ => panic!("Expected Name pattern (not Constructor), got {:?}", pattern.kind),
     }
 }
+
+// Module parsing tests
+
+#[test]
+fn test_parse_type_bind_simple() {
+    expect_parse("type Point = (i32, i32)", |declarations| {
+        if declarations.len() != 1 {
+            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+        }
+        match &declarations[0] {
+            Declaration::TypeBind(bind) => {
+                assert_eq!(bind.name, "Point");
+                assert_eq!(bind.kind, TypeBindKind::Normal);
+                assert_eq!(bind.type_params.len(), 0);
+                Ok(())
+            }
+            _ => Err("Expected TypeBind declaration".to_string()),
+        }
+    });
+}
+
+#[test]
+fn test_parse_import() {
+    expect_parse("import \"path/to/module\"", |declarations| {
+        if declarations.len() != 1 {
+            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+        }
+        match &declarations[0] {
+            Declaration::Import(path) => {
+                assert_eq!(path, "path/to/module");
+                Ok(())
+            }
+            _ => Err("Expected Import declaration".to_string()),
+        }
+    });
+}
+
+#[test]
+fn test_parse_module_bind_simple() {
+    expect_parse("module M = { def x : i32 = 42 }", |declarations| {
+        if declarations.len() != 1 {
+            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+        }
+        match &declarations[0] {
+            Declaration::ModuleBind(bind) => {
+                assert_eq!(bind.name, "M");
+                assert_eq!(bind.params.len(), 0);
+                assert!(bind.signature.is_none());
+                match &bind.body {
+                    ModuleExpression::Struct(decls) => {
+                        if decls.len() != 1 {
+                            return Err(format!("Expected 1 inner declaration, got {}", decls.len()));
+                        }
+                        Ok(())
+                    }
+                    _ => Err("Expected Struct module expression".to_string()),
+                }
+            }
+            _ => Err("Expected ModuleBind declaration".to_string()),
+        }
+    });
+}
+
+#[test]
+fn test_parse_local_declaration() {
+    expect_parse("local def x : i32 = 42", |declarations| {
+        if declarations.len() != 1 {
+            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+        }
+        match &declarations[0] {
+            Declaration::Local(inner) => match **inner {
+                Declaration::Decl(_) => Ok(()),
+                _ => Err("Expected Decl inside Local".to_string()),
+            },
+            _ => Err("Expected Local declaration".to_string()),
+        }
+    });
+}

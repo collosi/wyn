@@ -827,6 +827,24 @@ impl CodeGenerator {
                 // Type signatures only
                 Ok(())
             }
+            Declaration::TypeBind(_) => {
+                unimplemented!("Type bindings are not yet supported in code generation")
+            }
+            Declaration::ModuleBind(_) => {
+                unimplemented!("Module bindings are not yet supported in code generation")
+            }
+            Declaration::ModuleTypeBind(_) => {
+                unimplemented!("Module type bindings are not yet supported in code generation")
+            }
+            Declaration::Open(_) => {
+                unimplemented!("Open declarations are not yet supported in code generation")
+            }
+            Declaration::Import(_) => {
+                unimplemented!("Import declarations are not yet supported in code generation")
+            }
+            Declaration::Local(_) => {
+                unimplemented!("Local declarations are not yet supported in code generation")
+            }
         }
     }
 

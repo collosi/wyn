@@ -316,6 +316,24 @@ impl TypeChecker {
                 debug!("Checking Val declaration: {}", val_decl.name);
                 self.check_val_decl(val_decl)
             }
+            Declaration::TypeBind(_) => {
+                unimplemented!("Type bindings are not yet supported in type checking")
+            }
+            Declaration::ModuleBind(_) => {
+                unimplemented!("Module bindings are not yet supported in type checking")
+            }
+            Declaration::ModuleTypeBind(_) => {
+                unimplemented!("Module type bindings are not yet supported in type checking")
+            }
+            Declaration::Open(_) => {
+                unimplemented!("Open declarations are not yet supported in type checking")
+            }
+            Declaration::Import(_) => {
+                unimplemented!("Import declarations are not yet supported in type checking")
+            }
+            Declaration::Local(_) => {
+                unimplemented!("Local declarations are not yet supported in type checking")
+            }
         }
     }
 

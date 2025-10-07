@@ -119,6 +119,24 @@ impl Visitor for CodeAnnotator {
                 self.visit_val_decl(val)?;
                 self.output.push('\n');
             }
+            Declaration::TypeBind(_) => {
+                unimplemented!("Type bindings are not yet supported in code annotation")
+            }
+            Declaration::ModuleBind(_) => {
+                unimplemented!("Module bindings are not yet supported in code annotation")
+            }
+            Declaration::ModuleTypeBind(_) => {
+                unimplemented!("Module type bindings are not yet supported in code annotation")
+            }
+            Declaration::Open(_) => {
+                unimplemented!("Open declarations are not yet supported in code annotation")
+            }
+            Declaration::Import(_) => {
+                unimplemented!("Import declarations are not yet supported in code annotation")
+            }
+            Declaration::Local(_) => {
+                unimplemented!("Local declarations are not yet supported in code annotation")
+            }
         }
         ControlFlow::Continue(())
     }

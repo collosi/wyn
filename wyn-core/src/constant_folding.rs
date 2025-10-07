@@ -61,6 +61,24 @@ impl ConstantFolder {
                 // Val declarations don't have expressions to fold
                 Ok(Declaration::Val(v.clone()))
             }
+            Declaration::TypeBind(_) => {
+                unimplemented!("Type bindings are not yet supported in constant folding")
+            }
+            Declaration::ModuleBind(_) => {
+                unimplemented!("Module bindings are not yet supported in constant folding")
+            }
+            Declaration::ModuleTypeBind(_) => {
+                unimplemented!("Module type bindings are not yet supported in constant folding")
+            }
+            Declaration::Open(_) => {
+                unimplemented!("Open declarations are not yet supported in constant folding")
+            }
+            Declaration::Import(_) => {
+                unimplemented!("Import declarations are not yet supported in constant folding")
+            }
+            Declaration::Local(_) => {
+                unimplemented!("Local declarations are not yet supported in constant folding")
+            }
         }
     }
 

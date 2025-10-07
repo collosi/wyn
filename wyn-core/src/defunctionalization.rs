@@ -80,6 +80,24 @@ impl Defunctionalizer {
                     // Type signatures only
                     new_declarations.push(Declaration::Val(val_decl.clone()));
                 }
+                Declaration::TypeBind(_) => {
+                    unimplemented!("Type bindings are not yet supported in defunctionalization")
+                }
+                Declaration::ModuleBind(_) => {
+                    unimplemented!("Module bindings are not yet supported in defunctionalization")
+                }
+                Declaration::ModuleTypeBind(_) => {
+                    unimplemented!("Module type bindings are not yet supported in defunctionalization")
+                }
+                Declaration::Open(_) => {
+                    unimplemented!("Open declarations are not yet supported in defunctionalization")
+                }
+                Declaration::Import(_) => {
+                    unimplemented!("Import declarations are not yet supported in defunctionalization")
+                }
+                Declaration::Local(_) => {
+                    unimplemented!("Local declarations are not yet supported in defunctionalization")
+                }
             }
         }
 

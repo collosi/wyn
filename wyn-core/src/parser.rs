@@ -3,6 +3,7 @@ use crate::error::{CompilerError, Result};
 use crate::lexer::Token;
 use log::trace;
 
+mod module;
 mod pattern;
 #[cfg(test)]
 mod tests;
@@ -53,9 +54,56 @@ impl Parser {
                 decl.attributes = attributes;
                 Ok(Declaration::Val(decl))
             }
-            _ => Err(CompilerError::ParseError(
-                "Expected 'let', 'def', or 'val' declaration".to_string(),
-            )),
+            Some(Token::Type) => {
+                let type_bind = self.parse_type_bind()?;
+                Ok(Declaration::TypeBind(type_bind))
+            }
+            Some(Token::Module) => {
+                // Check if it's "module type" or just "module"
+                let saved_pos = self.current;
+                self.advance();
+                if self.check(&Token::Type) {
+                    // module type declaration
+                    self.current = saved_pos;
+                    let mod_type_bind = self.parse_module_type_bind()?;
+                    Ok(Declaration::ModuleTypeBind(mod_type_bind))
+                } else {
+                    // module declaration
+                    self.current = saved_pos;
+                    let mod_bind = self.parse_module_bind()?;
+                    Ok(Declaration::ModuleBind(mod_bind))
+                }
+            }
+            Some(Token::Open) => {
+                self.advance();
+                let mod_exp = self.parse_module_expression()?;
+                Ok(Declaration::Open(mod_exp))
+            }
+            Some(Token::Import) => {
+                self.advance();
+                let path = self.expect_string_literal()?;
+                Ok(Declaration::Import(path))
+            }
+            Some(Token::Local) => {
+                self.advance();
+                let inner = self.parse_declaration()?;
+                Ok(Declaration::Local(Box::new(inner)))
+            }
+            _ => Err(CompilerError::ParseError(format!(
+                "Expected declaration, got {:?}",
+                self.peek()
+            ))),
+        }
+    }
+
+    fn expect_string_literal(&mut self) -> Result<String> {
+        match self.peek() {
+            Some(Token::StringLiteral(s)) => {
+                let s = s.clone();
+                self.advance();
+                Ok(s)
+            }
+            _ => Err(CompilerError::ParseError("Expected string literal".to_string())),
         }
     }
 

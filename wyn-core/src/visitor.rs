@@ -134,6 +134,24 @@ pub fn walk_declaration<V: Visitor>(v: &mut V, d: &Declaration) -> ControlFlow<V
         Declaration::Decl(decl) => v.visit_decl(decl),
         Declaration::Uniform(uniform) => v.visit_uniform_decl(uniform),
         Declaration::Val(val) => v.visit_val_decl(val),
+        Declaration::TypeBind(_) => {
+            unimplemented!("Type bindings are not yet supported in visitor")
+        }
+        Declaration::ModuleBind(_) => {
+            unimplemented!("Module bindings are not yet supported in visitor")
+        }
+        Declaration::ModuleTypeBind(_) => {
+            unimplemented!("Module type bindings are not yet supported in visitor")
+        }
+        Declaration::Open(_) => {
+            unimplemented!("Open declarations are not yet supported in visitor")
+        }
+        Declaration::Import(_) => {
+            unimplemented!("Import declarations are not yet supported in visitor")
+        }
+        Declaration::Local(_) => {
+            unimplemented!("Local declarations are not yet supported in visitor")
+        }
     }
 }
 

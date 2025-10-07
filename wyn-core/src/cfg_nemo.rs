@@ -80,6 +80,24 @@ impl<W: Write> CfgNemoExtractor<W> {
             Declaration::Val(_val_decl) => {
                 // Val declarations are type signatures, no body to process
             }
+            Declaration::TypeBind(_) => {
+                unimplemented!("Type bindings are not yet supported in CFG extraction")
+            }
+            Declaration::ModuleBind(_) => {
+                unimplemented!("Module bindings are not yet supported in CFG extraction")
+            }
+            Declaration::ModuleTypeBind(_) => {
+                unimplemented!("Module type bindings are not yet supported in CFG extraction")
+            }
+            Declaration::Open(_) => {
+                unimplemented!("Open declarations are not yet supported in CFG extraction")
+            }
+            Declaration::Import(_) => {
+                unimplemented!("Import declarations are not yet supported in CFG extraction")
+            }
+            Declaration::Local(_) => {
+                unimplemented!("Local declarations are not yet supported in CFG extraction")
+            }
         }
         Ok(())
     }

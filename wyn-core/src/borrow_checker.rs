@@ -140,6 +140,24 @@ impl BorrowChecker {
             Declaration::Val(_) => {
                 // Val declarations don't create runtime lifetimes
             }
+            Declaration::TypeBind(_) => {
+                unimplemented!("Type bindings are not yet supported in borrow checking")
+            }
+            Declaration::ModuleBind(_) => {
+                unimplemented!("Module bindings are not yet supported in borrow checking")
+            }
+            Declaration::ModuleTypeBind(_) => {
+                unimplemented!("Module type bindings are not yet supported in borrow checking")
+            }
+            Declaration::Open(_) => {
+                unimplemented!("Open declarations are not yet supported in borrow checking")
+            }
+            Declaration::Import(_) => {
+                unimplemented!("Import declarations are not yet supported in borrow checking")
+            }
+            Declaration::Local(_) => {
+                unimplemented!("Local declarations are not yet supported in borrow checking")
+            }
         }
         Ok(())
     }

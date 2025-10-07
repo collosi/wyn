@@ -115,6 +115,12 @@ pub enum Declaration {
     Decl(Decl),           // Unified let/def declarations
     Uniform(UniformDecl), // Uniform declarations (no initializer)
     Val(ValDecl),
+    TypeBind(TypeBind),             // Type declarations
+    ModuleBind(ModuleBind),         // Module declarations
+    ModuleTypeBind(ModuleTypeBind), // Module type declarations
+    Open(ModuleExpression),         // open mod_exp
+    Import(String),                 // import "path"
+    Local(Box<Declaration>),        // local dec
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -197,6 +203,82 @@ pub struct ValDecl {
 pub struct UniformDecl {
     pub name: String,
     pub ty: Type, // Uniforms always have an explicit type
+}
+
+// Module system types
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeBind {
+    pub kind: TypeBindKind, // type, type^, or type~
+    pub name: String,
+    pub type_params: Vec<TypeParam>,
+    pub definition: Type,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeBindKind {
+    Normal, // type
+    Lifted, // type^
+    Size,   // type~
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeParam {
+    Size(String),       // [n]
+    Type(String),       // 'a
+    SizeType(String),   // '~a
+    LiftedType(String), // '^a
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModuleBind {
+    pub name: String,
+    pub params: Vec<ModuleParam>,
+    pub signature: Option<ModuleTypeExpression>,
+    pub body: ModuleExpression,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModuleParam {
+    pub name: String,
+    pub signature: ModuleTypeExpression,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModuleTypeBind {
+    pub name: String,
+    pub definition: ModuleTypeExpression,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModuleExpression {
+    Name(String),                                            // qualname
+    Ascription(Box<ModuleExpression>, ModuleTypeExpression), // mod_exp : mod_type_exp
+    Lambda(
+        Vec<ModuleParam>,
+        Option<ModuleTypeExpression>,
+        Box<ModuleExpression>,
+    ), // \ (params) [: sig] -> body
+    Application(Box<ModuleExpression>, Box<ModuleExpression>), // mod_exp mod_exp
+    Struct(Vec<Declaration>),                                // { dec* }
+    Import(String),                                          // import "path"
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModuleTypeExpression {
+    Name(String),                                                        // qualname
+    Signature(Vec<Spec>),                                                // { spec* }
+    With(Box<ModuleTypeExpression>, String, Vec<TypeParam>, Type), // mod_type with qualname type_params = type
+    Arrow(String, Box<ModuleTypeExpression>, Box<ModuleTypeExpression>), // (name : mod_type) -> mod_type
+    FunctorType(Box<ModuleTypeExpression>, Box<ModuleTypeExpression>), // mod_type -> mod_type
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Spec {
+    Val(String, Vec<TypeParam>, Type), // val name type_params : type
+    ValOp(String, Type),               // val (symbol) : type or val symbol : type
+    Type(TypeBindKind, String, Vec<TypeParam>, Option<Type>), // type declarations with optional definition
+    Module(String, ModuleTypeExpression), // module name : mod_type_exp
+    Include(ModuleTypeExpression),     // include mod_type_exp
 }
 
 // We now use polytype::Type instead of our own Type enum

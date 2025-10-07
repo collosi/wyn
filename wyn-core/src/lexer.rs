@@ -18,12 +18,20 @@ pub enum Token {
     If,
     Then,
     Else,
+    Module,
+    Open,
+    Import,
+    Local,
+    Type,
+    Include,
+    With,
 
     // Identifiers and literals
     Identifier(String),
     IntLiteral(i32),
     FloatLiteral(f32),
     CharLiteral(char),
+    StringLiteral(String),
 
     // Boolean literals
     True,
@@ -76,9 +84,16 @@ fn parse_keyword(input: &str) -> IResult<&str, Token> {
     };
 
     alt((
+        keyword("module", Token::Module),
+        keyword("import", Token::Import),
+        keyword("include", Token::Include),
         keyword("let", Token::Let),
+        keyword("local", Token::Local),
         keyword("def", Token::Def),
         keyword("val", Token::Val),
+        keyword("type", Token::Type),
+        keyword("with", Token::With),
+        keyword("open", Token::Open),
         keyword("in", Token::In),
         keyword("if", Token::If),
         keyword("then", Token::Then),
@@ -113,6 +128,16 @@ fn parse_identifier(input: &str) -> IResult<&str, Token> {
             if s == "_" { Token::Underscore } else { Token::Identifier(s.to_string()) }
         },
     )(input)
+}
+
+fn parse_string_literal(input: &str) -> IResult<&str, Token> {
+    use nom::bytes::complete::take_while;
+
+    let (rest, _) = char('"')(input)?;
+    let (rest, content) = take_while(|c| c != '"')(rest)?;
+    let (rest, _) = char('"')(rest)?;
+
+    Ok((rest, Token::StringLiteral(content.to_string())))
 }
 
 fn parse_float_literal(input: &str) -> IResult<&str, Token> {
@@ -177,6 +202,7 @@ fn parse_token(input: &str) -> IResult<&str, Token> {
         multispace0,
         alt((
             parse_comment,
+            parse_string_literal,
             parse_keyword,
             parse_float_literal,
             parse_type_variable,
