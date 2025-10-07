@@ -17,4 +17,3 @@ polytype = "7.0"
 spirv = "0.3"
 log = "0.4"
 env_logger = "0.11"
-inkwell = { git = "https://github.com/TheDan64/inkwell", rev = "50c16a644c6f5d5b41c27cc1620d63097cad43dd", features = ["llvm20-1"] }
