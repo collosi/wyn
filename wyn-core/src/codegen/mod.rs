@@ -1725,9 +1725,9 @@ impl CodeGenerator {
                     type_id: element_type_info.id,
                 })
             }
-            _ => Err(CompilerError::SpirvError(
-                "Expression type not yet implemented for rspirv backend".to_string(),
-            )),
+            ExprKind::Lambda(_) => {
+                unimplemented!("Lambda expressions are not yet supported in code generation")
+            }
         }
     }
 

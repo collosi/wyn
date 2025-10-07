@@ -48,3 +48,4 @@ LLVM_SYS_180_PREFIX=/usr/local/Cellar/llvm@18/18.1.8 cargo run --bin wyn -- chec
 - Type checking logic in `type_checker.rs`
 - SPIR-V generation in `codegen.rs`
 - All new syntax elements should have unit tests
+- You do not need the LLVM_SYS_180_PREFIX environment variable.  LLVM is not in use in this project
