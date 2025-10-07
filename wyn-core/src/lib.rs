@@ -10,6 +10,7 @@ pub mod defunctionalization;
 pub mod error;
 pub mod inference;
 pub mod lexer;
+pub mod mir;
 pub mod nemo_facts;
 pub mod parser;
 pub mod scope;
