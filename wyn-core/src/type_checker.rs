@@ -605,11 +605,15 @@ impl TypeChecker {
                     // This allows non-unique values to be passed to unique parameters
                     let arg_type_for_unify = types::strip_unique(&arg_type);
 
+                    // Also strip uniqueness from the function type before unifying
+                    // This ensures unique parameters can accept non-unique arguments
+                    let func_type_for_unify = types::strip_unique(&func_type);
+
                     // Expected function type: arg_type_for_unify -> result_type
                     let expected_func_type = Type::arrow(arg_type_for_unify, result_type.clone());
 
                     // Unify the function type with expected (with uniqueness stripped)
-                    self.context.unify(&func_type, &expected_func_type).map_err(|e| {
+                    self.context.unify(&func_type_for_unify, &expected_func_type).map_err(|e| {
                         CompilerError::TypeError(format!("Function call type error: {:?}", e))
                     })?;
 

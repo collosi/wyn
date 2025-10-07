@@ -97,6 +97,7 @@ pub struct CodeGenerator {
     function_cache: HashMap<String, spirv::Word>,
     type_cache: HashMap<Type, TypeInfo>,
     ptr_cache: HashMap<PtrKey, spirv::Word>,
+    int_const_cache: HashMap<u32, spirv::Word>, // Cache for integer constants
     current_function: Option<spirv::Word>,
     current_block: Option<spirv::Word>,
     function_entry_block_index: Option<usize>,
@@ -180,6 +181,7 @@ impl CodeGenerator {
             function_cache: HashMap::new(),
             type_cache: HashMap::new(),
             ptr_cache: HashMap::new(),
+            int_const_cache: HashMap::new(),
             current_function: None,
             current_block: None,
             function_entry_block_index: None,
@@ -461,6 +463,14 @@ impl CodeGenerator {
     /// Evaluate a constant expression at compile time (outside function context)
     /// Returns the SPIR-V constant value
     fn evaluate_constant_expression(&mut self, expr: &Expression) -> Result<Value> {
+        self.evaluate_constant_expression_with_type(expr, None)
+    }
+
+    fn evaluate_constant_expression_with_type(
+        &mut self,
+        expr: &Expression,
+        expected_type: Option<spirv::Word>,
+    ) -> Result<Value> {
         match &expr.kind {
             ExprKind::IntLiteral(n) => {
                 let const_id = self.builder.constant_bit32(self.i32_type, *n as u32);
@@ -497,19 +507,28 @@ impl CodeGenerator {
                     ));
                 }
 
-                // Evaluate all elements as constants
+                // Determine the array type to use
+                let array_type = if let Some(expected) = expected_type {
+                    // Use the expected type if provided
+                    expected
+                } else {
+                    // Infer type from the first element
+                    let first_val = self.evaluate_constant_expression(&elems[0])?;
+                    let elem_type = first_val.type_id;
+                    let array_size = elems.len() as u32;
+                    let size_const = self.get_or_create_int_constant(array_size);
+                    self.builder.type_array(elem_type, size_const)
+                };
+
+                // Get element type from array type
+                // For now, we'll evaluate elements and let them infer their types
                 let mut elem_vals = Vec::new();
                 for elem_expr in elems {
                     let elem_val = self.evaluate_constant_expression(elem_expr)?;
                     elem_vals.push(elem_val);
                 }
 
-                // All elements must have the same type
-                let elem_type = elem_vals[0].type_id;
                 let elem_ids: Vec<spirv::Word> = elem_vals.iter().map(|v| v.id).collect();
-
-                // Create array type
-                let array_type = self.builder.type_array(elem_type, elem_ids.len() as u32);
 
                 // Use constant_composite for array
                 let const_id = self.builder.constant_composite(array_type, elem_ids);
@@ -523,6 +542,22 @@ impl CodeGenerator {
                 expr
             ))),
         }
+    }
+
+    /// Create an integer constant with deduplication
+    fn get_or_create_int_constant(&mut self, value: u32) -> spirv::Word {
+        // Check cache first
+        if let Some(&cached_id) = self.int_const_cache.get(&value) {
+            return cached_id;
+        }
+
+        // Create new constant
+        let const_id = self.builder.constant_bit32(self.i32_type, value);
+
+        // Cache it
+        self.int_const_cache.insert(value, const_id);
+
+        const_id
     }
 
     /// Generic binary operation handler that dispatches to int or float operations
@@ -741,8 +776,8 @@ impl CodeGenerator {
                     })?;
                     self.generate_declaration_helper(&decl_node.name, ty, &decl_node.body)
                 } else {
-                    // Function declaration: let/def name param1 param2 = body (skip for now)
-                    Ok(())
+                    // Function declaration: generate as a regular SPIR-V function
+                    self.generate_user_function(decl_node)
                 }
             }
             Declaration::Uniform(uniform_decl) => self.generate_uniform_declaration(uniform_decl),
@@ -783,8 +818,11 @@ impl CodeGenerator {
         ty: &Type,
         value_expr: &Expression,
     ) -> Result<()> {
-        // Try to evaluate as a constant expression
-        match self.evaluate_constant_expression(value_expr) {
+        // Get the SPIR-V type ID for the declared type
+        let type_info = self.get_or_create_type(ty)?;
+
+        // Try to evaluate as a constant expression with expected type
+        match self.evaluate_constant_expression_with_type(value_expr, Some(type_info.id)) {
             Ok(const_value) => {
                 // Successfully evaluated as a constant
                 // Store directly in the global scope (no pointer needed for constants)
@@ -797,6 +835,81 @@ impl CodeGenerator {
                 Ok(())
             }
         }
+    }
+
+    /// Generate a regular user-defined function (not an entry point)
+    fn generate_user_function(&mut self, decl: &Decl) -> Result<()> {
+        // Get return type from declaration
+        let return_type = decl.ty.as_ref().ok_or_else(|| {
+            CompilerError::SpirvError(format!("Function '{}' must have return type", decl.name))
+        })?;
+
+        let return_type_info = self.get_or_create_type(return_type)?;
+
+        // Get parameter types
+        let mut param_type_ids = Vec::new();
+        for param in &decl.params {
+            match param {
+                DeclParam::Typed(p) => {
+                    let param_type_info = self.get_or_create_type(&p.ty)?;
+                    param_type_ids.push(param_type_info.id);
+                }
+                DeclParam::Untyped(_) => {
+                    return Err(CompilerError::SpirvError(
+                        "User functions must have typed parameters".to_string(),
+                    ));
+                }
+            }
+        }
+
+        // Create function type
+        let fn_type = self.builder.type_function(return_type_info.id, param_type_ids.clone());
+
+        // Create the function
+        let function_id = self.builder.begin_function(
+            return_type_info.id,
+            None,
+            spirv::FunctionControl::NONE,
+            fn_type,
+        )?;
+
+        self.function_cache.insert(decl.name.clone(), function_id);
+        self.current_function = Some(function_id);
+
+        // Clear local scopes for the new function
+        self.environment.clear_locals();
+
+        // Create function parameters
+        let param_ids = self.create_fn_params(&param_type_ids)?;
+
+        // Create entry block
+        let entry_label = self.builder.begin_block(None)?;
+        self.current_block = Some(entry_label);
+
+        // Store parameters in local variables
+        self.store_fn_params(&decl.params, &param_ids)?;
+
+        // Save the entry block index for later
+        self.function_entry_block_index = self.builder.selected_block();
+
+        // Clear pending variables
+        self.pending_variables.clear();
+
+        // Generate function body
+        let result = self.generate_expression(&decl.body)?;
+
+        // Emit pending variables at the beginning of the entry block
+        self.emit_pending_variables_at_entry_block()?;
+
+        // Return the result
+        self.builder.ret_value(result.id)?;
+
+        self.builder.end_function()?;
+        self.current_function = None;
+        self.current_block = None;
+        self.function_entry_block_index = None;
+
+        Ok(())
     }
 
     fn generate_entry_point(&mut self, decl: &Decl) -> Result<()> {
@@ -1177,8 +1290,12 @@ impl CodeGenerator {
                 }
             }
             ExprKind::FunctionCall(func_name, args) => {
+                // Handle map as a special compiler intrinsic with loop generation
+                if func_name == "map" {
+                    return self.generate_map_call(args);
+                }
                 // Handle length as a compiler intrinsic
-                if func_name == "length" {
+                else if func_name == "length" {
                     if args.len() != 1 {
                         return Err(CompilerError::SpirvError(
                             "length requires exactly one argument".to_string(),
@@ -1202,7 +1319,7 @@ impl CodeGenerator {
                             Type::Constructed(TypeName::Array, args) => {
                                 // Extract size from Array(Size(n), elem_type)
                                 if let Some(Type::Constructed(TypeName::Size(size), _)) = args.get(0) {
-                                    let const_id = self.builder.constant_bit32(self.i32_type, *size as u32);
+                                    let const_id = self.get_or_create_int_constant(*size as u32);
                                     Ok(Value {
                                         id: const_id,
                                         type_id: self.i32_type,
@@ -1513,6 +1630,215 @@ impl CodeGenerator {
         }
     }
 
+    /// Generate SPIR-V code for map function: map f arr
+    /// Creates a loop that applies f to each element of arr
+    fn generate_map_call(&mut self, args: &[Expression]) -> Result<Value> {
+        if args.len() != 2 {
+            return Err(CompilerError::SpirvError(
+                "map requires exactly 2 arguments (function, array)".to_string(),
+            ));
+        }
+
+        let func_expr = &args[0];
+        let array_expr = &args[1];
+
+        // Get the function name (for now, only support direct function references)
+        let func_name = match &func_expr.kind {
+            ExprKind::Identifier(name) => name,
+            _ => {
+                return Err(CompilerError::SpirvError(
+                    "map currently only supports direct function references".to_string(),
+                ));
+            }
+        };
+
+        // For map, we need the array pointer, not the loaded value
+        // Look up the variable directly to get the pointer
+        let array_var_name = match &array_expr.kind {
+            ExprKind::Identifier(name) => name,
+            _ => {
+                return Err(CompilerError::SpirvError(
+                    "map requires an array variable (identifier)".to_string(),
+                ));
+            }
+        };
+
+        let array_binding = self
+            .environment
+            .lookup(array_var_name)
+            .ok_or_else(|| CompilerError::UndefinedVariable(array_var_name.clone()))?;
+
+        let array_val = array_binding.value;
+
+        // Get array type from the binding
+        let array_type = array_binding
+            .ty
+            .as_ref()
+            .ok_or_else(|| CompilerError::SpirvError("Array has no type info".to_string()))?
+            .clone();
+
+        // Extract array size and element type
+        let (array_size, elem_type) = match &array_type {
+            Type::Constructed(TypeName::Array, type_args) => {
+                if type_args.len() != 2 {
+                    return Err(CompilerError::SpirvError("Invalid array type".to_string()));
+                }
+                let size = match &type_args[0] {
+                    Type::Constructed(TypeName::Size(n), _) => *n,
+                    _ => {
+                        return Err(CompilerError::SpirvError("Array missing size".to_string()));
+                    }
+                };
+                let elem = &type_args[1];
+                (size, elem)
+            }
+            Type::Constructed(TypeName::Unique, inner_args) => {
+                // Strip uniqueness and recurse
+                if let Some(inner_type) = inner_args.first() {
+                    match inner_type {
+                        Type::Constructed(TypeName::Array, type_args) => {
+                            if type_args.len() != 2 {
+                                return Err(CompilerError::SpirvError("Invalid array type".to_string()));
+                            }
+                            let size = match &type_args[0] {
+                                Type::Constructed(TypeName::Size(n), _) => *n,
+                                _ => {
+                                    return Err(CompilerError::SpirvError(
+                                        "Array missing size".to_string(),
+                                    ));
+                                }
+                            };
+                            let elem = &type_args[1];
+                            (size, elem)
+                        }
+                        _ => {
+                            return Err(CompilerError::SpirvError(
+                                "Unique type must wrap array".to_string(),
+                            ));
+                        }
+                    }
+                } else {
+                    return Err(CompilerError::SpirvError(
+                        "Unique type missing inner type".to_string(),
+                    ));
+                }
+            }
+            _ => {
+                return Err(CompilerError::SpirvError(format!(
+                    "map requires array type, got: {:?}",
+                    array_type
+                )));
+            }
+        };
+
+        // Get element type info for SPIR-V
+        let elem_type_info = self.get_or_create_type(elem_type)?;
+
+        // We update the array in place, so use the input array as the result
+        let result_var = array_val.id;
+
+        // Create loop counter variable
+        let i32_ptr_type = self.builder.type_pointer(None, StorageClass::Function, self.i32_type);
+        let counter_var = self.builder.id();
+        self.pending_variables.push((counter_var, i32_ptr_type));
+
+        // Initialize counter to 0
+        let zero = self.builder.constant_bit32(self.i32_type, 0);
+        self.builder.store(counter_var, zero, None, vec![])?;
+
+        // Create basic blocks for loop
+        let loop_header = self.builder.id();
+        let loop_body = self.builder.id();
+        let loop_continue = self.builder.id();
+        let loop_merge = self.builder.id();
+
+        // Branch to loop header
+        self.builder.branch(loop_header)?;
+
+        // Loop header: check condition
+        self.builder.begin_block(Some(loop_header))?;
+        self.current_block = Some(loop_header);
+
+        // Load counter
+        let counter_val = self.builder.load(self.i32_type, None, counter_var, None, vec![])?;
+
+        // Compare counter < array_size
+        let size_const = self.get_or_create_int_constant(array_size as u32);
+        let cond = self.builder.s_less_than(self.bool_type, None, counter_val, size_const)?;
+
+        // Loop merge instruction
+        self.builder.loop_merge(loop_merge, loop_continue, spirv::LoopControl::NONE, vec![])?;
+
+        // Conditional branch: if (counter < size) goto body, else goto merge
+        self.builder.branch_conditional(cond, loop_body, loop_merge, vec![])?;
+
+        // Loop body: apply function and store result
+        self.builder.begin_block(Some(loop_body))?;
+        self.current_block = Some(loop_body);
+
+        // Load current array element: arr[counter]
+        let counter_val_body = self.builder.load(self.i32_type, None, counter_var, None, vec![])?;
+        let elem_ptr_type = self.builder.type_pointer(None, StorageClass::Function, elem_type_info.id);
+        let elem_ptr =
+            self.builder.access_chain(elem_ptr_type, None, array_val.id, vec![counter_val_body])?;
+        let elem_val = self.builder.load(elem_type_info.id, None, elem_ptr, None, vec![])?;
+
+        // Call function on element
+        // Look up the function ID
+        let func_id = self.function_cache.get(func_name).ok_or_else(|| {
+            CompilerError::SpirvError(format!("Function '{}' not found for map", func_name))
+        })?;
+
+        // Call the function with the element as argument
+        // For now, we'll emit a direct function call with OpFunctionCall
+        let result_elem_id = self.builder.function_call(
+            elem_type_info.id, // Result type (for now, assume function returns same type)
+            None,
+            *func_id,
+            vec![elem_val],
+        )?;
+
+        let result_elem = Value {
+            id: result_elem_id,
+            type_id: elem_type_info.id,
+        };
+
+        // Store result in result array: result[counter] = f(elem)
+        let counter_val_store = self.builder.load(self.i32_type, None, counter_var, None, vec![])?;
+        let result_elem_ptr =
+            self.builder.access_chain(elem_ptr_type, None, result_var, vec![counter_val_store])?;
+        self.builder.store(result_elem_ptr, result_elem.id, None, vec![])?;
+
+        // Branch to continue block
+        self.builder.branch(loop_continue)?;
+
+        // Loop continue: increment counter
+        self.builder.begin_block(Some(loop_continue))?;
+        self.current_block = Some(loop_continue);
+
+        let counter_val_inc = self.builder.load(self.i32_type, None, counter_var, None, vec![])?;
+        let one = self.builder.constant_bit32(self.i32_type, 1);
+        let incremented = self.builder.i_add(self.i32_type, None, counter_val_inc, one)?;
+        self.builder.store(counter_var, incremented, None, vec![])?;
+
+        // Branch back to loop header
+        self.builder.branch(loop_header)?;
+
+        // Loop merge: after loop completes
+        self.builder.begin_block(Some(loop_merge))?;
+        self.current_block = Some(loop_merge);
+
+        // The array has been updated in place, so we can return the modified array
+        // We need to load it from the pointer to get the value
+        let array_type_info = self.get_or_create_type(&array_type)?;
+        let result_val = self.builder.load(array_type_info.id, None, result_var, None, vec![])?;
+
+        Ok(Value {
+            id: result_val,
+            type_id: array_type_info.id,
+        })
+    }
+
     fn generate_if_then_else(
         &mut self,
         condition: &Expression,
@@ -1748,7 +2074,7 @@ impl CodeGenerator {
                         let elem_type_info = self.get_or_create_type(elem_ty)?;
 
                         // Use the actual size from the type
-                        let length_id = self.builder.constant_bit32(self.i32_type, size as u32);
+                        let length_id = self.get_or_create_int_constant(size as u32);
                         let array_type = self.builder.type_array(elem_type_info.id, length_id);
                         (array_type, elem_type_info.size_bytes * (size as u32))
                     }
@@ -1763,6 +2089,19 @@ impl CodeGenerator {
                         }
                         let struct_type = self.builder.type_struct(component_type_ids);
                         (struct_type, total_size)
+                    }
+                    TypeName::Unique => {
+                        // Uniqueness is a compile-time concept, strip it for SPIR-V codegen
+                        let inner_ty = args.first().ok_or_else(|| {
+                            CompilerError::SpirvError("Unique type missing inner type".to_string())
+                        })?;
+                        return self.get_or_create_type(inner_ty);
+                    }
+                    TypeName::Size(_) => {
+                        // Size is used as a type-level literal in array types, not a runtime type
+                        return Err(CompilerError::SpirvError(
+                            "Size cannot be used as a standalone type".to_string(),
+                        ));
                     }
                     _ => {
                         return Err(CompilerError::SpirvError(format!(

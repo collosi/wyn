@@ -1,0 +1,26 @@
+-- Blue shader using map to transform color values
+-- Start with [79, 96, 150], add 1, and normalize to [0, 1] range
+
+-- Helper function to add 1 to a number
+def add_one(x: f32): f32 = x + 1f32
+
+-- Helper function to normalize from [0, 255] to [0, 1]
+def to_unit(x: f32): f32 = x / 256f32
+
+-- Vertex shader: full-screen triangle
+def verts: [3][4]f32 =
+  [[-1.0f32, -1.0f32, 0.0f32, 1.0f32],
+   [ 3.0f32, -1.0f32, 0.0f32, 1.0f32],
+   [-1.0f32,  3.0f32, 0.0f32, 1.0f32]]
+
+#[vertex]
+def vertex_main(#[builtin(vertex_index)] vertex_id: i32): #[builtin(position)] [4]f32 =
+  verts[vertex_id]
+
+-- Fragment shader: compute blue color using map
+#[fragment]
+def fragment_main(): #[location(0)] [4]f32 =
+  let base_color: [3]f32 = [79f32, 96f32, 150f32] in
+  let color_plus_one: [3]f32 = map add_one base_color in
+  let normalized_color: [3]f32 = map to_unit color_plus_one in
+  [normalized_color[0], normalized_color[1], normalized_color[2], 1.0f32]

@@ -414,7 +414,14 @@ pub mod types {
     pub fn strip_unique(ty: &Type) -> Type {
         match ty {
             Type::Constructed(TypeName::Unique, args) => {
-                args.first().cloned().unwrap_or_else(|| ty.clone())
+                // Recursively strip from the inner type
+                let inner = args.first().cloned().unwrap_or_else(|| ty.clone());
+                strip_unique(&inner)
+            }
+            Type::Constructed(name, args) => {
+                // Recursively strip from constructor arguments (e.g., arrow types)
+                let stripped_args: Vec<Type> = args.iter().map(strip_unique).collect();
+                Type::Constructed(name.clone(), stripped_args)
             }
             _ => ty.clone(),
         }
