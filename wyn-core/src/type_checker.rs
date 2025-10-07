@@ -11,6 +11,7 @@ pub struct TypeChecker {
     context: Context<TypeName>,                    // Polytype unification context
     record_field_map: HashMap<(String, String), Type>, // Map (type_name, field_name) -> field_type
     builtin_registry: crate::builtin_registry::BuiltinRegistry, // Centralized builtin registry
+    type_table: HashMap<crate::ast::NodeId, Type>, // Maps expression NodeId to inferred type
 }
 
 impl Default for TypeChecker {
@@ -51,6 +52,7 @@ impl TypeChecker {
             context: Context::default(),
             record_field_map: HashMap::new(),
             builtin_registry: crate::builtin_registry::BuiltinRegistry::new(),
+            type_table: HashMap::new(),
         }
     }
 
@@ -293,13 +295,13 @@ impl TypeChecker {
         }
     }
 
-    pub fn check_program(&mut self, program: &Program) -> Result<()> {
+    pub fn check_program(&mut self, program: &Program) -> Result<HashMap<crate::ast::NodeId, Type>> {
         // Process declarations in order - each can only refer to preceding declarations
         for decl in &program.declarations {
             self.check_declaration(decl)?;
         }
 
-        Ok(())
+        Ok(self.type_table.clone())
     }
 
     fn check_declaration(&mut self, decl: &Declaration) -> Result<()> {
@@ -477,7 +479,7 @@ impl TypeChecker {
     }
 
     fn infer_expression(&mut self, expr: &Expression) -> Result<Type> {
-        match &expr.kind {
+        let ty = match &expr.kind {
             ExprKind::IntLiteral(_) => Ok(types::i32()),
             ExprKind::FloatLiteral(_) => Ok(types::f32()),
             ExprKind::Identifier(name) => {
@@ -845,7 +847,11 @@ impl TypeChecker {
 
                 Ok(then_ty)
             }
-        }
+        }?;
+
+        // Store the inferred type in the type table
+        self.type_table.insert(expr.h.id, ty.clone());
+        Ok(ty)
     }
 
     // Removed: fresh_var - now using polytype's context.new_variable()

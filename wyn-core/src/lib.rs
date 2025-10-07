@@ -11,6 +11,7 @@ pub mod error;
 pub mod inference;
 pub mod lexer;
 pub mod mir;
+pub mod mirize;
 pub mod nemo_facts;
 pub mod parser;
 pub mod scope;
@@ -46,7 +47,7 @@ impl Compiler {
         // Type check
         let mut type_checker = type_checker::TypeChecker::new();
         type_checker.load_builtins()?;
-        type_checker.check_program(&program)?;
+        let _type_table = type_checker.check_program(&program)?;
 
         // Constant folding (evaluate compile-time constants)
         let mut constant_folder = constant_folding::ConstantFolder::new();

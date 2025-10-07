@@ -17,6 +17,9 @@ pub enum CompilerError {
     #[error("SPIR-V generation error: {0}")]
     SpirvError(String),
 
+    #[error("MIR generation error: {0}")]
+    MirError(String),
+
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 
