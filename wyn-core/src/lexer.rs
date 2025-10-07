@@ -30,6 +30,7 @@ pub enum Token {
     Arrow,
     Backslash, // \ for lambda expressions
     Dot,       // . for field access
+    Star,      // * for uniqueness types (prefix)
 
     // Delimiters
     LeftParen,

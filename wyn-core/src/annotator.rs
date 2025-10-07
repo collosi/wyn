@@ -80,6 +80,9 @@ impl CodeAnnotator {
                     TypeName::Size(n) => {
                         self.output.push_str(&n.to_string());
                     }
+                    TypeName::Unique => {
+                        self.output.push('*');
+                    }
                 }
                 if !args.is_empty() {
                     self.output.push('<');
@@ -124,12 +127,7 @@ impl Visitor for CodeAnnotator {
         let block = self.new_block();
         self.enter_block(block);
 
-        write!(
-            self.output,
-            "#B{}.0 {} {}",
-            block.0, d.keyword, d.name
-        )
-        .unwrap();
+        write!(self.output, "#B{}.0 {} {}", block.0, d.keyword, d.name).unwrap();
 
         // Add parameters if this is a function
         if !d.params.is_empty() {
@@ -207,7 +205,11 @@ impl Visitor for CodeAnnotator {
         ControlFlow::Continue(())
     }
 
-    fn visit_expr_array_index(&mut self, array: &Expression, index: &Expression) -> ControlFlow<Self::Break> {
+    fn visit_expr_array_index(
+        &mut self,
+        array: &Expression,
+        index: &Expression,
+    ) -> ControlFlow<Self::Break> {
         let loc = self.current_location();
         write!(self.output, "#B{}.{} ", loc.block.0, loc.index).unwrap();
         self.visit_expression(array)?;
@@ -217,7 +219,12 @@ impl Visitor for CodeAnnotator {
         ControlFlow::Continue(())
     }
 
-    fn visit_expr_binary_op(&mut self, op: &BinaryOp, left: &Expression, right: &Expression) -> ControlFlow<Self::Break> {
+    fn visit_expr_binary_op(
+        &mut self,
+        op: &BinaryOp,
+        left: &Expression,
+        right: &Expression,
+    ) -> ControlFlow<Self::Break> {
         let loc = self.current_location();
         write!(self.output, "#B{}.{} (", loc.block.0, loc.index).unwrap();
         self.visit_expression(left)?;
@@ -301,7 +308,11 @@ impl Visitor for CodeAnnotator {
         ControlFlow::Continue(())
     }
 
-    fn visit_expr_application(&mut self, func: &Expression, args: &[Expression]) -> ControlFlow<Self::Break> {
+    fn visit_expr_application(
+        &mut self,
+        func: &Expression,
+        args: &[Expression],
+    ) -> ControlFlow<Self::Break> {
         let loc = self.current_location();
         write!(self.output, "#B{}.{} ", loc.block.0, loc.index).unwrap();
         self.visit_expression(func)?;

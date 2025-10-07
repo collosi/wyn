@@ -141,7 +141,7 @@ impl Defunctionalizer {
                 StaticValue::Dyn(types::f32()),
             )),
             ExprKind::Identifier(name) => {
-                if let Some(sv) = scope_stack.lookup(name) {
+                if let Ok(sv) = scope_stack.lookup(name) {
                     match sv {
                         StaticValue::Dyn(_) => {
                             // Regular variable reference
@@ -345,7 +345,7 @@ impl Defunctionalizer {
         // Create a closure record with free variables
         let mut closure_fields = HashMap::new();
         for var in &free_vars {
-            if let Some(sv) = scope_stack.lookup(var) {
+            if let Ok(sv) = scope_stack.lookup(var) {
                 closure_fields.insert(var.clone(), sv.clone());
             }
         }

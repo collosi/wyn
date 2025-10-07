@@ -1208,9 +1208,7 @@ impl CodeGenerator {
                                         type_id: self.i32_type,
                                     })
                                 } else {
-                                    Err(CompilerError::SpirvError(
-                                        "Array type missing size".to_string(),
-                                    ))
+                                    Err(CompilerError::SpirvError("Array type missing size".to_string()))
                                 }
                             }
                             Type::Constructed(TypeName::Str("array"), _) => {
@@ -1477,8 +1475,7 @@ impl CodeGenerator {
                 let index = self.generate_expression(index_expr)?;
 
                 let element_type = match &array_type {
-                    Type::Constructed(TypeName::Array, args) =>
-                    {
+                    Type::Constructed(TypeName::Array, args) => {
                         // Array(Size(n), elem_type) - element type is at index 1
                         args.get(1).cloned().unwrap_or_else(types::i32)
                     }
@@ -1742,9 +1739,7 @@ impl CodeGenerator {
                         let size = if let Some(Type::Constructed(TypeName::Size(n), _)) = args.get(0) {
                             *n
                         } else {
-                            return Err(CompilerError::SpirvError(
-                                "Array type missing size".to_string(),
-                            ));
+                            return Err(CompilerError::SpirvError("Array type missing size".to_string()));
                         };
 
                         let elem_ty = args.get(1).ok_or_else(|| {

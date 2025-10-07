@@ -74,9 +74,10 @@ pub type Expression = Node<ExprKind>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeName {
-    Str(&'static str),  // Basic types: "int", "float", "tuple", "->", etc.
-    Array,              // Array type constructor (takes size and element type)
-    Size(usize),        // Array size literal
+    Str(&'static str), // Basic types: "int", "float", "tuple", "->", etc.
+    Array,             // Array type constructor (takes size and element type)
+    Size(usize),       // Array size literal
+    Unique,            // Uniqueness/consuming type marker (corresponds to "*" prefix)
 }
 
 impl std::fmt::Display for TypeName {
@@ -85,6 +86,7 @@ impl std::fmt::Display for TypeName {
             TypeName::Str(s) => write!(f, "{}", s),
             TypeName::Array => write!(f, "Array"),
             TypeName::Size(n) => write!(f, "{}", n),
+            TypeName::Unique => write!(f, "*"),
         }
     }
 }
@@ -396,5 +398,25 @@ pub mod types {
 
     pub fn function(arg: Type, ret: Type) -> Type {
         Type::arrow(arg, ret)
+    }
+
+    /// Create a unique (consuming/alias-free) type: *t
+    pub fn unique(inner: Type) -> Type {
+        Type::Constructed(TypeName::Unique, vec![inner])
+    }
+
+    /// Check if a type is marked as unique/consuming
+    pub fn is_unique(ty: &Type) -> bool {
+        matches!(ty, Type::Constructed(TypeName::Unique, _))
+    }
+
+    /// Strip uniqueness marker from a type, returning the inner type
+    pub fn strip_unique(ty: &Type) -> Type {
+        match ty {
+            Type::Constructed(TypeName::Unique, args) => {
+                args.first().cloned().unwrap_or_else(|| ty.clone())
+            }
+            _ => ty.clone(),
+        }
     }
 }

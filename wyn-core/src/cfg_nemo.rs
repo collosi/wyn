@@ -124,15 +124,11 @@ impl<W: Write> Visitor for CfgNemoExtractor<W> {
             };
 
             // Write location fact
-            try_cf!(self.nemo_writer
-                .write_location_fact(location_id, &location)
-                .map_err(Self::io_error));
+            try_cf!(self.nemo_writer.write_location_fact(location_id, &location).map_err(Self::io_error));
 
             // Write expression type fact
             let expr_type = expr_type_name(expr);
-            try_cf!(self.nemo_writer
-                .write_expr_fact(location_id, expr_type)
-                .map_err(Self::io_error));
+            try_cf!(self.nemo_writer.write_expr_fact(location_id, expr_type).map_err(Self::io_error));
 
             self.current_index += 1;
         }
@@ -156,9 +152,7 @@ impl<W: Write> Visitor for CfgNemoExtractor<W> {
         let location_id = self.location_counter - 1;
 
         // Variable reference
-        try_cf!(self.nemo_writer
-            .write_var_ref_fact(location_id, name)
-            .map_err(Self::io_error));
+        try_cf!(self.nemo_writer.write_var_ref_fact(location_id, name).map_err(Self::io_error));
 
         ControlFlow::Continue(())
     }
@@ -170,9 +164,7 @@ impl<W: Write> Visitor for CfgNemoExtractor<W> {
 
         // Write edge from parent block to lambda block
         if let Some(parent) = parent_block {
-            try_cf!(self.nemo_writer
-                .write_edge_fact(parent, lambda_block)
-                .map_err(Self::io_error));
+            try_cf!(self.nemo_writer.write_edge_fact(parent, lambda_block).map_err(Self::io_error));
         }
 
         // Process lambda parameters as variable definitions
@@ -183,12 +175,12 @@ impl<W: Write> Visitor for CfgNemoExtractor<W> {
                 index: self.current_index,
             };
 
-            try_cf!(self.nemo_writer
-                .write_location_fact(param_location_id, &location)
-                .map_err(Self::io_error));
-            try_cf!(self.nemo_writer
-                .write_var_def_fact(param_location_id, &param.name)
-                .map_err(Self::io_error));
+            try_cf!(
+                self.nemo_writer.write_location_fact(param_location_id, &location).map_err(Self::io_error)
+            );
+            try_cf!(
+                self.nemo_writer.write_var_def_fact(param_location_id, &param.name).map_err(Self::io_error)
+            );
             self.current_index += 1;
         }
 

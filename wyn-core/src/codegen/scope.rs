@@ -132,9 +132,21 @@ mod tests {
         let mut env = Environment::new();
 
         // Add to different layers
-        env.define_builtin("x".to_string(), Value { id: 1, type_id: 10 }, crate::ast::types::i32());
-        env.define_global("y".to_string(), Value { id: 2, type_id: 20 }, crate::ast::types::i32());
-        env.define_local("z".to_string(), Value { id: 3, type_id: 30 }, crate::ast::types::i32());
+        env.define_builtin(
+            "x".to_string(),
+            Value { id: 1, type_id: 10 },
+            crate::ast::types::i32(),
+        );
+        env.define_global(
+            "y".to_string(),
+            Value { id: 2, type_id: 20 },
+            crate::ast::types::i32(),
+        );
+        env.define_local(
+            "z".to_string(),
+            Value { id: 3, type_id: 30 },
+            crate::ast::types::i32(),
+        );
 
         // Lookup should find them
         assert_eq!(env.lookup("x").unwrap().value.id, 1);
@@ -146,11 +158,19 @@ mod tests {
     fn test_shadowing() {
         let mut env = Environment::new();
 
-        env.define_global("x".to_string(), Value { id: 1, type_id: 10 }, crate::ast::types::i32());
+        env.define_global(
+            "x".to_string(),
+            Value { id: 1, type_id: 10 },
+            crate::ast::types::i32(),
+        );
 
         // Push a new scope so we can actually pop it later
         env.push_scope();
-        env.define_local("x".to_string(), Value { id: 2, type_id: 10 }, crate::ast::types::i32());
+        env.define_local(
+            "x".to_string(),
+            Value { id: 2, type_id: 10 },
+            crate::ast::types::i32(),
+        );
 
         // Local should shadow global
         assert_eq!(env.lookup("x").unwrap().value.id, 2);
@@ -164,10 +184,18 @@ mod tests {
     fn test_scope_push_pop() {
         let mut env = Environment::new();
 
-        env.define_local("a".to_string(), Value { id: 1, type_id: 10 }, crate::ast::types::i32());
+        env.define_local(
+            "a".to_string(),
+            Value { id: 1, type_id: 10 },
+            crate::ast::types::i32(),
+        );
 
         env.push_scope();
-        env.define_local("b".to_string(), Value { id: 2, type_id: 10 }, crate::ast::types::i32());
+        env.define_local(
+            "b".to_string(),
+            Value { id: 2, type_id: 10 },
+            crate::ast::types::i32(),
+        );
 
         assert!(env.lookup("a").is_some());
         assert!(env.lookup("b").is_some());
@@ -182,7 +210,11 @@ mod tests {
     fn test_cannot_pop_last_scope() {
         let mut env = Environment::new();
 
-        env.define_local("x".to_string(), Value { id: 1, type_id: 10 }, crate::ast::types::i32());
+        env.define_local(
+            "x".to_string(),
+            Value { id: 1, type_id: 10 },
+            crate::ast::types::i32(),
+        );
 
         // Try to pop the only scope
         let result = env.pop_scope();
@@ -196,8 +228,16 @@ mod tests {
     fn test_clear_locals() {
         let mut env = Environment::new();
 
-        env.define_global("g".to_string(), Value { id: 1, type_id: 10 }, crate::ast::types::i32());
-        env.define_local("l".to_string(), Value { id: 2, type_id: 10 }, crate::ast::types::i32());
+        env.define_global(
+            "g".to_string(),
+            Value { id: 1, type_id: 10 },
+            crate::ast::types::i32(),
+        );
+        env.define_local(
+            "l".to_string(),
+            Value { id: 2, type_id: 10 },
+            crate::ast::types::i32(),
+        );
 
         env.clear_locals();
 

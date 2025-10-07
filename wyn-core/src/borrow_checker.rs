@@ -291,9 +291,9 @@ impl<'a, W: Write> Visitor for FactExtractor<'a, W> {
             block: self.current_block,
             index: location_id - 1,
         };
-        try_cf!(self.fact_writer
-            .write_location_fact(location_id, &location)
-            .map_err(BorrowChecker::io_error));
+        try_cf!(
+            self.fact_writer.write_location_fact(location_id, &location).map_err(BorrowChecker::io_error)
+        );
 
         // Dispatch to specific handlers based on expression type
         match &expr.kind {
@@ -320,21 +320,25 @@ impl<'a, W: Write> Visitor for FactExtractor<'a, W> {
         let location_id = *self.location_counter - 1;
 
         // Variable reference - this is a potential borrow
-        try_cf!(self.fact_writer
-            .write_var_ref_fact(location_id, name)
-            .map_err(BorrowChecker::io_error));
+        try_cf!(self.fact_writer.write_var_ref_fact(location_id, name).map_err(BorrowChecker::io_error));
 
         // In a functional language, references are typically borrows
         let borrow_id = self.borrow_checker.get_next_borrow_id();
         let lifetime_id = self.borrow_checker.get_current_lifetime_for_var(name);
-        try_cf!(self.fact_writer
-            .write_borrow_fact(borrow_id, location_id, name, lifetime_id)
-            .map_err(BorrowChecker::io_error));
+        try_cf!(
+            self.fact_writer
+                .write_borrow_fact(borrow_id, location_id, name, lifetime_id)
+                .map_err(BorrowChecker::io_error)
+        );
 
         ControlFlow::Continue(())
     }
 
-    fn visit_expr_function_call(&mut self, func_name: &str, args: &[Expression]) -> ControlFlow<Self::Break> {
+    fn visit_expr_function_call(
+        &mut self,
+        func_name: &str,
+        args: &[Expression],
+    ) -> ControlFlow<Self::Break> {
         let location_id = *self.location_counter - 1;
 
         let arg_names: Vec<&str> = args
@@ -345,9 +349,11 @@ impl<'a, W: Write> Visitor for FactExtractor<'a, W> {
             })
             .collect();
 
-        try_cf!(self.fact_writer
-            .write_call_fact(location_id, func_name, &arg_names)
-            .map_err(BorrowChecker::io_error));
+        try_cf!(
+            self.fact_writer
+                .write_call_fact(location_id, func_name, &arg_names)
+                .map_err(BorrowChecker::io_error)
+        );
 
         // Visit all arguments
         for arg in args {
@@ -360,12 +366,12 @@ impl<'a, W: Write> Visitor for FactExtractor<'a, W> {
     fn visit_expr_lambda(&mut self, lambda: &LambdaExpr) -> ControlFlow<Self::Break> {
         // Lambda creates a new block
         let lambda_block = BlockId(self.current_block.0 + 1000); // Offset to avoid conflicts
-        try_cf!(self.fact_writer
-            .write_block_fact(lambda_block)
-            .map_err(BorrowChecker::io_error));
-        try_cf!(self.fact_writer
-            .write_edge_fact(self.current_block, lambda_block)
-            .map_err(BorrowChecker::io_error));
+        try_cf!(self.fact_writer.write_block_fact(lambda_block).map_err(BorrowChecker::io_error));
+        try_cf!(
+            self.fact_writer
+                .write_edge_fact(self.current_block, lambda_block)
+                .map_err(BorrowChecker::io_error)
+        );
 
         // Lambda parameters create lifetimes
         for param in &lambda.params {
@@ -377,15 +383,21 @@ impl<'a, W: Write> Visitor for FactExtractor<'a, W> {
                 block: lambda_block,
                 index: 0,
             };
-            try_cf!(self.fact_writer
-                .write_location_fact(param_location_id, &param_location)
-                .map_err(BorrowChecker::io_error));
-            try_cf!(self.fact_writer
-                .write_var_def_fact(param_location_id, &param.name)
-                .map_err(BorrowChecker::io_error));
-            try_cf!(self.fact_writer
-                .write_lifetime_start_fact(lifetime_id, param_location_id, &param.name)
-                .map_err(BorrowChecker::io_error));
+            try_cf!(
+                self.fact_writer
+                    .write_location_fact(param_location_id, &param_location)
+                    .map_err(BorrowChecker::io_error)
+            );
+            try_cf!(
+                self.fact_writer
+                    .write_var_def_fact(param_location_id, &param.name)
+                    .map_err(BorrowChecker::io_error)
+            );
+            try_cf!(
+                self.fact_writer
+                    .write_lifetime_start_fact(lifetime_id, param_location_id, &param.name)
+                    .map_err(BorrowChecker::io_error)
+            );
         }
 
         // Analyze lambda body in new block
@@ -402,12 +414,14 @@ impl<'a, W: Write> Visitor for FactExtractor<'a, W> {
 
         // Let binding creates a lifetime
         let lifetime_id = self.borrow_checker.get_next_lifetime_id();
-        try_cf!(self.fact_writer
-            .write_var_def_fact(location_id, &let_in.name)
-            .map_err(BorrowChecker::io_error));
-        try_cf!(self.fact_writer
-            .write_lifetime_start_fact(lifetime_id, location_id, &let_in.name)
-            .map_err(BorrowChecker::io_error));
+        try_cf!(
+            self.fact_writer.write_var_def_fact(location_id, &let_in.name).map_err(BorrowChecker::io_error)
+        );
+        try_cf!(
+            self.fact_writer
+                .write_lifetime_start_fact(lifetime_id, location_id, &let_in.name)
+                .map_err(BorrowChecker::io_error)
+        );
 
         // Analyze value expression
         self.visit_expression(&let_in.value)?;

@@ -366,6 +366,13 @@ impl Parser {
     }
 
     fn parse_array_or_base_type(&mut self) -> Result<Type> {
+        // Check for uniqueness prefix *
+        if matches!(self.peek(), Some(Token::BinOp(op)) if op == "*") {
+            self.advance(); // consume '*'
+            let inner_type = self.parse_array_or_base_type()?;
+            return Ok(types::unique(inner_type));
+        }
+
         // Check for array type [dim]baseType (Futhark style)
         if self.check(&Token::LeftBracket) {
             self.advance(); // consume '['
@@ -2242,7 +2249,10 @@ def fragment_main(): [4]f32 = SKY_RGBA
                 match &declarations[0] {
                     Declaration::Uniform(uniform_decl) => {
                         if uniform_decl.name != "material_color" {
-                            return Err(format!("Expected name 'material_color', got '{}'", uniform_decl.name));
+                            return Err(format!(
+                                "Expected name 'material_color', got '{}'",
+                                uniform_decl.name
+                            ));
                         }
                         if uniform_decl.ty != crate::ast::types::vec3() {
                             return Err(format!("Expected vec3 type, got {:?}", uniform_decl.ty));
@@ -2268,7 +2278,10 @@ def fragment_main(): [4]f32 = SKY_RGBA
                 match &declarations[0] {
                     Declaration::Uniform(uniform_decl) => {
                         if uniform_decl.name != "material_color" {
-                            return Err(format!("Expected name 'material_color', got '{}'", uniform_decl.name));
+                            return Err(format!(
+                                "Expected name 'material_color', got '{}'",
+                                uniform_decl.name
+                            ));
                         }
                         if uniform_decl.ty != crate::ast::types::vec3() {
                             return Err(format!("Expected vec3 type, got {:?}", uniform_decl.ty));
@@ -2590,6 +2603,105 @@ def test_vertex : #[builtin(position)] vec4 =
                         return Err("Expected attributed return type".to_string());
                     }
                     Ok(())
+                }
+                _ => Err("Expected Decl".to_string()),
+            }
+        });
+    }
+
+    #[test]
+    fn test_parse_unique_type() {
+        expect_parse("def foo(x: *i32): i32 = x", |declarations| {
+            if declarations.len() != 1 {
+                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+            }
+            match &declarations[0] {
+                Declaration::Decl(decl) => {
+                    if decl.params.len() != 1 {
+                        return Err(format!("Expected 1 parameter, got {}", decl.params.len()));
+                    }
+                    match &decl.params[0] {
+                        DeclParam::Typed(param) => {
+                            let param_ty = &param.ty;
+                            // Should be Unique(i32)
+                            if !types::is_unique(param_ty) {
+                                return Err(format!("Expected unique type, got {:?}", param_ty));
+                            }
+                            let inner = types::strip_unique(param_ty);
+                            if inner != types::i32() {
+                                return Err(format!("Expected i32 inside unique, got {:?}", inner));
+                            }
+                            Ok(())
+                        }
+                        _ => Err("Expected typed parameter".to_string()),
+                    }
+                }
+                _ => Err("Expected Decl".to_string()),
+            }
+        });
+    }
+
+    #[test]
+    fn test_parse_unique_array_type() {
+        expect_parse("def bar(arr: *[3]f32): f32 = arr[0]", |declarations| {
+            if declarations.len() != 1 {
+                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+            }
+            match &declarations[0] {
+                Declaration::Decl(decl) => {
+                    if decl.params.len() != 1 {
+                        return Err(format!("Expected 1 parameter, got {}", decl.params.len()));
+                    }
+                    match &decl.params[0] {
+                        DeclParam::Typed(param) => {
+                            let param_ty = &param.ty;
+                            // Should be Unique(Array(3, f32))
+                            if !types::is_unique(param_ty) {
+                                return Err(format!("Expected unique type, got {:?}", param_ty));
+                            }
+                            let inner = types::strip_unique(param_ty);
+                            let expected = types::sized_array(3, types::f32());
+                            if inner != expected {
+                                return Err(format!("Expected [3]f32 inside unique, got {:?}", inner));
+                            }
+                            Ok(())
+                        }
+                        _ => Err("Expected typed parameter".to_string()),
+                    }
+                }
+                _ => Err("Expected Decl".to_string()),
+            }
+        });
+    }
+
+    #[test]
+    fn test_parse_nested_unique() {
+        // Nested arrays with unique at different levels
+        expect_parse("def baz(x: *[2][3]i32): i32 = x[0][0]", |declarations| {
+            if declarations.len() != 1 {
+                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+            }
+            match &declarations[0] {
+                Declaration::Decl(decl) => {
+                    if decl.params.len() != 1 {
+                        return Err(format!("Expected 1 parameter, got {}", decl.params.len()));
+                    }
+                    match &decl.params[0] {
+                        DeclParam::Typed(param) => {
+                            let param_ty = &param.ty;
+                            // Should be Unique(Array(2, Array(3, i32)))
+                            if !types::is_unique(param_ty) {
+                                return Err(format!("Expected unique type, got {:?}", param_ty));
+                            }
+                            let inner = types::strip_unique(param_ty);
+                            let expected = types::sized_array(2, types::sized_array(3, types::i32()));
+                            if inner != expected {
+                                return Err(format!("Expected [2][3]i32 inside unique, got {:?}", inner));
+                            }
+                            Ok(())
+                        }
+                        _ => Err("Expected typed parameter".to_string()),
+                    }
                 }
                 _ => Err("Expected Decl".to_string()),
             }

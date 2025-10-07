@@ -68,12 +68,14 @@ impl TypeChecker {
         let length_scheme = TypeScheme::Monotype(length_body);
         self.scope_stack.insert("length".to_string(), length_scheme);
 
-        // map: ∀a b n. (a -> b) -> Array(n, a) -> Array(n, b)
+        // map: ∀a b n. (a -> b) -> *Array(n, a) -> Array(n, b)
+        // The input array is consumed (unique), output is fresh
         let var_a = self.context.new_variable();
         let var_b = self.context.new_variable();
         let var_n = self.context.new_variable(); // Array size variable
         let func_type = Type::arrow(var_a.clone(), var_b.clone());
-        let input_array_type = Type::Constructed(TypeName::Array, vec![var_n.clone(), var_a]);
+        let input_array_type =
+            types::unique(Type::Constructed(TypeName::Array, vec![var_n.clone(), var_a]));
         let output_array_type = Type::Constructed(TypeName::Array, vec![var_n, var_b]);
         let map_arrow1 = Type::arrow(input_array_type, output_array_type);
         let map_body = Type::arrow(func_type, map_arrow1);
@@ -397,7 +399,9 @@ impl TypeChecker {
                     if !self.types_match(&body_type, declared_type) {
                         return Err(CompilerError::TypeError(format!(
                             "Function return type mismatch for '{}': expected {}, got {}",
-                            decl.name, self.format_type(declared_type), self.format_type(&body_type)
+                            decl.name,
+                            self.format_type(declared_type),
+                            self.format_type(&body_type)
                         )));
                     }
                 } else {
@@ -408,7 +412,9 @@ impl TypeChecker {
                     self.context.unify(&body_type, declared_type).map_err(|_| {
                         CompilerError::TypeError(format!(
                             "Type mismatch for '{}': declared {}, inferred {}",
-                            decl.name, self.format_type(declared_type), self.format_type(&body_type)
+                            decl.name,
+                            self.format_type(declared_type),
+                            self.format_type(&body_type)
                         ))
                     })?;
                 }
@@ -445,7 +451,7 @@ impl TypeChecker {
                 debug!("Current scope depth: {}", self.scope_stack.depth());
 
                 // First check scope stack for variables
-                if let Some(type_scheme) = self.scope_stack.lookup(name) {
+                if let Ok(type_scheme) = self.scope_stack.lookup(name) {
                     debug!("Found '{}' in scope stack with type: {:?}", name, type_scheme);
                     // Instantiate the type scheme to get a concrete type
                     return Ok(type_scheme.instantiate(&mut self.context));
@@ -556,7 +562,7 @@ impl TypeChecker {
             }
             ExprKind::FunctionCall(func_name, args) => {
                 // Get function type - check scope stack first, then builtin registry
-                let mut func_type = if let Some(type_scheme) = self.scope_stack.lookup(func_name) {
+                let mut func_type = if let Ok(type_scheme) = self.scope_stack.lookup(func_name) {
                     type_scheme.instantiate(&mut self.context)
                 } else if self.builtin_registry.is_builtin(func_name) {
                     // Get type from builtin registry
@@ -575,16 +581,50 @@ impl TypeChecker {
                 for arg in args {
                     let arg_type = self.infer_expression(arg)?;
 
+                    // Extract parameter type from function type (apply arrow destructor)
+                    // The function type should be: param_type -> rest_type
+                    let func_type_applied = func_type.apply(&self.context);
+
+                    // Check if the expected parameter is unique (for consumption tracking)
+                    // We need to peek into the arrow type structure
+                    let expects_unique =
+                        if let Type::Constructed(TypeName::Str("arrow"), arrow_args) = &func_type_applied {
+                            if let Some(param_type) = arrow_args.first() {
+                                types::is_unique(param_type)
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+
                     // Create a fresh result type variable
                     let result_type = self.context.new_variable();
 
-                    // Expected function type: arg_type -> result_type
-                    let expected_func_type = Type::arrow(arg_type, result_type.clone());
+                    // Strip uniqueness from arg_type for unification
+                    // This allows non-unique values to be passed to unique parameters
+                    let arg_type_for_unify = types::strip_unique(&arg_type);
 
-                    // Unify the function type with expected
+                    // Expected function type: arg_type_for_unify -> result_type
+                    let expected_func_type = Type::arrow(arg_type_for_unify, result_type.clone());
+
+                    // Unify the function type with expected (with uniqueness stripped)
                     self.context.unify(&func_type, &expected_func_type).map_err(|e| {
                         CompilerError::TypeError(format!("Function call type error: {:?}", e))
                     })?;
+
+                    // If the parameter expects unique ownership, mark the variable as consumed
+                    if expects_unique {
+                        if let ExprKind::Identifier(var_name) = &arg.kind {
+                            self.scope_stack.mark_consumed(var_name).map_err(|e| {
+                                CompilerError::TypeError(format!(
+                                    "Cannot consume variable '{}': {}",
+                                    var_name, e
+                                ))
+                            })?;
+                        }
+                        // Note: literals and other expressions can be consumed without tracking
+                    }
 
                     // Update func_type to result_type for the next argument (currying)
                     func_type = result_type;
@@ -715,6 +755,7 @@ impl TypeChecker {
                             TypeName::Str(s) => s.to_string(),
                             TypeName::Array => "array".to_string(),
                             TypeName::Size(n) => n.to_string(),
+                            TypeName::Unique => "unique".to_string(),
                         };
 
                         // Look up field in builtin registry (for vector types)
@@ -898,7 +939,7 @@ mod tests {
                 println!("Type checking succeeded!");
 
                 // Check that zip_arrays has the expected type
-                if let Some(func_type) = checker.scope_stack.lookup("zip_arrays") {
+                if let Ok(func_type) = checker.scope_stack.lookup("zip_arrays") {
                     println!("zip_arrays type: {}", func_type);
 
                     // The inferred type should be something like: t0 -> t1 -> [1](i32, i32)

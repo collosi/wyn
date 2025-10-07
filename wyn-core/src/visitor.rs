@@ -61,11 +61,20 @@ pub trait Visitor: Sized {
         walk_expr_array_literal(self, elements)
     }
 
-    fn visit_expr_array_index(&mut self, array: &Expression, index: &Expression) -> ControlFlow<Self::Break> {
+    fn visit_expr_array_index(
+        &mut self,
+        array: &Expression,
+        index: &Expression,
+    ) -> ControlFlow<Self::Break> {
         walk_expr_array_index(self, array, index)
     }
 
-    fn visit_expr_binary_op(&mut self, _op: &BinaryOp, left: &Expression, right: &Expression) -> ControlFlow<Self::Break> {
+    fn visit_expr_binary_op(
+        &mut self,
+        _op: &BinaryOp,
+        left: &Expression,
+        right: &Expression,
+    ) -> ControlFlow<Self::Break> {
         walk_expr_binary_op(self, left, right)
     }
 
@@ -81,7 +90,11 @@ pub trait Visitor: Sized {
         walk_expr_lambda(self, lambda)
     }
 
-    fn visit_expr_application(&mut self, func: &Expression, args: &[Expression]) -> ControlFlow<Self::Break> {
+    fn visit_expr_application(
+        &mut self,
+        func: &Expression,
+        args: &[Expression],
+    ) -> ControlFlow<Self::Break> {
         walk_expr_application(self, func, args)
     }
 
@@ -185,12 +198,20 @@ pub fn walk_expr_array_literal<V: Visitor>(v: &mut V, elements: &[Expression]) -
     ControlFlow::Continue(())
 }
 
-pub fn walk_expr_array_index<V: Visitor>(v: &mut V, array: &Expression, index: &Expression) -> ControlFlow<V::Break> {
+pub fn walk_expr_array_index<V: Visitor>(
+    v: &mut V,
+    array: &Expression,
+    index: &Expression,
+) -> ControlFlow<V::Break> {
     v.visit_expression(array)?;
     v.visit_expression(index)
 }
 
-pub fn walk_expr_binary_op<V: Visitor>(v: &mut V, left: &Expression, right: &Expression) -> ControlFlow<V::Break> {
+pub fn walk_expr_binary_op<V: Visitor>(
+    v: &mut V,
+    left: &Expression,
+    right: &Expression,
+) -> ControlFlow<V::Break> {
     v.visit_expression(left)?;
     v.visit_expression(right)
 }
@@ -226,7 +247,11 @@ pub fn walk_expr_lambda<V: Visitor>(v: &mut V, lambda: &LambdaExpr) -> ControlFl
     v.visit_expression(&lambda.body)
 }
 
-pub fn walk_expr_application<V: Visitor>(v: &mut V, func: &Expression, args: &[Expression]) -> ControlFlow<V::Break> {
+pub fn walk_expr_application<V: Visitor>(
+    v: &mut V,
+    func: &Expression,
+    args: &[Expression],
+) -> ControlFlow<V::Break> {
     v.visit_expression(func)?;
     for arg in args {
         v.visit_expression(arg)?;
