@@ -3,6 +3,10 @@ use crate::error::{CompilerError, Result};
 use crate::lexer::Token;
 use log::trace;
 
+mod pattern;
+#[cfg(test)]
+mod tests;
+
 pub struct Parser {
     tokens: Vec<Token>,
     current: usize,
@@ -921,6 +925,3 @@ impl Parser {
         self.current >= self.tokens.len()
     }
 }
-
-#[cfg(test)]
-mod tests;

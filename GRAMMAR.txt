@@ -1,0 +1,205 @@
+name         ::= lowercase constituent* | "_" constituent*
+constituent  ::= letter | digit | "_" | "'"
+quals        ::= (name ".")+
+qualname     ::= name | quals name
+symbol       ::= symstartchar symchar*
+qualsymbol   ::= symbol | quals symbol | "`" qualname "`"
+fieldid      ::= decimal | name
+symstartchar ::= "+" | "-" | "*" | "/" | "%" | "=" | "!" | ">" | "<" | "|" | "&" | "^"
+symchar      ::= symstartchar | "."
+constructor  ::= uppercase constituent*
+lowercase    ::= "a"..."z"
+uppercase    ::= "A"..."Z"
+letter       ::= lowercase | uppercase
+
+
+literal ::= intnumber | floatnumber | "true" | "false"
+
+
+int_type   ::= "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
+float_type ::= "f16" | "f32" | "f64"
+
+
+intnumber   ::= (decimal | hexadecimal | binary) [int_type]
+decimal     ::= decdigit (decdigit |"_")*
+hexadecimal ::= 0 ("x" | "X") hexdigit (hexdigit |"_")*
+binary      ::= 0 ("b" | "B") bindigit (bindigit | "_")*
+
+
+floatnumber      ::= (pointfloat | exponentfloat | hexadecimalfloat) [float_type]
+pointfloat       ::= [intpart] fraction
+exponentfloat    ::= (intpart | pointfloat) exponent
+hexadecimalfloat ::= 0 ("x" | "X") hexintpart hexfraction ("p"|"P") ["+" | "-"] decdigit+
+intpart          ::= decdigit (decdigit |"_")*
+fraction         ::= "." decdigit (decdigit |"_")*
+hexintpart       ::= hexdigit (hexdigit | "_")*
+hexfraction      ::= "." hexdigit (hexdigit |"_")*
+exponent         ::= ("e" | "E") ["+" | "-"] decdigit+
+
+
+decdigit ::= "0"..."9"
+hexdigit ::= decdigit | "a"..."f" | "A"..."F"
+bindigit ::= "0" | "1"
+
+
+type ::= qualname
+         | array_type
+         | tuple_type
+         | record_type
+         | sum_type
+         | function_type
+         | type_application
+         | existential_size
+
+
+tuple_type ::= "(" ")" | "(" type ("," type)+ [","] ")"
+
+
+array_type ::= "[" [exp] "]" type
+
+
+sum_type ::= constructor type* ("|" constructor type*)*
+
+
+record_type ::= "{" "}" | "{" fieldid ":" type ("," fieldid ":" type)* [","] "}"
+
+
+type_application ::= type type_arg | "*" type
+type_arg         ::= "[" [dim] "]" | type
+
+
+function_type ::= param_type "->" type
+param_type    ::= type | "(" name ":" type ")"
+
+
+stringlit  ::= '"' stringchar* '"'
+stringchar ::= <any source character except "\" or newline or double quotes>
+charlit    ::= "'" char "'"
+char       ::= <any source character except "\" or newline or single quotes>
+
+
+existential_size ::= "?" ("[" name "]")+ "." type
+
+
+dec ::= val_bind | type_bind | mod_bind | mod_type_bind
+        | "open" mod_exp
+        | "import" stringlit
+        | "local" dec
+        | "#[" attr "]" dec
+
+
+val_bind ::= ("def" | "entry" | "let") (name | "(" symbol ")") type_param* pat* [":" type] "=" exp
+             | ("def" | "entry" | "let") pat symbol pat [":" type] "=" exp
+
+type_bind  ::= ("type" | "type^" | "type~") name type_param* "=" type
+type_param ::= "[" name "]" | "'" name | "'~" name | "'^" name
+
+
+
+
+atom        ::= literal
+                | qualname ("." fieldid)*
+                | stringlit
+                | charlit
+                | "(" ")"
+                | "(" exp ")" ("." fieldid)*
+                | "(" exp ("," exp)+ [","] ")"
+                | "{" "}"
+                | "{" field ("," field)* [","] "}"
+                | qualname slice
+                | "(" exp ")" slice
+                | quals "." "(" exp ")"
+                | "[" exp ("," exp)* [","] "]"
+                | "(" qualsymbol ")"
+                | "(" exp qualsymbol ")"
+                | "(" qualsymbol exp ")"
+                | "(" ( "." field )+ ")"
+                | "(" "." slice ")"
+                | "???"
+exp         ::= atom
+                | exp qualsymbol exp
+                | exp exp
+                | "!" exp
+                | "-" exp
+                | constructor exp*
+                | exp ":" type
+                | exp ":>" type
+                | exp [ ".." exp ] "..." exp
+                | exp [ ".." exp ] "..<" exp
+                | exp [ ".." exp ] "..>" exp
+                | "if" exp "then" exp "else" exp
+                | "let" size* pat "=" exp "in" exp
+                | "let" name slice "=" exp "in" exp
+                | "let" name type_param* pat+ [":" type] "=" exp "in" exp
+                | "(" "\" pat+ [":" type] "->" exp ")"
+                | "loop" pat ["=" exp] loopform "do" exp
+                | "#[" attr "]" exp
+                | "unsafe" exp
+                | "assert" atom exp
+                | exp "with" slice "=" exp
+                | exp "with" fieldid ("." fieldid)* "=" exp
+                | "match" exp ("case" pat "->" exp)+
+slice       ::= "[" index ("," index)* [","] "]"
+field       ::= fieldid "=" exp
+                | name
+size        ::= "[" name "]"
+pat         ::= name
+                | pat_literal
+                | "_"
+                | "(" ")"
+                | "(" pat ")"
+                | "(" pat ("," pat)+ [","] ")"
+                | "{" "}"
+                | "{" fieldid ["=" pat] ("," fieldid ["=" pat])* [","] "}"
+                | constructor pat*
+                | pat ":" type
+                | "#[" attr "]" pat
+pat_literal ::= [ "-" ] intnumber
+                | [ "-" ] floatnumber
+                | charlit
+                | "true"
+                | "false"
+loopform    ::= "for" name "<" exp
+                | "for" pat "in" exp
+                | "while" exp
+index       ::= exp [":" [exp]] [":" [exp]]
+                | [exp] ":" exp [":" [exp]]
+                | [exp] [":" exp] ":" [exp]
+
+
+mod_bind      ::= "module" name mod_param* "=" [":" mod_type_exp] "=" mod_exp
+mod_param     ::= "(" name ":" mod_type_exp ")"
+mod_type_bind ::= "module" "type" name "=" mod_type_exp
+
+
+mod_exp ::= qualname
+            | mod_exp ":" mod_type_exp
+            | "\" "(" mod_param* ")" [":" mod_type_exp] "->" mod_exp
+            | mod_exp mod_exp
+            | "(" mod_exp ")"
+            | "{" dec* "}"
+            | "import" stringlit
+
+
+mod_type_exp ::= qualname
+                 | "{" spec* "}"
+                 | mod_type_exp "with" qualname type_param* "=" type
+                 | "(" mod_type_exp ")"
+                 | "(" name ":" mod_type_exp ")" "->" mod_type_exp
+                 | mod_type_exp "->" mod_type_exp
+
+
+spec ::= "val" name type_param* ":" type
+         | "val" "(" symbol ")" ":" type
+         | "val" symbol type_param* ":" type
+         | ("type" | "type^" | "type~") name type_param* "=" type
+         | ("type" | "type^" | "type~") name type_param*
+         | "module" name ":" mod_type_exp
+         | "include" mod_type_exp
+         | "#[" attr "]" spec
+
+
+attr ::= name
+         | decimal
+         | name "(" [attr ("," attr)* [","]] ")"
+

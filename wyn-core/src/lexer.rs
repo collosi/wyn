@@ -23,14 +23,21 @@ pub enum Token {
     Identifier(String),
     IntLiteral(i32),
     FloatLiteral(f32),
+    CharLiteral(char),
+
+    // Boolean literals
+    True,
+    False,
 
     // Operators
     Assign,
     BinOp(String), // Binary operators: +, -, *, /
     Arrow,
-    Backslash, // \ for lambda expressions
-    Dot,       // . for field access
-    Star,      // * for uniqueness types (prefix)
+    Backslash,  // \ for lambda expressions
+    Dot,        // . for field access
+    Star,       // * for uniqueness types (prefix)
+    Minus,      // - (can be unary or binary)
+    Underscore, // _ for wildcard patterns
 
     // Delimiters
     LeftParen,
@@ -38,6 +45,8 @@ pub enum Token {
     LeftBracket,       // [ without preceding whitespace (for indexing: arr[0])
     LeftBracketSpaced, // [ with preceding whitespace (for array literals: f [1,2,3])
     RightBracket,
+    LeftBrace,
+    RightBrace,
     Colon,
     Comma,
 
@@ -74,6 +83,8 @@ fn parse_keyword(input: &str) -> IResult<&str, Token> {
         keyword("if", Token::If),
         keyword("then", Token::Then),
         keyword("else", Token::Else),
+        keyword("true", Token::True),
+        keyword("false", Token::False),
     ))(input)
 }
 
@@ -97,7 +108,10 @@ fn parse_identifier(input: &str) -> IResult<&str, Token> {
             alt((alpha1, tag("_"))),
             many0(alt((alphanumeric1, tag("_")))),
         )),
-        |s: &str| Token::Identifier(s.to_string()),
+        |s: &str| {
+            // Handle underscore specially - it's a wildcard pattern, not an identifier
+            if s == "_" { Token::Underscore } else { Token::Identifier(s.to_string()) }
+        },
     )(input)
 }
 
@@ -151,6 +165,8 @@ fn parse_delimiter(input: &str) -> IResult<&str, Token> {
         value(Token::RightParen, char(')')),
         value(Token::LeftBracket, char('[')),
         value(Token::RightBracket, char(']')),
+        value(Token::LeftBrace, char('{')),
+        value(Token::RightBrace, char('}')),
         value(Token::Colon, char(':')),
         value(Token::Comma, char(',')),
     ))(input)

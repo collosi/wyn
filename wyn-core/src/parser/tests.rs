@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::lexer::tokenize;
 
@@ -1831,4 +1830,400 @@ fn test_parse_function_application_with_array_literal() {
             }
         },
     );
+}
+
+// Pattern parsing tests
+
+#[test]
+fn test_parse_pattern_name() {
+    let tokens = tokenize("x").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Name(name) => {
+            assert_eq!(name, "x", "Expected name 'x'");
+        }
+        _ => panic!("Expected Name pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_wildcard() {
+    let tokens = tokenize("_").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Wildcard => {}
+        _ => panic!("Expected Wildcard pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_unit() {
+    let tokens = tokenize("()").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Unit => {}
+        _ => panic!("Expected Unit pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_int_literal() {
+    let tokens = tokenize("42").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Literal(PatternLiteral::Int(n)) => {
+            assert_eq!(n, 42, "Expected int literal 42");
+        }
+        _ => panic!("Expected int literal pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_negative_int_literal() {
+    let tokens = tokenize("-42").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Literal(PatternLiteral::Int(n)) => {
+            assert_eq!(n, -42, "Expected int literal -42");
+        }
+        _ => panic!("Expected int literal pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_float_literal() {
+    let tokens = tokenize("3.14f32").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Literal(PatternLiteral::Float(f)) => {
+            assert!((f - 3.14).abs() < 0.001, "Expected float literal 3.14");
+        }
+        _ => panic!("Expected float literal pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_bool_true() {
+    let tokens = tokenize("true").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Literal(PatternLiteral::Bool(b)) => {
+            assert!(b, "Expected bool literal true");
+        }
+        _ => panic!("Expected bool literal pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_bool_false() {
+    let tokens = tokenize("false").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Literal(PatternLiteral::Bool(b)) => {
+            assert!(!b, "Expected bool literal false");
+        }
+        _ => panic!("Expected bool literal pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_tuple() {
+    let tokens = tokenize("(x, y, z)").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Tuple(patterns) => {
+            assert_eq!(patterns.len(), 3, "Expected 3 patterns in tuple");
+
+            match &patterns[0].kind {
+                PatternKind::Name(name) => assert_eq!(name, "x"),
+                _ => panic!("Expected first element to be Name pattern"),
+            }
+
+            match &patterns[1].kind {
+                PatternKind::Name(name) => assert_eq!(name, "y"),
+                _ => panic!("Expected second element to be Name pattern"),
+            }
+
+            match &patterns[2].kind {
+                PatternKind::Name(name) => assert_eq!(name, "z"),
+                _ => panic!("Expected third element to be Name pattern"),
+            }
+        }
+        _ => panic!("Expected Tuple pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_tuple_with_trailing_comma() {
+    let tokens = tokenize("(x, y,)").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Tuple(patterns) => {
+            assert_eq!(patterns.len(), 2, "Expected 2 patterns in tuple");
+        }
+        _ => panic!("Expected Tuple pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_single_in_parens() {
+    let tokens = tokenize("(x)").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    // Single pattern in parens should unwrap to just the pattern
+    match pattern.kind {
+        PatternKind::Name(name) => {
+            assert_eq!(name, "x", "Expected name 'x'");
+        }
+        _ => panic!(
+            "Expected Name pattern (unwrapped from parens), got {:?}",
+            pattern.kind
+        ),
+    }
+}
+
+#[test]
+fn test_parse_pattern_empty_record() {
+    let tokens = tokenize("{}").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Record(fields) => {
+            assert_eq!(fields.len(), 0, "Expected empty record");
+        }
+        _ => panic!("Expected Record pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_record_shorthand() {
+    let tokens = tokenize("{ x, y }").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Record(fields) => {
+            assert_eq!(fields.len(), 2, "Expected 2 fields");
+
+            assert_eq!(fields[0].field, "x");
+            assert!(fields[0].pattern.is_none(), "Expected shorthand (no pattern)");
+
+            assert_eq!(fields[1].field, "y");
+            assert!(fields[1].pattern.is_none(), "Expected shorthand (no pattern)");
+        }
+        _ => panic!("Expected Record pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_record_with_patterns() {
+    let tokens = tokenize("{ x = a, y = b }").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Record(fields) => {
+            assert_eq!(fields.len(), 2, "Expected 2 fields");
+
+            assert_eq!(fields[0].field, "x");
+            assert!(fields[0].pattern.is_some(), "Expected pattern for x");
+            if let Some(ref pat) = fields[0].pattern {
+                match &pat.kind {
+                    PatternKind::Name(name) => assert_eq!(name, "a"),
+                    _ => panic!("Expected Name pattern for x"),
+                }
+            }
+
+            assert_eq!(fields[1].field, "y");
+            assert!(fields[1].pattern.is_some(), "Expected pattern for y");
+            if let Some(ref pat) = fields[1].pattern {
+                match &pat.kind {
+                    PatternKind::Name(name) => assert_eq!(name, "b"),
+                    _ => panic!("Expected Name pattern for y"),
+                }
+            }
+        }
+        _ => panic!("Expected Record pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_record_mixed() {
+    let tokens = tokenize("{ x, y = b }").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Record(fields) => {
+            assert_eq!(fields.len(), 2, "Expected 2 fields");
+
+            assert_eq!(fields[0].field, "x");
+            assert!(fields[0].pattern.is_none(), "Expected shorthand for x");
+
+            assert_eq!(fields[1].field, "y");
+            assert!(fields[1].pattern.is_some(), "Expected pattern for y");
+        }
+        _ => panic!("Expected Record pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_constructor_no_args() {
+    let tokens = tokenize("None").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Constructor(name, args) => {
+            assert_eq!(name, "None");
+            assert_eq!(args.len(), 0, "Expected no arguments");
+        }
+        _ => panic!("Expected Constructor pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_constructor_with_args() {
+    let tokens = tokenize("Some x").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Constructor(name, args) => {
+            assert_eq!(name, "Some");
+            assert_eq!(args.len(), 1, "Expected 1 argument");
+
+            match &args[0].kind {
+                PatternKind::Name(arg_name) => assert_eq!(arg_name, "x"),
+                _ => panic!("Expected Name pattern for argument"),
+            }
+        }
+        _ => panic!("Expected Constructor pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_constructor_multiple_args() {
+    let tokens = tokenize("Point x y").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Constructor(name, args) => {
+            assert_eq!(name, "Point");
+            assert_eq!(args.len(), 2, "Expected 2 arguments");
+
+            match &args[0].kind {
+                PatternKind::Name(arg_name) => assert_eq!(arg_name, "x"),
+                _ => panic!("Expected Name pattern for first argument"),
+            }
+
+            match &args[1].kind {
+                PatternKind::Name(arg_name) => assert_eq!(arg_name, "y"),
+                _ => panic!("Expected Name pattern for second argument"),
+            }
+        }
+        _ => panic!("Expected Constructor pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_constructor_nested() {
+    let tokens = tokenize("Just (Some x)").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Constructor(name, args) => {
+            assert_eq!(name, "Just");
+            assert_eq!(args.len(), 1, "Expected 1 argument");
+
+            match &args[0].kind {
+                PatternKind::Constructor(inner_name, inner_args) => {
+                    assert_eq!(inner_name, "Some");
+                    assert_eq!(inner_args.len(), 1);
+
+                    match &inner_args[0].kind {
+                        PatternKind::Name(n) => assert_eq!(n, "x"),
+                        _ => panic!("Expected Name in nested constructor"),
+                    }
+                }
+                _ => panic!("Expected Constructor pattern for argument"),
+            }
+        }
+        _ => panic!("Expected Constructor pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_typed() {
+    let tokens = tokenize("x : i32").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Typed(pat, ty) => {
+            match pat.kind {
+                PatternKind::Name(name) => assert_eq!(name, "x"),
+                _ => panic!("Expected Name pattern"),
+            }
+
+            assert_eq!(ty, types::i32(), "Expected i32 type");
+        }
+        _ => panic!("Expected Typed pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_tuple_typed() {
+    let tokens = tokenize("(x, y) : (i32, f32)").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Typed(pat, _ty) => match pat.kind {
+            PatternKind::Tuple(patterns) => {
+                assert_eq!(patterns.len(), 2);
+            }
+            _ => panic!("Expected Tuple pattern"),
+        },
+        _ => panic!("Expected Typed pattern, got {:?}", pattern.kind),
+    }
+}
+
+#[test]
+fn test_parse_pattern_lowercase_not_constructor() {
+    // Lowercase identifiers should be name patterns, not constructors
+    let tokens = tokenize("some").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let pattern = parser.parse_pattern().expect("Failed to parse pattern");
+
+    match pattern.kind {
+        PatternKind::Name(name) => {
+            assert_eq!(name, "some", "Expected name pattern 'some'");
+        }
+        _ => panic!("Expected Name pattern (not Constructor), got {:?}", pattern.kind),
+    }
 }

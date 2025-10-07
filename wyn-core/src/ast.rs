@@ -251,6 +251,36 @@ pub struct IfExpr {
     pub else_branch: Box<Expression>,
 }
 
+// Pattern types for match expressions and let bindings
+#[derive(Debug, Clone, PartialEq)]
+pub enum PatternKind {
+    Name(String),                             // Simple name binding
+    Wildcard,                                 // _ wildcard
+    Literal(PatternLiteral),                  // Literal patterns
+    Unit,                                     // () unit pattern
+    Tuple(Vec<Pattern>),                      // (pat1, pat2, ...)
+    Record(Vec<RecordPatternField>),          // { field1, field2 = pat, ... }
+    Constructor(String, Vec<Pattern>),        // Constructor application
+    Typed(Box<Pattern>, Type),                // pat : type
+    Attributed(Vec<Attribute>, Box<Pattern>), // #[attr] pat
+}
+
+pub type Pattern = Node<PatternKind>;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PatternLiteral {
+    Int(i32),
+    Float(f32),
+    Char(char),
+    Bool(bool),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordPatternField {
+    pub field: String,
+    pub pattern: Option<Pattern>, // None means shorthand (just field name)
+}
+
 // Helper module for creating common polytype Types
 pub mod types {
     use super::{Type, TypeName};
