@@ -3,7 +3,19 @@ use crate::ast::*;
 use crate::cfg::{BlockId, Location};
 use crate::error::{CompilerError, Result};
 use crate::nemo_facts::{NemoFactWriter, expr_type_name};
+use crate::visitor::Visitor;
 use std::io::Write;
+use std::ops::ControlFlow;
+
+/// Macro to convert Result to ControlFlow::Break on error
+macro_rules! try_cf {
+    ($expr:expr) => {
+        match $expr {
+            Ok(v) => v,
+            Err(e) => return ControlFlow::Break(e),
+        }
+    };
+}
 
 /// CFG extractor that can output both regular facts and Nemo facts
 pub struct CfgNemoExtractor<W: Write> {
@@ -45,11 +57,21 @@ impl<W: Write> CfgNemoExtractor<W> {
                     if self.current_block.is_none() {
                         self.start_new_block()?; // Start block if needed
                     }
-                    self.extract_expression_cfg(&decl.body)?;
+
+                    // Use visitor to extract CFG
+                    match self.visit_expression(&decl.body) {
+                        ControlFlow::Continue(_) => {}
+                        ControlFlow::Break(e) => return Err(e),
+                    }
                 } else {
                     // Function declaration or def variable
                     self.start_new_block()?; // Function definitions start new blocks
-                    self.extract_expression_cfg(&decl.body)?;
+
+                    // Use visitor to extract CFG
+                    match self.visit_expression(&decl.body) {
+                        ControlFlow::Continue(_) => {}
+                        ControlFlow::Break(e) => return Err(e),
+                    }
                 }
             }
             Declaration::Uniform(_) => {
@@ -59,114 +81,6 @@ impl<W: Write> CfgNemoExtractor<W> {
                 // Val declarations are type signatures, no body to process
             }
         }
-        Ok(())
-    }
-
-    fn extract_expression_cfg(&mut self, expr: &Expression) -> Result<()> {
-        let location_id = self.get_next_location_id();
-
-        if let Some(current_block) = self.current_block {
-            let location = Location {
-                block: current_block,
-                index: self.current_index,
-            };
-
-            // Write location fact
-            self.nemo_writer.write_location_fact(location_id, &location).map_err(Self::io_error)?;
-
-            // Write expression type fact
-            let expr_type = expr_type_name(expr);
-            self.nemo_writer.write_expr_fact(location_id, expr_type).map_err(Self::io_error)?;
-
-            self.current_index += 1;
-        }
-
-        match &expr.kind {
-            ExprKind::Identifier(name) => {
-                // Variable reference
-                self.nemo_writer.write_var_ref_fact(location_id, name).map_err(Self::io_error)?;
-            }
-            ExprKind::BinaryOp(_, left, right) => {
-                self.extract_expression_cfg(left)?;
-                self.extract_expression_cfg(right)?;
-            }
-            ExprKind::ArrayLiteral(elements) => {
-                for element in elements {
-                    self.extract_expression_cfg(element)?;
-                }
-            }
-            ExprKind::ArrayIndex(array, index) => {
-                self.extract_expression_cfg(array)?;
-                self.extract_expression_cfg(index)?;
-            }
-            ExprKind::FunctionCall(_, args) => {
-                for arg in args {
-                    self.extract_expression_cfg(arg)?;
-                }
-            }
-            ExprKind::Application(func, args) => {
-                self.extract_expression_cfg(func)?;
-                for arg in args {
-                    self.extract_expression_cfg(arg)?;
-                }
-            }
-            ExprKind::Tuple(elements) => {
-                for element in elements {
-                    self.extract_expression_cfg(element)?;
-                }
-            }
-            // Lambda expressions create new basic blocks for their body
-            ExprKind::Lambda(lambda) => {
-                // Capture the current block BEFORE creating the new one
-                let parent_block = self.current_block;
-                let lambda_block = self.start_new_block()?;
-
-                // Write edge from parent block to lambda block
-                if let Some(parent) = parent_block {
-                    self.nemo_writer.write_edge_fact(parent, lambda_block).map_err(Self::io_error)?;
-                }
-
-                // Process lambda parameters as variable definitions
-                for param in &lambda.params {
-                    let param_location_id = self.get_next_location_id();
-                    let location = Location {
-                        block: lambda_block,
-                        index: self.current_index,
-                    };
-
-                    self.nemo_writer
-                        .write_location_fact(param_location_id, &location)
-                        .map_err(Self::io_error)?;
-                    self.nemo_writer
-                        .write_var_def_fact(param_location_id, &param.name)
-                        .map_err(Self::io_error)?;
-                    self.current_index += 1;
-                }
-
-                // Process lambda body
-                self.extract_expression_cfg(&lambda.body)?;
-
-                if self.debug {
-                    eprintln!("DEBUG: Lambda created block {} for body", lambda_block.0);
-                }
-            }
-            // Let-in expressions
-            ExprKind::LetIn(let_in) => {
-                self.extract_expression_cfg(&let_in.value)?;
-                self.extract_expression_cfg(&let_in.body)?;
-            }
-            // Literals don't require further processing
-            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) => {}
-            ExprKind::FieldAccess(expr, _field) => {
-                self.extract_expression_cfg(expr)?;
-            }
-            ExprKind::If(if_expr) => {
-                self.extract_expression_cfg(&if_expr.condition)?;
-                self.extract_expression_cfg(&if_expr.then_branch)?;
-                self.extract_expression_cfg(&if_expr.else_branch)?;
-            }
-        }
-
         Ok(())
     }
 
@@ -194,6 +108,98 @@ impl<W: Write> CfgNemoExtractor<W> {
 
     fn io_error(e: std::io::Error) -> CompilerError {
         CompilerError::SpirvError(format!("IO error during CFG extraction: {}", e))
+    }
+}
+
+impl<W: Write> Visitor for CfgNemoExtractor<W> {
+    type Break = CompilerError;
+
+    fn visit_expression(&mut self, expr: &Expression) -> ControlFlow<Self::Break> {
+        let location_id = self.get_next_location_id();
+
+        if let Some(current_block) = self.current_block {
+            let location = Location {
+                block: current_block,
+                index: self.current_index,
+            };
+
+            // Write location fact
+            try_cf!(self.nemo_writer
+                .write_location_fact(location_id, &location)
+                .map_err(Self::io_error));
+
+            // Write expression type fact
+            let expr_type = expr_type_name(expr);
+            try_cf!(self.nemo_writer
+                .write_expr_fact(location_id, expr_type)
+                .map_err(Self::io_error));
+
+            self.current_index += 1;
+        }
+
+        // Dispatch to specific handlers for special cases
+        match &expr.kind {
+            ExprKind::Identifier(name) => {
+                return self.visit_expr_identifier(name);
+            }
+            ExprKind::Lambda(lambda) => {
+                return self.visit_expr_lambda(lambda);
+            }
+            _ => {
+                // Use default traversal for other expressions
+                return crate::visitor::walk_expression(self, expr);
+            }
+        }
+    }
+
+    fn visit_expr_identifier(&mut self, name: &str) -> ControlFlow<Self::Break> {
+        let location_id = self.location_counter - 1;
+
+        // Variable reference
+        try_cf!(self.nemo_writer
+            .write_var_ref_fact(location_id, name)
+            .map_err(Self::io_error));
+
+        ControlFlow::Continue(())
+    }
+
+    fn visit_expr_lambda(&mut self, lambda: &LambdaExpr) -> ControlFlow<Self::Break> {
+        // Capture the current block BEFORE creating the new one
+        let parent_block = self.current_block;
+        let lambda_block = try_cf!(self.start_new_block());
+
+        // Write edge from parent block to lambda block
+        if let Some(parent) = parent_block {
+            try_cf!(self.nemo_writer
+                .write_edge_fact(parent, lambda_block)
+                .map_err(Self::io_error));
+        }
+
+        // Process lambda parameters as variable definitions
+        for param in &lambda.params {
+            let param_location_id = self.get_next_location_id();
+            let location = Location {
+                block: lambda_block,
+                index: self.current_index,
+            };
+
+            try_cf!(self.nemo_writer
+                .write_location_fact(param_location_id, &location)
+                .map_err(Self::io_error));
+            try_cf!(self.nemo_writer
+                .write_var_def_fact(param_location_id, &param.name)
+                .map_err(Self::io_error));
+            self.current_index += 1;
+        }
+
+        // Process lambda body
+        self.visit_expression(&lambda.body)?;
+
+        if self.debug {
+            eprintln!("DEBUG: Lambda created block {} for body", lambda_block.0);
+        }
+
+        ControlFlow::Continue(())
     }
 }
 
