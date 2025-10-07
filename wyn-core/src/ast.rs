@@ -74,15 +74,17 @@ pub type Expression = Node<ExprKind>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeName {
-    Str(&'static str),          // "int", "float", "tuple"
-    Array(&'static str, usize), // "array" with size
+    Str(&'static str),  // Basic types: "int", "float", "tuple", "->", etc.
+    Array,              // Array type constructor (takes size and element type)
+    Size(usize),        // Array size literal
 }
 
 impl std::fmt::Display for TypeName {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             TypeName::Str(s) => write!(f, "{}", s),
-            TypeName::Array(s, size) => write!(f, "{}@{}", s, size),
+            TypeName::Array => write!(f, "Array"),
+            TypeName::Size(n) => write!(f, "{}", n),
         }
     }
 }
@@ -375,7 +377,10 @@ pub mod types {
     }
 
     pub fn sized_array(size: usize, elem_type: Type) -> Type {
-        Type::Constructed(TypeName::Array("array", size), vec![elem_type])
+        Type::Constructed(
+            TypeName::Array,
+            vec![Type::Constructed(TypeName::Size(size), vec![]), elem_type],
+        )
     }
 
     pub fn tuple(types: Vec<Type>) -> Type {

@@ -43,6 +43,7 @@ impl Compiler {
 
         // Type check
         let mut type_checker = type_checker::TypeChecker::new();
+        type_checker.load_builtins()?;
         type_checker.check_program(&program)?;
 
         // Constant folding (evaluate compile-time constants)

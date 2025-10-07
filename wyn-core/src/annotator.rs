@@ -249,8 +249,12 @@ impl CodeAnnotator {
             Type::Constructed(name, args) => {
                 match name {
                     TypeName::Str(s) => self.output.push_str(s),
-                    TypeName::Array(s, size) => {
-                        self.output.push_str(&format!("{}[{}]", s, size));
+                    TypeName::Array => {
+                        // Array(Size(n), elem) - display as Array[n]<elem>
+                        self.output.push_str("Array");
+                    }
+                    TypeName::Size(n) => {
+                        self.output.push_str(&n.to_string());
                     }
                 }
                 if !args.is_empty() {

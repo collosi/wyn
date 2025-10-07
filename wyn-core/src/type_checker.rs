@@ -57,8 +57,7 @@ impl TypeChecker {
     // TODO: Polymorphic builtins (map, zip, length) need special handling
     // They should either be added to BuiltinRegistry with TypeScheme support,
     // or kept separate with manual registration here
-    #[allow(dead_code)]
-    fn load_builtins(&mut self) -> Result<()> {
+    pub fn load_builtins(&mut self) -> Result<()> {
         // Add builtin function types directly using manual construction
 
         // length: ∀a. [a] -> int
@@ -69,12 +68,13 @@ impl TypeChecker {
         let length_scheme = TypeScheme::Monotype(length_body);
         self.scope_stack.insert("length".to_string(), length_scheme);
 
-        // map: ∀a b. (a -> b) -> [a] -> [b]
+        // map: ∀a b n. (a -> b) -> Array(n, a) -> Array(n, b)
         let var_a = self.context.new_variable();
         let var_b = self.context.new_variable();
+        let var_n = self.context.new_variable(); // Array size variable
         let func_type = Type::arrow(var_a.clone(), var_b.clone());
-        let input_array_type = Type::Constructed(TypeName::Str("array"), vec![var_a]);
-        let output_array_type = Type::Constructed(TypeName::Str("array"), vec![var_b]);
+        let input_array_type = Type::Constructed(TypeName::Array, vec![var_n.clone(), var_a]);
+        let output_array_type = Type::Constructed(TypeName::Array, vec![var_n, var_b]);
         let map_arrow1 = Type::arrow(input_array_type, output_array_type);
         let map_body = Type::arrow(func_type, map_arrow1);
         let map_scheme = TypeScheme::Monotype(map_body);
@@ -391,22 +391,24 @@ impl TypeChecker {
                 decl.attributes.iter().any(|attr| matches!(attr, Attribute::Vertex | Attribute::Fragment));
 
             if let Some(declared_type) = &decl.ty {
-                // For entry points, ty is just the return type (not the full function type)
-                if is_entry_point {
-                    // Check return type matches
+                // When a function has parameters, decl.ty is just the return type annotation
+                // Check the body type matches the declared return type
+                if !decl.params.is_empty() {
                     if !self.types_match(&body_type, declared_type) {
                         return Err(CompilerError::TypeError(format!(
-                            "Entry point return type mismatch for '{}': expected {}, got {}",
+                            "Function return type mismatch for '{}': expected {}, got {}",
                             decl.name, self.format_type(declared_type), self.format_type(&body_type)
                         )));
                     }
                 } else {
-                    // For regular functions, ty would be the full function type (but we don't use it)
-                    // We just infer the function type from params and body
-                    self.context.unify(&func_type, declared_type).map_err(|_| {
+                    // For functions without parameters, ty should be the full type
+                    // But currently we're storing just the value type
+                    // Since func_type for parameterless functions is just the body type,
+                    // we can just check body_type against declared_type
+                    self.context.unify(&body_type, declared_type).map_err(|_| {
                         CompilerError::TypeError(format!(
-                            "Function type mismatch for '{}': declared {:?}, inferred {:?}",
-                            decl.name, declared_type, func_type
+                            "Type mismatch for '{}': declared {}, inferred {}",
+                            decl.name, self.format_type(declared_type), self.format_type(&body_type)
                         ))
                     })?;
                 }
@@ -502,10 +504,10 @@ impl TypeChecker {
                 })?;
 
                 Ok(match &array_type {
-                    Type::Constructed(name, args)
-                        if matches!(name, TypeName::Str("array") | TypeName::Array("array", _)) =>
-                    {
-                        args.get(0).cloned().ok_or_else(|| {
+                    Type::Constructed(TypeName::Array, args) => {
+                        // Array type is: Array(Size(n), elem_type)
+                        // So element type is at index 1
+                        args.get(1).cloned().ok_or_else(|| {
                             CompilerError::TypeError(format!(
                                 "Array type has no element type: {}",
                                 array_type
@@ -711,7 +713,8 @@ impl TypeChecker {
                         // Get the type name as a string
                         let type_name_str = match &type_name {
                             TypeName::Str(s) => s.to_string(),
-                            TypeName::Array(s, _) => s.to_string(),
+                            TypeName::Array => "array".to_string(),
+                            TypeName::Size(n) => n.to_string(),
                         };
 
                         // Look up field in builtin registry (for vector types)

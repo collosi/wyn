@@ -1199,12 +1199,19 @@ impl CodeGenerator {
                         })?;
 
                         match array_type {
-                            Type::Constructed(TypeName::Array("array", size), _) => {
-                                let const_id = self.builder.constant_bit32(self.i32_type, *size as u32);
-                                Ok(Value {
-                                    id: const_id,
-                                    type_id: self.i32_type,
-                                })
+                            Type::Constructed(TypeName::Array, args) => {
+                                // Extract size from Array(Size(n), elem_type)
+                                if let Some(Type::Constructed(TypeName::Size(size), _)) = args.get(0) {
+                                    let const_id = self.builder.constant_bit32(self.i32_type, *size as u32);
+                                    Ok(Value {
+                                        id: const_id,
+                                        type_id: self.i32_type,
+                                    })
+                                } else {
+                                    Err(CompilerError::SpirvError(
+                                        "Array type missing size".to_string(),
+                                    ))
+                                }
                             }
                             Type::Constructed(TypeName::Str("array"), _) => {
                                 // Default size for unsized arrays
@@ -1470,10 +1477,10 @@ impl CodeGenerator {
                 let index = self.generate_expression(index_expr)?;
 
                 let element_type = match &array_type {
-                    Type::Constructed(name, args)
-                        if matches!(name, TypeName::Str("array") | TypeName::Array("array", _)) =>
+                    Type::Constructed(TypeName::Array, args) =>
                     {
-                        args.first().cloned().unwrap_or_else(types::i32)
+                        // Array(Size(n), elem_type) - element type is at index 1
+                        args.get(1).cloned().unwrap_or_else(types::i32)
                     }
                     _ => {
                         return Err(CompilerError::SpirvError(
@@ -1730,27 +1737,25 @@ impl CodeGenerator {
                         (mat_type, 48) // 4 cols * 3 rows * 4 bytes
                     }
 
-                    TypeName::Str("array") => {
-                        let elem_ty = args.first().ok_or_else(|| {
-                            CompilerError::SpirvError("Array type missing element type".to_string())
-                        })?;
-                        let elem_type_info = self.get_or_create_type(elem_ty)?;
+                    TypeName::Array => {
+                        // Array(Size(n), elem_type)
+                        let size = if let Some(Type::Constructed(TypeName::Size(n), _)) = args.get(0) {
+                            *n
+                        } else {
+                            return Err(CompilerError::SpirvError(
+                                "Array type missing size".to_string(),
+                            ));
+                        };
 
-                        // For unsized arrays, use default size of 1
-                        let length_id = self.builder.constant_bit32(self.i32_type, 1);
-                        let array_type = self.builder.type_array(elem_type_info.id, length_id);
-                        (array_type, elem_type_info.size_bytes)
-                    }
-                    TypeName::Array("array", size) => {
-                        let elem_ty = args.first().ok_or_else(|| {
+                        let elem_ty = args.get(1).ok_or_else(|| {
                             CompilerError::SpirvError("Array type missing element type".to_string())
                         })?;
                         let elem_type_info = self.get_or_create_type(elem_ty)?;
 
                         // Use the actual size from the type
-                        let length_id = self.builder.constant_bit32(self.i32_type, *size as u32);
+                        let length_id = self.builder.constant_bit32(self.i32_type, size as u32);
                         let array_type = self.builder.type_array(elem_type_info.id, length_id);
-                        (array_type, elem_type_info.size_bytes * (*size as u32))
+                        (array_type, elem_type_info.size_bytes * (size as u32))
                     }
                     TypeName::Str("tuple") | TypeName::Str("attributed_tuple") => {
                         // Create a struct type with the component types
