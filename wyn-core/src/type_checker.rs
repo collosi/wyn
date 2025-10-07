@@ -119,6 +119,22 @@ impl TypeChecker {
         );
         self.scope_stack.insert("vec4".to_string(), TypeScheme::Monotype(vec4_body));
 
+        // Array to vector conversions: to_vec2, to_vec3, to_vec4
+        // to_vec2: [2]f32 -> vec2
+        let to_vec2_input = types::sized_array(2, types::f32());
+        let to_vec2_body = Type::arrow(to_vec2_input, types::vec2());
+        self.scope_stack.insert("to_vec2".to_string(), TypeScheme::Monotype(to_vec2_body));
+
+        // to_vec3: [3]f32 -> vec3
+        let to_vec3_input = types::sized_array(3, types::f32());
+        let to_vec3_body = Type::arrow(to_vec3_input, types::vec3());
+        self.scope_stack.insert("to_vec3".to_string(), TypeScheme::Monotype(to_vec3_body));
+
+        // to_vec4: [4]f32 -> vec4
+        let to_vec4_input = types::sized_array(4, types::f32());
+        let to_vec4_body = Type::arrow(to_vec4_input, types::vec4());
+        self.scope_stack.insert("to_vec4".to_string(), TypeScheme::Monotype(to_vec4_body));
+
         // Similarly for ivec2, ivec3, ivec4
         let ivec2_type = types::ivec2();
         let ivec2_body = Type::arrow(types::i32(), Type::arrow(types::i32(), ivec2_type));

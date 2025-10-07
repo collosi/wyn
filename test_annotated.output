@@ -1,0 +1,4 @@
+// === ANNOTATED WYN CODE ===
+// Format: #B<block_id>.<index> <original_code>
+
+#B0.0 let f: →<int, int> = #B0.0 \x -> #B1.0 (#B1.0 x + #B1.1 1)

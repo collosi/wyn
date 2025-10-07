@@ -15,4 +15,5 @@ rspirv = "0.12"
 nemo = { git = "https://github.com/knowsys/nemo", tag = "v0.8.0" }
 
 [dev-dependencies]
+env_logger.workspace = true
 naga = { version = "22.0", features = ["spv-in"] }

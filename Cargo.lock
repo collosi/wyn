@@ -3867,6 +3867,7 @@ dependencies = [
 name = "wyn-core"
 version = "0.1.0"
 dependencies = [
+ "env_logger",
  "log",
  "naga 22.1.0",
  "nemo",

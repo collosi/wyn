@@ -1,6 +1,7 @@
 use crate::ast::*;
 use crate::error::{CompilerError, Result};
 use crate::lexer::Token;
+use log::trace;
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -36,6 +37,7 @@ impl Parser {
     }
 
     fn parse_declaration(&mut self) -> Result<Declaration> {
+        trace!("parse_declaration: next token = {:?}", self.peek());
         // Parse optional attributes
         let attributes = self.parse_attributes()?;
 
@@ -54,6 +56,7 @@ impl Parser {
     }
 
     fn parse_decl(&mut self, keyword: &'static str, attributes: Vec<Attribute>) -> Result<Declaration> {
+        trace!("parse_decl({}): next token = {:?}", keyword, self.peek());
         // Expect the keyword token (let or def)
         match keyword {
             "let" => self.expect(Token::Let)?,
@@ -177,6 +180,7 @@ impl Parser {
     }
 
     fn parse_val_decl(&mut self) -> Result<ValDecl> {
+        trace!("parse_val_decl: next token = {:?}", self.peek());
         self.expect(Token::Val)?;
         let name = self.expect_identifier()?;
 
@@ -210,6 +214,7 @@ impl Parser {
     }
 
     fn parse_attributed_type(&mut self) -> Result<AttributedType> {
+        trace!("parse_attributed_type: next token = {:?}", self.peek());
         // Parse optional #[attribute] syntax
         let attributes = if self.check(&Token::AttributeStart) {
             self.advance(); // consume '#['
@@ -226,6 +231,7 @@ impl Parser {
     }
 
     fn parse_return_type(&mut self) -> Result<(Option<Type>, Option<Vec<AttributedType>>)> {
+        trace!("parse_return_type: next token = {:?}", self.peek());
         // Check if it's an attributed tuple: ([attr1] type1, [attr2] type2, ...)
         if self.check(&Token::LeftParen) {
             self.advance(); // consume '('
@@ -264,6 +270,7 @@ impl Parser {
     }
 
     fn parse_attribute(&mut self) -> Result<Attribute> {
+        trace!("parse_attribute: next token = {:?}", self.peek());
         let attr_name = self.expect_identifier()?;
 
         match attr_name.as_str() {
@@ -319,6 +326,7 @@ impl Parser {
     }
 
     fn parse_attributes(&mut self) -> Result<Vec<Attribute>> {
+        trace!("parse_attributes: next token = {:?}", self.peek());
         let mut attributes = Vec::new();
 
         while self.check(&Token::AttributeStart) {
@@ -337,6 +345,7 @@ impl Parser {
     }
 
     fn parse_type_variable(&mut self) -> Result<String> {
+        trace!("parse_type_variable: next token = {:?}", self.peek());
         match self.advance() {
             Some(Token::Identifier(name)) if name.starts_with('\'') => {
                 Ok(name[1..].to_string()) // Remove the apostrophe
@@ -348,10 +357,12 @@ impl Parser {
     }
 
     fn parse_type(&mut self) -> Result<Type> {
+        trace!("parse_type: next token = {:?}", self.peek());
         self.parse_function_type()
     }
 
     fn parse_function_type(&mut self) -> Result<Type> {
+        trace!("parse_function_type: next token = {:?}", self.peek());
         let mut left = self.parse_array_or_base_type()?;
 
         // Handle function arrows: T1 -> T2 -> T3
@@ -366,6 +377,7 @@ impl Parser {
     }
 
     fn parse_array_or_base_type(&mut self) -> Result<Type> {
+        trace!("parse_array_or_base_type: next token = {:?}", self.peek());
         // Check for uniqueness prefix *
         if matches!(self.peek(), Some(Token::BinOp(op)) if op == "*") {
             self.advance(); // consume '*'
@@ -374,7 +386,8 @@ impl Parser {
         }
 
         // Check for array type [dim]baseType (Futhark style)
-        if self.check(&Token::LeftBracket) {
+        // Accept both LeftBracket and LeftBracketSpaced in type position
+        if self.check(&Token::LeftBracket) || self.check(&Token::LeftBracketSpaced) {
             self.advance(); // consume '['
 
             // Parse dimension - could be integer literal or identifier (size variable)
@@ -394,6 +407,7 @@ impl Parser {
     }
 
     fn parse_base_type(&mut self) -> Result<Type> {
+        trace!("parse_base_type: next token = {:?}", self.peek());
         match self.peek() {
             Some(Token::Identifier(name)) if name == "i32" => {
                 self.advance();
@@ -495,10 +509,12 @@ impl Parser {
     }
 
     fn parse_expression(&mut self) -> Result<Expression> {
+        trace!("parse_expression: next token = {:?}", self.peek());
         self.parse_binary_expression()
     }
 
     fn parse_binary_expression(&mut self) -> Result<Expression> {
+        trace!("parse_binary_expression: next token = {:?}", self.peek());
         self.parse_binary_expression_with_precedence(0)
     }
 
@@ -514,6 +530,11 @@ impl Parser {
     }
 
     fn parse_binary_expression_with_precedence(&mut self, min_precedence: i32) -> Result<Expression> {
+        trace!(
+            "parse_binary_expression_with_precedence({}): next token = {:?}",
+            min_precedence,
+            self.peek()
+        );
         let mut left = self.parse_application_expression()?;
 
         loop {
@@ -560,6 +581,7 @@ impl Parser {
     // Function application has higher precedence than binary operators
     // Parses: f x y z, (f x) y, etc.
     fn parse_application_expression(&mut self) -> Result<Expression> {
+        trace!("parse_application_expression: next token = {:?}", self.peek());
         let mut expr = self.parse_postfix_expression()?;
 
         // Keep collecting arguments while we see primary expressions
@@ -611,24 +633,31 @@ impl Parser {
             Some(Token::IntLiteral(_)) |
             Some(Token::FloatLiteral(_)) |
             Some(Token::Identifier(_)) |
-            Some(Token::LeftBracket) |  // array literal
-            Some(Token::LeftParen) |    // parenthesized expression  
+            Some(Token::LeftBracket) |  // array literal (no space) or array indexing context
+            Some(Token::LeftBracketSpaced) |  // array literal (with space)
+            Some(Token::LeftParen) |    // parenthesized expression
             Some(Token::Backslash) |    // lambda
             Some(Token::Let) // let..in
         )
     }
 
     fn parse_postfix_expression(&mut self) -> Result<Expression> {
+        trace!("parse_postfix_expression: next token = {:?}", self.peek());
         let mut expr = self.parse_primary_expression()?;
 
         loop {
             match self.peek() {
                 Some(Token::LeftBracket) => {
-                    // Array indexing
+                    // Array indexing (no space before [): arr[0]
                     self.advance();
                     let index = self.parse_expression()?;
                     self.expect(Token::RightBracket)?;
                     expr = self.node_counter.mk_node(ExprKind::ArrayIndex(Box::new(expr), Box::new(index)));
+                }
+                Some(Token::LeftBracketSpaced) => {
+                    // Space before [ means it's not array indexing, it's a new expression
+                    // Stop postfix parsing and let the caller handle it
+                    break;
                 }
                 Some(Token::Dot) => {
                     // Field access (e.g., v.x, v.y, v.z, v.w)
@@ -668,6 +697,7 @@ impl Parser {
     }
 
     fn parse_primary_expression(&mut self) -> Result<Expression> {
+        trace!("parse_primary_expression: next token = {:?}", self.peek());
         match self.peek() {
             Some(Token::IntLiteral(n)) => {
                 let n = *n;
@@ -684,7 +714,7 @@ impl Parser {
                 self.advance();
                 Ok(self.node_counter.mk_node(ExprKind::Identifier(name)))
             }
-            Some(Token::LeftBracket) => self.parse_array_literal(),
+            Some(Token::LeftBracket) | Some(Token::LeftBracketSpaced) => self.parse_array_literal(),
             Some(Token::LeftParen) => {
                 self.advance(); // consume '('
 
@@ -724,7 +754,14 @@ impl Parser {
     }
 
     fn parse_array_literal(&mut self) -> Result<Expression> {
-        self.expect(Token::LeftBracket)?;
+        trace!("parse_array_literal: next token = {:?}", self.peek());
+        // Accept either LeftBracket or LeftBracketSpaced
+        match self.peek() {
+            Some(Token::LeftBracket) | Some(Token::LeftBracketSpaced) => {
+                self.advance();
+            }
+            _ => return Err(CompilerError::ParseError("Expected '['".to_string())),
+        }
 
         let mut elements = Vec::new();
         if !self.check(&Token::RightBracket) {
@@ -742,6 +779,7 @@ impl Parser {
     }
 
     fn parse_lambda(&mut self) -> Result<Expression> {
+        trace!("parse_lambda: next token = {:?}", self.peek());
         self.expect(Token::Backslash)?;
 
         // Parse parameter list: \x y z: t -> e (Futhark syntax)
@@ -792,6 +830,7 @@ impl Parser {
     }
 
     fn parse_let_in(&mut self) -> Result<Expression> {
+        trace!("parse_let_in: next token = {:?}", self.peek());
         use crate::ast::LetInExpr;
 
         self.expect(Token::Let)?;
@@ -819,6 +858,7 @@ impl Parser {
     }
 
     fn parse_if_then_else(&mut self) -> Result<Expression> {
+        trace!("parse_if_then_else: next token = {:?}", self.peek());
         use crate::ast::IfExpr;
 
         self.expect(Token::If)?;
@@ -2706,5 +2746,46 @@ def test_vertex : #[builtin(position)] vec4 =
                 _ => Err("Expected Decl".to_string()),
             }
         });
+    }
+
+    #[test]
+    fn test_parse_function_application_with_array_literal() {
+        let _ = env_logger::builder().is_test(true).try_init();
+        expect_parse(
+            "def test: vec4 = to_vec4 [1.0f32, 2.0f32, 3.0f32, 4.0f32]",
+            |declarations| {
+                if declarations.len() != 1 {
+                    return Err(format!("Expected 1 declaration, got {}", declarations.len()));
+                }
+                match &declarations[0] {
+                    Declaration::Decl(decl) => {
+                        if decl.name != "test" {
+                            return Err(format!("Expected name 'test', got '{}'", decl.name));
+                        }
+                        // Body should be FunctionCall("to_vec4", [ArrayLiteral(...)])
+                        match &decl.body.kind {
+                            ExprKind::FunctionCall(name, args) => {
+                                if name != "to_vec4" {
+                                    return Err(format!("Expected function 'to_vec4', got '{}'", name));
+                                }
+                                if args.len() != 1 {
+                                    return Err(format!("Expected 1 arg, got {}", args.len()));
+                                }
+                                if let ExprKind::ArrayLiteral(elements) = &args[0].kind {
+                                    if elements.len() != 4 {
+                                        return Err(format!("Expected 4 elements, got {}", elements.len()));
+                                    }
+                                } else {
+                                    return Err(format!("Expected ArrayLiteral, got {:?}", args[0].kind));
+                                }
+                                Ok(())
+                            }
+                            _ => Err(format!("Expected FunctionCall, got {:?}", decl.body.kind)),
+                        }
+                    }
+                    _ => Err("Expected Decl".to_string()),
+                }
+            },
+        );
     }
 }

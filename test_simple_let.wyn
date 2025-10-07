@@ -1,0 +1,9 @@
+-- Simple test to reproduce the OpStore pointer bug
+
+def add_one(x: f32): f32 = x + 1f32
+
+#[fragment]
+def fragment_main(): #[location(0)] vec4 =
+  let a: [3]f32 = [1.0f32, 2.0f32, 3.0f32] in
+  let b: [3]f32 = map add_one a in
+  to_vec4 [b[0], b[1], b[2], 1.0f32]

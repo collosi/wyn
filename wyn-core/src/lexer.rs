@@ -35,7 +35,8 @@ pub enum Token {
     // Delimiters
     LeftParen,
     RightParen,
-    LeftBracket,
+    LeftBracket,       // [ without preceding whitespace (for indexing: arr[0])
+    LeftBracketSpaced, // [ with preceding whitespace (for array literals: f [1,2,3])
     RightBracket,
     Colon,
     Comma,
@@ -174,21 +175,33 @@ fn parse_token(input: &str) -> IResult<&str, Token> {
 pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
     let mut remaining = input;
     let mut tokens = Vec::new();
+    let mut had_whitespace = true; // Start of input counts as having whitespace
 
     while !remaining.is_empty() {
-        // Skip leading whitespace
+        // Check for and skip leading whitespace
         if let Ok((rest, _)) = multispace1::<&str, nom::error::Error<&str>>(remaining) {
             remaining = rest;
+            had_whitespace = true;
             continue;
         }
 
         match parse_token(remaining) {
-            Ok((rest, token)) => {
+            Ok((rest, mut token)) => {
                 // Skip comments
-                if !matches!(token, Token::Comment(_)) {
-                    tokens.push(token);
+                if matches!(token, Token::Comment(_)) {
+                    remaining = rest;
+                    had_whitespace = true; // Comments act like whitespace
+                    continue;
                 }
+
+                // Convert LeftBracket based on whitespace
+                if matches!(token, Token::LeftBracket) {
+                    token = if had_whitespace { Token::LeftBracketSpaced } else { Token::LeftBracket };
+                }
+
+                tokens.push(token);
                 remaining = rest;
+                had_whitespace = false; // Next token won't have whitespace unless we skip some
             }
             Err(_) if remaining.trim().is_empty() => break,
             Err(e) => return Err(format!("Tokenization error: {:?}", e)),
@@ -272,10 +285,10 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::LeftBracket,
+                Token::LeftBracketSpaced, // At start of input, counts as having whitespace
                 Token::IntLiteral(3),
                 Token::RightBracket,
-                Token::LeftBracket,
+                Token::LeftBracket, // No space before this one
                 Token::IntLiteral(4),
                 Token::RightBracket,
                 Token::Identifier("f32".to_string()),

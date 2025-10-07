@@ -162,7 +162,7 @@ impl CodeGenerator {
         let mut builder = Builder::new();
 
         // Set up SPIR-V header
-        builder.set_version(1, 0);
+        builder.set_version(1, 4);
 
         // Add capabilities
         builder.capability(Capability::Shader);
@@ -449,7 +449,8 @@ impl CodeGenerator {
             }
 
             let elem_type = elem_vals[0].type_id;
-            let array_type = self.builder.type_array(elem_type, elem_vals.len() as u32);
+            let length_const = self.get_or_create_int_constant(elem_vals.len() as u32);
+            let array_type = self.builder.type_array(elem_type, length_const);
             let elem_ids: Vec<spirv::Word> = elem_vals.iter().map(|v| v.id).collect();
             let const_id = self.builder.constant_composite(array_type, elem_ids);
 
@@ -542,6 +543,47 @@ impl CodeGenerator {
                 expr
             ))),
         }
+    }
+
+    /// Copy a value to a local variable and return the variable pointer
+    /// This is needed when we have a constant value but need a pointer for OpAccessChain
+    fn copy_to_local_variable(&mut self, value: Value, ty: &Type) -> Result<Value> {
+        if self.current_block.is_none() {
+            return Err(CompilerError::SpirvError(
+                "Cannot create local variables outside function context".to_string(),
+            ));
+        }
+
+        let type_info = self.get_or_create_type(ty)?;
+        let ptr_type = self.ptr_of(StorageClass::Function, type_info.id);
+
+        // Check if value is already a pointer - if so, just return it
+        if value.type_id == ptr_type {
+            // It's already a pointer to the right type, return it directly
+            return Ok(value);
+        }
+
+        let var_id = self.builder.id();
+
+        // Queue the variable to be emitted at the beginning of the function
+        self.pending_variables.push((var_id, ptr_type));
+
+        // Check if value is a pointer to a different type - need to load first
+        let value_to_store = if value.type_id == type_info.id {
+            // It's a value of the right type
+            value.id
+        } else {
+            // It might be a pointer - load from it
+            self.builder.load(type_info.id, None, value.id, None, vec![])?
+        };
+
+        // Store the value into the variable
+        self.builder.store(var_id, value_to_store, None, vec![])?;
+
+        Ok(Value {
+            id: var_id,
+            type_id: ptr_type,
+        })
     }
 
     /// Create an integer constant with deduplication
@@ -1356,6 +1398,45 @@ impl CodeGenerator {
                         }
                     }
                 }
+                // Handle array to vector conversions: to_vec2, to_vec3, to_vec4
+                else if func_name == "to_vec2" || func_name == "to_vec3" || func_name == "to_vec4" {
+                    if args.len() != 1 {
+                        return Err(CompilerError::SpirvError(format!(
+                            "{} requires exactly one argument",
+                            func_name
+                        )));
+                    }
+
+                    let array_value = self.generate_expression(&args[0])?;
+
+                    // Determine the target vector type and size
+                    let (vec_type, size) = match func_name.as_str() {
+                        "to_vec2" => (self.get_or_create_type(&types::vec2())?.id, 2),
+                        "to_vec3" => (self.get_or_create_type(&types::vec3())?.id, 3),
+                        "to_vec4" => (self.get_or_create_type(&types::vec4())?.id, 4),
+                        _ => unreachable!(),
+                    };
+
+                    // Extract each array element and construct the vector using OpCompositeConstruct
+                    // OpCopyLogical doesn't work for array->vector conversion (different structures)
+                    let mut components = Vec::new();
+                    for i in 0..size {
+                        let component = self.builder.composite_extract(
+                            self.f32_type,
+                            None,
+                            array_value.id,
+                            vec![i as u32],
+                        )?;
+                        components.push(component);
+                    }
+
+                    let vec_value = self.builder.composite_construct(vec_type, None, components)?;
+
+                    Ok(Value {
+                        id: vec_value,
+                        type_id: vec_type,
+                    })
+                }
                 // Check if it's a builtin function
                 else if self.builtin_registry.is_builtin(func_name) {
                     // Generate arguments first
@@ -1515,7 +1596,7 @@ impl CodeGenerator {
                 let elem_type = element_type_id.unwrap();
 
                 // Create array type
-                let length_id = self.builder.constant_bit32(self.i32_type, elements.len() as u32);
+                let length_id = self.get_or_create_int_constant(elements.len() as u32);
                 let array_type = self.builder.type_array(elem_type, length_id);
 
                 // Build the array
@@ -1605,15 +1686,17 @@ impl CodeGenerator {
 
                 let element_type_info = self.get_or_create_type(&element_type)?;
 
+                // OpAccessChain requires a pointer base. If array_value is not a pointer
+                // (e.g., it's a global constant), copy it to a local variable first.
+                // Simple heuristic: always copy to be safe for dynamic indexing
+                let array_ptr = self.copy_to_local_variable(array_value, &array_type)?;
+
                 // Create pointer type for array element access
-                // TODO: Derive storage class from base pointer. Currently assumes Function,
-                // which is correct for local arrays but wrong for Uniform/Private globals.
-                // Should extract SC from array_value.type_id or track it alongside Value.
                 let element_ptr_type = self.ptr_of(StorageClass::Function, element_type_info.id);
 
                 // Use AccessChain to get element pointer
                 let element_ptr =
-                    self.builder.access_chain(element_ptr_type, None, array_value.id, vec![index.id])?;
+                    self.builder.access_chain(element_ptr_type, None, array_ptr.id, vec![index.id])?;
 
                 // Load the element
                 let element_id =
