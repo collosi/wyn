@@ -11,8 +11,12 @@ use crate::ast::TypeName;
 use polytype::Type;
 use std::collections::HashMap;
 
-/// SSA register ID
-pub type RegisterId = u32;
+/// SSA register with type information
+#[derive(Debug, Clone, PartialEq)]
+pub struct Register {
+    pub id: u32,
+    pub ty: Type<TypeName>,
+}
 
 /// Function ID
 pub type FunctionId = u32;
@@ -20,51 +24,51 @@ pub type FunctionId = u32;
 /// Block ID for control flow
 pub type BlockId = u32;
 
-/// MIR instruction - SSA-based operations
+/// MIR instruction - SSA-based operations with full type information
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
     // Constants
-    ConstInt(RegisterId, i32),
-    ConstFloat(RegisterId, f32),
-    ConstBool(RegisterId, bool),
+    ConstInt(Register, i32),
+    ConstFloat(Register, f32),
+    ConstBool(Register, bool),
 
     // Binary operations
-    Add(RegisterId, RegisterId, RegisterId), // dest = left + right
-    Sub(RegisterId, RegisterId, RegisterId),
-    Mul(RegisterId, RegisterId, RegisterId),
-    Div(RegisterId, RegisterId, RegisterId),
+    Add(Register, Register, Register), // dest = left + right
+    Sub(Register, Register, Register),
+    Mul(Register, Register, Register),
+    Div(Register, Register, Register),
 
     // Comparisons
-    Eq(RegisterId, RegisterId, RegisterId),
-    Ne(RegisterId, RegisterId, RegisterId),
-    Lt(RegisterId, RegisterId, RegisterId),
-    Le(RegisterId, RegisterId, RegisterId),
-    Gt(RegisterId, RegisterId, RegisterId),
-    Ge(RegisterId, RegisterId, RegisterId),
+    Eq(Register, Register, Register),
+    Ne(Register, Register, Register),
+    Lt(Register, Register, Register),
+    Le(Register, Register, Register),
+    Gt(Register, Register, Register),
+    Ge(Register, Register, Register),
 
     // Memory operations (for mutable variables)
     // Alloca creates a pointer in the entry block
-    Alloca(RegisterId, Type<TypeName>), // dest_ptr, pointee_type
-    Load(RegisterId, RegisterId),       // dest, src_ptr
-    Store(RegisterId, RegisterId),      // dest_ptr, src_value
+    Alloca(Register),          // dest_ptr (type includes pointee info)
+    Load(Register, Register),  // dest, src_ptr
+    Store(Register, Register), // dest_ptr, src_value
 
     // Function calls
-    Call(RegisterId, FunctionId, Vec<RegisterId>), // dest, func_id, args
-    CallBuiltin(RegisterId, String, Vec<RegisterId>), // dest, builtin_name, args
+    Call(Register, FunctionId, Vec<Register>), // dest, func_id, args
+    CallBuiltin(Register, String, Vec<Register>), // dest, builtin_name, args
 
     // Tuple operations
-    MakeTuple(RegisterId, Vec<RegisterId>),      // dest, elements
-    ExtractElement(RegisterId, RegisterId, u32), // dest, tuple, index
+    MakeTuple(Register, Vec<Register>),      // dest, elements
+    ExtractElement(Register, Register, u32), // dest, tuple, index
 
     // Array operations
-    MakeArray(RegisterId, Vec<RegisterId>),         // dest, elements
-    ArrayIndex(RegisterId, RegisterId, RegisterId), // dest, array, index
+    MakeArray(Register, Vec<Register>),       // dest, elements
+    ArrayIndex(Register, Register, Register), // dest, array, index
 
     // Control flow
-    Branch(BlockId),                             // unconditional jump
-    BranchCond(RegisterId, BlockId, BlockId),    // cond, true_block, false_block
-    Phi(RegisterId, Vec<(RegisterId, BlockId)>), // dest, vec of (value, predecessor_block)
-    Return(RegisterId),                          // return value
+    Branch(BlockId),                         // unconditional jump
+    BranchCond(Register, BlockId, BlockId),  // cond, true_block, false_block
+    Phi(Register, Vec<(Register, BlockId)>), // dest, vec of (value, predecessor_block)
+    Return(Register),                        // return value
 }
 
 /// Basic block in control flow graph
@@ -79,7 +83,7 @@ pub struct Block {
 pub struct Function {
     pub id: FunctionId,
     pub name: String,
-    pub params: Vec<(RegisterId, Type<TypeName>)>,
+    pub params: Vec<Register>,
     pub return_type: Type<TypeName>,
     pub blocks: Vec<Block>,
     pub entry_block: BlockId,
@@ -104,7 +108,7 @@ pub struct Builder {
     current_block: Option<BlockId>,
 
     /// Next register ID to allocate
-    next_register: RegisterId,
+    next_register: u32,
 
     /// Next function ID to allocate
     next_function_id: FunctionId,
@@ -115,14 +119,11 @@ pub struct Builder {
     /// Map from function names to function IDs
     function_map: HashMap<String, FunctionId>,
 
-    /// Type deduplication - maps types to their canonical register holding that type
-    type_cache: HashMap<Type<TypeName>, RegisterId>,
+    /// Integer constant deduplication (value, type) -> Register
+    int_const_cache: HashMap<(i32, Type<TypeName>), Register>,
 
-    /// Integer constant deduplication
-    int_const_cache: HashMap<i32, RegisterId>,
-
-    /// Float constant deduplication (using bits as key since f32 doesn't impl Eq/Hash)
-    float_const_cache: HashMap<u32, RegisterId>,
+    /// Float constant deduplication (bits, type) -> Register
+    float_const_cache: HashMap<(u32, Type<TypeName>), Register>,
 
     /// Pending allocas to be inserted in entry block
     pending_allocas: Vec<Instruction>,
@@ -138,18 +139,17 @@ impl Builder {
             next_function_id: 0,
             next_block_id: 0,
             function_map: HashMap::new(),
-            type_cache: HashMap::new(),
             int_const_cache: HashMap::new(),
             float_const_cache: HashMap::new(),
             pending_allocas: Vec::new(),
         }
     }
 
-    /// Allocate a new SSA register
-    pub fn new_register(&mut self) -> RegisterId {
+    /// Allocate a new SSA register with given type
+    pub fn new_register(&mut self, ty: Type<TypeName>) -> Register {
         let id = self.next_register;
         self.next_register += 1;
-        id
+        Register { id, ty }
     }
 
     /// Allocate a new block ID
@@ -170,8 +170,7 @@ impl Builder {
         self.next_function_id += 1;
 
         // Create parameter registers
-        let param_regs: Vec<(RegisterId, Type<TypeName>)> =
-            params.into_iter().map(|(_, ty)| (self.new_register(), ty)).collect();
+        let param_regs: Vec<Register> = params.into_iter().map(|(_, ty)| self.new_register(ty)).collect();
 
         // Create entry block
         let entry_block = self.new_block_id();
@@ -216,9 +215,9 @@ impl Builder {
     }
 
     /// Get parameter register by index
-    pub fn get_param(&self, index: usize) -> Option<RegisterId> {
+    pub fn get_param(&self, index: usize) -> Option<Register> {
         self.current_function
-            .and_then(|func_id| self.functions[func_id as usize].params.get(index).map(|(reg, _)| *reg))
+            .and_then(|func_id| self.functions[func_id as usize].params.get(index).cloned())
     }
 
     /// Emit an instruction to the current block
@@ -252,165 +251,202 @@ impl Builder {
 
     // === Constant builders with deduplication ===
 
-    pub fn build_const_int(&mut self, value: i32) -> RegisterId {
-        if let Some(&reg) = self.int_const_cache.get(&value) {
-            return reg;
+    pub fn build_const_int(&mut self, value: i32, ty: Type<TypeName>) -> Register {
+        let key = (value, ty.clone());
+        if let Some(reg) = self.int_const_cache.get(&key) {
+            return reg.clone();
         }
 
-        let reg = self.new_register();
-        self.emit(Instruction::ConstInt(reg, value));
-        self.int_const_cache.insert(value, reg);
+        let reg = self.new_register(ty.clone());
+        self.emit(Instruction::ConstInt(reg.clone(), value));
+        self.int_const_cache.insert(key, reg.clone());
         reg
     }
 
-    pub fn build_const_float(&mut self, value: f32) -> RegisterId {
+    pub fn build_const_float(&mut self, value: f32, ty: Type<TypeName>) -> Register {
         // Note: Using bits for HashMap key since f32 doesn't implement Eq/Hash
         let bits = value.to_bits();
-        if let Some(&reg) = self.float_const_cache.get(&bits) {
-            return reg;
+        let key = (bits, ty.clone());
+        if let Some(reg) = self.float_const_cache.get(&key) {
+            return reg.clone();
         }
 
-        let reg = self.new_register();
-        self.emit(Instruction::ConstFloat(reg, value));
-        self.float_const_cache.insert(bits, reg);
+        let reg = self.new_register(ty.clone());
+        self.emit(Instruction::ConstFloat(reg.clone(), value));
+        self.float_const_cache.insert(key, reg.clone());
         reg
     }
 
-    pub fn build_const_bool(&mut self, value: bool) -> RegisterId {
-        let reg = self.new_register();
-        self.emit(Instruction::ConstBool(reg, value));
+    pub fn build_const_bool(&mut self, value: bool, ty: Type<TypeName>) -> Register {
+        let reg = self.new_register(ty);
+        self.emit(Instruction::ConstBool(reg.clone(), value));
         reg
     }
 
     // === Binary operations ===
 
-    pub fn build_add(&mut self, left: RegisterId, right: RegisterId) -> RegisterId {
-        let dest = self.new_register();
-        self.emit(Instruction::Add(dest, left, right));
+    pub fn build_add(&mut self, left: Register, right: Register) -> Register {
+        let dest = self.new_register(left.ty.clone());
+        self.emit(Instruction::Add(dest.clone(), left, right));
         dest
     }
 
-    pub fn build_sub(&mut self, left: RegisterId, right: RegisterId) -> RegisterId {
-        let dest = self.new_register();
-        self.emit(Instruction::Sub(dest, left, right));
+    pub fn build_sub(&mut self, left: Register, right: Register) -> Register {
+        let dest = self.new_register(left.ty.clone());
+        self.emit(Instruction::Sub(dest.clone(), left, right));
         dest
     }
 
-    pub fn build_mul(&mut self, left: RegisterId, right: RegisterId) -> RegisterId {
-        let dest = self.new_register();
-        self.emit(Instruction::Mul(dest, left, right));
+    pub fn build_mul(&mut self, left: Register, right: Register) -> Register {
+        let dest = self.new_register(left.ty.clone());
+        self.emit(Instruction::Mul(dest.clone(), left, right));
         dest
     }
 
-    pub fn build_div(&mut self, left: RegisterId, right: RegisterId) -> RegisterId {
-        let dest = self.new_register();
-        self.emit(Instruction::Div(dest, left, right));
+    pub fn build_div(&mut self, left: Register, right: Register) -> Register {
+        let dest = self.new_register(left.ty.clone());
+        self.emit(Instruction::Div(dest.clone(), left, right));
         dest
     }
 
     // === Comparison operations ===
 
-    pub fn build_eq(&mut self, left: RegisterId, right: RegisterId) -> RegisterId {
-        let dest = self.new_register();
-        self.emit(Instruction::Eq(dest, left, right));
+    pub fn build_eq(&mut self, left: Register, right: Register) -> Register {
+        let bool_type = Type::Constructed(TypeName::Str("bool"), vec![]);
+        let dest = self.new_register(bool_type);
+        self.emit(Instruction::Eq(dest.clone(), left, right));
         dest
     }
 
-    pub fn build_ne(&mut self, left: RegisterId, right: RegisterId) -> RegisterId {
-        let dest = self.new_register();
-        self.emit(Instruction::Ne(dest, left, right));
+    pub fn build_ne(&mut self, left: Register, right: Register) -> Register {
+        let bool_type = Type::Constructed(TypeName::Str("bool"), vec![]);
+        let dest = self.new_register(bool_type);
+        self.emit(Instruction::Ne(dest.clone(), left, right));
         dest
     }
 
-    pub fn build_lt(&mut self, left: RegisterId, right: RegisterId) -> RegisterId {
-        let dest = self.new_register();
-        self.emit(Instruction::Lt(dest, left, right));
+    pub fn build_lt(&mut self, left: Register, right: Register) -> Register {
+        let bool_type = Type::Constructed(TypeName::Str("bool"), vec![]);
+        let dest = self.new_register(bool_type);
+        self.emit(Instruction::Lt(dest.clone(), left, right));
         dest
     }
 
-    pub fn build_le(&mut self, left: RegisterId, right: RegisterId) -> RegisterId {
-        let dest = self.new_register();
-        self.emit(Instruction::Le(dest, left, right));
+    pub fn build_le(&mut self, left: Register, right: Register) -> Register {
+        let bool_type = Type::Constructed(TypeName::Str("bool"), vec![]);
+        let dest = self.new_register(bool_type);
+        self.emit(Instruction::Le(dest.clone(), left, right));
         dest
     }
 
-    pub fn build_gt(&mut self, left: RegisterId, right: RegisterId) -> RegisterId {
-        let dest = self.new_register();
-        self.emit(Instruction::Gt(dest, left, right));
+    pub fn build_gt(&mut self, left: Register, right: Register) -> Register {
+        let bool_type = Type::Constructed(TypeName::Str("bool"), vec![]);
+        let dest = self.new_register(bool_type);
+        self.emit(Instruction::Gt(dest.clone(), left, right));
         dest
     }
 
-    pub fn build_ge(&mut self, left: RegisterId, right: RegisterId) -> RegisterId {
-        let dest = self.new_register();
-        self.emit(Instruction::Ge(dest, left, right));
+    pub fn build_ge(&mut self, left: Register, right: Register) -> Register {
+        let bool_type = Type::Constructed(TypeName::Str("bool"), vec![]);
+        let dest = self.new_register(bool_type);
+        self.emit(Instruction::Ge(dest.clone(), left, right));
         dest
     }
 
     // === Memory operations ===
 
     /// Allocate space for a mutable variable (will be placed in entry block)
-    pub fn build_alloca(&mut self, pointee_type: Type<TypeName>) -> RegisterId {
-        let ptr_reg = self.new_register();
-        self.pending_allocas.push(Instruction::Alloca(ptr_reg, pointee_type));
+    /// ptr_type should be a pointer type (the Register's type includes pointee info)
+    pub fn build_alloca(&mut self, ptr_type: Type<TypeName>) -> Register {
+        let ptr_reg = self.new_register(ptr_type);
+        self.pending_allocas.push(Instruction::Alloca(ptr_reg.clone()));
         ptr_reg
     }
 
-    pub fn build_load(&mut self, ptr: RegisterId) -> RegisterId {
-        let dest = self.new_register();
-        self.emit(Instruction::Load(dest, ptr));
+    pub fn build_load(&mut self, ptr: Register, pointee_type: Type<TypeName>) -> Register {
+        let dest = self.new_register(pointee_type);
+        self.emit(Instruction::Load(dest.clone(), ptr));
         dest
     }
 
-    pub fn build_store(&mut self, ptr: RegisterId, value: RegisterId) {
+    pub fn build_store(&mut self, ptr: Register, value: Register) {
         self.emit(Instruction::Store(ptr, value));
     }
 
     // === Function calls ===
 
-    pub fn build_call(&mut self, func_name: &str, args: Vec<RegisterId>) -> RegisterId {
-        let dest = self.new_register();
+    pub fn build_call(
+        &mut self,
+        func_name: &str,
+        args: Vec<Register>,
+        result_type: Type<TypeName>,
+    ) -> Register {
+        let dest = self.new_register(result_type);
 
         if let Some(&func_id) = self.function_map.get(func_name) {
-            self.emit(Instruction::Call(dest, func_id, args));
+            self.emit(Instruction::Call(dest.clone(), func_id, args));
         } else {
             // Assume it's a builtin
-            self.emit(Instruction::CallBuiltin(dest, func_name.to_string(), args));
+            self.emit(Instruction::CallBuiltin(
+                dest.clone(),
+                func_name.to_string(),
+                args,
+            ));
         }
 
         dest
     }
 
-    pub fn build_call_builtin(&mut self, builtin_name: &str, args: Vec<RegisterId>) -> RegisterId {
-        let dest = self.new_register();
-        self.emit(Instruction::CallBuiltin(dest, builtin_name.to_string(), args));
+    pub fn build_call_builtin(
+        &mut self,
+        builtin_name: &str,
+        args: Vec<Register>,
+        result_type: Type<TypeName>,
+    ) -> Register {
+        let dest = self.new_register(result_type);
+        self.emit(Instruction::CallBuiltin(
+            dest.clone(),
+            builtin_name.to_string(),
+            args,
+        ));
         dest
     }
 
     // === Tuple operations ===
 
-    pub fn build_tuple(&mut self, elements: Vec<RegisterId>) -> RegisterId {
-        let dest = self.new_register();
-        self.emit(Instruction::MakeTuple(dest, elements));
+    pub fn build_tuple(&mut self, elements: Vec<Register>, tuple_type: Type<TypeName>) -> Register {
+        let dest = self.new_register(tuple_type);
+        self.emit(Instruction::MakeTuple(dest.clone(), elements));
         dest
     }
 
-    pub fn build_extract_element(&mut self, tuple: RegisterId, index: u32) -> RegisterId {
-        let dest = self.new_register();
-        self.emit(Instruction::ExtractElement(dest, tuple, index));
+    pub fn build_extract_element(
+        &mut self,
+        tuple: Register,
+        index: u32,
+        element_type: Type<TypeName>,
+    ) -> Register {
+        let dest = self.new_register(element_type);
+        self.emit(Instruction::ExtractElement(dest.clone(), tuple, index));
         dest
     }
 
     // === Array operations ===
 
-    pub fn build_array(&mut self, elements: Vec<RegisterId>) -> RegisterId {
-        let dest = self.new_register();
-        self.emit(Instruction::MakeArray(dest, elements));
+    pub fn build_array(&mut self, elements: Vec<Register>, array_type: Type<TypeName>) -> Register {
+        let dest = self.new_register(array_type);
+        self.emit(Instruction::MakeArray(dest.clone(), elements));
         dest
     }
 
-    pub fn build_array_index(&mut self, array: RegisterId, index: RegisterId) -> RegisterId {
-        let dest = self.new_register();
-        self.emit(Instruction::ArrayIndex(dest, array, index));
+    pub fn build_array_index(
+        &mut self,
+        array: Register,
+        index: Register,
+        element_type: Type<TypeName>,
+    ) -> Register {
+        let dest = self.new_register(element_type);
+        self.emit(Instruction::ArrayIndex(dest.clone(), array, index));
         dest
     }
 
@@ -420,17 +456,21 @@ impl Builder {
         self.emit(Instruction::Branch(target));
     }
 
-    pub fn build_branch_cond(&mut self, cond: RegisterId, true_block: BlockId, false_block: BlockId) {
+    pub fn build_branch_cond(&mut self, cond: Register, true_block: BlockId, false_block: BlockId) {
         self.emit(Instruction::BranchCond(cond, true_block, false_block));
     }
 
-    pub fn build_phi(&mut self, incoming: Vec<(RegisterId, BlockId)>) -> RegisterId {
-        let dest = self.new_register();
-        self.emit(Instruction::Phi(dest, incoming));
+    pub fn build_phi(
+        &mut self,
+        incoming: Vec<(Register, BlockId)>,
+        result_type: Type<TypeName>,
+    ) -> Register {
+        let dest = self.new_register(result_type);
+        self.emit(Instruction::Phi(dest.clone(), incoming));
         dest
     }
 
-    pub fn build_return(&mut self, value: RegisterId) {
+    pub fn build_return(&mut self, value: Register) {
         self.emit(Instruction::Return(value));
     }
 
@@ -492,17 +532,17 @@ mod tests {
         let mut builder = Builder::new();
 
         let i32_type = Type::Constructed(TypeName::Str("i32"), vec![]);
-        builder.begin_function("test".to_string(), vec![], i32_type);
+        builder.begin_function("test".to_string(), vec![], i32_type.clone());
 
         // Create the same constant twice
-        let c1 = builder.build_const_int(42);
-        let c2 = builder.build_const_int(42);
+        let c1 = builder.build_const_int(42, i32_type.clone());
+        let c2 = builder.build_const_int(42, i32_type.clone());
 
         // Should return the same register
         assert_eq!(c1, c2);
 
         // Create a different constant
-        let c3 = builder.build_const_int(100);
+        let c3 = builder.build_const_int(100, i32_type);
         assert_ne!(c1, c3);
 
         builder.end_function();
@@ -513,16 +553,18 @@ mod tests {
         let mut builder = Builder::new();
 
         let i32_type = Type::Constructed(TypeName::Str("i32"), vec![]);
+        let ptr_type = Type::Constructed(TypeName::Str("ptr"), vec![i32_type.clone()]);
+
         builder.begin_function("test".to_string(), vec![], i32_type.clone());
 
         // Create some allocas
-        let ptr1 = builder.build_alloca(i32_type.clone());
-        let ptr2 = builder.build_alloca(i32_type.clone());
+        let ptr1 = builder.build_alloca(ptr_type.clone());
+        let ptr2 = builder.build_alloca(ptr_type.clone());
 
         // Store and load
-        let value = builder.build_const_int(42);
-        builder.build_store(ptr1, value);
-        let loaded = builder.build_load(ptr1);
+        let value = builder.build_const_int(42, i32_type.clone());
+        builder.build_store(ptr1.clone(), value);
+        let loaded = builder.build_load(ptr1.clone(), i32_type);
         builder.build_return(loaded);
 
         builder.end_function();
@@ -547,7 +589,7 @@ mod tests {
         builder.begin_function(
             "test_if".to_string(),
             vec![("cond".to_string(), bool_type)],
-            i32_type,
+            i32_type.clone(),
         );
 
         let cond = builder.get_param(0).unwrap();
@@ -562,17 +604,17 @@ mod tests {
 
         // Then block: return 1
         builder.select_block(then_block);
-        let then_value = builder.build_const_int(1);
+        let then_value = builder.build_const_int(1, i32_type.clone());
         builder.build_branch(merge_block);
 
         // Else block: return 2
         builder.select_block(else_block);
-        let else_value = builder.build_const_int(2);
+        let else_value = builder.build_const_int(2, i32_type.clone());
         builder.build_branch(merge_block);
 
         // Merge block: phi node
         builder.select_block(merge_block);
-        let result = builder.build_phi(vec![(then_value, then_block), (else_value, else_block)]);
+        let result = builder.build_phi(vec![(then_value, then_block), (else_value, else_block)], i32_type);
         builder.build_return(result);
 
         builder.end_function();
@@ -599,8 +641,8 @@ mod tests {
 
         // Define main function that calls helper
         builder.begin_function("main".to_string(), vec![], i32_type.clone());
-        let arg = builder.build_const_int(42);
-        let result = builder.build_call("helper", vec![arg]);
+        let arg = builder.build_const_int(42, i32_type.clone());
+        let result = builder.build_call("helper", vec![arg], i32_type);
         builder.build_return(result);
         builder.end_function();
 
@@ -622,13 +664,14 @@ mod tests {
         let mut builder = Builder::new();
 
         let f32_type = Type::Constructed(TypeName::Str("f32"), vec![]);
+        let vec2_type = Type::Constructed(TypeName::Str("vec2"), vec![]);
 
-        builder.begin_function("test".to_string(), vec![], f32_type);
+        builder.begin_function("test".to_string(), vec![], f32_type.clone());
 
-        let x = builder.build_const_float(1.0);
-        let y = builder.build_const_float(2.0);
-        let v = builder.build_call_builtin("vec2", vec![x, y]);
-        let len = builder.build_call_builtin("length", vec![v]);
+        let x = builder.build_const_float(1.0, f32_type.clone());
+        let y = builder.build_const_float(2.0, f32_type.clone());
+        let v = builder.build_call_builtin("vec2", vec![x, y], vec2_type);
+        let len = builder.build_call_builtin("length", vec![v], f32_type);
         builder.build_return(len);
 
         builder.end_function();
@@ -653,12 +696,15 @@ mod tests {
         let mut builder = Builder::new();
 
         let i32_type = Type::Constructed(TypeName::Str("i32"), vec![]);
+        let tuple_type =
+            Type::Constructed(TypeName::Str("tuple"), vec![i32_type.clone(), i32_type.clone()]);
+
         builder.begin_function("test".to_string(), vec![], i32_type.clone());
 
-        let a = builder.build_const_int(1);
-        let b = builder.build_const_int(2);
-        let tuple = builder.build_tuple(vec![a, b]);
-        let first = builder.build_extract_element(tuple, 0);
+        let a = builder.build_const_int(1, i32_type.clone());
+        let b = builder.build_const_int(2, i32_type.clone());
+        let tuple = builder.build_tuple(vec![a, b], tuple_type);
+        let first = builder.build_extract_element(tuple, 0, i32_type.clone());
         builder.build_return(first);
 
         builder.end_function();
@@ -676,14 +722,16 @@ mod tests {
         let mut builder = Builder::new();
 
         let i32_type = Type::Constructed(TypeName::Str("i32"), vec![]);
+        let array_type = Type::Constructed(TypeName::Str("array"), vec![i32_type.clone()]);
+
         builder.begin_function("test".to_string(), vec![], i32_type.clone());
 
-        let e1 = builder.build_const_int(1);
-        let e2 = builder.build_const_int(2);
-        let e3 = builder.build_const_int(3);
-        let array = builder.build_array(vec![e1, e2, e3]);
-        let idx = builder.build_const_int(1);
-        let element = builder.build_array_index(array, idx);
+        let e1 = builder.build_const_int(1, i32_type.clone());
+        let e2 = builder.build_const_int(2, i32_type.clone());
+        let e3 = builder.build_const_int(3, i32_type.clone());
+        let array = builder.build_array(vec![e1, e2, e3], array_type);
+        let idx = builder.build_const_int(1, i32_type.clone());
+        let element = builder.build_array_index(array, idx, i32_type.clone());
         builder.build_return(element);
 
         builder.end_function();
