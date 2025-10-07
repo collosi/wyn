@@ -4,7 +4,9 @@
 use crate::ast::TypeName;
 use crate::ast::*;
 use crate::cfg::{BlockId, Location};
+use crate::visitor::{Visitor, walk_expr_lambda};
 use std::fmt::Write as FmtWrite;
+use std::ops::ControlFlow;
 
 /// Annotated code formatter
 pub struct CodeAnnotator {
@@ -32,215 +34,37 @@ impl CodeAnnotator {
         writeln!(self.output, "// Format: #B<block_id>.<index> <original_code>").unwrap();
         writeln!(self.output).unwrap();
 
-        // Process all declarations
-        for decl in &program.declarations {
-            self.annotate_declaration(decl);
-            self.output.push('\n');
-        }
+        // Use visitor pattern to traverse
+        let _ = self.visit_program(program);
 
         self.output.clone()
     }
 
-    fn annotate_declaration(&mut self, decl: &Declaration) {
-        match decl {
-            Declaration::Decl(decl_node) => {
-                let block = self.new_block();
-                self.enter_block(block);
+    fn new_block(&mut self) -> BlockId {
+        let id = BlockId(self.next_block_id);
+        self.next_block_id += 1;
+        id
+    }
 
-                write!(
-                    self.output,
-                    "#B{}.0 {} {}",
-                    block.0, decl_node.keyword, decl_node.name
-                )
-                .unwrap();
+    fn enter_block(&mut self, block: BlockId) {
+        self.current_block = Some(block);
+        self.current_index = 0;
+    }
 
-                // Add parameters if this is a function
-                if !decl_node.params.is_empty() {
-                    self.output.push('(');
-                    for (i, param) in decl_node.params.iter().enumerate() {
-                        if i > 0 {
-                            self.output.push_str(", ");
-                        }
-                        match param {
-                            DeclParam::Untyped(name) => write!(self.output, "{}", name).unwrap(),
-                            DeclParam::Typed(p) => write!(self.output, "{}", p.name).unwrap(),
-                        }
-                    }
-                    self.output.push(')');
-                }
+    fn exit_block(&mut self) {
+        self.current_block = None;
+        self.current_index = 0;
+    }
 
-                // Add type annotation if present
-                if let Some(ref ty) = decl_node.ty {
-                    self.output.push_str(": ");
-                    self.write_type(ty);
-                }
-
-                self.output.push_str(" = ");
-                self.annotate_expression(&decl_node.body);
-
-                self.exit_block();
-            }
-
-            Declaration::Uniform(uniform) => {
-                write!(self.output, "#[uniform] def {}: ", uniform.name).unwrap();
-                self.write_type(&uniform.ty);
-            }
-
-            Declaration::Val(val) => {
-                write!(self.output, "val {}: ", val.name).unwrap();
-                self.write_type(&val.ty);
-            }
+    fn current_location(&self) -> Location {
+        Location {
+            block: self.current_block.expect("Not in a block"),
+            index: self.current_index,
         }
     }
 
-    fn annotate_expression(&mut self, expr: &Expression) {
-        let loc = self.current_location();
-
-        match &expr.kind {
-            ExprKind::IntLiteral(n) => {
-                write!(self.output, "#B{}.{} {}", loc.block.0, loc.index, n).unwrap();
-                self.advance_index();
-            }
-
-            ExprKind::FloatLiteral(f) => {
-                write!(self.output, "#B{}.{} {}", loc.block.0, loc.index, f).unwrap();
-                self.advance_index();
-            }
-
-            ExprKind::Identifier(name) => {
-                write!(self.output, "#B{}.{} {}", loc.block.0, loc.index, name).unwrap();
-                self.advance_index();
-            }
-
-            ExprKind::ArrayLiteral(elements) => {
-                write!(self.output, "#B{}.{} [", loc.block.0, loc.index).unwrap();
-
-                for (i, elem) in elements.iter().enumerate() {
-                    if i > 0 {
-                        self.output.push_str(", ");
-                    }
-                    self.annotate_expression(elem);
-                }
-
-                self.output.push(']');
-            }
-
-            ExprKind::ArrayIndex(array, index) => {
-                write!(self.output, "#B{}.{} ", loc.block.0, loc.index).unwrap();
-                self.annotate_expression(array);
-                self.output.push('[');
-                self.annotate_expression(index);
-                self.output.push(']');
-            }
-
-            ExprKind::BinaryOp(op, left, right) => {
-                write!(self.output, "#B{}.{} (", loc.block.0, loc.index).unwrap();
-                self.annotate_expression(left);
-
-                let op_str = format!(" {} ", op.op);
-                self.output.push_str(&op_str);
-
-                self.annotate_expression(right);
-                self.output.push(')');
-            }
-
-            ExprKind::FunctionCall(name, args) => {
-                write!(self.output, "#B{}.{} {}(", loc.block.0, loc.index, name).unwrap();
-
-                for (i, arg) in args.iter().enumerate() {
-                    if i > 0 {
-                        self.output.push_str(", ");
-                    }
-                    self.annotate_expression(arg);
-                }
-
-                self.output.push(')');
-            }
-
-            ExprKind::Application(func, args) => {
-                write!(self.output, "#B{}.{} ", loc.block.0, loc.index).unwrap();
-                self.annotate_expression(func);
-
-                for arg in args {
-                    self.output.push(' ');
-                    self.annotate_expression(arg);
-                }
-            }
-
-            ExprKind::Tuple(elements) => {
-                write!(self.output, "#B{}.{} (", loc.block.0, loc.index).unwrap();
-
-                for (i, elem) in elements.iter().enumerate() {
-                    if i > 0 {
-                        self.output.push_str(", ");
-                    }
-                    self.annotate_expression(elem);
-                }
-
-                self.output.push(')');
-            }
-
-            ExprKind::Lambda(lambda) => {
-                write!(self.output, "#B{}.{} \\", loc.block.0, loc.index).unwrap();
-
-                // Parameters
-                for (i, param) in lambda.params.iter().enumerate() {
-                    if i > 0 {
-                        self.output.push(' ');
-                    }
-                    self.output.push_str(&param.name);
-                    if let Some(ref ty) = param.ty {
-                        self.output.push(':');
-                        self.write_type(ty);
-                    }
-                }
-
-                if let Some(ref ret_ty) = lambda.return_type {
-                    self.output.push_str(": ");
-                    self.write_type(ret_ty);
-                }
-
-                self.output.push_str(" -> ");
-
-                // Create new block for lambda body
-                let lambda_block = self.new_block();
-                let saved_block = self.current_block;
-                let saved_index = self.current_index;
-
-                self.enter_block(lambda_block);
-                self.annotate_expression(&lambda.body);
-                self.exit_block();
-
-                // Restore context
-                self.current_block = saved_block;
-                self.current_index = saved_index;
-                self.advance_index();
-            }
-
-            ExprKind::LetIn(let_in) => {
-                write!(
-                    self.output,
-                    "#B{}.{} let {} = ",
-                    loc.block.0, loc.index, let_in.name
-                )
-                .unwrap();
-                self.annotate_expression(&let_in.value);
-                self.output.push_str(" in ");
-                self.annotate_expression(&let_in.body);
-                self.advance_index();
-            }
-            ExprKind::FieldAccess(expr, _field) => {
-                self.annotate_expression(expr);
-            }
-            ExprKind::If(if_expr) => {
-                self.output.push_str("if ");
-                self.annotate_expression(&if_expr.condition);
-                self.output.push_str(" then ");
-                self.annotate_expression(&if_expr.then_branch);
-                self.output.push_str(" else ");
-                self.annotate_expression(&if_expr.else_branch);
-            }
-        }
+    fn advance_index(&mut self) {
+        self.current_index += 1;
     }
 
     fn write_type(&mut self, ty: &Type) {
@@ -273,32 +97,249 @@ impl CodeAnnotator {
             }
         }
     }
+}
 
-    fn new_block(&mut self) -> BlockId {
-        let id = BlockId(self.next_block_id);
-        self.next_block_id += 1;
-        id
-    }
+impl Visitor for CodeAnnotator {
+    type Break = ();
 
-    fn enter_block(&mut self, block: BlockId) {
-        self.current_block = Some(block);
-        self.current_index = 0;
-    }
-
-    fn exit_block(&mut self) {
-        self.current_block = None;
-        self.current_index = 0;
-    }
-
-    fn current_location(&self) -> Location {
-        Location {
-            block: self.current_block.expect("Not in a block"),
-            index: self.current_index,
+    fn visit_declaration(&mut self, decl: &Declaration) -> ControlFlow<Self::Break> {
+        match decl {
+            Declaration::Decl(decl_node) => {
+                self.visit_decl(decl_node)?;
+                self.output.push('\n');
+            }
+            Declaration::Uniform(uniform) => {
+                self.visit_uniform_decl(uniform)?;
+                self.output.push('\n');
+            }
+            Declaration::Val(val) => {
+                self.visit_val_decl(val)?;
+                self.output.push('\n');
+            }
         }
+        ControlFlow::Continue(())
     }
 
-    fn advance_index(&mut self) {
-        self.current_index += 1;
+    fn visit_decl(&mut self, d: &Decl) -> ControlFlow<Self::Break> {
+        let block = self.new_block();
+        self.enter_block(block);
+
+        write!(
+            self.output,
+            "#B{}.0 {} {}",
+            block.0, d.keyword, d.name
+        )
+        .unwrap();
+
+        // Add parameters if this is a function
+        if !d.params.is_empty() {
+            self.output.push('(');
+            for (i, param) in d.params.iter().enumerate() {
+                if i > 0 {
+                    self.output.push_str(", ");
+                }
+                match param {
+                    DeclParam::Untyped(name) => write!(self.output, "{}", name).unwrap(),
+                    DeclParam::Typed(p) => write!(self.output, "{}", p.name).unwrap(),
+                }
+            }
+            self.output.push(')');
+        }
+
+        // Add type annotation if present
+        if let Some(ref ty) = d.ty {
+            self.output.push_str(": ");
+            self.write_type(ty);
+        }
+
+        self.output.push_str(" = ");
+        self.visit_expression(&d.body)?;
+
+        self.exit_block();
+        ControlFlow::Continue(())
+    }
+
+    fn visit_uniform_decl(&mut self, u: &UniformDecl) -> ControlFlow<Self::Break> {
+        write!(self.output, "#[uniform] def {}: ", u.name).unwrap();
+        self.write_type(&u.ty);
+        ControlFlow::Continue(())
+    }
+
+    fn visit_val_decl(&mut self, v: &ValDecl) -> ControlFlow<Self::Break> {
+        write!(self.output, "val {}: ", v.name).unwrap();
+        self.write_type(&v.ty);
+        ControlFlow::Continue(())
+    }
+
+    fn visit_expr_int_literal(&mut self, n: i32) -> ControlFlow<Self::Break> {
+        let loc = self.current_location();
+        write!(self.output, "#B{}.{} {}", loc.block.0, loc.index, n).unwrap();
+        self.advance_index();
+        ControlFlow::Continue(())
+    }
+
+    fn visit_expr_float_literal(&mut self, f: f32) -> ControlFlow<Self::Break> {
+        let loc = self.current_location();
+        write!(self.output, "#B{}.{} {}", loc.block.0, loc.index, f).unwrap();
+        self.advance_index();
+        ControlFlow::Continue(())
+    }
+
+    fn visit_expr_identifier(&mut self, name: &str) -> ControlFlow<Self::Break> {
+        let loc = self.current_location();
+        write!(self.output, "#B{}.{} {}", loc.block.0, loc.index, name).unwrap();
+        self.advance_index();
+        ControlFlow::Continue(())
+    }
+
+    fn visit_expr_array_literal(&mut self, elements: &[Expression]) -> ControlFlow<Self::Break> {
+        let loc = self.current_location();
+        write!(self.output, "#B{}.{} [", loc.block.0, loc.index).unwrap();
+
+        for (i, elem) in elements.iter().enumerate() {
+            if i > 0 {
+                self.output.push_str(", ");
+            }
+            self.visit_expression(elem)?;
+        }
+
+        self.output.push(']');
+        ControlFlow::Continue(())
+    }
+
+    fn visit_expr_array_index(&mut self, array: &Expression, index: &Expression) -> ControlFlow<Self::Break> {
+        let loc = self.current_location();
+        write!(self.output, "#B{}.{} ", loc.block.0, loc.index).unwrap();
+        self.visit_expression(array)?;
+        self.output.push('[');
+        self.visit_expression(index)?;
+        self.output.push(']');
+        ControlFlow::Continue(())
+    }
+
+    fn visit_expr_binary_op(&mut self, op: &BinaryOp, left: &Expression, right: &Expression) -> ControlFlow<Self::Break> {
+        let loc = self.current_location();
+        write!(self.output, "#B{}.{} (", loc.block.0, loc.index).unwrap();
+        self.visit_expression(left)?;
+
+        let op_str = format!(" {} ", op.op);
+        self.output.push_str(&op_str);
+
+        self.visit_expression(right)?;
+        self.output.push(')');
+        ControlFlow::Continue(())
+    }
+
+    fn visit_expr_function_call(&mut self, name: &str, args: &[Expression]) -> ControlFlow<Self::Break> {
+        let loc = self.current_location();
+        write!(self.output, "#B{}.{} {}(", loc.block.0, loc.index, name).unwrap();
+
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 {
+                self.output.push_str(", ");
+            }
+            self.visit_expression(arg)?;
+        }
+
+        self.output.push(')');
+        ControlFlow::Continue(())
+    }
+
+    fn visit_expr_tuple(&mut self, elements: &[Expression]) -> ControlFlow<Self::Break> {
+        let loc = self.current_location();
+        write!(self.output, "#B{}.{} (", loc.block.0, loc.index).unwrap();
+
+        for (i, elem) in elements.iter().enumerate() {
+            if i > 0 {
+                self.output.push_str(", ");
+            }
+            self.visit_expression(elem)?;
+        }
+
+        self.output.push(')');
+        ControlFlow::Continue(())
+    }
+
+    fn visit_expr_lambda(&mut self, lambda: &LambdaExpr) -> ControlFlow<Self::Break> {
+        let loc = self.current_location();
+        write!(self.output, "#B{}.{} \\", loc.block.0, loc.index).unwrap();
+
+        // Parameters
+        for (i, param) in lambda.params.iter().enumerate() {
+            if i > 0 {
+                self.output.push(' ');
+            }
+            self.output.push_str(&param.name);
+            if let Some(ref ty) = param.ty {
+                self.output.push(':');
+                self.write_type(ty);
+            }
+        }
+
+        if let Some(ref ret_ty) = lambda.return_type {
+            self.output.push_str(": ");
+            self.write_type(ret_ty);
+        }
+
+        self.output.push_str(" -> ");
+
+        // Create new block for lambda body
+        let lambda_block = self.new_block();
+        let saved_block = self.current_block;
+        let saved_index = self.current_index;
+
+        self.enter_block(lambda_block);
+        // Use default walk for lambda body
+        walk_expr_lambda(self, lambda)?;
+        self.exit_block();
+
+        // Restore context
+        self.current_block = saved_block;
+        self.current_index = saved_index;
+        self.advance_index();
+
+        ControlFlow::Continue(())
+    }
+
+    fn visit_expr_application(&mut self, func: &Expression, args: &[Expression]) -> ControlFlow<Self::Break> {
+        let loc = self.current_location();
+        write!(self.output, "#B{}.{} ", loc.block.0, loc.index).unwrap();
+        self.visit_expression(func)?;
+
+        for arg in args {
+            self.output.push(' ');
+            self.visit_expression(arg)?;
+        }
+        ControlFlow::Continue(())
+    }
+
+    fn visit_expr_let_in(&mut self, let_in: &LetInExpr) -> ControlFlow<Self::Break> {
+        let loc = self.current_location();
+        write!(
+            self.output,
+            "#B{}.{} let {} = ",
+            loc.block.0, loc.index, let_in.name
+        )
+        .unwrap();
+        self.visit_expression(&let_in.value)?;
+        self.output.push_str(" in ");
+        self.visit_expression(&let_in.body)?;
+        self.advance_index();
+        ControlFlow::Continue(())
+    }
+
+    fn visit_expr_field_access(&mut self, expr: &Expression, _field: &str) -> ControlFlow<Self::Break> {
+        self.visit_expression(expr)
+    }
+
+    fn visit_expr_if(&mut self, if_expr: &IfExpr) -> ControlFlow<Self::Break> {
+        self.output.push_str("if ");
+        self.visit_expression(&if_expr.condition)?;
+        self.output.push_str(" then ");
+        self.visit_expression(&if_expr.then_branch)?;
+        self.output.push_str(" else ");
+        self.visit_expression(&if_expr.else_branch)?;
+        ControlFlow::Continue(())
     }
 }
 
@@ -338,7 +379,7 @@ mod tests {
 
     #[test]
     fn test_lambda_annotation() {
-        let source = r#"#[vertex] def main(x: i32): i32 = 
+        let source = r#"#[vertex] def main(x: i32): i32 =
             let f = \y -> y + x in
             f 10"#;
 
@@ -359,7 +400,7 @@ mod tests {
 
     #[test]
     fn test_complex_expression() {
-        let source = r#"#[vertex] def main(arr: [4]i32): i32 = 
+        let source = r#"#[vertex] def main(arr: [4]i32): i32 =
             arr[0] + arr[1]"#;
 
         let tokens = tokenize(source).unwrap();

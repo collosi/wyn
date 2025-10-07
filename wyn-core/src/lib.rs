@@ -14,6 +14,7 @@ pub mod nemo_facts;
 pub mod parser;
 pub mod scope;
 pub mod type_checker;
+pub mod visitor;
 
 #[cfg(test)]
 mod integration_tests;
