@@ -490,13 +490,9 @@ impl TypeChecker {
                 if let Ok(type_scheme) = self.scope_stack.lookup(name) {
                     debug!("Found '{}' in scope stack with type: {:?}", name, type_scheme);
                     // Instantiate the type scheme to get a concrete type
-                    return Ok(type_scheme.instantiate(&mut self.context));
-                }
-
-                debug!("'{}' not found in scope stack, checking builtin registry", name);
-
-                // Then check builtin registry for builtin functions/constructors
-                if self.builtin_registry.is_builtin(name) {
+                    Ok(type_scheme.instantiate(&mut self.context))
+                } else if self.builtin_registry.is_builtin(name) {
+                    // Then check builtin registry for builtin functions/constructors
                     debug!("'{}' is a builtin", name);
                     if let Some(desc) = self.builtin_registry.get(name) {
                         // Build function type from param types and return type
@@ -508,33 +504,36 @@ impl TypeChecker {
                                 Type::arrow(param_ty.clone(), acc)
                             });
                         debug!("Built function type for builtin '{}': {:?}", name, func_type);
-                        return Ok(func_type);
+                        Ok(func_type)
+                    } else {
+                        Err(CompilerError::UndefinedVariable(name.clone()))
                     }
+                } else {
+                    // Not found anywhere
+                    debug!("Variable lookup failed for '{}' - not in scope or builtins", name);
+                    debug!("Scope stack contents: {:?}", self.scope_stack);
+                    Err(CompilerError::UndefinedVariable(name.clone()))
                 }
-
-                // Not found anywhere
-                debug!("Variable lookup failed for '{}' - not in scope or builtins", name);
-                debug!("Scope stack contents: {:?}", self.scope_stack);
-                Err(CompilerError::UndefinedVariable(name.clone()))
             }
             ExprKind::ArrayLiteral(elements) => {
                 if elements.is_empty() {
-                    return Err(CompilerError::TypeError(
+                    Err(CompilerError::TypeError(
                         "Cannot infer type of empty array".to_string(),
-                    ));
-                }
-
-                let first_type = self.infer_expression(&elements[0])?;
-                for elem in &elements[1..] {
-                    let elem_type = self.infer_expression(elem)?;
-                    if !self.types_match(&elem_type, &first_type) {
-                        return Err(CompilerError::TypeError(
-                            "Array elements must have the same type".to_string(),
-                        ));
+                    ))
+                } else {
+                    let first_type = self.infer_expression(&elements[0])?;
+                    for elem in &elements[1..] {
+                        let elem_type = self.infer_expression(elem)?;
+                        self.context.unify(&elem_type, &first_type).map_err(|_| {
+                            CompilerError::TypeError(format!(
+                                "Array elements must have the same type, expected {}, got {}",
+                                first_type, elem_type
+                            ))
+                        })?;
                     }
-                }
 
-                Ok(types::sized_array(elements.len(), first_type))
+                    Ok(types::sized_array(elements.len(), first_type))
+                }
             }
             ExprKind::ArrayIndex(array_expr, index_expr) => {
                 let array_type = self.infer_expression(array_expr)?;
@@ -545,7 +544,7 @@ impl TypeChecker {
                     CompilerError::TypeError(format!("Array index must be i32, got {}", index_type))
                 })?;
 
-                Ok(match &array_type {
+                match &array_type {
                     Type::Constructed(TypeName::Array, args) => {
                         // Array type is: Array(Size(n), elem_type)
                         // So element type is at index 1
@@ -554,15 +553,13 @@ impl TypeChecker {
                                 "Array type has no element type: {}",
                                 array_type
                             ))
-                        })?
+                        })
                     }
-                    _ => {
-                        return Err(CompilerError::TypeError(format!(
-                            "Cannot index non-array type: got {}",
-                            array_type
-                        )));
-                    }
-                })
+                    _ => Err(CompilerError::TypeError(format!(
+                        "Cannot index non-array type: got {}",
+                        array_type
+                    ))),
+                }
             }
             ExprKind::BinaryOp(op, left, right) => {
                 let left_type = self.infer_expression(left)?;
@@ -577,41 +574,44 @@ impl TypeChecker {
                 })?;
 
                 // Determine return type based on operator
-                let return_type = match op.op.as_str() {
+                match op.op.as_str() {
                     "==" | "!=" | "<" | ">" | "<=" | ">=" => {
                         // Comparison operators return boolean
-                        Type::Constructed(TypeName::Str("bool"), vec![])
+                        Ok(Type::Constructed(TypeName::Str("bool"), vec![]))
                     }
                     "+" | "-" | "*" | "/" => {
                         // Arithmetic operators return the same type as operands
-                        left_type.apply(&self.context)
+                        Ok(left_type.apply(&self.context))
                     }
-                    _ => {
-                        return Err(CompilerError::TypeError(format!(
-                            "Unknown binary operator: {}",
-                            op.op
-                        )));
-                    }
-                };
-
-                Ok(return_type)
+                    _ => Err(CompilerError::TypeError(format!(
+                        "Unknown binary operator: {}",
+                        op.op
+                    ))),
+                }
             }
             ExprKind::FunctionCall(func_name, args) => {
                 // Get function type - check scope stack first, then builtin registry
-                let mut func_type = if let Ok(type_scheme) = self.scope_stack.lookup(func_name) {
-                    type_scheme.instantiate(&mut self.context)
-                } else if self.builtin_registry.is_builtin(func_name) {
-                    // Get type from builtin registry
-                    if let Some(desc) = self.builtin_registry.get(func_name) {
-                        desc.param_types.iter().rev().fold(desc.return_type.clone(), |acc, param_ty| {
-                            Type::arrow(param_ty.clone(), acc)
-                        })
+                let func_type_result: Result<Type> =
+                    if let Ok(type_scheme) = self.scope_stack.lookup(func_name) {
+                        Ok(type_scheme.instantiate(&mut self.context))
+                    } else if self.builtin_registry.is_builtin(func_name) {
+                        // Get type from builtin registry
+                        if let Some(desc) = self.builtin_registry.get(func_name) {
+                            Ok(desc
+                                .param_types
+                                .iter()
+                                .rev()
+                                .fold(desc.return_type.clone(), |acc, param_ty| {
+                                    Type::arrow(param_ty.clone(), acc)
+                                }))
+                        } else {
+                            Err(CompilerError::UndefinedVariable(func_name.clone()))
+                        }
                     } else {
-                        return Err(CompilerError::UndefinedVariable(func_name.clone()));
-                    }
-                } else {
-                    return Err(CompilerError::UndefinedVariable(func_name.clone()));
-                };
+                        Err(CompilerError::UndefinedVariable(func_name.clone()))
+                    };
+
+                let mut func_type = func_type_result?;
 
                 // Apply function to each argument using unification
                 for arg in args {
@@ -713,12 +713,12 @@ impl TypeChecker {
 
                 // Check type annotation if present
                 if let Some(declared_type) = &let_in.ty {
-                    if !self.types_match(&value_type, declared_type) {
-                        return Err(CompilerError::TypeError(format!(
+                    self.context.unify(&value_type, declared_type).map_err(|_| {
+                        CompilerError::TypeError(format!(
                             "Type mismatch in let binding: expected {}, got {}",
                             declared_type, value_type
-                        )));
-                    }
+                        ))
+                    })?;
                 }
 
                 // Push new scope and add binding
@@ -762,6 +762,9 @@ impl TypeChecker {
             ExprKind::FieldAccess(expr, field) => {
                 // Check if this is a qualified name (namespace.function)
                 // e.g., f32.sin where f32 is a namespace, not a variable
+                let mut handled_as_qualified = false;
+                let mut qualified_result = None;
+
                 if let ExprKind::Identifier(name) = &expr.kind {
                     // Check if this looks like a namespace (currently just "f32")
                     let qualified_name = format!("{}.{}", name, field);
@@ -779,48 +782,50 @@ impl TypeChecker {
                                     Type::arrow(arg_ty.clone(), acc)
                                 });
 
-                            return Ok(func_type);
+                            handled_as_qualified = true;
+                            qualified_result = Some(Ok(func_type));
                         }
                     }
                 }
 
-                // Not a qualified name, proceed with normal field access
-                let expr_type = self.infer_expression(expr)?;
+                if handled_as_qualified {
+                    qualified_result.unwrap()
+                } else {
+                    // Not a qualified name, proceed with normal field access
+                    let expr_type = self.infer_expression(expr)?;
 
-                // Extract the type name from the expression type
-                match expr_type {
-                    Type::Constructed(type_name, _) => {
-                        // Get the type name as a string
-                        let type_name_str = match &type_name {
-                            TypeName::Str(s) => s.to_string(),
-                            TypeName::Array => "array".to_string(),
-                            TypeName::Size(n) => n.to_string(),
-                            TypeName::Unique => "unique".to_string(),
-                        };
+                    // Extract the type name from the expression type
+                    match expr_type {
+                        Type::Constructed(type_name, _) => {
+                            // Get the type name as a string
+                            let type_name_str = match &type_name {
+                                TypeName::Str(s) => s.to_string(),
+                                TypeName::Array => "array".to_string(),
+                                TypeName::Size(n) => n.to_string(),
+                                TypeName::Unique => "unique".to_string(),
+                            };
 
-                        // Look up field in builtin registry (for vector types)
-                        if let Some(field_type) =
-                            self.builtin_registry.get_field_type(&type_name_str, field)
-                        {
-                            return Ok(field_type);
+                            // Look up field in builtin registry (for vector types)
+                            if let Some(field_type) =
+                                self.builtin_registry.get_field_type(&type_name_str, field)
+                            {
+                                Ok(field_type)
+                            } else if let Some(field_type) =
+                                self.record_field_map.get(&(type_name_str.clone(), field.clone()))
+                            {
+                                Ok(field_type.clone())
+                            } else {
+                                Err(CompilerError::TypeError(format!(
+                                    "Type '{}' has no field '{}'",
+                                    type_name_str, field
+                                )))
+                            }
                         }
-
-                        // Fall back to record field mapping (for user-defined types)
-                        if let Some(field_type) =
-                            self.record_field_map.get(&(type_name_str.clone(), field.clone()))
-                        {
-                            Ok(field_type.clone())
-                        } else {
-                            Err(CompilerError::TypeError(format!(
-                                "Type '{}' has no field '{}'",
-                                type_name_str, field
-                            )))
-                        }
+                        _ => Err(CompilerError::TypeError(format!(
+                            "Field access '{}' not supported on type {}",
+                            field, expr_type
+                        ))),
                     }
-                    _ => Err(CompilerError::TypeError(format!(
-                        "Field access '{}' not supported on type {}",
-                        field, expr_type
-                    ))),
                 }
             }
             ExprKind::If(if_expr) => {
