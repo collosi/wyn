@@ -10,6 +10,7 @@ pub mod defunctionalization;
 pub mod error;
 pub mod inference;
 pub mod lexer;
+pub mod lowering;
 pub mod mir;
 pub mod mirize;
 pub mod nemo_facts;
@@ -17,6 +18,9 @@ pub mod parser;
 pub mod scope;
 pub mod type_checker;
 pub mod visitor;
+
+#[cfg(test)]
+mod mirize_tests;
 
 #[cfg(test)]
 mod integration_tests;
@@ -47,21 +51,16 @@ impl Compiler {
         // Type check
         let mut type_checker = type_checker::TypeChecker::new();
         type_checker.load_builtins()?;
-        let _type_table = type_checker.check_program(&program)?;
+        let type_table = type_checker.check_program(&program)?;
 
-        // Constant folding (evaluate compile-time constants)
-        let mut constant_folder = constant_folding::ConstantFolder::new();
-        let folded_program = constant_folder.fold_program(&program)?;
+        // Convert AST to MIR (Mid-level Intermediate Representation)
+        let mirize = mirize::Mirize::new(type_table);
+        let mir_module = mirize.mirize_program(&program)?;
 
-        // Defunctionalization (convert higher-order functions to first-order)
-        let mut defunctionalizer = defunctionalization::Defunctionalizer::new();
-        let defunctionalized_program = defunctionalizer.defunctionalize_program(&folded_program)?;
+        // Lower MIR to SPIR-V
+        let lowering = lowering::Lowering::new();
+        let spirv_bytes = lowering.lower_module(&mir_module)?;
 
-        // Generate SPIR-V using rspirv
-        let codegen = codegen::CodeGenerator::new("wyn_module");
-        let raw_spirv = codegen.generate(&defunctionalized_program)?;
-
-        // Post-process SPIR-V to fix compatibility issues (now handled within rspirv backend)
-        Ok(raw_spirv)
+        Ok(spirv_bytes)
     }
 }

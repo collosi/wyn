@@ -169,6 +169,10 @@ impl Builder {
         let func_id = self.next_function_id;
         self.next_function_id += 1;
 
+        // Clear constant caches for new function (constants don't cross function boundaries)
+        self.int_const_cache.clear();
+        self.float_const_cache.clear();
+
         // Create parameter registers
         let param_regs: Vec<Register> = params.into_iter().map(|(_, ty)| self.new_register(ty)).collect();
 
@@ -247,6 +251,11 @@ impl Builder {
     /// Switch to building in a different block
     pub fn select_block(&mut self, block_id: BlockId) {
         self.current_block = Some(block_id);
+    }
+
+    /// Get the currently selected block ID
+    pub fn current_block(&self) -> Option<BlockId> {
+        self.current_block
     }
 
     // === Constant builders with deduplication ===

@@ -78,9 +78,25 @@ impl Mirize {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let return_type = decl.ty.clone().ok_or_else(|| {
-            CompilerError::MirError("Function missing return type annotation".to_string())
-        })?;
+        // Get return type - either from ty or from attributed_return_type
+        let return_type = if let Some(ty) = &decl.ty {
+            ty.clone()
+        } else if let Some(attr_types) = &decl.attributed_return_type {
+            // Build a tuple type from the attributed types
+            if attr_types.len() == 1 {
+                attr_types[0].ty.clone()
+            } else {
+                use crate::ast::TypeName;
+                Type::Constructed(
+                    TypeName::Str("tuple"),
+                    attr_types.iter().map(|at| at.ty.clone()).collect(),
+                )
+            }
+        } else {
+            return Err(CompilerError::MirError(
+                "Function missing return type annotation".to_string(),
+            ));
+        };
 
         // Check if this is an entry point
         let is_entry_point =
@@ -231,10 +247,9 @@ impl Mirize {
                 // Evaluate condition
                 let cond_reg = self.mirize_expression(&if_expr.condition)?;
 
-                // Create blocks
+                // Create then and else blocks (but NOT merge block yet)
                 let then_block = self.builder.create_block();
                 let else_block = self.builder.create_block();
-                let merge_block = self.builder.create_block();
 
                 // Branch on condition
                 self.builder.build_branch_cond(cond_reg, then_block, else_block);
@@ -242,17 +257,29 @@ impl Mirize {
                 // Then block
                 self.builder.select_block(then_block);
                 let then_reg = self.mirize_expression(&if_expr.then_branch)?;
-                self.builder.build_branch(merge_block);
+                let then_end_block = self.builder.current_block().unwrap();
 
                 // Else block
                 self.builder.select_block(else_block);
                 let else_reg = self.mirize_expression(&if_expr.else_branch)?;
+                let else_end_block = self.builder.current_block().unwrap();
+
+                // NOW create the merge block (after both branches are processed)
+                let merge_block = self.builder.create_block();
+
+                // Add branches from both end blocks to merge
+                self.builder.select_block(then_end_block);
+                self.builder.build_branch(merge_block);
+
+                self.builder.select_block(else_end_block);
                 self.builder.build_branch(merge_block);
 
                 // Merge block with phi
                 self.builder.select_block(merge_block);
-                let result_reg =
-                    self.builder.build_phi(vec![(then_reg, then_block), (else_reg, else_block)], expr_type);
+                let result_reg = self.builder.build_phi(
+                    vec![(then_reg, then_end_block), (else_reg, else_end_block)],
+                    expr_type,
+                );
 
                 Ok(result_reg)
             }
