@@ -1,17 +1,19 @@
-//! Numeric and boolean literal parsing for the Wyn lexer
+//! Literal parsing for the Wyn lexer
 //!
 //! Implements the full grammar specification for literals:
 //! - Integer literals: decimal, hexadecimal (0xFF), binary (0b1010) with optional underscores
 //! - Float literals: pointfloat, exponent notation, hexadecimal floats
 //! - Type suffixes: i8, i16, i32, i64, u8, u16, u32, u64, f16, f32, f64
+//! - String literals: "stringchar*"
+//! - Char literals: 'char'
 
 use nom::{
     branch::alt,
-    bytes::complete::tag,
-    character::complete::{char, digit1, hex_digit1, one_of},
-    combinator::{map, opt, recognize},
+    bytes::complete::{tag, take_while},
+    character::complete::{char, digit1, hex_digit1, none_of, one_of},
+    combinator::{map, opt, recognize, verify},
     multi::many1,
-    sequence::{pair, tuple},
+    sequence::{delimited, pair, tuple},
     IResult,
 };
 
@@ -185,6 +187,34 @@ pub fn parse_float_literal(input: &str) -> IResult<&str, Token> {
     )(input)
 }
 
+// String literal parser
+// stringlit  ::= '"' stringchar* '"'
+// stringchar ::= <any source character except "\" or newline or double quotes>
+pub fn parse_string_literal(input: &str) -> IResult<&str, Token> {
+    map(
+        delimited(
+            char('"'),
+            take_while(|c| c != '"' && c != '\\' && c != '\n'),
+            char('"'),
+        ),
+        |s: &str| Token::StringLiteral(s.to_string()),
+    )(input)
+}
+
+// Char literal parser
+// charlit ::= "'" char "'"
+// char    ::= <any source character except "\" or newline or single quotes>
+pub fn parse_char_literal(input: &str) -> IResult<&str, Token> {
+    map(
+        delimited(
+            char('\''),
+            verify(none_of("'\\\n"), |_| true),
+            char('\''),
+        ),
+        Token::CharLiteral,
+    )(input)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,5 +281,66 @@ mod tests {
         // These should parse but currently return 0.0
         assert!(parse_float_literal("0x1.8p3f32").is_ok());
         assert!(parse_float_literal("0X1.0p-2f32").is_ok());
+    }
+
+    #[test]
+    fn test_string_literals() {
+        assert_eq!(
+            parse_string_literal("\"hello\""),
+            Ok(("", Token::StringLiteral("hello".to_string())))
+        );
+        assert_eq!(
+            parse_string_literal("\"hello world\""),
+            Ok(("", Token::StringLiteral("hello world".to_string())))
+        );
+        assert_eq!(
+            parse_string_literal("\"\""),
+            Ok(("", Token::StringLiteral("".to_string())))
+        );
+        assert_eq!(
+            parse_string_literal("\"foo123\""),
+            Ok(("", Token::StringLiteral("foo123".to_string())))
+        );
+    }
+
+    #[test]
+    fn test_string_rejects_backslash() {
+        // Strings with backslashes should fail (no escape sequences according to grammar)
+        assert!(parse_string_literal("\"hello\\nworld\"").is_err());
+        assert!(parse_string_literal("\"test\\\"quote\"").is_err());
+    }
+
+    #[test]
+    fn test_string_rejects_newline() {
+        // Strings with newlines should fail
+        assert!(parse_string_literal("\"hello\nworld\"").is_err());
+    }
+
+    #[test]
+    fn test_char_literals() {
+        assert_eq!(parse_char_literal("'a'"), Ok(("", Token::CharLiteral('a'))));
+        assert_eq!(parse_char_literal("'Z'"), Ok(("", Token::CharLiteral('Z'))));
+        assert_eq!(parse_char_literal("'0'"), Ok(("", Token::CharLiteral('0'))));
+        assert_eq!(parse_char_literal("' '"), Ok(("", Token::CharLiteral(' '))));
+        assert_eq!(parse_char_literal("'?'"), Ok(("", Token::CharLiteral('?'))));
+    }
+
+    #[test]
+    fn test_char_rejects_backslash() {
+        // Chars with backslashes should fail (no escape sequences according to grammar)
+        assert!(parse_char_literal("'\\n'").is_err());
+        assert!(parse_char_literal("'\\''").is_err());
+    }
+
+    #[test]
+    fn test_char_rejects_newline() {
+        // Chars with newlines should fail
+        assert!(parse_char_literal("'\n'").is_err());
+    }
+
+    #[test]
+    fn test_char_rejects_empty() {
+        // Empty char literals should fail
+        assert!(parse_char_literal("''").is_err());
     }
 }

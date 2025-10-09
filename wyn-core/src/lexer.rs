@@ -10,7 +10,7 @@ use nom::{
     sequence::{pair, preceded, terminated, tuple},
 };
 
-use literal::{parse_float_literal, parse_int_literal};
+use literal::{parse_char_literal, parse_float_literal, parse_int_literal, parse_string_literal};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -165,17 +165,7 @@ fn parse_identifier(input: &str) -> IResult<&str, Token> {
     )(input)
 }
 
-fn parse_string_literal(input: &str) -> IResult<&str, Token> {
-    use nom::bytes::complete::take_while;
-
-    let (rest, _) = char('"')(input)?;
-    let (rest, content) = take_while(|c| c != '"')(rest)?;
-    let (rest, _) = char('"')(rest)?;
-
-    Ok((rest, Token::StringLiteral(content.to_string())))
-}
-
-// Float and integer literal parsing moved to literal submodule
+// Float, integer, string, and char literal parsing moved to literal submodule
 
 fn parse_operator(input: &str) -> IResult<&str, Token> {
     alt((
@@ -238,6 +228,7 @@ fn parse_token(input: &str) -> IResult<&str, Token> {
         alt((
             parse_comment,
             parse_string_literal,
+            parse_char_literal,
             parse_keyword,
             parse_float_literal,
             parse_type_variable,
