@@ -49,6 +49,9 @@ pub struct Lowering {
 
     // Entry point interface variables - maps function ID to (inputs, outputs)
     entry_point_interfaces: HashMap<FunctionId, (Vec<spirv::Word>, Vec<spirv::Word>)>,
+
+    // Constants storage buffer (created if constants_buffer_size > 0)
+    constants_buffer_var: Option<spirv::Word>,
 }
 
 impl Lowering {
@@ -75,6 +78,7 @@ impl Lowering {
             current_input_vars: Vec::new(),
             current_function_blocks: Vec::new(),
             entry_point_interfaces: HashMap::new(),
+            constants_buffer_var: None,
         };
 
         // Initialize common types
@@ -91,6 +95,13 @@ impl Lowering {
         // Set up SPIR-V capabilities and addressing model
         self.builder.capability(Capability::Shader);
         self.builder.memory_model(AddressingModel::Logical, MemoryModel::GLSL450);
+
+        // Create constants storage buffer if needed
+        if mir.constants_buffer_size > 0 {
+            // Add extension for StorageBuffer storage class
+            self.builder.extension("SPV_KHR_storage_buffer_storage_class");
+            self.create_constants_buffer(mir.constants_buffer_size)?;
+        }
 
         // Lower all functions
         for function in &mir.functions {
@@ -257,6 +268,53 @@ impl Lowering {
             if value { self.builder.constant_true(type_id) } else { self.builder.constant_false(type_id) };
         self.bool_const_cache.insert(key, const_id);
         const_id
+    }
+
+    /// Create the global constants storage buffer
+    fn create_constants_buffer(&mut self, buffer_size: u32) -> Result<()> {
+        // Create a runtime array of u32 for the buffer contents
+        // This gives us a byte-addressable buffer (each u32 = 4 bytes)
+        let u32_type = self.builder.type_int(32, 0); // unsigned
+        let runtime_array_type = self.builder.type_runtime_array(u32_type);
+
+        // Wrap in a struct (required for storage buffers in SPIR-V)
+        let struct_type = self.builder.type_struct([runtime_array_type]);
+
+        // Decorate the struct
+        self.builder.decorate(
+            struct_type,
+            spirv::Decoration::Block,
+            [],
+        );
+
+        // Decorate the member (offset 0)
+        self.builder.member_decorate(
+            struct_type,
+            0,
+            spirv::Decoration::Offset,
+            [rspirv::dr::Operand::LiteralBit32(0)],
+        );
+
+        // Create pointer type for StorageBuffer storage class
+        let ptr_type = self.builder.type_pointer(None, StorageClass::StorageBuffer, struct_type);
+
+        // Create the global variable
+        let var_id = self.builder.variable(ptr_type, None, StorageClass::StorageBuffer, None);
+
+        // Add decorations for binding
+        self.builder.decorate(
+            var_id,
+            spirv::Decoration::DescriptorSet,
+            [rspirv::dr::Operand::LiteralBit32(0)],
+        );
+        self.builder.decorate(
+            var_id,
+            spirv::Decoration::Binding,
+            [rspirv::dr::Operand::LiteralBit32(0)],
+        );
+
+        self.constants_buffer_var = Some(var_id);
+        Ok(())
     }
 
     /// Find all blocks reachable from a starting block (following unconditional branches)
@@ -624,6 +682,10 @@ impl Lowering {
                 self.current_register_map.insert(dest.id, result_id);
             }
 
+            Instruction::ReturnVoid => {
+                self.builder.ret()?;
+            }
+
             Instruction::Return(value) => {
                 if self.current_is_entry_point {
                     // For entry points, store to output variables instead of returning
@@ -663,6 +725,74 @@ impl Lowering {
                     let value_id = self.get_register(value)?;
                     self.builder.ret_value(value_id)?;
                 }
+            }
+
+            Instruction::BufferStore(offset, value) => {
+                let buffer_var = self.constants_buffer_var.ok_or_else(|| {
+                    CompilerError::SpirvError("BufferStore used but no constants buffer exists".to_string())
+                })?;
+
+                // Get value to store
+                let value_id = self.get_register(value)?;
+
+                // Calculate byte offset as u32 index (divide by 4 since buffer is u32 array)
+                let index = offset / 4;
+                let index_const = self.get_or_create_int_const(index as i32, self.i32_type);
+
+                // Access chain: first index 0 for struct member, then the array index
+                let u32_type = self.builder.type_int(32, 0);
+                let ptr_type_id = self.get_or_create_ptr_type(StorageClass::StorageBuffer, u32_type);
+                let member_zero = self.get_or_create_int_const(0, self.i32_type);
+
+                let ptr_id = self.builder.access_chain(
+                    ptr_type_id,
+                    None,
+                    buffer_var,
+                    [member_zero, index_const],
+                )?;
+
+                // OpStore the value (bitcast if needed for f32)
+                let store_value = if self.is_float_type(&value.ty) {
+                    self.builder.bitcast(u32_type, None, value_id)?
+                } else {
+                    value_id
+                };
+                self.builder.store(ptr_id, store_value, None, [])?;
+            }
+
+            Instruction::BufferLoad(dest, offset) => {
+                let buffer_var = self.constants_buffer_var.ok_or_else(|| {
+                    CompilerError::SpirvError("BufferLoad used but no constants buffer exists".to_string())
+                })?;
+
+                // Calculate byte offset as u32 index (divide by 4 since buffer is u32 array)
+                let index = offset / 4;
+                let index_const = self.get_or_create_int_const(index as i32, self.i32_type);
+
+                // Access chain: first index 0 for struct member, then the array index
+                let u32_type = self.builder.type_int(32, 0);
+                let ptr_type_id = self.get_or_create_ptr_type(StorageClass::StorageBuffer, u32_type);
+                let member_zero = self.get_or_create_int_const(0, self.i32_type);
+
+                let ptr_id = self.builder.access_chain(
+                    ptr_type_id,
+                    None,
+                    buffer_var,
+                    [member_zero, index_const],
+                )?;
+
+                // OpLoad from buffer (as u32)
+                let loaded_u32 = self.builder.load(u32_type, None, ptr_id, None, [])?;
+
+                // Bitcast to destination type if needed (for f32, etc.)
+                let loaded_type_id = self.get_or_create_type(&dest.ty)?;
+                let loaded_id = if self.is_float_type(&dest.ty) {
+                    self.builder.bitcast(loaded_type_id, None, loaded_u32)?
+                } else {
+                    loaded_u32
+                };
+
+                self.current_register_map.insert(dest.id, loaded_id);
             }
 
             // TODO: Implement remaining instructions
@@ -769,35 +899,40 @@ impl Lowering {
                 self.current_output_vars.push(var_id);
             }
         } else {
-            // Single return value - create one output variable
-            let ret_type_id = self.get_or_create_type(&func.return_type)?;
-            let ptr_type_id = self.get_or_create_ptr_type(StorageClass::Output, ret_type_id);
+            // Single return value - create one output variable (unless void)
+            use crate::ast::TypeName;
+            let is_void = matches!(&func.return_type, Type::Constructed(TypeName::Str(name), _) if *name == "void");
 
-            let var_id = self.builder.variable(ptr_type_id, None, StorageClass::Output, None);
+            if !is_void {
+                let ret_type_id = self.get_or_create_type(&func.return_type)?;
+                let ptr_type_id = self.get_or_create_ptr_type(StorageClass::Output, ret_type_id);
 
-            // Add decorations from return_attributes
-            for attr in &func.return_attributes {
-                match attr {
-                    Attribute::Location(loc) => {
-                        self.builder.decorate(
-                            var_id,
-                            spirv::Decoration::Location,
-                            [rspirv::dr::Operand::LiteralBit32(*loc)],
-                        );
+                let var_id = self.builder.variable(ptr_type_id, None, StorageClass::Output, None);
+
+                // Add decorations from return_attributes
+                for attr in &func.return_attributes {
+                    match attr {
+                        Attribute::Location(loc) => {
+                            self.builder.decorate(
+                                var_id,
+                                spirv::Decoration::Location,
+                                [rspirv::dr::Operand::LiteralBit32(*loc)],
+                            );
+                        }
+                        Attribute::BuiltIn(builtin) => {
+                            self.builder.decorate(
+                                var_id,
+                                spirv::Decoration::BuiltIn,
+                                [rspirv::dr::Operand::BuiltIn(*builtin)],
+                            );
+                        }
+                        _ => {}
                     }
-                    Attribute::BuiltIn(builtin) => {
-                        self.builder.decorate(
-                            var_id,
-                            spirv::Decoration::BuiltIn,
-                            [rspirv::dr::Operand::BuiltIn(*builtin)],
-                        );
-                    }
-                    _ => {}
                 }
-            }
 
-            output_vars.push(var_id);
-            self.current_output_vars.push(var_id);
+                output_vars.push(var_id);
+                self.current_output_vars.push(var_id);
+            }
         }
 
         // Store the interface variables for this entry point

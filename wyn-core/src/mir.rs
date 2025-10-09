@@ -52,6 +52,11 @@ pub enum Instruction {
     Load(Register, Register),  // dest, src_ptr
     Store(Register, Register), // dest_ptr, src_value
 
+    // Storage buffer operations
+    // Access to a global storage buffer at a specific offset
+    BufferStore(u32, Register), // offset_in_bytes, value
+    BufferLoad(Register, u32),  // dest, offset_in_bytes
+
     // Function calls
     Call(Register, FunctionId, Vec<Register>), // dest, func_id, args
     CallBuiltin(Register, String, Vec<Register>), // dest, builtin_name, args
@@ -69,6 +74,7 @@ pub enum Instruction {
     BranchCond(Register, BlockId, BlockId, BlockId),  // cond, true_block, false_block, merge_block
     Phi(Register, Vec<(Register, BlockId)>), // dest, vec of (value, predecessor_block)
     Return(Register),                        // return value
+    ReturnVoid,                              // return from void function
 }
 
 /// Basic block in control flow graph
@@ -104,6 +110,8 @@ pub struct Function {
 pub struct Module {
     pub functions: Vec<Function>,
     pub entry_points: Vec<FunctionId>,
+    /// Size of the constants storage buffer in bytes (0 if no constants)
+    pub constants_buffer_size: u32,
 }
 
 /// Builder for constructing MIR while visiting the AST
@@ -137,6 +145,11 @@ pub struct Builder {
 
     /// Pending allocas to be inserted in entry block
     pending_allocas: Vec<Instruction>,
+
+    /// Constants buffer management
+    /// Maps constant name to (type, offset)
+    constants: HashMap<String, (Type<TypeName>, u32)>,
+    next_constant_offset: u32,
 }
 
 impl Builder {
@@ -152,6 +165,8 @@ impl Builder {
             int_const_cache: HashMap::new(),
             float_const_cache: HashMap::new(),
             pending_allocas: Vec::new(),
+            constants: HashMap::new(),
+            next_constant_offset: 0,
         }
     }
 
@@ -523,12 +538,68 @@ impl Builder {
         self.emit(Instruction::Return(value));
     }
 
+    pub fn build_return_void(&mut self) {
+        self.emit(Instruction::ReturnVoid);
+    }
+
+    // === Storage buffer operations ===
+
+    /// Register a top-level constant, allocating space in the constants buffer
+    /// Returns the offset where this constant will be stored
+    pub fn register_constant(&mut self, name: String, ty: Type<TypeName>) -> u32 {
+        // Calculate size for this type
+        let size = Self::size_of_type(&ty);
+        let offset = self.next_constant_offset;
+
+        self.constants.insert(name, (ty, offset));
+        self.next_constant_offset += size;
+
+        offset
+    }
+
+    /// Get the offset of a previously registered constant
+    pub fn get_constant_offset(&self, name: &str) -> Option<u32> {
+        self.constants.get(name).map(|(_, offset)| *offset)
+    }
+
+    /// Store a value to the constants buffer at a specific offset
+    pub fn build_buffer_store(&mut self, offset: u32, value: Register) {
+        self.emit(Instruction::BufferStore(offset, value));
+    }
+
+    /// Load a value from the constants buffer at a specific offset
+    pub fn build_buffer_load(&mut self, offset: u32, value_type: Type<TypeName>) -> Register {
+        let dest = self.new_register(value_type);
+        self.emit(Instruction::BufferLoad(dest.clone(), offset));
+        dest
+    }
+
+    /// Calculate size in bytes for a type (for buffer layout)
+    fn size_of_type(ty: &Type<TypeName>) -> u32 {
+        use crate::ast::TypeName;
+        match ty {
+            Type::Constructed(TypeName::Str(name), args) => match *name {
+                "i32" | "f32" | "bool" => 4,
+                "vec2" => 8,
+                "vec3" => 12, // Note: vec3 has padding, often treated as 16 bytes in std140
+                "vec4" => 16,
+                "tuple" => {
+                    // Sum of component sizes (simplified, doesn't handle alignment)
+                    args.iter().map(|arg| Self::size_of_type(arg)).sum()
+                }
+                _ => 4, // Default to 4 bytes
+            },
+            _ => 4,
+        }
+    }
+
     // === Module finalization ===
 
     pub fn finish(self, entry_points: Vec<FunctionId>) -> Module {
         Module {
             functions: self.functions,
             entry_points,
+            constants_buffer_size: self.next_constant_offset,
         }
     }
 }
