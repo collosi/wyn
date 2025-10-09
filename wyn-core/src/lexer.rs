@@ -1,12 +1,16 @@
+mod literal;
+
 use nom::{
     IResult,
     branch::alt,
     bytes::complete::{tag, take_until},
-    character::complete::{alpha1, alphanumeric1, char, digit1, multispace0, multispace1, one_of},
-    combinator::{eof, map, opt, peek, recognize, value},
+    character::complete::{alpha1, alphanumeric1, char, multispace0, multispace1, one_of},
+    combinator::{eof, map, peek, recognize, value},
     multi::many0,
     sequence::{pair, preceded, terminated, tuple},
 };
+
+use literal::{parse_float_literal, parse_int_literal};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -171,26 +175,7 @@ fn parse_string_literal(input: &str) -> IResult<&str, Token> {
     Ok((rest, Token::StringLiteral(content.to_string())))
 }
 
-fn parse_float_literal(input: &str) -> IResult<&str, Token> {
-    map(
-        recognize(tuple((
-            opt(char('-')),
-            digit1,
-            opt(tuple((char('.'), digit1))),
-            tag("f32"),
-        ))),
-        |s: &str| {
-            let num_str = &s[..s.len() - 3]; // Remove "f32" suffix
-            Token::FloatLiteral(num_str.parse().unwrap_or(0.0))
-        },
-    )(input)
-}
-
-fn parse_int_literal(input: &str) -> IResult<&str, Token> {
-    map(recognize(pair(opt(char('-')), digit1)), |s: &str| {
-        Token::IntLiteral(s.parse().unwrap_or(0))
-    })(input)
-}
+// Float and integer literal parsing moved to literal submodule
 
 fn parse_operator(input: &str) -> IResult<&str, Token> {
     alt((
@@ -386,115 +371,7 @@ mod tests {
         );
     }
 
-    #[test]
-    #[ignore] // TODO: Implement hexadecimal integer support
-    fn test_hexadecimal_integers() {
-        // hexadecimal ::= 0 ("x" | "X") hexdigit (hexdigit |"_")*
-        let input = "0x10 0xFF 0x1A_2B";
-        let tokens = tokenize(input).unwrap();
-        assert_eq!(
-            tokens,
-            vec![
-                Token::IntLiteral(16),
-                Token::IntLiteral(255),
-                Token::IntLiteral(0x1A2B),
-            ]
-        );
-    }
-
-    #[test]
-    #[ignore] // TODO: Implement binary integer support
-    fn test_binary_integers() {
-        // binary ::= 0 ("b" | "B") bindigit (bindigit | "_")*
-        let input = "0b1010 0B1111 0b10_11";
-        let tokens = tokenize(input).unwrap();
-        assert_eq!(
-            tokens,
-            vec![
-                Token::IntLiteral(0b1010),
-                Token::IntLiteral(0b1111),
-                Token::IntLiteral(0b1011),
-            ]
-        );
-    }
-
-    #[test]
-    #[ignore] // TODO: Implement underscore support in decimals
-    fn test_integers_with_underscores() {
-        // decimal ::= decdigit (decdigit |"_")*
-        let input = "1_000_000 42_42";
-        let tokens = tokenize(input).unwrap();
-        assert_eq!(
-            tokens,
-            vec![
-                Token::IntLiteral(1_000_000),
-                Token::IntLiteral(4242),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_float_literal_formats() {
-        // Test basic pointfloat format (currently supported)
-        let input = "1.0f32 -2.5f32 0.0f32 3.14159f32";
-        let tokens = tokenize(input).unwrap();
-        assert_eq!(
-            tokens,
-            vec![
-                Token::FloatLiteral(1.0),
-                Token::FloatLiteral(-2.5),
-                Token::FloatLiteral(0.0),
-                Token::FloatLiteral(3.14159),
-            ]
-        );
-    }
-
-    #[test]
-    #[ignore] // TODO: Implement exponent notation for floats
-    fn test_float_exponent_notation() {
-        // exponentfloat ::= (intpart | pointfloat) exponent
-        // exponent ::= ("e" | "E") ["+" | "-"] decdigit+
-        let input = "1.5e10f32 2E-5f32 3.14e+2f32";
-        let tokens = tokenize(input).unwrap();
-        assert_eq!(
-            tokens,
-            vec![
-                Token::FloatLiteral(1.5e10),
-                Token::FloatLiteral(2E-5),
-                Token::FloatLiteral(3.14e2),
-            ]
-        );
-    }
-
-    #[test]
-    #[ignore] // TODO: Implement underscore support in floats
-    fn test_floats_with_underscores() {
-        // fraction ::= "." decdigit (decdigit |"_")*
-        let input = "3.14_159f32 1_000.5f32";
-        let tokens = tokenize(input).unwrap();
-        assert_eq!(
-            tokens,
-            vec![
-                Token::FloatLiteral(3.14159),
-                Token::FloatLiteral(1000.5),
-            ]
-        );
-    }
-
-    #[test]
-    #[ignore] // TODO: Implement hexadecimal float support
-    fn test_hexadecimal_floats() {
-        // hexadecimalfloat ::= 0 ("x" | "X") hexintpart hexfraction ("p"|"P") ["+" | "-"] decdigit+
-        let input = "0x1.8p3f32 0X1.0p-2f32";
-        let tokens = tokenize(input).unwrap();
-        assert_eq!(
-            tokens,
-            vec![
-                Token::FloatLiteral(12.0),  // 1.5 * 2^3 = 12
-                Token::FloatLiteral(0.25),  // 1.0 * 2^-2 = 0.25
-            ]
-        );
-    }
+    // Hexadecimal, binary, underscore, and exponent tests moved to literal::tests submodule
 
     #[test]
     fn test_tokenize_with_comments() {
