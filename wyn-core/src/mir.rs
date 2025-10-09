@@ -66,7 +66,7 @@ pub enum Instruction {
 
     // Control flow
     Branch(BlockId),                         // unconditional jump
-    BranchCond(Register, BlockId, BlockId),  // cond, true_block, false_block
+    BranchCond(Register, BlockId, BlockId, BlockId),  // cond, true_block, false_block, merge_block
     Phi(Register, Vec<(Register, BlockId)>), // dest, vec of (value, predecessor_block)
     Return(Register),                        // return value
 }
@@ -78,13 +78,23 @@ pub struct Block {
     pub instructions: Vec<Instruction>,
 }
 
+/// Parameter with attributes (for entry points)
+#[derive(Debug, Clone)]
+pub struct ParameterInfo {
+    pub register: Register,
+    pub attributes: Vec<crate::ast::Attribute>,
+}
+
 /// MIR function
 #[derive(Debug, Clone)]
 pub struct Function {
     pub id: FunctionId,
     pub name: String,
     pub params: Vec<Register>,
+    pub param_attributes: Vec<Vec<crate::ast::Attribute>>, // Attributes for each parameter
     pub return_type: Type<TypeName>,
+    pub return_attributes: Vec<crate::ast::Attribute>, // Attributes on the return type
+    pub attributed_return_types: Option<Vec<crate::ast::AttributedType>>, // For multiple outputs
     pub blocks: Vec<Block>,
     pub entry_block: BlockId,
 }
@@ -152,10 +162,22 @@ impl Builder {
         Register { id, ty }
     }
 
-    /// Allocate a new block ID
+    /// Allocate a new block ID (without creating the block yet)
     pub fn new_block_id(&mut self) -> BlockId {
         let id = self.next_block_id;
         self.next_block_id += 1;
+        id
+    }
+
+    /// Create a block with a previously allocated ID
+    pub fn create_block_with_id(&mut self, id: BlockId) -> BlockId {
+        let block = Block {
+            id,
+            instructions: Vec::new(),
+        };
+        if let Some(func_id) = self.current_function {
+            self.functions[func_id as usize].blocks.push(block);
+        }
         id
     }
 
@@ -183,7 +205,10 @@ impl Builder {
             id: func_id,
             name: name.clone(),
             params: param_regs,
+            param_attributes: Vec::new(), // Will be filled in by mirize
             return_type,
+            return_attributes: Vec::new(), // Will be filled in by mirize
+            attributed_return_types: None, // Will be filled in by mirize
             blocks: vec![Block {
                 id: entry_block,
                 instructions: Vec::new(),
@@ -201,6 +226,21 @@ impl Builder {
     }
 
     /// Finish building the current function and insert pending allocas
+    /// Set attributes for the current function (must be called before end_function)
+    pub fn set_function_attributes(
+        &mut self,
+        param_attributes: Vec<Vec<crate::ast::Attribute>>,
+        return_attributes: Vec<crate::ast::Attribute>,
+        attributed_return_types: Option<Vec<crate::ast::AttributedType>>,
+    ) {
+        if let Some(func_id) = self.current_function {
+            let func = &mut self.functions[func_id as usize];
+            func.param_attributes = param_attributes;
+            func.return_attributes = return_attributes;
+            func.attributed_return_types = attributed_return_types;
+        }
+    }
+
     pub fn end_function(&mut self) {
         if let Some(func_id) = self.current_function {
             let func = &mut self.functions[func_id as usize];
@@ -465,8 +505,8 @@ impl Builder {
         self.emit(Instruction::Branch(target));
     }
 
-    pub fn build_branch_cond(&mut self, cond: Register, true_block: BlockId, false_block: BlockId) {
-        self.emit(Instruction::BranchCond(cond, true_block, false_block));
+    pub fn build_branch_cond(&mut self, cond: Register, true_block: BlockId, false_block: BlockId, merge_block: BlockId) {
+        self.emit(Instruction::BranchCond(cond, true_block, false_block, merge_block));
     }
 
     pub fn build_phi(
@@ -609,7 +649,7 @@ mod tests {
         let merge_block = builder.create_block();
 
         // Entry: branch based on condition
-        builder.build_branch_cond(cond, then_block, else_block);
+        builder.build_branch_cond(cond, then_block, else_block, merge_block);
 
         // Then block: return 1
         builder.select_block(then_block);

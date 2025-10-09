@@ -134,7 +134,7 @@ def test(x: i32): i32 =
 
                         let branches_here = match last_inst.unwrap() {
                             Instruction::Branch(target) => *target == block.id,
-                            Instruction::BranchCond(_, true_target, false_target) => {
+                            Instruction::BranchCond(_, true_target, false_target, _) => {
                                 *true_target == block.id || *false_target == block.id
                             }
                             _ => false,
@@ -148,28 +148,26 @@ def test(x: i32): i32 =
                             last_inst.unwrap()
                         );
 
-                        // Check that the register is defined in the predecessor block or its dominators
-                        // For now, just check it's defined somewhere before this block
-                        let reg_defined = func.blocks.iter().take_while(|b| b.id != block.id).any(|b| {
-                            b.instructions.iter().any(|i| match i {
-                                Instruction::ConstInt(r, _) => r.id == value_reg.id,
-                                Instruction::ConstFloat(r, _) => r.id == value_reg.id,
-                                Instruction::ConstBool(r, _) => r.id == value_reg.id,
-                                Instruction::Add(r, _, _) => r.id == value_reg.id,
-                                Instruction::Sub(r, _, _) => r.id == value_reg.id,
-                                Instruction::Mul(r, _, _) => r.id == value_reg.id,
-                                Instruction::Div(r, _, _) => r.id == value_reg.id,
-                                Instruction::Eq(r, _, _) => r.id == value_reg.id,
-                                Instruction::CallBuiltin(r, _, _) => r.id == value_reg.id,
-                                Instruction::Phi(r, _) => r.id == value_reg.id,
-                                _ => false,
-                            })
+                        // Check that the register is defined in the specific predecessor block
+                        let pred_block = func.blocks.iter().find(|b| b.id == *pred_block_id).expect("Predecessor block should exist");
+                        let reg_defined = pred_block.instructions.iter().any(|i| match i {
+                            Instruction::ConstInt(r, _) => r.id == value_reg.id,
+                            Instruction::ConstFloat(r, _) => r.id == value_reg.id,
+                            Instruction::ConstBool(r, _) => r.id == value_reg.id,
+                            Instruction::Add(r, _, _) => r.id == value_reg.id,
+                            Instruction::Sub(r, _, _) => r.id == value_reg.id,
+                            Instruction::Mul(r, _, _) => r.id == value_reg.id,
+                            Instruction::Div(r, _, _) => r.id == value_reg.id,
+                            Instruction::Eq(r, _, _) => r.id == value_reg.id,
+                            Instruction::CallBuiltin(r, _, _) => r.id == value_reg.id,
+                            Instruction::Phi(r, _) => r.id == value_reg.id,
+                            _ => false,
                         });
 
                         assert!(
                             reg_defined,
-                            "Register {} used in Phi is not defined before block {}",
-                            value_reg.id, block.id
+                            "Register {} used in Phi is not defined in predecessor block {}",
+                            value_reg.id, pred_block_id
                         );
                     }
                 }

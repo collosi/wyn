@@ -109,6 +109,23 @@ impl Mirize {
             self.entry_points.push(func_id);
         }
 
+        // Extract parameter attributes
+        let param_attrs: Vec<Vec<Attribute>> = decl
+            .params
+            .iter()
+            .map(|p| match p {
+                DeclParam::Typed(param) => param.attributes.clone(),
+                DeclParam::Untyped(_) => Vec::new(),
+            })
+            .collect();
+
+        // Set function attributes before building body
+        self.builder.set_function_attributes(
+            param_attrs,
+            decl.return_attributes.clone(),
+            decl.attributed_return_type.clone(),
+        );
+
         // Bind parameters in environment
         for (idx, (name, _)) in param_types.iter().enumerate() {
             let param_reg = self
@@ -247,12 +264,13 @@ impl Mirize {
                 // Evaluate condition
                 let cond_reg = self.mirize_expression(&if_expr.condition)?;
 
-                // Create then and else blocks (but NOT merge block yet)
+                // Allocate block IDs: then, else, and reserve merge block ID
                 let then_block = self.builder.create_block();
                 let else_block = self.builder.create_block();
+                let merge_block_id = self.builder.new_block_id(); // Reserve ID but don't create yet
 
-                // Branch on condition
-                self.builder.build_branch_cond(cond_reg, then_block, else_block);
+                // Branch on condition with merge block annotation
+                self.builder.build_branch_cond(cond_reg, then_block, else_block, merge_block_id);
 
                 // Then block
                 self.builder.select_block(then_block);
@@ -264,8 +282,8 @@ impl Mirize {
                 let else_reg = self.mirize_expression(&if_expr.else_branch)?;
                 let else_end_block = self.builder.current_block().unwrap();
 
-                // NOW create the merge block (after both branches are processed)
-                let merge_block = self.builder.create_block();
+                // NOW create the merge block (after nested blocks are created)
+                let merge_block = self.builder.create_block_with_id(merge_block_id);
 
                 // Add branches from both end blocks to merge
                 self.builder.select_block(then_end_block);

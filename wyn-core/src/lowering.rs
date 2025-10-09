@@ -20,7 +20,6 @@ type FunctionMap = HashMap<FunctionId, spirv::Word>;
 /// Lowers MIR to SPIR-V
 pub struct Lowering {
     builder: Builder,
-    module: SpirvModule,
 
     // Type caching
     type_cache: HashMap<Type<TypeName>, spirv::Word>,
@@ -43,6 +42,13 @@ pub struct Lowering {
     // Current function context
     current_register_map: RegisterMap,
     current_block_map: HashMap<BlockId, spirv::Word>,
+    current_is_entry_point: bool,
+    current_output_vars: Vec<spirv::Word>,
+    current_input_vars: Vec<(spirv::Word, Register)>, // (var_id, register) to load in first block
+    current_function_blocks: Vec<mir::Block>, // For control flow analysis
+
+    // Entry point interface variables - maps function ID to (inputs, outputs)
+    entry_point_interfaces: HashMap<FunctionId, (Vec<spirv::Word>, Vec<spirv::Word>)>,
 }
 
 impl Lowering {
@@ -52,7 +58,6 @@ impl Lowering {
 
         let mut lowering = Lowering {
             builder,
-            module: SpirvModule::new(),
             type_cache: HashMap::new(),
             ptr_cache: HashMap::new(),
             int_const_cache: HashMap::new(),
@@ -65,6 +70,11 @@ impl Lowering {
             function_map: HashMap::new(),
             current_register_map: HashMap::new(),
             current_block_map: HashMap::new(),
+            current_is_entry_point: false,
+            current_output_vars: Vec::new(),
+            current_input_vars: Vec::new(),
+            current_function_blocks: Vec::new(),
+            entry_point_interfaces: HashMap::new(),
         };
 
         // Initialize common types
@@ -84,7 +94,8 @@ impl Lowering {
 
         // Lower all functions
         for function in &mir.functions {
-            self.lower_function(function)?;
+            let is_entry_point = mir.entry_points.contains(&function.id);
+            self.lower_function(function, is_entry_point)?;
         }
 
         // Add entry points
@@ -103,7 +114,29 @@ impl Lowering {
                     ExecutionModel::GLCompute
                 };
 
-                self.builder.entry_point(execution_model, spirv_func_id, &func.name, &[]);
+                // Get interface variables for this entry point
+                let interface_vars = if let Some((inputs, outputs)) = self.entry_point_interfaces.get(&func_id) {
+                    inputs.iter().chain(outputs.iter()).copied().collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+
+                // Register entry point with interface variables
+                self.builder.entry_point(
+                    execution_model,
+                    spirv_func_id,
+                    &func.name,
+                    &interface_vars,
+                );
+
+                // Add required execution modes
+                if execution_model == ExecutionModel::Fragment {
+                    self.builder.execution_mode(
+                        spirv_func_id,
+                        spirv::ExecutionMode::OriginUpperLeft,
+                        [],
+                    );
+                }
             }
         }
 
@@ -226,14 +259,66 @@ impl Lowering {
         const_id
     }
 
-    /// Lower a MIR function to SPIR-V
-    fn lower_function(&mut self, func: &mir::Function) -> Result<()> {
-        // Create function type
-        let return_type_id = self.get_or_create_type(&func.return_type)?;
-        let mut param_type_ids = Vec::new();
-        for param in &func.params {
-            param_type_ids.push(self.get_or_create_type(&param.ty)?);
+    /// Find all blocks reachable from a starting block (following unconditional branches)
+    fn find_reachable_blocks(&self, start: BlockId) -> Vec<BlockId> {
+        let mut reachable = vec![start];
+        let mut to_visit = vec![start];
+
+        while let Some(current) = to_visit.pop() {
+            if let Some(block) = self.current_function_blocks.iter().find(|b| b.id == current) {
+                // Only follow unconditional branches
+                if let Some(last_inst) = block.instructions.last() {
+                    if let Instruction::Branch(target) = last_inst {
+                        if !reachable.contains(target) {
+                            reachable.push(*target);
+                            to_visit.push(*target);
+                        }
+                    }
+                }
+            }
         }
+        reachable
+    }
+
+    /// Find the merge block for a conditional branch by analyzing control flow
+    fn find_merge_block(&self, true_block: BlockId, false_block: BlockId) -> Option<BlockId> {
+        // Find all blocks reachable from each branch
+        let true_reachable = self.find_reachable_blocks(true_block);
+        let false_reachable = self.find_reachable_blocks(false_block);
+
+        // The merge block is where both branches converge - find a block with a Phi that
+        // has predecessors from the reachable sets of both branches
+        for block in &self.current_function_blocks {
+            for inst in &block.instructions {
+                if let Instruction::Phi(_dest, incoming) = inst {
+                    let predecessors: Vec<BlockId> = incoming.iter().map(|(_, bid)| *bid).collect();
+
+                    // Check if this phi has predecessors from both branches
+                    let has_true_pred = predecessors.iter().any(|p| true_reachable.contains(p));
+                    let has_false_pred = predecessors.iter().any(|p| false_reachable.contains(p));
+
+                    if has_true_pred && has_false_pred {
+                        return Some(block.id);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Lower a MIR function to SPIR-V
+    fn lower_function(&mut self, func: &mir::Function, is_entry_point: bool) -> Result<()> {
+        // For entry points, create void(void) signature and use global variables
+        let (return_type_id, param_type_ids) = if is_entry_point {
+            (self.void_type, vec![])
+        } else {
+            let return_type_id = self.get_or_create_type(&func.return_type)?;
+            let mut param_type_ids = Vec::new();
+            for param in &func.params {
+                param_type_ids.push(self.get_or_create_type(&param.ty)?);
+            }
+            (return_type_id, param_type_ids)
+        };
 
         let func_type_id = self.builder.type_function(return_type_id, param_type_ids.clone());
         let func_id = self.builder.begin_function(
@@ -249,11 +334,20 @@ impl Lowering {
         // Reset register and block maps for this function
         self.current_register_map.clear();
         self.current_block_map.clear();
+        self.current_is_entry_point = is_entry_point;
+        self.current_output_vars.clear();
+        self.current_input_vars.clear();
+        self.current_function_blocks = func.blocks.clone();
 
-        // Create parameters
-        for (i, param) in func.params.iter().enumerate() {
-            let param_id = self.builder.function_parameter(param_type_ids[i])?;
-            self.current_register_map.insert(param.id, param_id);
+        // For entry points, create global input/output variables
+        if is_entry_point {
+            self.create_entry_point_interface(func)?;
+        } else {
+            // Create regular parameters
+            for (i, param) in func.params.iter().enumerate() {
+                let param_id = self.builder.function_parameter(param_type_ids[i])?;
+                self.current_register_map.insert(param.id, param_id);
+            }
         }
 
         // Create all blocks first (for forward references)
@@ -263,8 +357,10 @@ impl Lowering {
         }
 
         // Lower all blocks
+        let first_block_id = func.entry_block;
         for block in &func.blocks {
-            self.lower_block(block)?;
+            let is_first = block.id == first_block_id;
+            self.lower_block(block, is_first)?;
         }
 
         self.builder.end_function()?;
@@ -272,13 +368,24 @@ impl Lowering {
     }
 
     /// Lower a MIR basic block to SPIR-V
-    fn lower_block(&mut self, block: &mir::Block) -> Result<()> {
+    fn lower_block(&mut self, block: &mir::Block, is_first_block: bool) -> Result<()> {
         let spirv_block_id = *self
             .current_block_map
             .get(&block.id)
             .ok_or_else(|| CompilerError::SpirvError(format!("Block {} not found in map", block.id)))?;
 
         self.builder.begin_block(Some(spirv_block_id))?;
+
+        // For entry points, load input variables in the first block
+        if is_first_block && self.current_is_entry_point && !self.current_input_vars.is_empty() {
+            let input_vars = self.current_input_vars.clone();
+            for (var_id, param) in input_vars {
+                let param_type_id = self.get_or_create_type(&param.ty)?;
+                let loaded_value = self.builder.load(param_type_id, None, var_id, None, [])?;
+                self.current_register_map.insert(param.id, loaded_value);
+            }
+            self.current_input_vars.clear();
+        }
 
         for instruction in &block.instructions {
             self.lower_instruction(instruction)?;
@@ -455,7 +562,7 @@ impl Lowering {
                 self.builder.branch(target_id)?;
             }
 
-            Instruction::BranchCond(cond, true_block, false_block) => {
+            Instruction::BranchCond(cond, true_block, false_block, merge_block) => {
                 let cond_id = self.get_register(cond)?;
                 let true_id = *self.current_block_map.get(true_block).ok_or_else(|| {
                     CompilerError::SpirvError(format!("Block {} not found in map", true_block))
@@ -463,6 +570,12 @@ impl Lowering {
                 let false_id = *self.current_block_map.get(false_block).ok_or_else(|| {
                     CompilerError::SpirvError(format!("Block {} not found in map", false_block))
                 })?;
+                let merge_spirv_id = *self.current_block_map.get(merge_block).ok_or_else(|| {
+                    CompilerError::SpirvError(format!("Merge block {} not found in map", merge_block))
+                })?;
+
+                // Add OpSelectionMerge before the conditional branch
+                self.builder.selection_merge(merge_spirv_id, spirv::SelectionControl::NONE)?;
                 self.builder.branch_conditional(cond_id, true_id, false_id, [])?;
             }
 
@@ -512,8 +625,44 @@ impl Lowering {
             }
 
             Instruction::Return(value) => {
-                let value_id = self.get_register(value)?;
-                self.builder.ret_value(value_id)?;
+                if self.current_is_entry_point {
+                    // For entry points, store to output variables instead of returning
+                    let value_id = self.get_register(value)?;
+
+                    // Check if the value is a tuple (multiple outputs)
+                    if let Type::Constructed(TypeName::Str(name), component_types) = &value.ty {
+                        if *name == "tuple" {
+                            // Extract each component and store to corresponding output variable
+                            for (i, output_var) in self.current_output_vars.clone().iter().enumerate() {
+                                let component_type_id = self.get_or_create_type(&component_types[i])?;
+                                let component_id = self.builder.composite_extract(
+                                    component_type_id,
+                                    None,
+                                    value_id,
+                                    [i as u32],
+                                )?;
+                                self.builder.store(*output_var, component_id, None, [])?;
+                            }
+                        } else {
+                            // Single value
+                            if let Some(&output_var) = self.current_output_vars.first() {
+                                self.builder.store(output_var, value_id, None, [])?;
+                            }
+                        }
+                    } else {
+                        // Single value
+                        if let Some(&output_var) = self.current_output_vars.first() {
+                            self.builder.store(output_var, value_id, None, [])?;
+                        }
+                    }
+
+                    // Return void
+                    self.builder.ret()?;
+                } else {
+                    // Regular function return
+                    let value_id = self.get_register(value)?;
+                    self.builder.ret_value(value_id)?;
+                }
             }
 
             // TODO: Implement remaining instructions
@@ -539,6 +688,122 @@ impl Lowering {
     /// Check if a type is a floating point type
     fn is_float_type(&self, ty: &Type<TypeName>) -> bool {
         matches!(ty, Type::Constructed(TypeName::Str(name), _) if *name == "f32" || name.starts_with("vec"))
+    }
+
+    /// Create global Input/Output variables for entry point interface
+    fn create_entry_point_interface(&mut self, func: &mir::Function) -> Result<()> {
+        use crate::ast::Attribute;
+
+        let mut input_vars = Vec::new();
+        let mut output_vars = Vec::new();
+
+        // Create Input variables for parameters
+        for (i, param) in func.params.iter().enumerate() {
+            let param_type_id = self.get_or_create_type(&param.ty)?;
+            let ptr_type_id = self.get_or_create_ptr_type(StorageClass::Input, param_type_id);
+
+            // Create the global variable
+            let var_id = self.builder.variable(ptr_type_id, None, StorageClass::Input, None);
+
+            // Add decorations based on attributes
+            if i < func.param_attributes.len() {
+                for attr in &func.param_attributes[i] {
+                    match attr {
+                        Attribute::Location(loc) => {
+                            self.builder.decorate(
+                                var_id,
+                                spirv::Decoration::Location,
+                                [rspirv::dr::Operand::LiteralBit32(*loc)],
+                            );
+                        }
+                        Attribute::BuiltIn(builtin) => {
+                            self.builder.decorate(
+                                var_id,
+                                spirv::Decoration::BuiltIn,
+                                [rspirv::dr::Operand::BuiltIn(*builtin)],
+                            );
+                        }
+                        _ => {} // Ignore other attributes for now
+                    }
+                }
+            }
+
+            input_vars.push(var_id);
+
+            // Store for loading later (must be done inside a block)
+            self.current_input_vars.push((var_id, param.clone()));
+        }
+
+        // Create Output variables for return value
+        // Handle both single return and tuple return (for multiple outputs)
+        if let Some(attributed_types) = &func.attributed_return_types {
+            // Multiple attributed outputs - create a global for each
+            for attr_ty in attributed_types.iter() {
+                let ret_type_id = self.get_or_create_type(&attr_ty.ty)?;
+                let ptr_type_id = self.get_or_create_ptr_type(StorageClass::Output, ret_type_id);
+
+                let var_id = self.builder.variable(ptr_type_id, None, StorageClass::Output, None);
+
+                // Add decorations
+                for attr in &attr_ty.attributes {
+                    match attr {
+                        Attribute::Location(loc) => {
+                            self.builder.decorate(
+                                var_id,
+                                spirv::Decoration::Location,
+                                [rspirv::dr::Operand::LiteralBit32(*loc)],
+                            );
+                        }
+                        Attribute::BuiltIn(builtin) => {
+                            self.builder.decorate(
+                                var_id,
+                                spirv::Decoration::BuiltIn,
+                                [rspirv::dr::Operand::BuiltIn(*builtin)],
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+
+                output_vars.push(var_id);
+                self.current_output_vars.push(var_id);
+            }
+        } else {
+            // Single return value - create one output variable
+            let ret_type_id = self.get_or_create_type(&func.return_type)?;
+            let ptr_type_id = self.get_or_create_ptr_type(StorageClass::Output, ret_type_id);
+
+            let var_id = self.builder.variable(ptr_type_id, None, StorageClass::Output, None);
+
+            // Add decorations from return_attributes
+            for attr in &func.return_attributes {
+                match attr {
+                    Attribute::Location(loc) => {
+                        self.builder.decorate(
+                            var_id,
+                            spirv::Decoration::Location,
+                            [rspirv::dr::Operand::LiteralBit32(*loc)],
+                        );
+                    }
+                    Attribute::BuiltIn(builtin) => {
+                        self.builder.decorate(
+                            var_id,
+                            spirv::Decoration::BuiltIn,
+                            [rspirv::dr::Operand::BuiltIn(*builtin)],
+                        );
+                    }
+                    _ => {}
+                }
+            }
+
+            output_vars.push(var_id);
+            self.current_output_vars.push(var_id);
+        }
+
+        // Store the interface variables for this entry point
+        self.entry_point_interfaces.insert(func.id, (input_vars, output_vars));
+
+        Ok(())
     }
 }
 
