@@ -695,7 +695,7 @@ impl Parser {
 
     fn parse_postfix_expression(&mut self) -> Result<Expression> {
         trace!("parse_postfix_expression: next token = {:?}", self.peek());
-        let mut expr = self.parse_primary_expression()?;
+        let mut expr = self.parse_unary_expression()?;
 
         loop {
             match self.peek() {
@@ -746,6 +746,30 @@ impl Parser {
         }
 
         Ok(expr)
+    }
+
+    fn parse_unary_expression(&mut self) -> Result<Expression> {
+        trace!("parse_unary_expression: next token = {:?}", self.peek());
+        // Check for unary operators: - and !
+        match self.peek() {
+            Some(Token::BinOp(op)) if op == "-" => {
+                self.advance();
+                let operand = self.parse_unary_expression()?; // Right-associative
+                Ok(self.node_counter.mk_node(ExprKind::UnaryOp(
+                    UnaryOp { op: "-".to_string() },
+                    Box::new(operand),
+                )))
+            }
+            Some(Token::Bang) => {
+                self.advance();
+                let operand = self.parse_unary_expression()?; // Right-associative
+                Ok(self.node_counter.mk_node(ExprKind::UnaryOp(
+                    UnaryOp { op: "!".to_string() },
+                    Box::new(operand),
+                )))
+            }
+            _ => self.parse_primary_expression(),
+        }
     }
 
     fn parse_primary_expression(&mut self) -> Result<Expression> {

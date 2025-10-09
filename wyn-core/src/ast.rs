@@ -288,9 +288,11 @@ pub enum ExprKind {
     IntLiteral(i32),
     FloatLiteral(f32),
     Identifier(String),
+    QualifiedName(Vec<String>, String), // quals, name - e.g., f32.sin is (["f32"], "sin")
     ArrayLiteral(Vec<Expression>),
     ArrayIndex(Box<Expression>, Box<Expression>),
     BinaryOp(BinaryOp, Box<Expression>, Box<Expression>),
+    UnaryOp(UnaryOp, Box<Expression>), // Unary operations: -, !
     FunctionCall(String, Vec<Expression>),
     Tuple(Vec<Expression>),
     Lambda(LambdaExpr),
@@ -298,6 +300,14 @@ pub enum ExprKind {
     LetIn(LetInExpr),
     FieldAccess(Box<Expression>, String), // e.g. v.x, v.y
     If(IfExpr),                           // if-then-else expression
+    Loop(LoopExpr),                       // loop expression
+    Match(MatchExpr),                     // match expression
+    Range(RangeExpr),                     // range expressions: a..b, a..<b, a..>b, a...b
+    Pipe(Box<Expression>, Box<Expression>), // |> pipe operator
+    TypeAscription(Box<Expression>, Type), // exp : type
+    TypeCoercion(Box<Expression>, Type),   // exp :> type
+    Unsafe(Box<Expression>),               // unsafe exp
+    Assert(Box<Expression>, Box<Expression>), // assert cond exp
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -327,10 +337,58 @@ pub struct BinaryOp {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct UnaryOp {
+    pub op: String, // "-" or "!"
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct IfExpr {
     pub condition: Box<Expression>,
     pub then_branch: Box<Expression>,
     pub else_branch: Box<Expression>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoopExpr {
+    pub pattern: Pattern,                 // loop variable pattern
+    pub init: Option<Box<Expression>>,    // initial value (optional)
+    pub form: LoopForm,                   // for/while condition
+    pub body: Box<Expression>,            // loop body
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LoopForm {
+    For(String, Box<Expression>),         // for name < exp
+    ForIn(Pattern, Box<Expression>),      // for pat in exp
+    While(Box<Expression>),               // while exp
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchExpr {
+    pub scrutinee: Box<Expression>,       // expression being matched
+    pub cases: Vec<MatchCase>,            // case branches
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchCase {
+    pub pattern: Pattern,
+    pub body: Box<Expression>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RangeExpr {
+    pub start: Box<Expression>,
+    pub step: Option<Box<Expression>>,    // Optional middle expression in start..step..end
+    pub end: Box<Expression>,
+    pub kind: RangeKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RangeKind {
+    Inclusive,      // ... (three dots)
+    Exclusive,      // .. (two dots)
+    ExclusiveLt,    // ..<
+    ExclusiveGt,    // ..>
 }
 
 // Pattern types for match expressions and let bindings

@@ -346,7 +346,20 @@ impl Defunctionalizer {
                     StaticValue::Dyn(Type::Constructed(TypeName::Str("unknown"), vec![])), // If expressions are runtime values
                 ))
             }
-        }
+
+            ExprKind::QualifiedName(_, _)
+            | ExprKind::UnaryOp(_, _)
+            | ExprKind::Loop(_)
+            | ExprKind::Match(_)
+            | ExprKind::Range(_)
+            | ExprKind::Pipe(_, _)
+            | ExprKind::TypeAscription(_, _)
+            | ExprKind::TypeCoercion(_, _)
+            | ExprKind::Unsafe(_)
+            | ExprKind::Assert(_, _) => {
+                todo!("New expression kinds not yet implemented in defunctionalization")
+            }
+        } // NEWCASESHERE - add new cases before this closing brace
     }
 
     fn defunctionalize_lambda(
@@ -564,7 +577,20 @@ impl Defunctionalizer {
                 self.collect_free_variables(&if_expr.then_branch, bound_vars, free_vars)?;
                 self.collect_free_variables(&if_expr.else_branch, bound_vars, free_vars)?;
             }
-        }
+
+            ExprKind::QualifiedName(_, _)
+            | ExprKind::UnaryOp(_, _)
+            | ExprKind::Loop(_)
+            | ExprKind::Match(_)
+            | ExprKind::Range(_)
+            | ExprKind::Pipe(_, _)
+            | ExprKind::TypeAscription(_, _)
+            | ExprKind::TypeCoercion(_, _)
+            | ExprKind::Unsafe(_)
+            | ExprKind::Assert(_, _) => {
+                todo!("New expression kinds not yet implemented in collect_free_variables")
+            }
+        } // NEWCASESHERE - add new cases before this closing brace
         Ok(())
     }
 

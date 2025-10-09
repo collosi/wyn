@@ -852,7 +852,49 @@ impl TypeChecker {
 
                 Ok(then_ty)
             }
-        }?;
+
+            // New expression kinds - to be implemented
+            ExprKind::QualifiedName(_, _) => {
+                todo!("QualifiedName not yet implemented in type checker")
+            }
+
+            ExprKind::UnaryOp(_, _) => {
+                todo!("UnaryOp not yet implemented in type checker")
+            }
+
+            ExprKind::Loop(_) => {
+                todo!("Loop not yet implemented in type checker")
+            }
+
+            ExprKind::Match(_) => {
+                todo!("Match not yet implemented in type checker")
+            }
+
+            ExprKind::Range(_) => {
+                todo!("Range not yet implemented in type checker")
+            }
+
+            ExprKind::Pipe(_, _) => {
+                todo!("Pipe not yet implemented in type checker")
+            }
+
+            ExprKind::TypeAscription(_, _) => {
+                todo!("TypeAscription not yet implemented in type checker")
+            }
+
+            ExprKind::TypeCoercion(_, _) => {
+                todo!("TypeCoercion not yet implemented in type checker")
+            }
+
+            ExprKind::Unsafe(_) => {
+                todo!("Unsafe not yet implemented in type checker")
+            }
+
+            ExprKind::Assert(_, _) => {
+                todo!("Assert not yet implemented in type checker")
+            } 
+        } // NEWCASESHERE - add new cases before this closing brace
+        ?;
 
         // Store the inferred type in the type table
         self.type_table.insert(expr.h.id, ty.clone());

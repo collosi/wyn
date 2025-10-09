@@ -206,7 +206,20 @@ pub fn walk_expression<V: Visitor>(v: &mut V, e: &Expression) -> ControlFlow<V::
         ExprKind::LetIn(let_in) => v.visit_expr_let_in(let_in),
         ExprKind::FieldAccess(expr, field) => v.visit_expr_field_access(expr, field),
         ExprKind::If(if_expr) => v.visit_expr_if(if_expr),
-    }
+
+        ExprKind::QualifiedName(_, _)
+        | ExprKind::UnaryOp(_, _)
+        | ExprKind::Loop(_)
+        | ExprKind::Match(_)
+        | ExprKind::Range(_)
+        | ExprKind::Pipe(_, _)
+        | ExprKind::TypeAscription(_, _)
+        | ExprKind::TypeCoercion(_, _)
+        | ExprKind::Unsafe(_)
+        | ExprKind::Assert(_, _) => {
+            todo!("New expression kinds not yet implemented in visitor")
+        }
+    } // NEWCASESHERE - add new cases before this closing brace
 }
 
 pub fn walk_expr_array_literal<V: Visitor>(v: &mut V, elements: &[Expression]) -> ControlFlow<V::Break> {

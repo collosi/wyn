@@ -40,9 +40,8 @@ impl Mirize {
         for decl in &program.declarations {
             if let Declaration::Decl(d) = decl {
                 // Check if this is a top-level constant (def with no params, no entry point attributes)
-                let is_entry_point = d.attributes.iter().any(|attr| {
-                    matches!(attr, Attribute::Vertex | Attribute::Fragment)
-                });
+                let is_entry_point =
+                    d.attributes.iter().any(|attr| matches!(attr, Attribute::Vertex | Attribute::Fragment));
 
                 if d.keyword == "def" && d.params.is_empty() && !is_entry_point {
                     // This is a top-level constant
@@ -80,12 +79,15 @@ impl Mirize {
             } else {
                 // Use type from type table
                 let node_id = decl.body.h.id;
-                self.type_table.get(&node_id).ok_or_else(|| {
-                    CompilerError::MirError(format!(
-                        "Type not found for constant '{}' in type table",
-                        decl.name
-                    ))
-                })?.clone()
+                self.type_table
+                    .get(&node_id)
+                    .ok_or_else(|| {
+                        CompilerError::MirError(format!(
+                            "Type not found for constant '{}' in type table",
+                            decl.name
+                        ))
+                    })?
+                    .clone()
             };
 
             self.builder.register_constant(decl.name.clone(), ty);
@@ -389,7 +391,48 @@ impl Mirize {
 
                 Ok(result_reg)
             }
-        }
+
+            // New expression kinds - to be implemented
+            ExprKind::QualifiedName(_, _) => {
+                todo!("QualifiedName not yet implemented in MIR")
+            }
+
+            ExprKind::UnaryOp(_, _) => {
+                todo!("UnaryOp not yet implemented in MIR")
+            }
+
+            ExprKind::Loop(_) => {
+                todo!("Loop not yet implemented in MIR")
+            }
+
+            ExprKind::Match(_) => {
+                todo!("Match not yet implemented in MIR")
+            }
+
+            ExprKind::Range(_) => {
+                todo!("Range not yet implemented in MIR")
+            }
+
+            ExprKind::Pipe(_, _) => {
+                todo!("Pipe not yet implemented in MIR")
+            }
+
+            ExprKind::TypeAscription(_, _) => {
+                todo!("TypeAscription not yet implemented in MIR")
+            }
+
+            ExprKind::TypeCoercion(_, _) => {
+                todo!("TypeCoercion not yet implemented in MIR")
+            }
+
+            ExprKind::Unsafe(_) => {
+                todo!("Unsafe not yet implemented in MIR")
+            }
+
+            ExprKind::Assert(_, _) => {
+                todo!("Assert not yet implemented in MIR")
+            }
+        } // NEWCASESHERE - add new cases before this closing brace
     }
 }
 

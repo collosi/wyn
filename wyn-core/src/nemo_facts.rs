@@ -204,7 +204,18 @@ pub fn expr_type_name(expr: &Expression) -> &'static str {
         ExprKind::LetIn(_) => "let_in",
         ExprKind::FieldAccess(..) => "field_access",
         ExprKind::If(..) => "if_expr",
-    }
+
+        ExprKind::QualifiedName(_, _) => "qualified_name",
+        ExprKind::UnaryOp(_, _) => "unary_op",
+        ExprKind::Loop(_) => "loop",
+        ExprKind::Match(_) => "match",
+        ExprKind::Range(_) => "range",
+        ExprKind::Pipe(_, _) => "pipe",
+        ExprKind::TypeAscription(_, _) => "type_ascription",
+        ExprKind::TypeCoercion(_, _) => "type_coercion",
+        ExprKind::Unsafe(_) => "unsafe",
+        ExprKind::Assert(_, _) => "assert",
+    } // NEWCASESHERE - add new cases before this closing brace
 }
 
 #[cfg(test)]

@@ -18,6 +18,12 @@ pub enum Token {
     If,
     Then,
     Else,
+    Loop,
+    For,
+    While,
+    Do,
+    Match,
+    Case,
     Module,
     Open,
     Import,
@@ -25,6 +31,8 @@ pub enum Token {
     Type,
     Include,
     With,
+    Unsafe,
+    Assert,
 
     // Identifiers and literals
     Identifier(String),
@@ -43,9 +51,18 @@ pub enum Token {
     Arrow,
     Backslash,  // \ for lambda expressions
     Dot,        // . for field access
+    DotDot,     // .. for ranges
+    DotDotLt,   // ..< for ranges
+    DotDotGt,   // ..> for ranges
+    Ellipsis,   // ... for ranges
+    Pipe,       // | for pattern matching
+    PipeOp,     // |> for pipe operator
     Star,       // * for uniqueness types (prefix)
     Minus,      // - (can be unary or binary)
     Underscore, // _ for wildcard patterns
+    Bang,       // ! for negation
+    QuestionMark, // ? for existential types
+    At,         // @ for as-patterns (future)
 
     // Delimiters
     LeftParen,
@@ -84,22 +101,36 @@ fn parse_keyword(input: &str) -> IResult<&str, Token> {
     };
 
     alt((
-        keyword("module", Token::Module),
-        keyword("import", Token::Import),
-        keyword("include", Token::Include),
-        keyword("let", Token::Let),
-        keyword("local", Token::Local),
-        keyword("def", Token::Def),
-        keyword("val", Token::Val),
-        keyword("type", Token::Type),
-        keyword("with", Token::With),
-        keyword("open", Token::Open),
-        keyword("in", Token::In),
-        keyword("if", Token::If),
-        keyword("then", Token::Then),
-        keyword("else", Token::Else),
-        keyword("true", Token::True),
-        keyword("false", Token::False),
+        alt((
+            keyword("module", Token::Module),
+            keyword("import", Token::Import),
+            keyword("include", Token::Include),
+            keyword("unsafe", Token::Unsafe),
+            keyword("assert", Token::Assert),
+            keyword("match", Token::Match),
+            keyword("case", Token::Case),
+            keyword("local", Token::Local),
+        )),
+        alt((
+            keyword("let", Token::Let),
+            keyword("loop", Token::Loop),
+            keyword("while", Token::While),
+            keyword("def", Token::Def),
+            keyword("val", Token::Val),
+            keyword("type", Token::Type),
+            keyword("with", Token::With),
+            keyword("open", Token::Open),
+        )),
+        alt((
+            keyword("then", Token::Then),
+            keyword("else", Token::Else),
+            keyword("true", Token::True),
+            keyword("false", Token::False),
+            keyword("for", Token::For),
+            keyword("in", Token::In),
+            keyword("if", Token::If),
+            keyword("do", Token::Do),
+        )),
     ))(input)
 }
 
@@ -121,7 +152,7 @@ fn parse_identifier(input: &str) -> IResult<&str, Token> {
     map(
         recognize(pair(
             alt((alpha1, tag("_"))),
-            many0(alt((alphanumeric1, tag("_")))),
+            many0(alt((alphanumeric1, tag("_"), tag("'")))),
         )),
         |s: &str| {
             // Handle underscore specially - it's a wildcard pattern, not an identifier
@@ -163,23 +194,42 @@ fn parse_int_literal(input: &str) -> IResult<&str, Token> {
 
 fn parse_operator(input: &str) -> IResult<&str, Token> {
     alt((
-        value(Token::Arrow, tag("->")),
-        // Comparison operators (must come before single =, <, >)
-        map(tag("=="), |s: &str| Token::BinOp(s.to_string())),
-        map(tag("!="), |s: &str| Token::BinOp(s.to_string())),
-        map(tag("<="), |s: &str| Token::BinOp(s.to_string())),
-        map(tag(">="), |s: &str| Token::BinOp(s.to_string())),
-        map(tag("<"), |s: &str| Token::BinOp(s.to_string())),
-        map(tag(">"), |s: &str| Token::BinOp(s.to_string())),
-        // Assignment (must come after ==)
-        value(Token::Assign, tag("=")),
-        // Arithmetic operators
-        map(tag("/"), |s: &str| Token::BinOp(s.to_string())),
-        map(char('+'), |c| Token::BinOp(c.to_string())),
-        map(char('-'), |c| Token::BinOp(c.to_string())),
-        map(char('*'), |c| Token::BinOp(c.to_string())),
-        value(Token::Backslash, char('\\')),
-        value(Token::Dot, char('.')),
+        alt((
+            value(Token::Arrow, tag("->")),
+            // Range operators (must come before ..)
+            value(Token::Ellipsis, tag("...")),
+            value(Token::DotDotLt, tag("..<")),
+            value(Token::DotDotGt, tag("..>")),
+            value(Token::DotDot, tag("..")),
+            // Pipe operator (must come before |)
+            value(Token::PipeOp, tag("|>")),
+        )),
+        alt((
+            // Comparison operators (must come before single =, <, >)
+            map(tag("=="), |s: &str| Token::BinOp(s.to_string())),
+            map(tag("!="), |s: &str| Token::BinOp(s.to_string())),
+            map(tag("<="), |s: &str| Token::BinOp(s.to_string())),
+            map(tag(">="), |s: &str| Token::BinOp(s.to_string())),
+            map(tag("<"), |s: &str| Token::BinOp(s.to_string())),
+            map(tag(">"), |s: &str| Token::BinOp(s.to_string())),
+        )),
+        alt((
+            // Assignment (must come after ==)
+            value(Token::Assign, tag("=")),
+            // Arithmetic operators
+            map(tag("/"), |s: &str| Token::BinOp(s.to_string())),
+            map(char('+'), |c| Token::BinOp(c.to_string())),
+            map(char('-'), |c| Token::BinOp(c.to_string())),
+            map(char('*'), |c| Token::BinOp(c.to_string())),
+            value(Token::Backslash, char('\\')),
+        )),
+        alt((
+            value(Token::Dot, char('.')),
+            value(Token::Pipe, char('|')),
+            value(Token::Bang, char('!')),
+            value(Token::QuestionMark, char('?')),
+            value(Token::At, char('@')),
+        )),
     ))(input)
 }
 

@@ -245,7 +245,20 @@ impl ConstantFolder {
             ExprKind::Identifier(_) | ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) => {
                 Ok(expr.clone())
             }
-        }
+
+            ExprKind::QualifiedName(_, _)
+            | ExprKind::UnaryOp(_, _)
+            | ExprKind::Loop(_)
+            | ExprKind::Match(_)
+            | ExprKind::Range(_)
+            | ExprKind::Pipe(_, _)
+            | ExprKind::TypeAscription(_, _)
+            | ExprKind::TypeCoercion(_, _)
+            | ExprKind::Unsafe(_)
+            | ExprKind::Assert(_, _) => {
+                todo!("New expression kinds not yet implemented in constant folding")
+            }
+        } // NEWCASESHERE - add new cases before this closing brace
     }
 }
 

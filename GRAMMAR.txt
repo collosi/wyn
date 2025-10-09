@@ -88,8 +88,8 @@ dec ::= val_bind | type_bind | mod_bind | mod_type_bind
         | "#[" attr "]" dec
 
 
-val_bind ::= ("def" | "entry" | "let") (name | "(" symbol ")") type_param* pat* [":" type] "=" exp
-             | ("def" | "entry" | "let") pat symbol pat [":" type] "=" exp
+val_bind ::= ("def" | "let") (name | "(" symbol ")") type_param* pat* [":" type] "=" exp
+             | ("def" | "let") pat symbol pat [":" type] "=" exp
 
 type_bind  ::= ("type" | "type^" | "type~") name type_param* "=" type
 type_param ::= "[" name "]" | "'" name | "'~" name | "'^" name

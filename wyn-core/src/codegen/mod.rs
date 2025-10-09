@@ -538,11 +538,12 @@ impl CodeGenerator {
                     type_id: array_type,
                 })
             }
+
             _ => Err(CompilerError::SpirvError(format!(
                 "Unsupported constant expression: {:?}",
                 expr
             ))),
-        }
+        } // NEWCASESHERE - add new cases before this closing brace
     }
 
     /// Copy a value to a local variable and return the variable pointer
@@ -1728,7 +1729,20 @@ impl CodeGenerator {
             ExprKind::Lambda(_) => {
                 unimplemented!("Lambda expressions are not yet supported in code generation")
             }
-        }
+
+            ExprKind::QualifiedName(_, _)
+            | ExprKind::UnaryOp(_, _)
+            | ExprKind::Loop(_)
+            | ExprKind::Match(_)
+            | ExprKind::Range(_)
+            | ExprKind::Pipe(_, _)
+            | ExprKind::TypeAscription(_, _)
+            | ExprKind::TypeCoercion(_, _)
+            | ExprKind::Unsafe(_)
+            | ExprKind::Assert(_, _) => {
+                todo!("New expression kinds not yet implemented in codegen")
+            }
+        } // NEWCASESHERE - add new cases before this closing brace
     }
 
     /// Generate SPIR-V code for map function: map f arr
