@@ -356,6 +356,147 @@ mod tests {
     }
 
     #[test]
+    fn test_all_literal_types() {
+        // literal ::= intnumber | floatnumber | "true" | "false"
+        let input = "true false 123 45.67f32";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::True,
+                Token::False,
+                Token::IntLiteral(123),
+                Token::FloatLiteral(45.67),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_integer_literal_formats() {
+        // Test decimal integers (basic support)
+        let input = "42 -10 0";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::IntLiteral(42),
+                Token::IntLiteral(-10),
+                Token::IntLiteral(0),
+            ]
+        );
+    }
+
+    #[test]
+    #[ignore] // TODO: Implement hexadecimal integer support
+    fn test_hexadecimal_integers() {
+        // hexadecimal ::= 0 ("x" | "X") hexdigit (hexdigit |"_")*
+        let input = "0x10 0xFF 0x1A_2B";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::IntLiteral(16),
+                Token::IntLiteral(255),
+                Token::IntLiteral(0x1A2B),
+            ]
+        );
+    }
+
+    #[test]
+    #[ignore] // TODO: Implement binary integer support
+    fn test_binary_integers() {
+        // binary ::= 0 ("b" | "B") bindigit (bindigit | "_")*
+        let input = "0b1010 0B1111 0b10_11";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::IntLiteral(0b1010),
+                Token::IntLiteral(0b1111),
+                Token::IntLiteral(0b1011),
+            ]
+        );
+    }
+
+    #[test]
+    #[ignore] // TODO: Implement underscore support in decimals
+    fn test_integers_with_underscores() {
+        // decimal ::= decdigit (decdigit |"_")*
+        let input = "1_000_000 42_42";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::IntLiteral(1_000_000),
+                Token::IntLiteral(4242),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_float_literal_formats() {
+        // Test basic pointfloat format (currently supported)
+        let input = "1.0f32 -2.5f32 0.0f32 3.14159f32";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::FloatLiteral(1.0),
+                Token::FloatLiteral(-2.5),
+                Token::FloatLiteral(0.0),
+                Token::FloatLiteral(3.14159),
+            ]
+        );
+    }
+
+    #[test]
+    #[ignore] // TODO: Implement exponent notation for floats
+    fn test_float_exponent_notation() {
+        // exponentfloat ::= (intpart | pointfloat) exponent
+        // exponent ::= ("e" | "E") ["+" | "-"] decdigit+
+        let input = "1.5e10f32 2E-5f32 3.14e+2f32";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::FloatLiteral(1.5e10),
+                Token::FloatLiteral(2E-5),
+                Token::FloatLiteral(3.14e2),
+            ]
+        );
+    }
+
+    #[test]
+    #[ignore] // TODO: Implement underscore support in floats
+    fn test_floats_with_underscores() {
+        // fraction ::= "." decdigit (decdigit |"_")*
+        let input = "3.14_159f32 1_000.5f32";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::FloatLiteral(3.14159),
+                Token::FloatLiteral(1000.5),
+            ]
+        );
+    }
+
+    #[test]
+    #[ignore] // TODO: Implement hexadecimal float support
+    fn test_hexadecimal_floats() {
+        // hexadecimalfloat ::= 0 ("x" | "X") hexintpart hexfraction ("p"|"P") ["+" | "-"] decdigit+
+        let input = "0x1.8p3f32 0X1.0p-2f32";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::FloatLiteral(12.0),  // 1.5 * 2^3 = 12
+                Token::FloatLiteral(0.25),  // 1.0 * 2^-2 = 0.25
+            ]
+        );
+    }
+
+    #[test]
     fn test_tokenize_with_comments() {
         let input = "-- This is a comment\nlet x = 42";
         let tokens = tokenize(input).unwrap();
@@ -431,6 +572,217 @@ mod tests {
             vec![
                 Token::AttributeStart,
                 Token::Identifier("vertex".to_string()),
+                Token::RightBracket,
+            ]
+        );
+    }
+
+    // Tests for grammar rules: name with constituent characters
+    #[test]
+    fn test_name_with_prime() {
+        // constituent ::= letter | digit | "_" | "'"
+        let input = "acc' uv' x'' my_var'";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("acc'".to_string()),
+                Token::Identifier("uv'".to_string()),
+                Token::Identifier("x''".to_string()),
+                Token::Identifier("my_var'".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_name_starting_with_underscore() {
+        // name ::= lowercase constituent* | "_" constituent*
+        let input = "_foo _bar123 _x'";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("_foo".to_string()),
+                Token::Identifier("_bar123".to_string()),
+                Token::Identifier("_x'".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_constructor_names() {
+        // constructor ::= uppercase constituent*
+        let input = "Some None True' MyType123";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("Some".to_string()),
+                Token::Identifier("None".to_string()),
+                Token::Identifier("True'".to_string()),
+                Token::Identifier("MyType123".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_new_operators() {
+        // Test |>, .., ..., ..<, ..>, |, !, ?, @
+        let input = "|> .. ... ..< ..>";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::PipeOp,
+                Token::DotDot,
+                Token::Ellipsis,
+                Token::DotDotLt,
+                Token::DotDotGt,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_bang_and_pipe() {
+        let input = "! | !x |> y";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Bang,
+                Token::Pipe,
+                Token::Bang,
+                Token::Identifier("x".to_string()),
+                Token::PipeOp,
+                Token::Identifier("y".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_question_and_at() {
+        let input = "? @ x ?[n]";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::QuestionMark,
+                Token::At,
+                Token::Identifier("x".to_string()),
+                Token::QuestionMark,
+                Token::LeftBracket,
+                Token::Identifier("n".to_string()),
+                Token::RightBracket,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_new_keywords() {
+        let input = "loop for while do match case unsafe assert";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Loop,
+                Token::For,
+                Token::While,
+                Token::Do,
+                Token::Match,
+                Token::Case,
+                Token::Unsafe,
+                Token::Assert,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_qualified_names_tokenization() {
+        // quals ::= (name ".")+
+        // qualname ::= name | quals name
+        // The parser will handle this, but lexer should produce: Identifier, Dot, Identifier
+        let input = "f32.sin i32.max std.math.sqrt";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("f32".to_string()),
+                Token::Dot,
+                Token::Identifier("sin".to_string()),
+                Token::Identifier("i32".to_string()),
+                Token::Dot,
+                Token::Identifier("max".to_string()),
+                Token::Identifier("std".to_string()),
+                Token::Dot,
+                Token::Identifier("math".to_string()),
+                Token::Dot,
+                Token::Identifier("sqrt".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_range_operators_in_context() {
+        // Test that range operators work in realistic context
+        let input = "a..b a...b a..<b a..>b";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("a".to_string()),
+                Token::DotDot,
+                Token::Identifier("b".to_string()),
+                Token::Identifier("a".to_string()),
+                Token::Ellipsis,
+                Token::Identifier("b".to_string()),
+                Token::Identifier("a".to_string()),
+                Token::DotDotLt,
+                Token::Identifier("b".to_string()),
+                Token::Identifier("a".to_string()),
+                Token::DotDotGt,
+                Token::Identifier("b".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_comparison_operators() {
+        let input = "== != <= >= < >";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::BinOp("==".to_string()),
+                Token::BinOp("!=".to_string()),
+                Token::BinOp("<=".to_string()),
+                Token::BinOp(">=".to_string()),
+                Token::BinOp("<".to_string()),
+                Token::BinOp(">".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_mixed_identifiers_and_operators() {
+        // Test realistic expression with new features
+        let input = "acc' |> map (\\x -> -x) arr[0]";
+        let tokens = tokenize(input).unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier("acc'".to_string()),
+                Token::PipeOp,
+                Token::Identifier("map".to_string()),
+                Token::LeftParen,
+                Token::Backslash,
+                Token::Identifier("x".to_string()),
+                Token::Arrow,
+                Token::BinOp("-".to_string()),
+                Token::Identifier("x".to_string()),
+                Token::RightParen,
+                Token::Identifier("arr".to_string()),
+                Token::LeftBracket,
+                Token::IntLiteral(0),
                 Token::RightBracket,
             ]
         );
