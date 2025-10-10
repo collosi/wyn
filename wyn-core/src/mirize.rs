@@ -393,6 +393,10 @@ impl Mirize {
             }
 
             // New expression kinds - to be implemented
+            ExprKind::TypeHole => {
+                todo!("TypeHole not yet implemented in MIR")
+            }
+
             ExprKind::QualifiedName(_, _) => {
                 todo!("QualifiedName not yet implemented in MIR")
             }

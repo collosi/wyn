@@ -83,6 +83,30 @@ impl CodeAnnotator {
                     TypeName::Unique => {
                         self.output.push('*');
                     }
+                    TypeName::Record(fields) => {
+                        self.output.push('{');
+                        for (i, (name, ty)) in fields.iter().enumerate() {
+                            if i > 0 {
+                                self.output.push_str(", ");
+                            }
+                            self.output.push_str(name);
+                            self.output.push_str(": ");
+                            self.write_type(ty);
+                        }
+                        self.output.push('}');
+                    }
+                    TypeName::Sum(variants) => {
+                        for (i, (name, types)) in variants.iter().enumerate() {
+                            if i > 0 {
+                                self.output.push_str(" | ");
+                            }
+                            self.output.push_str(name);
+                            for ty in types {
+                                self.output.push(' ');
+                                self.write_type(ty);
+                            }
+                        }
+                    }
                 }
                 if !args.is_empty() {
                     self.output.push('<');

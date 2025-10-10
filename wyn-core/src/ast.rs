@@ -74,10 +74,12 @@ pub type Expression = Node<ExprKind>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeName {
-    Str(&'static str), // Basic types: "int", "float", "tuple", "->", etc.
-    Array,             // Array type constructor (takes size and element type)
-    Size(usize),       // Array size literal
-    Unique,            // Uniqueness/consuming type marker (corresponds to "*" prefix)
+    Str(&'static str),             // Basic types: "int", "float", "tuple", "->", etc.
+    Array,                         // Array type constructor (takes size and element type)
+    Size(usize),                   // Array size literal
+    Unique,                        // Uniqueness/consuming type marker (corresponds to "*" prefix)
+    Record(Vec<(String, Type)>),   // Record type: {field1: type1, field2: type2}
+    Sum(Vec<(String, Vec<Type>)>), // Sum type: Constructor1 type* | Constructor2 type*
 }
 
 impl std::fmt::Display for TypeName {
@@ -87,6 +89,28 @@ impl std::fmt::Display for TypeName {
             TypeName::Array => write!(f, "Array"),
             TypeName::Size(n) => write!(f, "{}", n),
             TypeName::Unique => write!(f, "*"),
+            TypeName::Record(fields) => {
+                write!(f, "{{")?;
+                for (i, (name, ty)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}: {}", name, ty)?;
+                }
+                write!(f, "}}")
+            }
+            TypeName::Sum(variants) => {
+                for (i, (name, types)) in variants.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " | ")?;
+                    }
+                    write!(f, "{}", name)?;
+                    for ty in types {
+                        write!(f, " {}", ty)?;
+                    }
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -308,6 +332,7 @@ pub enum ExprKind {
     TypeCoercion(Box<Expression>, Type),   // exp :> type
     Unsafe(Box<Expression>),               // unsafe exp
     Assert(Box<Expression>, Box<Expression>), // assert cond exp
+    TypeHole,                              // ??? - placeholder for any expression
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -568,6 +593,16 @@ pub mod types {
 
     pub fn function(arg: Type, ret: Type) -> Type {
         Type::arrow(arg, ret)
+    }
+
+    /// Create a record type: {field1: type1, field2: type2}
+    pub fn record(fields: Vec<(String, Type)>) -> Type {
+        Type::Constructed(TypeName::Record(fields), vec![])
+    }
+
+    /// Create a sum type: Constructor1 type* | Constructor2 type*
+    pub fn sum(variants: Vec<(String, Vec<Type>)>) -> Type {
+        Type::Constructed(TypeName::Sum(variants), vec![])
     }
 
     /// Create a unique (consuming/alias-free) type: *t

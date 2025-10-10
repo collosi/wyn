@@ -347,6 +347,11 @@ impl Defunctionalizer {
                 ))
             }
 
+            ExprKind::TypeHole => Ok((
+                self.node_counter.mk_node(ExprKind::TypeHole),
+                StaticValue::Dyn(polytype::Type::Variable(0)), // Type to be inferred
+            )),
+
             ExprKind::QualifiedName(_, _)
             | ExprKind::UnaryOp(_, _)
             | ExprKind::Loop(_)
@@ -566,8 +571,8 @@ impl Defunctionalizer {
                 extended_bound.insert(let_in.name.clone());
                 self.collect_free_variables(&let_in.body, &extended_bound, free_vars)?;
             }
-            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) => {
-                // No free variables in literals
+            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::TypeHole => {
+                // No free variables in literals or type holes
             }
             ExprKind::FieldAccess(expr, _field) => {
                 self.collect_free_variables(expr, bound_vars, free_vars)?;

@@ -41,6 +41,11 @@ decdigit ::= "0"..."9"
 hexdigit ::= decdigit | "a"..."f" | "A"..."F"
 bindigit ::= "0" | "1"
 
+stringlit  ::= '"' stringchar* '"'
+stringchar ::= <any source character except "\" or newline or double quotes>
+charlit    ::= "'" char "'"
+char       ::= <any source character except "\" or newline or single quotes>
+
 
 type ::= qualname
          | array_type
@@ -71,11 +76,6 @@ type_arg         ::= "[" [dim] "]" | type
 function_type ::= param_type "->" type
 param_type    ::= type | "(" name ":" type ")"
 
-
-stringlit  ::= '"' stringchar* '"'
-stringchar ::= <any source character except "\" or newline or double quotes>
-charlit    ::= "'" char "'"
-char       ::= <any source character except "\" or newline or single quotes>
 
 
 existential_size ::= "?" ("[" name "]")+ "." type

@@ -66,6 +66,7 @@ pub enum Token {
     Underscore, // _ for wildcard patterns
     Bang,       // ! for negation
     QuestionMark, // ? for existential types
+    TypeHole,   // ??? for type holes (placeholder expressions)
     At,         // @ for as-patterns (future)
 
     // Delimiters
@@ -171,6 +172,8 @@ fn parse_operator(input: &str) -> IResult<&str, Token> {
     alt((
         alt((
             value(Token::Arrow, tag("->")),
+            // Type hole (must come before Ellipsis and QuestionMark)
+            value(Token::TypeHole, tag("???")),
             // Range operators (must come before ..)
             value(Token::Ellipsis, tag("...")),
             value(Token::DotDotLt, tag("..<")),

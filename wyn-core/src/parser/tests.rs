@@ -2305,3 +2305,122 @@ fn test_parse_local_declaration() {
         }
     });
 }
+
+#[test]
+fn test_parse_record_type_empty() {
+    // Test empty record type {}
+    expect_parse("let x: {} = ???", |declarations| {
+        assert_eq!(declarations.len(), 1);
+        match &declarations[0] {
+            Declaration::Decl(decl) => {
+                assert_eq!(decl.name, "x");
+                match &decl.ty {
+                    Some(Type::Constructed(TypeName::Record(fields), _)) => {
+                        assert_eq!(fields.len(), 0);
+                        Ok(())
+                    }
+                    _ => Err("Expected record type".to_string()),
+                }
+            }
+            _ => Err("Expected Decl".to_string()),
+        }
+    });
+}
+
+#[test]
+fn test_parse_record_type_single_field() {
+    // Test record type with single field {x: i32}
+    expect_parse("let r: {x: i32} = ???", |declarations| {
+        assert_eq!(declarations.len(), 1);
+        match &declarations[0] {
+            Declaration::Decl(decl) => {
+                assert_eq!(decl.name, "r");
+                match &decl.ty {
+                    Some(Type::Constructed(TypeName::Record(fields), _)) => {
+                        assert_eq!(fields.len(), 1);
+                        assert_eq!(fields[0].0, "x");
+                        Ok(())
+                    }
+                    _ => Err("Expected record type".to_string()),
+                }
+            }
+            _ => Err("Expected Decl".to_string()),
+        }
+    });
+}
+
+#[test]
+fn test_parse_record_type_multiple_fields() {
+    // Test record type with multiple fields {x: i32, y: f32, z: vec3}
+    expect_parse("let r: {x: i32, y: f32, z: vec3} = ???", |declarations| {
+        assert_eq!(declarations.len(), 1);
+        match &declarations[0] {
+            Declaration::Decl(decl) => {
+                assert_eq!(decl.name, "r");
+                match &decl.ty {
+                    Some(Type::Constructed(TypeName::Record(fields), _)) => {
+                        assert_eq!(fields.len(), 3);
+                        assert_eq!(fields[0].0, "x");
+                        assert_eq!(fields[1].0, "y");
+                        assert_eq!(fields[2].0, "z");
+                        Ok(())
+                    }
+                    _ => Err("Expected record type".to_string()),
+                }
+            }
+            _ => Err("Expected Decl".to_string()),
+        }
+    });
+}
+
+#[test]
+fn test_parse_sum_type_simple() {
+    // Test sum type: Option i32
+    expect_parse("let x: Some i32 | None = ???", |declarations| {
+        assert_eq!(declarations.len(), 1);
+        match &declarations[0] {
+            Declaration::Decl(decl) => {
+                assert_eq!(decl.name, "x");
+                match &decl.ty {
+                    Some(Type::Constructed(TypeName::Sum(variants), _)) => {
+                        assert_eq!(variants.len(), 2);
+                        assert_eq!(variants[0].0, "Some");
+                        assert_eq!(variants[0].1.len(), 1); // Some has 1 type arg
+                        assert_eq!(variants[1].0, "None");
+                        assert_eq!(variants[1].1.len(), 0); // None has 0 type args
+                        Ok(())
+                    }
+                    _ => Err("Expected sum type".to_string()),
+                }
+            }
+            _ => Err("Expected Decl".to_string()),
+        }
+    });
+}
+
+#[test]
+fn test_parse_sum_type_multiple_args() {
+    // Test sum type with multiple type arguments
+    expect_parse("let x: Result i32 f32 | Error | Ok = ???", |declarations| {
+        assert_eq!(declarations.len(), 1);
+        match &declarations[0] {
+            Declaration::Decl(decl) => {
+                assert_eq!(decl.name, "x");
+                match &decl.ty {
+                    Some(Type::Constructed(TypeName::Sum(variants), _)) => {
+                        assert_eq!(variants.len(), 3);
+                        assert_eq!(variants[0].0, "Result");
+                        assert_eq!(variants[0].1.len(), 2); // Result has 2 type args
+                        assert_eq!(variants[1].0, "Error");
+                        assert_eq!(variants[1].1.len(), 0);
+                        assert_eq!(variants[2].0, "Ok");
+                        assert_eq!(variants[2].1.len(), 0);
+                        Ok(())
+                    }
+                    _ => Err("Expected sum type".to_string()),
+                }
+            }
+            _ => Err("Expected Decl".to_string()),
+        }
+    });
+}

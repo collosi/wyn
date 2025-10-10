@@ -1177,6 +1177,9 @@ impl CodeGenerator {
 
     fn generate_expression(&mut self, expr: &Expression) -> Result<Value> {
         match &expr.kind {
+            ExprKind::TypeHole => {
+                Err(CompilerError::TypeError("Type holes (???) must be replaced before code generation".to_string()))
+            }
             ExprKind::IntLiteral(n) => {
                 let const_id = self.builder.constant_bit32(self.i32_type, *n as u32);
                 Ok(Value {

@@ -539,7 +539,7 @@ impl Parser {
                 Ok(polytype::Type::Variable(var_id))
             }
             Some(Token::LeftParen) => {
-                // Tuple type (T1, T2, T3)
+                // Tuple type (T1, T2, T3) or empty tuple ()
                 self.advance(); // consume '('
                 let mut tuple_types = Vec::new();
 
@@ -556,8 +556,107 @@ impl Parser {
                 self.expect(Token::RightParen)?;
                 Ok(types::tuple(tuple_types))
             }
+            Some(Token::LeftBrace) => {
+                // Record type {field1: type1, field2: type2} or empty record {}
+                self.parse_record_type()
+            }
+            Some(Token::Identifier(name)) if name.chars().next().unwrap().is_uppercase() => {
+                // Sum type: Constructor type* | Constructor type*
+                self.parse_sum_type()
+            }
             _ => Err(CompilerError::ParseError("Expected type".to_string())),
         }
+    }
+
+    fn parse_record_type(&mut self) -> Result<Type> {
+        self.expect(Token::LeftBrace)?;
+        let mut fields = Vec::new();
+
+        if !self.check(&Token::RightBrace) {
+            loop {
+                // Parse field identifier (can be a number or name)
+                let field_name = match self.peek() {
+                    Some(Token::Identifier(name)) => {
+                        let n = name.clone();
+                        self.advance();
+                        n
+                    }
+                    Some(Token::IntLiteral(n)) => {
+                        let num = n.to_string();
+                        self.advance();
+                        num
+                    }
+                    _ => return Err(CompilerError::ParseError("Expected field name or number".to_string())),
+                };
+
+                self.expect(Token::Colon)?;
+                let field_type = self.parse_type()?;
+                fields.push((field_name, field_type));
+
+                if !self.check(&Token::Comma) {
+                    break;
+                }
+                self.advance(); // consume ','
+
+                // Allow trailing comma
+                if self.check(&Token::RightBrace) {
+                    break;
+                }
+            }
+        }
+
+        self.expect(Token::RightBrace)?;
+        Ok(types::record(fields))
+    }
+
+    fn parse_sum_type(&mut self) -> Result<Type> {
+        let mut variants = Vec::new();
+
+        loop {
+            // Parse constructor name (uppercase identifier)
+            let constructor_name = match self.peek() {
+                Some(Token::Identifier(name)) if name.chars().next().unwrap().is_uppercase() => {
+                    let n = name.clone();
+                    self.advance();
+                    n
+                }
+                _ => return Err(CompilerError::ParseError("Expected constructor name".to_string())),
+            };
+
+            // Parse zero or more type arguments for this constructor
+            let mut arg_types = Vec::new();
+            while !self.check(&Token::Pipe)
+                && !self.check(&Token::RightParen)
+                && !self.check(&Token::RightBracket)
+                && !self.check(&Token::RightBrace)
+                && !self.check(&Token::Comma)
+                && !self.check(&Token::Arrow)
+                && self.current < self.tokens.len() {
+                // Try to parse a type argument
+                // This is tricky - we need to avoid consuming tokens that aren't part of the sum type
+                // For now, we'll be conservative and only parse simple types
+                match self.peek() {
+                    Some(Token::Identifier(_)) | Some(Token::LeftParen) | Some(Token::LeftBrace) | Some(Token::LeftBracket) | Some(Token::LeftBracketSpaced) => {
+                        arg_types.push(self.parse_array_or_base_type()?);
+                    }
+                    Some(Token::BinOp(op)) if op == "*" => {
+                        arg_types.push(self.parse_array_or_base_type()?);
+                    }
+                    _ => break,
+                }
+            }
+
+            variants.push((constructor_name, arg_types));
+
+            // Check for more variants
+            if self.check(&Token::Pipe) {
+                self.advance(); // consume '|'
+            } else {
+                break;
+            }
+        }
+
+        Ok(types::sum(variants))
     }
 
     fn parse_expression(&mut self) -> Result<Expression> {
@@ -775,6 +874,10 @@ impl Parser {
     fn parse_primary_expression(&mut self) -> Result<Expression> {
         trace!("parse_primary_expression: next token = {:?}", self.peek());
         match self.peek() {
+            Some(Token::TypeHole) => {
+                self.advance();
+                Ok(self.node_counter.mk_node(ExprKind::TypeHole))
+            }
             Some(Token::IntLiteral(n)) => {
                 let n = *n;
                 self.advance();

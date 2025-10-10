@@ -205,6 +205,7 @@ pub fn expr_type_name(expr: &Expression) -> &'static str {
         ExprKind::FieldAccess(..) => "field_access",
         ExprKind::If(..) => "if_expr",
 
+        ExprKind::TypeHole => "type_hole",
         ExprKind::QualifiedName(_, _) => "qualified_name",
         ExprKind::UnaryOp(_, _) => "unary_op",
         ExprKind::Loop(_) => "loop",

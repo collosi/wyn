@@ -242,7 +242,7 @@ impl ConstantFolder {
             }
 
             // Literals and identifiers don't need folding
-            ExprKind::Identifier(_) | ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) => {
+            ExprKind::Identifier(_) | ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::TypeHole => {
                 Ok(expr.clone())
             }
 

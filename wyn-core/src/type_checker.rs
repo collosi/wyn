@@ -480,6 +480,9 @@ impl TypeChecker {
 
     fn infer_expression(&mut self, expr: &Expression) -> Result<Type> {
         let ty = match &expr.kind {
+            ExprKind::TypeHole => {
+                Ok(self.context.new_variable())
+            }
             ExprKind::IntLiteral(_) => Ok(types::i32()),
             ExprKind::FloatLiteral(_) => Ok(types::f32()),
             ExprKind::Identifier(name) => {
@@ -803,6 +806,8 @@ impl TypeChecker {
                                 TypeName::Array => "array".to_string(),
                                 TypeName::Size(n) => n.to_string(),
                                 TypeName::Unique => "unique".to_string(),
+                                TypeName::Record(_) => "record".to_string(),
+                                TypeName::Sum(_) => "sum".to_string(),
                             };
 
                             // Look up field in builtin registry (for vector types)
