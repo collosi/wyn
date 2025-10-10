@@ -114,11 +114,6 @@ pub struct CodeGenerator {
 }
 
 impl CodeGenerator {
-    /// Check if a type is an attributed tuple
-    fn is_attributed_tuple(ty: &Type) -> bool {
-        matches!(ty, Type::Constructed(TypeName::Str("attributed_tuple"), _))
-    }
-
     /// Validate that all return types for an entry point are properly attributed
     /// Each element must have @location or @builtin attribute
     fn validate_entry_point_return_types(attributed_types: &[AttributedType]) -> Result<()> {
@@ -1356,7 +1351,7 @@ impl CodeGenerator {
             ExprKind::FunctionCall(func_name, args) => {
                 // Handle map as a special compiler intrinsic with loop generation
                 if func_name == "map" {
-                    return self.generate_map_call(args);
+                    self.generate_map_call(args)
                 }
                 // Handle length as a compiler intrinsic
                 else if func_name == "length" {
@@ -1382,7 +1377,7 @@ impl CodeGenerator {
                         match array_type {
                             Type::Constructed(TypeName::Array, args) => {
                                 // Extract size from Array(Size(n), elem_type)
-                                if let Some(Type::Constructed(TypeName::Size(size), _)) = args.get(0) {
+                                if let Some(Type::Constructed(TypeName::Size(size), _)) = args.first() {
                                     let const_id = self.get_or_create_int_constant(*size as u32);
                                     Ok(Value {
                                         id: const_id,
@@ -2180,7 +2175,7 @@ impl CodeGenerator {
 
                     TypeName::Array => {
                         // Array(Size(n), elem_type)
-                        let size = if let Some(Type::Constructed(TypeName::Size(n), _)) = args.get(0) {
+                        let size = if let Some(Type::Constructed(TypeName::Size(n), _)) = args.first() {
                             *n
                         } else {
                             return Err(CompilerError::SpirvError("Array type missing size".to_string()));

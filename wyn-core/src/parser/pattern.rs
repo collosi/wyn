@@ -56,7 +56,7 @@ impl Parser {
 
             Some(Token::Identifier(name)) => {
                 // Check if it's a constructor (starts with uppercase)
-                if name.chars().next().map_or(false, |c| c.is_uppercase()) {
+                if name.chars().next().is_some_and(|c| c.is_uppercase()) {
                     self.parse_constructor_pattern()
                 } else {
                     // Simple name binding

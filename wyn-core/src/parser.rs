@@ -605,9 +605,9 @@ impl Parser {
                     vec![types::size_var(size_var), elem_type],
                 ))
             } else {
-                return Err(CompilerError::ParseError(
+                Err(CompilerError::ParseError(
                     "Expected size literal or variable in array type".to_string(),
-                ));
+                ))
             }
         } else {
             self.parse_base_type()

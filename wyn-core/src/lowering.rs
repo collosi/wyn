@@ -7,7 +7,7 @@ use crate::error::{CompilerError, Result};
 use crate::mir::{self, BlockId, FunctionId, Instruction, Module as MirModule, Register};
 use polytype::Type;
 use rspirv::binary::Assemble;
-use rspirv::dr::{Builder, Module as SpirvModule};
+use rspirv::dr::Builder;
 use rspirv::spirv::{self, AddressingModel, Capability, ExecutionModel, MemoryModel, StorageClass};
 use std::collections::HashMap;
 
@@ -52,6 +52,12 @@ pub struct Lowering {
 
     // Constants storage buffer (created if constants_buffer_size > 0)
     constants_buffer_var: Option<spirv::Word>,
+}
+
+impl Default for Lowering {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Lowering {
@@ -100,7 +106,7 @@ impl Lowering {
         if mir.constants_buffer_size > 0 {
             // Add extension for StorageBuffer storage class
             self.builder.extension("SPV_KHR_storage_buffer_storage_class");
-            self.create_constants_buffer(mir.constants_buffer_size)?;
+            self.create_constants_buffer()?;
         }
 
         // Lower all functions
@@ -263,7 +269,7 @@ impl Lowering {
     }
 
     /// Create the global constants storage buffer
-    fn create_constants_buffer(&mut self, buffer_size: u32) -> Result<()> {
+    fn create_constants_buffer(&mut self) -> Result<()> {
         // Create a runtime array of u32 for the buffer contents
         // This gives us a byte-addressable buffer (each u32 = 4 bytes)
         let u32_type = self.builder.type_int(32, 0); // unsigned
@@ -304,54 +310,6 @@ impl Lowering {
         self.constants_buffer_var = Some(var_id);
         Ok(())
     }
-
-    /// Find all blocks reachable from a starting block (following unconditional branches)
-    fn find_reachable_blocks(&self, start: BlockId) -> Vec<BlockId> {
-        let mut reachable = vec![start];
-        let mut to_visit = vec![start];
-
-        while let Some(current) = to_visit.pop() {
-            if let Some(block) = self.current_function_blocks.iter().find(|b| b.id == current) {
-                // Only follow unconditional branches
-                if let Some(last_inst) = block.instructions.last() {
-                    if let Instruction::Branch(target) = last_inst {
-                        if !reachable.contains(target) {
-                            reachable.push(*target);
-                            to_visit.push(*target);
-                        }
-                    }
-                }
-            }
-        }
-        reachable
-    }
-
-    /// Find the merge block for a conditional branch by analyzing control flow
-    fn find_merge_block(&self, true_block: BlockId, false_block: BlockId) -> Option<BlockId> {
-        // Find all blocks reachable from each branch
-        let true_reachable = self.find_reachable_blocks(true_block);
-        let false_reachable = self.find_reachable_blocks(false_block);
-
-        // The merge block is where both branches converge - find a block with a Phi that
-        // has predecessors from the reachable sets of both branches
-        for block in &self.current_function_blocks {
-            for inst in &block.instructions {
-                if let Instruction::Phi(_dest, incoming) = inst {
-                    let predecessors: Vec<BlockId> = incoming.iter().map(|(_, bid)| *bid).collect();
-
-                    // Check if this phi has predecessors from both branches
-                    let has_true_pred = predecessors.iter().any(|p| true_reachable.contains(p));
-                    let has_false_pred = predecessors.iter().any(|p| false_reachable.contains(p));
-
-                    if has_true_pred && has_false_pred {
-                        return Some(block.id);
-                    }
-                }
-            }
-        }
-        None
-    }
-
     /// Lower a MIR function to SPIR-V
     fn lower_function(&mut self, func: &mir::Function, is_entry_point: bool) -> Result<()> {
         // For entry points, create void(void) signature and use global variables

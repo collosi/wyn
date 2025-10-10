@@ -20,10 +20,6 @@ impl Binding {
     pub fn new(value: Value, ty: Type) -> Self {
         Binding { value, ty: Some(ty) }
     }
-
-    pub fn value_only(value: Value) -> Self {
-        Binding { value, ty: None }
-    }
 }
 
 /// Environment manages variable and constant bindings during code generation
@@ -50,6 +46,7 @@ impl Environment {
     }
 
     /// Define a builtin (only accessible before any code generation)
+    #[cfg(test)]
     pub fn define_builtin(&mut self, name: String, value: Value, ty: Type) {
         self.builtins.insert(name, Binding::new(value, ty));
     }
@@ -109,11 +106,6 @@ impl Environment {
     pub fn clear_locals(&mut self) {
         self.local_scopes.clear();
         self.local_scopes.push(HashMap::new());
-    }
-
-    /// Get the number of local scopes currently on the stack
-    pub fn scope_depth(&self) -> usize {
-        self.local_scopes.len()
     }
 }
 

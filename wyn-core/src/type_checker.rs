@@ -2,7 +2,7 @@ use crate::ast::TypeName;
 use crate::ast::*;
 use crate::error::{CompilerError, Result};
 use crate::scope::ScopeStack;
-use log::{debug, warn};
+use log::debug;
 use polytype::{Context, TypeScheme};
 use std::collections::HashMap;
 

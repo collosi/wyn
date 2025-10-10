@@ -316,20 +316,20 @@ impl<'a, W: Write> Visitor for FactExtractor<'a, W> {
         // Dispatch to specific handlers based on expression type
         match &expr.kind {
             ExprKind::Identifier(name) => {
-                return self.visit_expr_identifier(name);
+                self.visit_expr_identifier(name)
             }
             ExprKind::FunctionCall(name, args) => {
-                return self.visit_expr_function_call(name, args);
+                self.visit_expr_function_call(name, args)
             }
             ExprKind::Lambda(lambda) => {
-                return self.visit_expr_lambda(lambda);
+                self.visit_expr_lambda(lambda)
             }
             ExprKind::LetIn(let_in) => {
-                return self.visit_expr_let_in(let_in);
+                self.visit_expr_let_in(let_in)
             }
             _ => {
                 // For other expressions, use default traversal
-                return crate::visitor::walk_expression(self, expr);
+                crate::visitor::walk_expression(self, expr)
             }
         }
     }

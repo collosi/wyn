@@ -596,7 +596,7 @@ impl Builder {
                 "vec4" => 16,
                 "tuple" => {
                     // Sum of component sizes (simplified, doesn't handle alignment)
-                    args.iter().map(|arg| Self::size_of_type(arg)).sum()
+                    args.iter().map(Self::size_of_type).sum()
                 }
                 _ => 4, // Default to 4 bytes
             },

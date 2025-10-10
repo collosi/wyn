@@ -7,14 +7,6 @@ enum BindingState<T> {
     Consumed(T), // Tombstone: holds the type but marks it as consumed
 }
 
-impl<T> BindingState<T> {
-    fn value(&self) -> &T {
-        match self {
-            BindingState::Available(t) | BindingState::Consumed(t) => t,
-        }
-    }
-}
-
 /// A single scope containing variable bindings
 #[derive(Debug, Clone)]
 pub struct Scope<T> {
