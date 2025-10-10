@@ -45,7 +45,7 @@ pub struct Lowering {
     current_is_entry_point: bool,
     current_output_vars: Vec<spirv::Word>,
     current_input_vars: Vec<(spirv::Word, Register)>, // (var_id, register) to load in first block
-    current_function_blocks: Vec<mir::Block>, // For control flow analysis
+    current_function_blocks: Vec<mir::Block>,         // For control flow analysis
 
     // Entry point interface variables - maps function ID to (inputs, outputs)
     entry_point_interfaces: HashMap<FunctionId, (Vec<spirv::Word>, Vec<spirv::Word>)>,
@@ -126,27 +126,19 @@ impl Lowering {
                 };
 
                 // Get interface variables for this entry point
-                let interface_vars = if let Some((inputs, outputs)) = self.entry_point_interfaces.get(&func_id) {
-                    inputs.iter().chain(outputs.iter()).copied().collect::<Vec<_>>()
-                } else {
-                    Vec::new()
-                };
+                let interface_vars =
+                    if let Some((inputs, outputs)) = self.entry_point_interfaces.get(&func_id) {
+                        inputs.iter().chain(outputs.iter()).copied().collect::<Vec<_>>()
+                    } else {
+                        Vec::new()
+                    };
 
                 // Register entry point with interface variables
-                self.builder.entry_point(
-                    execution_model,
-                    spirv_func_id,
-                    &func.name,
-                    &interface_vars,
-                );
+                self.builder.entry_point(execution_model, spirv_func_id, &func.name, &interface_vars);
 
                 // Add required execution modes
                 if execution_model == ExecutionModel::Fragment {
-                    self.builder.execution_mode(
-                        spirv_func_id,
-                        spirv::ExecutionMode::OriginUpperLeft,
-                        [],
-                    );
+                    self.builder.execution_mode(spirv_func_id, spirv::ExecutionMode::OriginUpperLeft, []);
                 }
             }
         }
@@ -281,11 +273,7 @@ impl Lowering {
         let struct_type = self.builder.type_struct([runtime_array_type]);
 
         // Decorate the struct
-        self.builder.decorate(
-            struct_type,
-            spirv::Decoration::Block,
-            [],
-        );
+        self.builder.decorate(struct_type, spirv::Decoration::Block, []);
 
         // Decorate the member (offset 0)
         self.builder.member_decorate(
@@ -744,12 +732,8 @@ impl Lowering {
                 let ptr_type_id = self.get_or_create_ptr_type(StorageClass::StorageBuffer, u32_type);
                 let member_zero = self.get_or_create_int_const(0, self.i32_type);
 
-                let ptr_id = self.builder.access_chain(
-                    ptr_type_id,
-                    None,
-                    buffer_var,
-                    [member_zero, index_const],
-                )?;
+                let ptr_id =
+                    self.builder.access_chain(ptr_type_id, None, buffer_var, [member_zero, index_const])?;
 
                 // OpStore the value (bitcast if needed for f32)
                 let store_value = if self.is_float_type(&value.ty) {
@@ -774,12 +758,8 @@ impl Lowering {
                 let ptr_type_id = self.get_or_create_ptr_type(StorageClass::StorageBuffer, u32_type);
                 let member_zero = self.get_or_create_int_const(0, self.i32_type);
 
-                let ptr_id = self.builder.access_chain(
-                    ptr_type_id,
-                    None,
-                    buffer_var,
-                    [member_zero, index_const],
-                )?;
+                let ptr_id =
+                    self.builder.access_chain(ptr_type_id, None, buffer_var, [member_zero, index_const])?;
 
                 // OpLoad from buffer (as u32)
                 let loaded_u32 = self.builder.load(u32_type, None, ptr_id, None, [])?;
@@ -901,7 +881,8 @@ impl Lowering {
         } else {
             // Single return value - create one output variable (unless void)
             use crate::ast::TypeName;
-            let is_void = matches!(&func.return_type, Type::Constructed(TypeName::Str(name), _) if *name == "void");
+            let is_void =
+                matches!(&func.return_type, Type::Constructed(TypeName::Str(name), _) if *name == "void");
 
             if !is_void {
                 let ret_type_id = self.get_or_create_type(&func.return_type)?;

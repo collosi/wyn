@@ -432,11 +432,10 @@ fn test_parse_builtin_attribute_on_return_type() {
 }
 
 #[test]
-#[should_panic(expected = "Size variables in array types not yet implemented")]
 fn test_parse_single_attributed_return_type() {
     // Test single attributed return type
     expect_parse(
-        "#[vertex] def vertex_main(): [builtin(position)] vec4 = vec4 0.0f32 0.0f32 0.0f32 1.0f32",
+        "#[vertex] def vertex_main(): #[builtin(position)] vec4 = vec4 0.0f32 0.0f32 0.0f32 1.0f32",
         |declarations| {
             if declarations.len() != 1 {
                 return Err(format!("Expected 1 declaration, got {}", declarations.len()));
@@ -483,11 +482,10 @@ fn test_parse_single_attributed_return_type() {
 }
 
 #[test]
-#[should_panic(expected = "Size variables in array types not yet implemented")]
 fn test_parse_tuple_attributed_return_type() {
     // Test tuple of attributed return types
     expect_parse(
-        "#[vertex] def vertex_main(): ([builtin(position)] vec4, [location(0)] vec3) = result",
+        "#[vertex] def vertex_main(): (#[builtin(position)] vec4, #[location(0)] vec3) = result",
         |declarations| {
             if declarations.len() != 1 {
                 return Err(format!("Expected 1 declaration, got {}", declarations.len()));
@@ -1399,11 +1397,10 @@ fn test_uniform_with_initializer_error() {
 }
 
 #[test]
-#[should_panic(expected = "Size variables in array types not yet implemented")]
 fn test_parse_multiple_shader_outputs() {
     expect_parse(
         r#"
-            #[fragment] def fragment_main(): ([location(0)] vec4, [location(1)] vec3) = 
+            #[fragment] def fragment_main(): (#[location(0)] vec4, #[location(1)] vec3) = 
               let color = vec4 1.0f32 0.5f32 0.2f32 1.0f32 in
               let normal = vec3 0.0f32 1.0f32 0.0f32 in
               (color, normal)
@@ -1457,7 +1454,6 @@ fn test_parse_multiple_shader_outputs() {
 }
 
 #[test]
-#[should_panic(expected = "Size variables in array types not yet implemented")]
 fn test_parse_complete_shader_example() {
     expect_parse(
         r#"
@@ -1465,7 +1461,7 @@ fn test_parse_complete_shader_example() {
             #[uniform] def material_color: vec3
             #[uniform] def time: f32
 
-            #[vertex] def vertex_main(): ([builtin(position)] vec4, [location(0)] vec3) =
+            #[vertex] def vertex_main(): (#[builtin(position)] vec4, #[location(0)] vec3) =
               let angle: f32 = time in
               let x: f32 = sin angle in
               let y: f32 = cos angle in
@@ -1473,7 +1469,7 @@ fn test_parse_complete_shader_example() {
               let color: vec3 = material_color in
               (position, color)
 
-            #[fragment] def fragment_main(): ([location(0)] vec4, [location(1)] vec3) = 
+            #[fragment] def fragment_main(): (#[location(0)] vec4, #[location(1)] vec3) = 
               let final_color: vec4 = vec4 1.0f32 0.5f32 0.2f32 1.0f32 in
               let normal: vec3 = vec3 0.0f32 1.0f32 0.0f32 in
               (final_color, normal)
@@ -1485,8 +1481,8 @@ fn test_parse_complete_shader_example() {
 
             // Check uniform declarations
             match &declarations[0] {
-                Declaration::Decl(decl) => {
-                    if decl.name != "material_color" || !decl.attributes.contains(&Attribute::Uniform) {
+                Declaration::Uniform(uniform) => {
+                    if uniform.name != "material_color" {
                         return Err("Expected uniform material_color".to_string());
                     }
                 }
@@ -1494,8 +1490,8 @@ fn test_parse_complete_shader_example() {
             }
 
             match &declarations[1] {
-                Declaration::Decl(decl) => {
-                    if decl.name != "time" || !decl.attributes.contains(&Attribute::Uniform) {
+                Declaration::Uniform(uniform) => {
+                    if uniform.name != "time" {
                         return Err("Expected uniform time".to_string());
                     }
                 }

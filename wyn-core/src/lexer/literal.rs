@@ -8,37 +8,28 @@
 //! - Char literals: 'char'
 
 use nom::{
+    IResult,
     branch::alt,
     bytes::complete::{tag, take_while},
     character::complete::{char, digit1, hex_digit1, none_of, one_of},
     combinator::{map, opt, recognize, verify},
     multi::many1,
     sequence::{delimited, pair, tuple},
-    IResult,
 };
 
 use super::Token;
 
 // Helper to parse digits with optional underscores
 fn decimal_with_underscores(input: &str) -> IResult<&str, &str> {
-    recognize(pair(
-        digit1,
-        many1(alt((digit1, tag("_")))),
-    ))(input)
+    recognize(pair(digit1, many1(alt((digit1, tag("_"))))))(input)
 }
 
 fn hex_with_underscores(input: &str) -> IResult<&str, &str> {
-    recognize(pair(
-        hex_digit1,
-        many1(alt((hex_digit1, tag("_")))),
-    ))(input)
+    recognize(pair(hex_digit1, many1(alt((hex_digit1, tag("_"))))))(input)
 }
 
 fn binary_with_underscores(input: &str) -> IResult<&str, &str> {
-    recognize(pair(
-        one_of("01"),
-        many1(alt((one_of("01"), char('_')))),
-    ))(input)
+    recognize(pair(one_of("01"), many1(alt((one_of("01"), char('_'))))))(input)
 }
 
 // Strip underscores from a numeric string for parsing
@@ -49,8 +40,14 @@ fn strip_underscores(s: &str) -> String {
 // Parse integer type suffix
 fn int_type_suffix(input: &str) -> IResult<&str, &str> {
     alt((
-        tag("i8"), tag("i16"), tag("i32"), tag("i64"),
-        tag("u8"), tag("u16"), tag("u32"), tag("u64"),
+        tag("i8"),
+        tag("i16"),
+        tag("i32"),
+        tag("i64"),
+        tag("u8"),
+        tag("u16"),
+        tag("u32"),
+        tag("u64"),
     ))(input)
 }
 
@@ -139,10 +136,7 @@ fn exponent(input: &str) -> IResult<&str, &str> {
 
 // Exponent float: (intpart | pointfloat) exponent
 fn exponentfloat(input: &str) -> IResult<&str, &str> {
-    recognize(tuple((
-        alt((pointfloat, intpart)),
-        exponent,
-    )))(input)
+    recognize(tuple((alt((pointfloat, intpart)), exponent)))(input)
 }
 
 // Hexadecimal float: 0x[hex_mantissa]p[+|-][dec_exponent]
@@ -150,10 +144,7 @@ fn hexadecimalfloat(input: &str) -> IResult<&str, &str> {
     recognize(tuple((
         alt((tag("0x"), tag("0X"))),
         alt((hex_with_underscores, hex_digit1)),
-        opt(tuple((
-            char('.'),
-            alt((hex_with_underscores, hex_digit1)),
-        ))),
+        opt(tuple((char('.'), alt((hex_with_underscores, hex_digit1))))),
         alt((char('p'), char('P'))),
         opt(alt((char('+'), char('-')))),
         alt((decimal_with_underscores, digit1)),
@@ -206,11 +197,7 @@ pub fn parse_string_literal(input: &str) -> IResult<&str, Token> {
 // char    ::= <any source character except "\" or newline or single quotes>
 pub fn parse_char_literal(input: &str) -> IResult<&str, Token> {
     map(
-        delimited(
-            char('\''),
-            verify(none_of("'\\\n"), |_| true),
-            char('\''),
-        ),
+        delimited(char('\''), verify(none_of("'\\\n"), |_| true), char('\'')),
         Token::CharLiteral,
     )(input)
 }
@@ -236,7 +223,10 @@ mod tests {
 
     #[test]
     fn test_integers_with_underscores() {
-        assert_eq!(parse_int_literal("1_000_000"), Ok(("", Token::IntLiteral(1_000_000))));
+        assert_eq!(
+            parse_int_literal("1_000_000"),
+            Ok(("", Token::IntLiteral(1_000_000)))
+        );
         assert_eq!(parse_int_literal("42_42"), Ok(("", Token::IntLiteral(4242))));
         assert_eq!(parse_int_literal("123_456"), Ok(("", Token::IntLiteral(123456))));
     }
@@ -249,7 +239,10 @@ mod tests {
 
     #[test]
     fn test_pointfloat() {
-        assert_eq!(parse_float_literal("3.14f32"), Ok(("", Token::FloatLiteral(3.14))));
+        assert_eq!(
+            parse_float_literal("3.14f32"),
+            Ok(("", Token::FloatLiteral(3.14)))
+        );
         assert_eq!(parse_float_literal("0.5f32"), Ok(("", Token::FloatLiteral(0.5))));
         assert_eq!(parse_float_literal(".5f32"), Ok(("", Token::FloatLiteral(0.5))));
     }
@@ -257,22 +250,46 @@ mod tests {
     #[test]
     fn test_intpart_with_suffix() {
         // Test integers with float suffix like "135f32"
-        assert_eq!(parse_float_literal("135f32"), Ok(("", Token::FloatLiteral(135.0))));
-        assert_eq!(parse_float_literal("255f32"), Ok(("", Token::FloatLiteral(255.0))));
-        assert_eq!(parse_float_literal("-17f32"), Ok(("", Token::FloatLiteral(-17.0))));
+        assert_eq!(
+            parse_float_literal("135f32"),
+            Ok(("", Token::FloatLiteral(135.0)))
+        );
+        assert_eq!(
+            parse_float_literal("255f32"),
+            Ok(("", Token::FloatLiteral(255.0)))
+        );
+        assert_eq!(
+            parse_float_literal("-17f32"),
+            Ok(("", Token::FloatLiteral(-17.0)))
+        );
     }
 
     #[test]
     fn test_float_exponent_notation() {
-        assert_eq!(parse_float_literal("1.5e10f32"), Ok(("", Token::FloatLiteral(1.5e10))));
-        assert_eq!(parse_float_literal("2E-5f32"), Ok(("", Token::FloatLiteral(2e-5))));
-        assert_eq!(parse_float_literal("3.14e2f32"), Ok(("", Token::FloatLiteral(314.0))));
+        assert_eq!(
+            parse_float_literal("1.5e10f32"),
+            Ok(("", Token::FloatLiteral(1.5e10)))
+        );
+        assert_eq!(
+            parse_float_literal("2E-5f32"),
+            Ok(("", Token::FloatLiteral(2e-5)))
+        );
+        assert_eq!(
+            parse_float_literal("3.14e2f32"),
+            Ok(("", Token::FloatLiteral(314.0)))
+        );
     }
 
     #[test]
     fn test_floats_with_underscores() {
-        assert_eq!(parse_float_literal("3.14_159f32"), Ok(("", Token::FloatLiteral(3.14159))));
-        assert_eq!(parse_float_literal("1_000.5f32"), Ok(("", Token::FloatLiteral(1000.5))));
+        assert_eq!(
+            parse_float_literal("3.14_159f32"),
+            Ok(("", Token::FloatLiteral(3.14159)))
+        );
+        assert_eq!(
+            parse_float_literal("1_000.5f32"),
+            Ok(("", Token::FloatLiteral(1000.5)))
+        );
     }
 
     #[test]

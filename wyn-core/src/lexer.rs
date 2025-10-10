@@ -53,21 +53,21 @@ pub enum Token {
     Assign,
     BinOp(String), // Binary operators: +, -, *, /
     Arrow,
-    Backslash,  // \ for lambda expressions
-    Dot,        // . for field access
-    DotDot,     // .. for ranges
-    DotDotLt,   // ..< for ranges
-    DotDotGt,   // ..> for ranges
-    Ellipsis,   // ... for ranges
-    Pipe,       // | for pattern matching
-    PipeOp,     // |> for pipe operator
-    Star,       // * for uniqueness types (prefix)
-    Minus,      // - (can be unary or binary)
-    Underscore, // _ for wildcard patterns
-    Bang,       // ! for negation
+    Backslash,    // \ for lambda expressions
+    Dot,          // . for field access
+    DotDot,       // .. for ranges
+    DotDotLt,     // ..< for ranges
+    DotDotGt,     // ..> for ranges
+    Ellipsis,     // ... for ranges
+    Pipe,         // | for pattern matching
+    PipeOp,       // |> for pipe operator
+    Star,         // * for uniqueness types (prefix)
+    Minus,        // - (can be unary or binary)
+    Underscore,   // _ for wildcard patterns
+    Bang,         // ! for negation
     QuestionMark, // ? for existential types
-    TypeHole,   // ??? for type holes (placeholder expressions)
-    At,         // @ for as-patterns (future)
+    TypeHole,     // ??? for type holes (placeholder expressions)
+    At,           // @ for as-patterns (future)
 
     // Delimiters
     LeftParen,

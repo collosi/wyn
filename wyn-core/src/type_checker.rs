@@ -805,9 +805,12 @@ impl TypeChecker {
                                 TypeName::Str(s) => s.to_string(),
                                 TypeName::Array => "array".to_string(),
                                 TypeName::Size(n) => n.to_string(),
+                                TypeName::SizeVar(name) => name.clone(),
                                 TypeName::Unique => "unique".to_string(),
                                 TypeName::Record(_) => "record".to_string(),
                                 TypeName::Sum(_) => "sum".to_string(),
+                                TypeName::Existential(_, _) => "existential".to_string(),
+                                TypeName::NamedParam(_, _) => "named_param".to_string(),
                             };
 
                             // Look up field in builtin registry (for vector types)
@@ -897,7 +900,7 @@ impl TypeChecker {
 
             ExprKind::Assert(_, _) => {
                 todo!("Assert not yet implemented in type checker")
-            } 
+            }
         } // NEWCASESHERE - add new cases before this closing brace
         ?;
 

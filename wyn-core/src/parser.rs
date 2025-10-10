@@ -410,22 +410,157 @@ impl Parser {
 
     fn parse_type(&mut self) -> Result<Type> {
         trace!("parse_type: next token = {:?}", self.peek());
+        // Check for existential size: ?[n][m]. type
+        if self.check(&Token::QuestionMark) {
+            return self.parse_existential_type();
+        }
         self.parse_function_type()
+    }
+
+    fn parse_existential_type(&mut self) -> Result<Type> {
+        self.expect(Token::QuestionMark)?;
+        let mut size_vars = Vec::new();
+
+        // Parse one or more [name] size variables
+        while self.check(&Token::LeftBracket) || self.check(&Token::LeftBracketSpaced) {
+            self.advance(); // consume '['
+            let var_name = self.expect_identifier()?;
+            self.expect(Token::RightBracket)?;
+            size_vars.push(var_name);
+        }
+
+        if size_vars.is_empty() {
+            return Err(CompilerError::ParseError(
+                "Existential type must have at least one size variable".to_string(),
+            ));
+        }
+
+        self.expect(Token::Dot)?;
+        let inner_type = self.parse_function_type()?;
+
+        Ok(types::existential(size_vars, inner_type))
     }
 
     fn parse_function_type(&mut self) -> Result<Type> {
         trace!("parse_function_type: next token = {:?}", self.peek());
-        let mut left = self.parse_array_or_base_type()?;
+
+        // Check for named parameter: (name: type) -> type
+        if self.check(&Token::LeftParen) {
+            let saved_pos = self.current;
+            self.advance(); // consume '('
+
+            // Try to parse as named parameter
+            if let Some(Token::Identifier(name)) = self.peek() {
+                let param_name = name.clone();
+                self.advance();
+
+                if self.check(&Token::Colon) {
+                    // It's a named parameter
+                    self.advance(); // consume ':'
+                    let param_type = self.parse_type()?;
+                    self.expect(Token::RightParen)?;
+
+                    // Must be followed by ->
+                    if self.check(&Token::Arrow) {
+                        self.advance();
+                        let return_type = self.parse_type()?;
+                        let named_param = types::named_param(param_name, param_type);
+                        return Ok(types::function(named_param, return_type));
+                    } else {
+                        return Err(CompilerError::ParseError(
+                            "Named parameter must be followed by ->".to_string(),
+                        ));
+                    }
+                }
+            }
+
+            // Not a named parameter, restore position and parse normally
+            self.current = saved_pos;
+        }
+
+        // Regular function type or type application
+        let mut left = self.parse_type_application()?;
 
         // Handle function arrows: T1 -> T2 -> T3
         while self.check(&Token::Arrow) {
-            // We'll need to add Arrow token
             self.advance();
-            let right = self.parse_array_or_base_type()?;
+            let right = self.parse_type_application()?;
             left = types::function(left, right);
         }
 
         Ok(left)
+    }
+
+    fn parse_type_application(&mut self) -> Result<Type> {
+        trace!("parse_type_application: next token = {:?}", self.peek());
+
+        let mut base = self.parse_array_or_base_type()?;
+
+        // Type application loop: keep applying type arguments
+        // Grammar: type_application ::= type type_arg | "*" type
+        //          type_arg         ::= "[" [dim] "]" | type
+        loop {
+            if self.is_at_type_boundary() {
+                break;
+            }
+
+            match self.peek() {
+                // Array dimension application: [n] or []
+                Some(Token::LeftBracket) | Some(Token::LeftBracketSpaced) => {
+                    self.advance();
+
+                    if self.check(&Token::RightBracket) {
+                        // Empty brackets []
+                        self.advance();
+                        base = Type::Constructed(
+                            TypeName::Array,
+                            vec![Type::Constructed(TypeName::Str("unsized"), vec![]), base],
+                        );
+                    } else if let Some(Token::Identifier(name)) = self.peek() {
+                        // Size variable [n]
+                        let size_var = name.clone();
+                        self.advance();
+                        self.expect(Token::RightBracket)?;
+                        base = Type::Constructed(TypeName::Array, vec![types::size_var(size_var), base]);
+                    } else if let Some(Token::IntLiteral(n)) = self.peek() {
+                        // Size literal [3]
+                        let size = *n as usize;
+                        self.advance();
+                        self.expect(Token::RightBracket)?;
+                        base = Type::Constructed(
+                            TypeName::Array,
+                            vec![Type::Constructed(TypeName::Size(size), vec![]), base],
+                        );
+                    } else {
+                        return Err(CompilerError::ParseError(
+                            "Expected size in array type application".to_string(),
+                        ));
+                    }
+                }
+                // Regular type argument application
+                Some(Token::Identifier(_)) | Some(Token::LeftParen) | Some(Token::LeftBrace) => {
+                    let arg_type = self.parse_array_or_base_type()?;
+                    base = Type::Constructed(TypeName::Str("app"), vec![base, arg_type]);
+                }
+                _ => break,
+            }
+        }
+
+        Ok(base)
+    }
+
+    // Helper to check if we're at a type boundary (don't continue type application)
+    fn is_at_type_boundary(&self) -> bool {
+        matches!(
+            self.peek(),
+            Some(Token::Arrow)
+                | Some(Token::RightParen)
+                | Some(Token::RightBrace)
+                | Some(Token::Comma)
+                | Some(Token::Assign)
+                | Some(Token::Pipe)
+                | None
+        )
     }
 
     fn parse_array_or_base_type(&mut self) -> Result<Type> {
@@ -442,6 +577,16 @@ impl Parser {
         if self.check(&Token::LeftBracket) || self.check(&Token::LeftBracketSpaced) {
             self.advance(); // consume '['
 
+            // Check for empty brackets []
+            if self.check(&Token::RightBracket) {
+                self.advance();
+                let elem_type = self.parse_array_or_base_type()?;
+                return Ok(Type::Constructed(
+                    TypeName::Array,
+                    vec![Type::Constructed(TypeName::Str("unsized"), vec![]), elem_type],
+                ));
+            }
+
             // Parse dimension - could be integer literal or identifier (size variable)
             if let Some(Token::IntLiteral(n)) = self.peek() {
                 let size = *n as usize;
@@ -449,9 +594,20 @@ impl Parser {
                 self.expect(Token::RightBracket)?;
                 let elem_type = self.parse_array_or_base_type()?; // Allow nested arrays
                 Ok(types::sized_array(size, elem_type))
+            } else if let Some(Token::Identifier(name)) = self.peek() {
+                // Size variable [n]
+                let size_var = name.clone();
+                self.advance();
+                self.expect(Token::RightBracket)?;
+                let elem_type = self.parse_array_or_base_type()?;
+                Ok(Type::Constructed(
+                    TypeName::Array,
+                    vec![types::size_var(size_var), elem_type],
+                ))
             } else {
-                // Size variables like [n] are not implemented yet
-                todo!("Size variables in array types not yet implemented")
+                return Err(CompilerError::ParseError(
+                    "Expected size literal or variable in array type".to_string(),
+                ));
             }
         } else {
             self.parse_base_type()
@@ -586,7 +742,11 @@ impl Parser {
                         self.advance();
                         num
                     }
-                    _ => return Err(CompilerError::ParseError("Expected field name or number".to_string())),
+                    _ => {
+                        return Err(CompilerError::ParseError(
+                            "Expected field name or number".to_string(),
+                        ));
+                    }
                 };
 
                 self.expect(Token::Colon)?;
@@ -631,12 +791,17 @@ impl Parser {
                 && !self.check(&Token::RightBrace)
                 && !self.check(&Token::Comma)
                 && !self.check(&Token::Arrow)
-                && self.current < self.tokens.len() {
+                && self.current < self.tokens.len()
+            {
                 // Try to parse a type argument
                 // This is tricky - we need to avoid consuming tokens that aren't part of the sum type
                 // For now, we'll be conservative and only parse simple types
                 match self.peek() {
-                    Some(Token::Identifier(_)) | Some(Token::LeftParen) | Some(Token::LeftBrace) | Some(Token::LeftBracket) | Some(Token::LeftBracketSpaced) => {
+                    Some(Token::Identifier(_))
+                    | Some(Token::LeftParen)
+                    | Some(Token::LeftBrace)
+                    | Some(Token::LeftBracket)
+                    | Some(Token::LeftBracketSpaced) => {
                         arg_types.push(self.parse_array_or_base_type()?);
                     }
                     Some(Token::BinOp(op)) if op == "*" => {

@@ -80,6 +80,9 @@ impl CodeAnnotator {
                     TypeName::Size(n) => {
                         self.output.push_str(&n.to_string());
                     }
+                    TypeName::SizeVar(name) => {
+                        self.output.push_str(name);
+                    }
                     TypeName::Unique => {
                         self.output.push('*');
                     }
@@ -106,6 +109,23 @@ impl CodeAnnotator {
                                 self.write_type(ty);
                             }
                         }
+                    }
+                    TypeName::Existential(vars, ty) => {
+                        self.output.push('?');
+                        for var in vars {
+                            self.output.push('[');
+                            self.output.push_str(var);
+                            self.output.push(']');
+                        }
+                        self.output.push('.');
+                        self.write_type(ty);
+                    }
+                    TypeName::NamedParam(name, ty) => {
+                        self.output.push('(');
+                        self.output.push_str(name);
+                        self.output.push(':');
+                        self.write_type(ty);
+                        self.output.push(')');
                     }
                 }
                 if !args.is_empty() {

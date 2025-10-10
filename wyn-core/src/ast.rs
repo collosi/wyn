@@ -74,12 +74,15 @@ pub type Expression = Node<ExprKind>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeName {
-    Str(&'static str),             // Basic types: "int", "float", "tuple", "->", etc.
-    Array,                         // Array type constructor (takes size and element type)
-    Size(usize),                   // Array size literal
-    Unique,                        // Uniqueness/consuming type marker (corresponds to "*" prefix)
-    Record(Vec<(String, Type)>),   // Record type: {field1: type1, field2: type2}
-    Sum(Vec<(String, Vec<Type>)>), // Sum type: Constructor1 type* | Constructor2 type*
+    Str(&'static str),                   // Basic types: "int", "float", "tuple", "->", etc.
+    Array,                               // Array type constructor (takes size and element type)
+    Size(usize),                         // Array size literal
+    SizeVar(String),                     // Size variable: [n]
+    Unique,                              // Uniqueness/consuming type marker (corresponds to "*" prefix)
+    Record(Vec<(String, Type)>),         // Record type: {field1: type1, field2: type2}
+    Sum(Vec<(String, Vec<Type>)>),       // Sum type: Constructor1 type* | Constructor2 type*
+    Existential(Vec<String>, Box<Type>), // Existential size: ?[n][m]. type
+    NamedParam(String, Box<Type>),       // Named parameter: (name: type)
 }
 
 impl std::fmt::Display for TypeName {
@@ -88,6 +91,7 @@ impl std::fmt::Display for TypeName {
             TypeName::Str(s) => write!(f, "{}", s),
             TypeName::Array => write!(f, "Array"),
             TypeName::Size(n) => write!(f, "{}", n),
+            TypeName::SizeVar(name) => write!(f, "{}", name),
             TypeName::Unique => write!(f, "*"),
             TypeName::Record(fields) => {
                 write!(f, "{{")?;
@@ -110,6 +114,16 @@ impl std::fmt::Display for TypeName {
                     }
                 }
                 Ok(())
+            }
+            TypeName::Existential(vars, ty) => {
+                write!(f, "?")?;
+                for var in vars {
+                    write!(f, "[{}]", var)?;
+                }
+                write!(f, ".{}", ty)
+            }
+            TypeName::NamedParam(name, ty) => {
+                write!(f, "({}:{})", name, ty)
             }
         }
     }
@@ -322,17 +336,17 @@ pub enum ExprKind {
     Lambda(LambdaExpr),
     Application(Box<Expression>, Vec<Expression>), // Function application
     LetIn(LetInExpr),
-    FieldAccess(Box<Expression>, String), // e.g. v.x, v.y
-    If(IfExpr),                           // if-then-else expression
-    Loop(LoopExpr),                       // loop expression
-    Match(MatchExpr),                     // match expression
-    Range(RangeExpr),                     // range expressions: a..b, a..<b, a..>b, a...b
-    Pipe(Box<Expression>, Box<Expression>), // |> pipe operator
-    TypeAscription(Box<Expression>, Type), // exp : type
-    TypeCoercion(Box<Expression>, Type),   // exp :> type
-    Unsafe(Box<Expression>),               // unsafe exp
+    FieldAccess(Box<Expression>, String),     // e.g. v.x, v.y
+    If(IfExpr),                               // if-then-else expression
+    Loop(LoopExpr),                           // loop expression
+    Match(MatchExpr),                         // match expression
+    Range(RangeExpr),                         // range expressions: a..b, a..<b, a..>b, a...b
+    Pipe(Box<Expression>, Box<Expression>),   // |> pipe operator
+    TypeAscription(Box<Expression>, Type),    // exp : type
+    TypeCoercion(Box<Expression>, Type),      // exp :> type
+    Unsafe(Box<Expression>),                  // unsafe exp
     Assert(Box<Expression>, Box<Expression>), // assert cond exp
-    TypeHole,                              // ??? - placeholder for any expression
+    TypeHole,                                 // ??? - placeholder for any expression
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -375,23 +389,23 @@ pub struct IfExpr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoopExpr {
-    pub pattern: Pattern,                 // loop variable pattern
-    pub init: Option<Box<Expression>>,    // initial value (optional)
-    pub form: LoopForm,                   // for/while condition
-    pub body: Box<Expression>,            // loop body
+    pub pattern: Pattern,              // loop variable pattern
+    pub init: Option<Box<Expression>>, // initial value (optional)
+    pub form: LoopForm,                // for/while condition
+    pub body: Box<Expression>,         // loop body
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LoopForm {
-    For(String, Box<Expression>),         // for name < exp
-    ForIn(Pattern, Box<Expression>),      // for pat in exp
-    While(Box<Expression>),               // while exp
+    For(String, Box<Expression>),    // for name < exp
+    ForIn(Pattern, Box<Expression>), // for pat in exp
+    While(Box<Expression>),          // while exp
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchExpr {
-    pub scrutinee: Box<Expression>,       // expression being matched
-    pub cases: Vec<MatchCase>,            // case branches
+    pub scrutinee: Box<Expression>, // expression being matched
+    pub cases: Vec<MatchCase>,      // case branches
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -403,17 +417,17 @@ pub struct MatchCase {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RangeExpr {
     pub start: Box<Expression>,
-    pub step: Option<Box<Expression>>,    // Optional middle expression in start..step..end
+    pub step: Option<Box<Expression>>, // Optional middle expression in start..step..end
     pub end: Box<Expression>,
     pub kind: RangeKind,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RangeKind {
-    Inclusive,      // ... (three dots)
-    Exclusive,      // .. (two dots)
-    ExclusiveLt,    // ..<
-    ExclusiveGt,    // ..>
+    Inclusive,   // ... (three dots)
+    Exclusive,   // .. (two dots)
+    ExclusiveLt, // ..<
+    ExclusiveGt, // ..>
 }
 
 // Pattern types for match expressions and let bindings
@@ -603,6 +617,21 @@ pub mod types {
     /// Create a sum type: Constructor1 type* | Constructor2 type*
     pub fn sum(variants: Vec<(String, Vec<Type>)>) -> Type {
         Type::Constructed(TypeName::Sum(variants), vec![])
+    }
+
+    /// Create an existential size type: ?[n][m]. type
+    pub fn existential(size_vars: Vec<String>, inner: Type) -> Type {
+        Type::Constructed(TypeName::Existential(size_vars, Box::new(inner)), vec![])
+    }
+
+    /// Create a named parameter type: (name: type)
+    pub fn named_param(name: String, ty: Type) -> Type {
+        Type::Constructed(TypeName::NamedParam(name, Box::new(ty)), vec![])
+    }
+
+    /// Create a size variable in array types: [n]
+    pub fn size_var(name: String) -> Type {
+        Type::Constructed(TypeName::SizeVar(name), vec![])
     }
 
     /// Create a unique (consuming/alias-free) type: *t

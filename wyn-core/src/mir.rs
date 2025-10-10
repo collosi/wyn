@@ -70,11 +70,11 @@ pub enum Instruction {
     ArrayIndex(Register, Register, Register), // dest, array, index
 
     // Control flow
-    Branch(BlockId),                         // unconditional jump
-    BranchCond(Register, BlockId, BlockId, BlockId),  // cond, true_block, false_block, merge_block
-    Phi(Register, Vec<(Register, BlockId)>), // dest, vec of (value, predecessor_block)
-    Return(Register),                        // return value
-    ReturnVoid,                              // return from void function
+    Branch(BlockId),                                 // unconditional jump
+    BranchCond(Register, BlockId, BlockId, BlockId), // cond, true_block, false_block, merge_block
+    Phi(Register, Vec<(Register, BlockId)>),         // dest, vec of (value, predecessor_block)
+    Return(Register),                                // return value
+    ReturnVoid,                                      // return from void function
 }
 
 /// Basic block in control flow graph
@@ -520,8 +520,19 @@ impl Builder {
         self.emit(Instruction::Branch(target));
     }
 
-    pub fn build_branch_cond(&mut self, cond: Register, true_block: BlockId, false_block: BlockId, merge_block: BlockId) {
-        self.emit(Instruction::BranchCond(cond, true_block, false_block, merge_block));
+    pub fn build_branch_cond(
+        &mut self,
+        cond: Register,
+        true_block: BlockId,
+        false_block: BlockId,
+        merge_block: BlockId,
+    ) {
+        self.emit(Instruction::BranchCond(
+            cond,
+            true_block,
+            false_block,
+            merge_block,
+        ));
     }
 
     pub fn build_phi(

@@ -149,7 +149,11 @@ def test(x: i32): i32 =
                         );
 
                         // Check that the register is defined in the specific predecessor block
-                        let pred_block = func.blocks.iter().find(|b| b.id == *pred_block_id).expect("Predecessor block should exist");
+                        let pred_block = func
+                            .blocks
+                            .iter()
+                            .find(|b| b.id == *pred_block_id)
+                            .expect("Predecessor block should exist");
                         let reg_defined = pred_block.instructions.iter().any(|i| match i {
                             Instruction::ConstInt(r, _) => r.id == value_reg.id,
                             Instruction::ConstFloat(r, _) => r.id == value_reg.id,
