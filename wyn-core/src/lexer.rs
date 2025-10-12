@@ -53,6 +53,7 @@ pub enum Token {
     Assign,
     BinOp(String), // Binary operators: +, -, *, /
     Arrow,
+    TypeCoercion,  // :> for type coercion
     Backslash,    // \ for lambda expressions
     Dot,          // . for field access
     DotDot,       // .. for ranges
@@ -172,6 +173,7 @@ fn parse_operator(input: &str) -> IResult<&str, Token> {
     alt((
         alt((
             value(Token::Arrow, tag("->")),
+            value(Token::TypeCoercion, tag(":>")),
             // Type hole (must come before Ellipsis and QuestionMark)
             value(Token::TypeHole, tag("???")),
             // Range operators (must come before ..)

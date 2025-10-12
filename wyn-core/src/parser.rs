@@ -826,7 +826,90 @@ impl Parser {
 
     fn parse_expression(&mut self) -> Result<Expression> {
         trace!("parse_expression: next token = {:?}", self.peek());
-        self.parse_binary_expression()
+        self.parse_type_ascription()
+    }
+
+    // Parse type ascription and coercion (lowest precedence)
+    fn parse_type_ascription(&mut self) -> Result<Expression> {
+        let mut expr = self.parse_range_expression()?;
+
+        // Check for type ascription (:) or type coercion (:>)
+        match self.peek() {
+            Some(Token::Colon) => {
+                self.advance();
+                let ty = self.parse_type()?;
+                expr = self.node_counter.mk_node(ExprKind::TypeAscription(Box::new(expr), ty));
+            }
+            Some(Token::TypeCoercion) => {
+                self.advance();
+                let ty = self.parse_type()?;
+                expr = self.node_counter.mk_node(ExprKind::TypeCoercion(Box::new(expr), ty));
+            }
+            _ => {}
+        }
+
+        Ok(expr)
+    }
+
+    // Parse range expressions: a..b, a..<b, a..>b, a...b, a..step..end
+    fn parse_range_expression(&mut self) -> Result<Expression> {
+        let mut start = self.parse_binary_expression()?;
+
+        // Check if we have a range operator
+        match self.peek() {
+            Some(Token::DotDot) | Some(Token::DotDotLt) | Some(Token::DotDotGt) | Some(Token::Ellipsis) => {
+                self.advance();
+                let first_op = self.tokens[self.current - 1].clone();
+
+                // Check if there's a step value (for a..step..end)
+                let (step, end_op) = if matches!(first_op, Token::DotDot) {
+                    // Parse potential step
+                    let step_expr = self.parse_binary_expression()?;
+
+                    // Check if there's another range operator
+                    match self.peek() {
+                        Some(Token::DotDotLt) | Some(Token::DotDotGt) | Some(Token::Ellipsis) => {
+                            self.advance();
+                            let second_op = self.tokens[self.current - 1].clone();
+                            (Some(Box::new(step_expr)), second_op)
+                        }
+                        _ => {
+                            // No second operator, step_expr is actually the end
+                            return Ok(self.node_counter.mk_node(ExprKind::Range(RangeExpr {
+                                start: Box::new(start),
+                                step: None,
+                                end: Box::new(step_expr),
+                                kind: RangeKind::Exclusive,
+                            })));
+                        }
+                    }
+                } else {
+                    (None, first_op)
+                };
+
+                // Parse the end expression
+                let end = self.parse_binary_expression()?;
+
+                // Determine range kind
+                let kind = match end_op {
+                    Token::Ellipsis => RangeKind::Inclusive,
+                    Token::DotDotLt => RangeKind::ExclusiveLt,
+                    Token::DotDotGt => RangeKind::ExclusiveGt,
+                    Token::DotDot => RangeKind::Exclusive,
+                    _ => unreachable!(),
+                };
+
+                start = self.node_counter.mk_node(ExprKind::Range(RangeExpr {
+                    start: Box::new(start),
+                    step,
+                    end: Box::new(end),
+                    kind,
+                }));
+            }
+            _ => {}
+        }
+
+        Ok(start)
     }
 
     fn parse_binary_expression(&mut self) -> Result<Expression> {
@@ -838,6 +921,7 @@ impl Parser {
         // Returns (precedence, is_left_associative)
         // Higher precedence binds tighter
         match op {
+            "|>" => Some((8, true)),      // Pipe operator
             "*" | "/" => Some((3, true)), // Multiplication and division
             "+" | "-" => Some((2, true)), // Addition and subtraction
             "==" | "!=" | "<" | ">" | "<=" | ">=" => Some((1, true)), // Comparison operators
@@ -854,9 +938,10 @@ impl Parser {
         let mut left = self.parse_application_expression()?;
 
         loop {
-            // Check if we have a binary operator
+            // Check if we have a binary operator or pipe operator
             let op_string = match self.peek() {
                 Some(Token::BinOp(op)) => op.clone(),
+                Some(Token::PipeOp) => "|>".to_string(),
                 _ => break,
             };
 
@@ -883,12 +968,18 @@ impl Parser {
 
             let right = self.parse_binary_expression_with_precedence(next_min_precedence)?;
 
-            // Build the binary operation
-            left = self.node_counter.mk_node(ExprKind::BinaryOp(
-                BinaryOp { op: op_string },
-                Box::new(left),
-                Box::new(right),
-            ));
+            // Build the appropriate operation
+            left = if op_string == "|>" {
+                // Pipe operator creates a Pipe node
+                self.node_counter.mk_node(ExprKind::Pipe(Box::new(left), Box::new(right)))
+            } else {
+                // Regular binary operation
+                self.node_counter.mk_node(ExprKind::BinaryOp(
+                    BinaryOp { op: op_string },
+                    Box::new(left),
+                    Box::new(right),
+                ))
+            };
         }
 
         Ok(left)
@@ -1093,6 +1184,10 @@ impl Parser {
             Some(Token::Backslash) => self.parse_lambda(),
             Some(Token::Let) => self.parse_let_in(),
             Some(Token::If) => self.parse_if_then_else(),
+            Some(Token::Loop) => self.parse_loop(),
+            Some(Token::Match) => self.parse_match(),
+            Some(Token::Unsafe) => self.parse_unsafe(),
+            Some(Token::Assert) => self.parse_assert(),
             _ => Err(CompilerError::ParseError("Expected expression".to_string())),
         }
     }
@@ -1217,6 +1312,108 @@ impl Parser {
             then_branch,
             else_branch,
         })))
+    }
+
+    fn parse_loop(&mut self) -> Result<Expression> {
+        trace!("parse_loop: next token = {:?}", self.peek());
+        use crate::ast::{LoopExpr, LoopForm};
+
+        self.expect(Token::Loop)?;
+        let pattern = self.parse_pattern()?;
+
+        // Check for optional initialization: = exp
+        let init = if self.check(&Token::Assign) {
+            self.advance();
+            Some(Box::new(self.parse_expression()?))
+        } else {
+            None
+        };
+
+        // Parse loop form
+        let form = if self.check(&Token::For) {
+            self.advance();
+            // Check if it's "for name < exp" or "for pat in exp"
+            let saved_pos = self.current;
+
+            // Try to parse as pattern first
+            if let Ok(pat) = self.parse_pattern() {
+                if self.check(&Token::In) {
+                    // It's "for pat in exp"
+                    self.advance();
+                    let iter_expr = Box::new(self.parse_expression()?);
+                    LoopForm::ForIn(pat, iter_expr)
+                } else {
+                    // Backtrack and try as "for name < exp"
+                    self.current = saved_pos;
+                    let name = self.expect_identifier()?;
+                    self.expect(Token::BinOp("<".to_string()))?;
+                    let bound = Box::new(self.parse_expression()?);
+                    LoopForm::For(name, bound)
+                }
+            } else {
+                return Err(CompilerError::ParseError("Expected pattern in for loop".to_string()));
+            }
+        } else if self.check(&Token::While) {
+            self.advance();
+            let condition = Box::new(self.parse_expression()?);
+            LoopForm::While(condition)
+        } else {
+            return Err(CompilerError::ParseError("Expected 'for' or 'while' in loop".to_string()));
+        };
+
+        self.expect(Token::Do)?;
+        let body = Box::new(self.parse_expression()?);
+
+        Ok(self.node_counter.mk_node(ExprKind::Loop(LoopExpr {
+            pattern,
+            init,
+            form,
+            body,
+        })))
+    }
+
+    fn parse_match(&mut self) -> Result<Expression> {
+        trace!("parse_match: next token = {:?}", self.peek());
+        use crate::ast::{MatchExpr, MatchCase};
+
+        self.expect(Token::Match)?;
+        let scrutinee = Box::new(self.parse_expression()?);
+
+        // Parse one or more case branches
+        let mut cases = Vec::new();
+        while self.check(&Token::Case) {
+            self.advance();
+            let pattern = self.parse_pattern()?;
+            self.expect(Token::Arrow)?;
+            let body = Box::new(self.parse_expression()?);
+            cases.push(MatchCase { pattern, body });
+        }
+
+        if cases.is_empty() {
+            return Err(CompilerError::ParseError("Match expression must have at least one case".to_string()));
+        }
+
+        Ok(self.node_counter.mk_node(ExprKind::Match(MatchExpr {
+            scrutinee,
+            cases,
+        })))
+    }
+
+    fn parse_unsafe(&mut self) -> Result<Expression> {
+        trace!("parse_unsafe: next token = {:?}", self.peek());
+        self.expect(Token::Unsafe)?;
+        let expr = Box::new(self.parse_expression()?);
+        Ok(self.node_counter.mk_node(ExprKind::Unsafe(expr)))
+    }
+
+    fn parse_assert(&mut self) -> Result<Expression> {
+        trace!("parse_assert: next token = {:?}", self.peek());
+        self.expect(Token::Assert)?;
+        // According to grammar: "assert" atom exp
+        // atom is a primary expression (condition)
+        let condition = Box::new(self.parse_primary_expression()?);
+        let body = Box::new(self.parse_expression()?);
+        Ok(self.node_counter.mk_node(ExprKind::Assert(condition, body)))
     }
 
     // Helper methods
