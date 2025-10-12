@@ -53,6 +53,10 @@ pub trait Visitor: Sized {
         ControlFlow::Continue(())
     }
 
+    fn visit_expr_bool_literal(&mut self, _b: bool) -> ControlFlow<Self::Break> {
+        ControlFlow::Continue(())
+    }
+
     fn visit_expr_identifier(&mut self, _name: &str) -> ControlFlow<Self::Break> {
         ControlFlow::Continue(())
     }
@@ -195,6 +199,7 @@ pub fn walk_expression<V: Visitor>(v: &mut V, e: &Expression) -> ControlFlow<V::
     match &e.kind {
         ExprKind::IntLiteral(n) => v.visit_expr_int_literal(*n),
         ExprKind::FloatLiteral(f) => v.visit_expr_float_literal(*f),
+        ExprKind::BoolLiteral(b) => v.visit_expr_bool_literal(*b),
         ExprKind::Identifier(name) => v.visit_expr_identifier(name),
         ExprKind::ArrayLiteral(elements) => v.visit_expr_array_literal(elements),
         ExprKind::ArrayIndex(array, index) => v.visit_expr_array_index(array, index),

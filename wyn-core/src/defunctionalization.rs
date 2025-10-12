@@ -158,6 +158,10 @@ impl Defunctionalizer {
                 self.node_counter.mk_node(ExprKind::FloatLiteral(*f)),
                 StaticValue::Dyn(types::f32()),
             )),
+            ExprKind::BoolLiteral(b) => Ok((
+                self.node_counter.mk_node(ExprKind::BoolLiteral(*b)),
+                StaticValue::Dyn(types::bool_type()),
+            )),
             ExprKind::Identifier(name) => {
                 if let Ok(sv) = scope_stack.lookup(name) {
                     match sv {
@@ -571,7 +575,7 @@ impl Defunctionalizer {
                 extended_bound.insert(let_in.name.clone());
                 self.collect_free_variables(&let_in.body, &extended_bound, free_vars)?;
             }
-            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::TypeHole => {
+            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::BoolLiteral(_) | ExprKind::TypeHole => {
                 // No free variables in literals or type holes
             }
             ExprKind::FieldAccess(expr, _field) => {

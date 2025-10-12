@@ -325,6 +325,7 @@ pub enum Spec {
 pub enum ExprKind {
     IntLiteral(i32),
     FloatLiteral(f32),
+    BoolLiteral(bool),
     Identifier(String),
     QualifiedName(Vec<String>, String), // quals, name - e.g., f32.sin is (["f32"], "sin")
     ArrayLiteral(Vec<Expression>),
@@ -470,6 +471,10 @@ pub mod types {
 
     pub fn f32() -> Type {
         Type::Constructed(TypeName::Str("f32"), vec![])
+    }
+
+    pub fn bool_type() -> Type {
+        Type::Constructed(TypeName::Str("bool"), vec![])
     }
 
     // f32 vector types

@@ -485,6 +485,7 @@ impl TypeChecker {
             }
             ExprKind::IntLiteral(_) => Ok(types::i32()),
             ExprKind::FloatLiteral(_) => Ok(types::f32()),
+            ExprKind::BoolLiteral(_) => Ok(types::bool_type()),
             ExprKind::Identifier(name) => {
                 debug!("Looking up identifier '{}'", name);
                 debug!("Current scope depth: {}", self.scope_stack.depth());

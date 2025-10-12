@@ -245,6 +245,7 @@ impl ConstantFolder {
             ExprKind::Identifier(_)
             | ExprKind::IntLiteral(_)
             | ExprKind::FloatLiteral(_)
+            | ExprKind::BoolLiteral(_)
             | ExprKind::TypeHole => Ok(expr.clone()),
 
             ExprKind::QualifiedName(_, _)

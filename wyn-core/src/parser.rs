@@ -1144,6 +1144,14 @@ impl Parser {
                 self.advance();
                 Ok(self.node_counter.mk_node(ExprKind::FloatLiteral(f)))
             }
+            Some(Token::True) => {
+                self.advance();
+                Ok(self.node_counter.mk_node(ExprKind::BoolLiteral(true)))
+            }
+            Some(Token::False) => {
+                self.advance();
+                Ok(self.node_counter.mk_node(ExprKind::BoolLiteral(false)))
+            }
             Some(Token::Identifier(name)) => {
                 let name = name.clone();
                 self.advance();

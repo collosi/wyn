@@ -1189,6 +1189,14 @@ impl CodeGenerator {
                     type_id: self.f32_type,
                 })
             }
+            ExprKind::BoolLiteral(b) => {
+                // bool is represented as i32 (0 or 1) in SPIR-V
+                let const_id = self.builder.constant_bit32(self.i32_type, if *b { 1 } else { 0 });
+                Ok(Value {
+                    id: const_id,
+                    type_id: self.i32_type,
+                })
+            }
             ExprKind::Identifier(name) => {
                 if let Some(binding) = self.environment.lookup(name) {
                     let value = binding.value;

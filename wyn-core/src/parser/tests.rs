@@ -2420,3 +2420,184 @@ fn test_parse_sum_type_multiple_args() {
         }
     });
 }
+
+// ============================================================================
+// Grammar Ambiguity Tests
+// Tests for ambiguities described in GRAMMAR.txt lines 210-233
+// ============================================================================
+
+#[test]
+fn test_ambiguity_field_access_parses_as_field() {
+    // x.y should parse as field access on record x
+    expect_parse("def test(): i32 = x.y", |declarations| {
+        match &declarations[0] {
+            Declaration::Decl(decl) => match &decl.body.kind {
+                ExprKind::FieldAccess(base, field) => match &base.kind {
+                    ExprKind::Identifier(name) if name == "x" && field == "y" => Ok(()),
+                    _ => Err("Expected x.y field access".to_string()),
+                },
+                _ => Err("Expected field access".to_string()),
+            },
+            _ => Err("Expected Decl".to_string()),
+        }
+    });
+}
+
+#[test]
+fn test_ambiguity_array_index_with_space_is_function_call() {
+    // f [x] with space should parse as function call with array argument
+    expect_parse("def test(): i32 = f [1, 2, 3]", |declarations| {
+        match &declarations[0] {
+            Declaration::Decl(decl) => match &decl.body.kind {
+                ExprKind::FunctionCall(name, args) if name == "f" && args.len() == 1 => match &args[0].kind {
+                    ExprKind::ArrayLiteral(_) => Ok(()),
+                    _ => Err("Expected array literal".to_string()),
+                },
+                _ => Err("Expected function call".to_string()),
+            },
+            _ => Err("Expected Decl".to_string()),
+        }
+    });
+}
+
+#[test]
+fn test_ambiguity_array_index_without_space_is_indexing() {
+    // f[x] without space should parse as array indexing
+    expect_parse("def test(): i32 = f[0]", |declarations| {
+        match &declarations[0] {
+            Declaration::Decl(decl) => match &decl.body.kind {
+                ExprKind::ArrayIndex(array, _) => match &array.kind {
+                    ExprKind::Identifier(name) if name == "f" => Ok(()),
+                    _ => Err("Expected identifier 'f'".to_string()),
+                },
+                _ => Err("Expected array index".to_string()),
+            },
+            _ => Err("Expected Decl".to_string()),
+        }
+    });
+}
+
+#[test]
+fn test_ambiguity_negative_in_parens() {
+    // (-x) should parse as negation of x in parentheses
+    expect_parse("def test(): i32 = (-x)", |declarations| {
+        match &declarations[0] {
+            Declaration::Decl(decl) => match &decl.body.kind {
+                ExprKind::UnaryOp(op, operand) if op.op == "-" => match &operand.kind {
+                    ExprKind::Identifier(name) if name == "x" => Ok(()),
+                    _ => Err("Expected identifier 'x'".to_string()),
+                },
+                _ => Err("Expected unary operation".to_string()),
+            },
+            _ => Err("Expected Decl".to_string()),
+        }
+    });
+}
+
+#[test]
+fn test_ambiguity_prefix_binds_tighter_than_infix() {
+    // !x + y should parse as (!x) + y, not !(x + y)
+    expect_parse("def test(): i32 = !x + y", |declarations| {
+        match &declarations[0] {
+            Declaration::Decl(decl) => match &decl.body.kind {
+                ExprKind::BinaryOp(op, left, _) if op.op == "+" => match &left.kind {
+                    ExprKind::UnaryOp(unary_op, _) if unary_op.op == "!" => Ok(()),
+                    _ => Err("Expected unary ! on left".to_string()),
+                },
+                _ => Err("Expected binary operation".to_string()),
+            },
+            _ => Err("Expected Decl".to_string()),
+        }
+    });
+}
+
+#[test]
+fn test_ambiguity_function_application_binds_tighter() {
+    // f x + y should parse as (f x) + y, not f (x + y)
+    expect_parse("def test(): i32 = f x + y", |declarations| {
+        match &declarations[0] {
+            Declaration::Decl(decl) => match &decl.body.kind {
+                ExprKind::BinaryOp(op, left, _) if op.op == "+" => match &left.kind {
+                    ExprKind::FunctionCall(_, args) if args.len() == 1 => Ok(()),
+                    _ => Err("Expected function call on left".to_string()),
+                },
+                _ => Err("Expected binary operation".to_string()),
+            },
+            _ => Err("Expected Decl".to_string()),
+        }
+    });
+}
+
+#[test]
+fn test_ambiguity_let_extends_right() {
+    // let x = 1 in x + y should parse with (x + y) as the body
+    expect_parse("def test(): i32 = let x = 1 in x + y", |declarations| {
+        match &declarations[0] {
+            Declaration::Decl(decl) => match &decl.body.kind {
+                ExprKind::LetIn(let_in) => match &let_in.body.kind {
+                    ExprKind::BinaryOp(op, _, _) if op.op == "+" => Ok(()),
+                    _ => Err("Expected binary op in let body".to_string()),
+                },
+                _ => Err("Expected let-in expression".to_string()),
+            },
+            _ => Err("Expected Decl".to_string()),
+        }
+    });
+}
+
+#[test]
+fn test_ambiguity_if_extends_right() {
+    // if cond then x else y + z should parse with (y + z) as else branch
+    expect_parse("def test(): i32 = if true then 1 else 2 + 3", |declarations| {
+        match &declarations[0] {
+            Declaration::Decl(decl) => match &decl.body.kind {
+                ExprKind::If(if_expr) => match &if_expr.else_branch.kind {
+                    ExprKind::BinaryOp(op, _, _) if op.op == "+" => Ok(()),
+                    _ => Err("Expected binary op in else branch".to_string()),
+                },
+                _ => Err("Expected if expression".to_string()),
+            },
+            _ => Err("Expected Decl".to_string()),
+        }
+    });
+}
+
+#[test]
+fn test_ambiguity_type_ascription() {
+    // x : i32 should parse as type ascription
+    expect_parse("def test(): i32 = x : i32", |declarations| {
+        match &declarations[0] {
+            Declaration::Decl(decl) => match &decl.body.kind {
+                ExprKind::TypeAscription(inner, ty) => match (&inner.kind, ty) {
+                    (ExprKind::Identifier(name), Type::Constructed(TypeName::Str("i32"), _))
+                        if name == "x" =>
+                    {
+                        Ok(())
+                    }
+                    _ => Err("Expected x : i32".to_string()),
+                },
+                _ => Err("Expected type ascription".to_string()),
+            },
+            _ => Err("Expected Decl".to_string()),
+        }
+    });
+}
+
+#[test]
+fn test_ambiguity_pipe_operator() {
+    // x |> f should parse as pipe operation
+    expect_parse("def test(): i32 = x |> f", |declarations| {
+        match &declarations[0] {
+            Declaration::Decl(decl) => match &decl.body.kind {
+                ExprKind::Pipe(left, right) => match (&left.kind, &right.kind) {
+                    (ExprKind::Identifier(l), ExprKind::Identifier(r)) if l == "x" && r == "f" => {
+                        Ok(())
+                    }
+                    _ => Err("Expected x |> f".to_string()),
+                },
+                _ => Err("Expected pipe operation".to_string()),
+            },
+            _ => Err("Expected Decl".to_string()),
+        }
+    });
+}

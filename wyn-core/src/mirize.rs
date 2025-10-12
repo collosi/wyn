@@ -247,6 +247,8 @@ impl Mirize {
 
             ExprKind::FloatLiteral(f) => Ok(self.builder.build_const_float(*f, expr_type)),
 
+            ExprKind::BoolLiteral(b) => Ok(self.builder.build_const_bool(*b, expr_type)),
+
             ExprKind::Identifier(name) => {
                 // Check if this is a constant reference
                 if let Some(offset) = self.builder.get_constant_offset(name) {

@@ -193,6 +193,7 @@ pub fn expr_type_name(expr: &Expression) -> &'static str {
     match &expr.kind {
         ExprKind::IntLiteral(_) => "int_literal",
         ExprKind::FloatLiteral(_) => "float_literal",
+        ExprKind::BoolLiteral(_) => "bool_literal",
         ExprKind::Identifier(_) => "identifier",
         ExprKind::ArrayLiteral(_) => "array_literal",
         ExprKind::ArrayIndex(..) => "array_index",
