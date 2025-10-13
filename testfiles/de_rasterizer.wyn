@@ -15,19 +15,19 @@ def WHITE : vec3 = vec3 1.0f32 1.0f32 0.97f32
 def YELLOW : vec3 = vec3 1.0f32 1.0f32 0.0f32
 
 -- Rasterize helpers
-def line (WEIGHT:f32) (p:vec2) (p0:vec2) (p1:vec2) (w:f32) : f32 =
+def line weight:f32 p:vec2 p0:vec2 p1:vec2 w:f32 : f32 =
   let d = [p1[0]-p0[0], p1[1]-p0[1]]
   let denom = dot2 d d
   let t_raw = if denom == 0.0f32 then 0.0f32 else (dot2 d [p[0]-p0[0], p[1]-p0[1]] / denom)
   let t = clamp t_raw 0.0f32 1.0f32
   let proj = [ p0[0] + d[0]*t, p0[1] + d[1]*t ]
   let dist = length2 [ p[0]-proj[0], p[1]-proj[1] ]
-  let s = (if dist == 0.0f32 then 0.0f32 else (1.0f32 / dist)) * WEIGHT * w
+  let s = (if dist == 0.0f32 then 0.0f32 else (1.0f32 / dist)) * weight * w
   in f32.min (s*s) 1.0f32
 
-def circle (WEIGHT:f32) (p:vec2) (c:vec2) (r:f32) (w:f32) : f32 =
+def circle weight:f32 p:vec2 c:vec2 r:f32 w:f32 : f32 =
   let dist = f32.abs (length2 [p[0]-c[0], p[1]-c[1]]) + r
-  let s = (if dist == 0.0f32 then 0.0f32 else (1.0f32 / dist)) * WEIGHT * w
+  let s = (if dist == 0.0f32 then 0.0f32 else (1.0f32 / dist)) * weight * w
   in f32.min (s*s) 1.0f32
 
 -- Matrices

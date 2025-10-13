@@ -198,9 +198,8 @@ impl Visitor for CodeAnnotator {
                 if i > 0 {
                     self.output.push_str(", ");
                 }
-                match param {
-                    DeclParam::Untyped(name) => write!(self.output, "{}", name).unwrap(),
-                    DeclParam::Typed(p) => write!(self.output, "{}", p.name).unwrap(),
+                if let Some(name) = param.simple_name() {
+                    write!(self.output, "{}", name).unwrap();
                 }
             }
             self.output.push(')');

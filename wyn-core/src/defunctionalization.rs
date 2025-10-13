@@ -107,7 +107,11 @@ impl Defunctionalizer {
                 keyword: "def",
                 attributes: vec![],
                 name: func.name.clone(),
-                params: func.params.iter().map(|p| DeclParam::Untyped(p.name.clone())).collect(),
+                params: func
+                    .params
+                    .iter()
+                    .map(|p| self.node_counter.mk_node_dummy(PatternKind::Name(p.name.clone())))
+                    .collect(),
                 ty: None, // Function definitions don't have explicit type annotations
                 return_attributes: vec![],
                 attributed_return_type: None,

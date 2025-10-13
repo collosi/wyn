@@ -686,19 +686,22 @@ impl CodeGenerator {
     fn prepare_params(
         &mut self,
         exec_model: ExecutionModel,
-        params: &[DeclParam],
+        params: &[Pattern],
     ) -> Result<Vec<spirv::Word>> {
         let mut fn_param_type_ids = Vec::new();
 
         for param in params {
-            let DeclParam::Typed(p) = param else {
-                return Err(CompilerError::SpirvError(
-                    "Entry point parameters must have explicit types".to_string(),
-                ));
-            };
+            // Extract type and attributes from pattern
+            let param_ty = param.pattern_type().ok_or_else(|| {
+                CompilerError::SpirvError("Entry point parameters must have explicit types".to_string())
+            })?;
 
-            let ty_info = self.get_or_create_type(&p.ty)?;
-            if let Some(builtin) = p.attributes.first_builtin() {
+            // Get attributes if the pattern is attributed
+            let param_attrs =
+                if let PatternKind::Attributed(attrs, _) = &param.kind { attrs } else { &vec![] };
+
+            let ty_info = self.get_or_create_type(param_ty)?;
+            if let Some(builtin) = param_attrs.first_builtin() {
                 // Builtin parameter - create global input variable
                 let input_var = self
                     .global_builder
@@ -710,12 +713,21 @@ impl CodeGenerator {
                         ))
                     })?;
 
+                let param_name = param
+                    .simple_name()
+                    .ok_or_else(|| {
+                        CompilerError::SpirvError(
+                            "Complex patterns not supported for entry point parameters".to_string(),
+                        )
+                    })?
+                    .to_string();
+
                 let val = Value {
                     id: input_var,
                     type_id: ty_info.id,
                 };
-                self.environment.define_local(p.name.clone(), val, p.ty.clone());
-                self.builtin_inputs.insert(p.name.clone(), val);
+                self.environment.define_local(param_name.clone(), val, param_ty.clone());
+                self.builtin_inputs.insert(param_name, val);
             } else {
                 // Regular parameter - add to function signature
                 fn_param_type_ids.push(ty_info.id);
@@ -736,23 +748,34 @@ impl CodeGenerator {
     }
 
     /// Store function parameters in local variables (must be called after begin_block)
-    fn store_fn_params(&mut self, params: &[DeclParam], param_ids: &[spirv::Word]) -> Result<()> {
+    fn store_fn_params(&mut self, params: &[Pattern], param_ids: &[spirv::Word]) -> Result<()> {
         let mut param_index = 0;
         for param in params {
-            let DeclParam::Typed(p) = param else { continue };
+            let param_ty = param.pattern_type().ok_or_else(|| {
+                CompilerError::SpirvError("Entry point parameters must have explicit types".to_string())
+            })?;
+
+            let param_name = param.simple_name().ok_or_else(|| {
+                CompilerError::SpirvError(
+                    "Complex patterns not supported for entry point parameters".to_string(),
+                )
+            })?;
+
+            let param_attrs =
+                if let PatternKind::Attributed(attrs, _) = &param.kind { attrs } else { &vec![] };
 
             // Handle builtin parameters specially - they reference global builtin inputs
-            if p.attributes.first_builtin().is_some() {
+            if param_attrs.first_builtin().is_some() {
                 // The builtin global was already created in prepare_params
                 // Add the parameter name to environment pointing to the builtin input
-                if let Some(builtin_value) = self.builtin_inputs.get(&p.name) {
-                    self.environment.define_local(p.name.clone(), *builtin_value, p.ty.clone());
+                if let Some(builtin_value) = self.builtin_inputs.get(param_name) {
+                    self.environment.define_local(param_name.to_string(), *builtin_value, param_ty.clone());
                 }
                 continue;
             }
 
             // Regular parameters: create local variable and store parameter value
-            let ty_info = self.get_or_create_type(&p.ty)?;
+            let ty_info = self.get_or_create_type(param_ty)?;
             let param_id = param_ids[param_index];
             param_index += 1;
 
@@ -765,7 +788,7 @@ impl CodeGenerator {
                 id: local_var,
                 type_id: ptr_type,
             };
-            self.environment.define_local(p.name.clone(), value_ptr, p.ty.clone());
+            self.environment.define_local(param_name.to_string(), value_ptr, param_ty.clone());
         }
 
         Ok(())
@@ -905,17 +928,11 @@ impl CodeGenerator {
         // Get parameter types
         let mut param_type_ids = Vec::new();
         for param in &decl.params {
-            match param {
-                DeclParam::Typed(p) => {
-                    let param_type_info = self.get_or_create_type(&p.ty)?;
-                    param_type_ids.push(param_type_info.id);
-                }
-                DeclParam::Untyped(_) => {
-                    return Err(CompilerError::SpirvError(
-                        "User functions must have typed parameters".to_string(),
-                    ));
-                }
-            }
+            let param_ty = param.pattern_type().ok_or_else(|| {
+                CompilerError::SpirvError("User functions must have typed parameters".to_string())
+            })?;
+            let param_type_info = self.get_or_create_type(param_ty)?;
+            param_type_ids.push(param_type_info.id);
         }
 
         // Create function type

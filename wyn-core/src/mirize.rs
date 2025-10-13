@@ -128,12 +128,17 @@ impl Mirize {
         let param_types: Vec<(String, Type)> = decl
             .params
             .iter()
-            .map(|p| match p {
-                DeclParam::Typed(param) => Ok((param.name.clone(), param.ty.clone())),
-                DeclParam::Untyped(name) => Err(CompilerError::MirError(format!(
-                    "Function parameter '{}' missing type annotation",
-                    name
-                ))),
+            .map(|p| {
+                let name = p.simple_name().ok_or_else(|| {
+                    CompilerError::MirError("Complex patterns not supported in MIR".to_string())
+                })?;
+                let ty = p.pattern_type().ok_or_else(|| {
+                    CompilerError::MirError(format!(
+                        "Function parameter '{}' missing type annotation",
+                        name
+                    ))
+                })?;
+                Ok((name.to_string(), ty.clone()))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -169,14 +174,13 @@ impl Mirize {
         }
 
         // Extract parameter attributes
-        let param_attrs: Vec<Vec<Attribute>> = decl
-            .params
-            .iter()
-            .map(|p| match p {
-                DeclParam::Typed(param) => param.attributes.clone(),
-                DeclParam::Untyped(_) => Vec::new(),
-            })
-            .collect();
+        let param_attrs: Vec<Vec<Attribute>> =
+            decl.params
+                .iter()
+                .map(|p| {
+                    if let PatternKind::Attributed(attrs, _) = &p.kind { attrs.clone() } else { Vec::new() }
+                })
+                .collect();
 
         // Set function attributes before building body
         self.builder.set_function_attributes(

@@ -132,117 +132,33 @@ impl Parser {
 
         let name = self.expect_identifier()?;
 
-        // Check if we have typed parameters (for entry points with parentheses)
-        if self.check(&Token::LeftParen) {
-            // Parse typed parameters for entry points
-            self.expect(Token::LeftParen)?;
-            let mut params = Vec::new();
-            if !self.check(&Token::RightParen) {
-                loop {
-                    let param_attributes = self.parse_attributes()?;
-                    let param_name = self.expect_identifier()?;
-                    self.expect(Token::Colon)?;
-                    let param_ty = self.parse_type()?;
-                    params.push(DeclParam::Typed(Parameter {
-                        attributes: param_attributes,
-                        name: param_name,
-                        ty: param_ty,
-                    }));
-
-                    if !self.check(&Token::Comma) {
-                        break;
-                    }
-                    self.advance();
-                }
-            }
-            self.expect(Token::RightParen)?;
-            self.expect(Token::Colon)?;
-
-            // Parse return type with optional attributes
-            let (ty, attributed_return_type) = self.parse_return_type()?;
-
-            self.expect(Token::Assign)?;
-            let body = self.parse_expression()?;
-
-            Ok(Declaration::Decl(Decl {
-                keyword,
-                attributes,
-                name,
-                params,
-                // For functions with parameters, don't store attributed_tuple in ty
-                // The type checker will build the full function type from params and body
-                ty: if attributed_return_type.is_some() { None } else { ty },
-                return_attributes: vec![], // No separate return attributes for now
-                attributed_return_type,
-                body,
-            }))
+        // Parse patterns until we hit : (return type) or = (body)
+        let mut params = Vec::new();
+        while !self.check(&Token::Colon) && !self.check(&Token::Assign) && !self.is_at_end() {
+            params.push(self.parse_pattern()?);
         }
-        // Check if this is a typed declaration (name: type = value or name: type for uniforms)
-        else if self.check(&Token::Colon) {
-            // Typed declaration: let/def name: type = value or let/def name: type (uniform)
-            self.expect(Token::Colon)?;
 
-            // Check if this is an attributed return type
-            let (ty, attributed_return_type) = if self.check(&Token::AttributeStart) {
-                self.parse_return_type()?
-            } else {
-                (Some(self.parse_type()?), None)
-            };
-
-            // Check if this is a uniform declaration (no initializer allowed)
-            let has_uniform_attr = attributes.iter().any(|attr| matches!(attr, Attribute::Uniform));
-
-            if has_uniform_attr {
-                // Uniforms don't have initializers
-                if self.check(&Token::Assign) {
-                    return Err(CompilerError::ParseError(
-                        "Uniform declarations cannot have initializer values".to_string(),
-                    ));
-                }
-                // Return UniformDecl
-                Ok(Declaration::Uniform(UniformDecl {
-                    name,
-                    ty: ty.ok_or_else(|| {
-                        CompilerError::ParseError("Uniform must have explicit type annotation".to_string())
-                    })?,
-                }))
-            } else {
-                // Regular typed declaration requires an initializer
-                self.expect(Token::Assign)?;
-                let body = self.parse_expression()?;
-
-                Ok(Declaration::Decl(Decl {
-                    keyword,
-                    attributes,
-                    name,
-                    params: vec![], // No parameters for typed declarations
-                    ty,
-                    return_attributes: vec![],
-                    attributed_return_type,
-                    body,
-                }))
-            }
+        // Check for optional return type annotation
+        let ty = if self.check(&Token::Colon) {
+            self.advance();
+            Some(self.parse_type()?)
         } else {
-            // Function declaration: let/def name param1 param2 = body
-            // OR simple variable: let/def name = value
-            let mut params = Vec::new();
-            while !self.check(&Token::Assign) && !self.is_at_end() {
-                params.push(DeclParam::Untyped(self.expect_identifier()?));
-            }
-            self.expect(Token::Assign)?;
-            let body = self.parse_expression()?;
+            None
+        };
 
-            Ok(Declaration::Decl(Decl {
-                keyword,
-                attributes,
-                name,
-                params,
-                ty: None, // No explicit type for untyped declarations
-                return_attributes: vec![],
-                attributed_return_type: None,
-                body,
-            }))
-        }
+        self.expect(Token::Assign)?;
+        let body = self.parse_expression()?;
+
+        Ok(Declaration::Decl(Decl {
+            keyword,
+            attributes,
+            name,
+            params,
+            ty,
+            return_attributes: vec![],
+            attributed_return_type: None,
+            body,
+        }))
     }
 
     fn parse_val_decl(&mut self) -> Result<ValDecl> {
@@ -563,6 +479,29 @@ impl Parser {
         Ok(base)
     }
 
+    // Helper to check if current token can start a type
+    fn can_start_type(&self) -> bool {
+        match self.peek() {
+            Some(Token::LeftParen) => true, // Tuple type
+            Some(Token::LeftBrace) => true, // Record type
+            Some(Token::LeftBracket) | Some(Token::LeftBracketSpaced) => true, // Array type
+            Some(Token::BinOp(op)) if op == "*" => true, // Unique type
+            Some(Token::Identifier(name)) => {
+                // Uppercase = constructor/sum type, lowercase = base type like i32/f32
+                name.chars().next().map_or(false, |c| {
+                    c.is_uppercase()
+                        || name == "i32"
+                        || name == "f32"
+                        || name.starts_with("vec")
+                        || name.starts_with("ivec")
+                        || name.starts_with("mat")
+                        || name.starts_with('\'')
+                })
+            }
+            _ => false,
+        }
+    }
+
     // Helper to check if we're at a type boundary (don't continue type application)
     fn is_at_type_boundary(&self) -> bool {
         matches!(
@@ -573,8 +512,9 @@ impl Parser {
                 | Some(Token::Comma)
                 | Some(Token::Assign)
                 | Some(Token::Pipe)
+                | Some(Token::Colon)
                 | None
-        )
+        ) || !self.can_start_type()
     }
 
     fn parse_array_or_base_type(&mut self) -> Result<Type> {
@@ -734,7 +674,10 @@ impl Parser {
                 // Sum type: Constructor type* | Constructor type*
                 self.parse_sum_type()
             }
-            _ => Err(CompilerError::ParseError("Expected type".to_string())),
+            _ => {
+                let span = self.current_span();
+                Err(CompilerError::ParseError(format!("Expected type at {}", span)))
+            }
         }
     }
 
@@ -1557,18 +1500,24 @@ impl Parser {
             self.advance();
             Ok(())
         } else {
+            let span = self.current_span();
             Err(CompilerError::ParseError(format!(
-                "Expected {:?}, got {:?}",
+                "Expected {:?}, got {:?} at {}",
                 token,
-                self.peek()
+                self.peek(),
+                span
             )))
         }
     }
 
     fn expect_identifier(&mut self) -> Result<String> {
+        let span = self.current_span();
         match self.advance() {
             Some(Token::Identifier(name)) => Ok(name.clone()),
-            _ => Err(CompilerError::ParseError("Expected identifier".to_string())),
+            _ => Err(CompilerError::ParseError(format!(
+                "Expected identifier at {}",
+                span
+            ))),
         }
     }
 

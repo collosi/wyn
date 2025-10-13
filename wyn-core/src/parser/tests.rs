@@ -53,7 +53,12 @@ where
 /// Parse input and return the Program, panicking on failure
 fn parse_ok(input: &str) -> Program {
     let tokens = tokenize(input).expect("tokenize failed");
-    Parser::new(tokens).parse().expect("parse failed")
+    let tokens_clone = tokens.clone();
+    Parser::new(tokens).parse().unwrap_or_else(|e| {
+        println!("Parse failed with error: {:?}", e);
+        println!("Tokens were: {:#?}", tokens_clone);
+        panic!("parse failed: {:?}", e);
+    })
 }
 
 /// Parse input and return the single Decl, panicking if not exactly one or not a Decl
@@ -66,31 +71,61 @@ fn single_decl(input: &str) -> Decl {
     }
 }
 
-/// Assert that a DeclParam is Typed with given name, type, and no attributes
+/// Assert that a Pattern has given name and type
 macro_rules! assert_typed_param {
     ($param:expr, $name:expr, $ty:expr) => {
-        assert!(
-            matches!(
-                $param,
-                DeclParam::Typed(p) if p.name == $name && p.ty == $ty && p.attributes.is_empty()
-            ),
-            "Expected Typed param with name {:?} and type {:?}, got {:?}",
-            $name, $ty, $param
+        assert_eq!(
+            $param.simple_name(),
+            Some($name),
+            "Expected param with name {:?}, got {:?}",
+            $name,
+            $param
+        );
+        assert_eq!(
+            $param.pattern_type(),
+            Some(&$ty),
+            "Expected param with type {:?}, got {:?}",
+            $ty,
+            $param.pattern_type()
         );
     };
 }
 
-/// Assert that a DeclParam is Typed with given name, type, and attributes
+/// Assert that a Pattern has given name, type, and attributes
 macro_rules! assert_typed_param_with_attrs {
     ($param:expr, $name:expr, $ty:expr, $attrs:expr) => {
-        assert!(
-            matches!(
-                $param,
-                DeclParam::Typed(p) if p.name == $name && p.ty == $ty && p.attributes == $attrs
-            ),
-            "Expected Typed param with name {:?}, type {:?}, and attrs {:?}, got {:?}",
-            $name, $ty, $attrs, $param
+        assert_eq!(
+            $param.simple_name(),
+            Some($name),
+            "Expected param with name {:?}, got {:?}",
+            $name,
+            $param
         );
+        assert_eq!(
+            $param.pattern_type(),
+            Some(&$ty),
+            "Expected param with type {:?}, got {:?}",
+            $ty,
+            $param.pattern_type()
+        );
+        // Pattern structure is Typed(Attributed(attrs, Name), type)
+        // We need to check inside the Typed pattern for attributes
+        if let PatternKind::Typed(inner, _) = &$param.kind {
+            if let PatternKind::Attributed(attrs, _) = &inner.kind {
+                assert_eq!(
+                    attrs, &$attrs,
+                    "Expected attrs {:?}, got {:?}",
+                    $attrs, attrs
+                );
+            } else {
+                panic!(
+                    "Expected attributed pattern inside typed pattern, got {:?}",
+                    inner
+                );
+            }
+        } else {
+            panic!("Expected typed pattern, got {:?}", $param);
+        }
     };
 }
 
@@ -111,7 +146,7 @@ fn test_parse_array_type() {
 
 #[test]
 fn test_parse_entry_point_decl() {
-    let decl = single_decl("#[vertex] def main(x: i32, y: f32): [4]f32 = result");
+    let decl = single_decl("#[vertex] def main x:i32 y:f32 : [4]f32 = result");
 
     assert_eq!(decl.name, "main");
     assert_eq!(decl.attributes, vec![Attribute::Vertex]);
@@ -292,7 +327,7 @@ fn test_parse_location_attribute_on_return_type() {
 
 #[test]
 fn test_parse_parameter_with_builtin_attribute() {
-    let decl = single_decl("#[vertex] def main(#[builtin(vertex_index)] vid: i32): [4]f32 = result");
+    let decl = single_decl("#[vertex] def main #[builtin(vertex_index)] vid:i32 : [4]f32 = result");
 
     assert_eq!(decl.params.len(), 1);
     assert_typed_param_with_attrs!(
@@ -305,7 +340,7 @@ fn test_parse_parameter_with_builtin_attribute() {
 
 #[test]
 fn test_parse_parameter_with_location_attribute() {
-    let decl = single_decl("#[fragment] def frag(#[location(1)] color: [3]f32): [4]f32 = result");
+    let decl = single_decl("#[fragment] def frag #[location(1)] color:[3]f32 : [4]f32 = result");
 
     assert_eq!(decl.params.len(), 1);
     assert_typed_param_with_attrs!(
@@ -319,7 +354,7 @@ fn test_parse_parameter_with_location_attribute() {
 #[test]
 fn test_parse_multiple_builtin_types() {
     let decl = single_decl(
-        "#[vertex] def main(#[builtin(vertex_index)] vid: i32, #[builtin(instance_index)] iid: i32): #[builtin(position)] [4]f32 = result",
+        "#[vertex] def main #[builtin(vertex_index)] vid:i32 #[builtin(instance_index)] iid:i32 : #[builtin(position)] [4]f32 = result",
     );
 
     assert_eq!(decl.params.len(), 2);
@@ -468,7 +503,7 @@ fn test_parse_function_application() {
 #[test]
 fn test_parse_simple_let_in() {
     // Just verify it parses successfully - the structure is complex to validate in detail
-    let _decl = single_decl("#[vertex] def main(x: i32): i32 = let y = 5 in y + x");
+    let _decl = single_decl("#[vertex] def main x:i32 : i32 = let y = 5 in y + x");
 }
 
 #[test]
@@ -483,7 +518,7 @@ fn test_parse_let_in_expression_only() {
 #[test]
 fn test_parse_let_in_with_lambda() {
     // Just verify it parses successfully - the lambda let..in structure is complex
-    let _decl = single_decl(r#"#[vertex] def main(x: i32): i32 = let f = \y -> y + x in f 10"#);
+    let _decl = single_decl(r#"#[vertex] def main x:i32 : i32 = let f = \y -> y + x in f 10"#);
 }
 
 #[test]
@@ -765,46 +800,34 @@ def test_vertex : #[builtin(position)] vec4 =
 
 #[test]
 fn test_parse_unique_type() {
-    let decl = single_decl("def foo(x: *i32): i32 = x");
+    let decl = single_decl("def foo x:*i32 : i32 = x");
 
     assert_eq!(decl.params.len(), 1);
-    let param = match &decl.params[0] {
-        DeclParam::Typed(p) => p,
-        _ => panic!("Expected typed parameter"),
-    };
-    assert!(types::is_unique(&param.ty));
-    assert_eq!(types::strip_unique(&param.ty), types::i32());
+    let param_ty = decl.params[0].pattern_type().expect("Expected typed parameter");
+    assert!(types::is_unique(param_ty));
+    assert_eq!(types::strip_unique(param_ty), types::i32());
 }
 
 #[test]
 fn test_parse_unique_array_type() {
-    let decl = single_decl("def bar(arr: *[3]f32): f32 = arr[0]");
+    let decl = single_decl("def bar arr:*[3]f32 : f32 = arr[0]");
 
     assert_eq!(decl.params.len(), 1);
-    let param = match &decl.params[0] {
-        DeclParam::Typed(p) => p,
-        _ => panic!("Expected typed parameter"),
-    };
-    assert!(types::is_unique(&param.ty));
-    assert_eq!(
-        types::strip_unique(&param.ty),
-        types::sized_array(3, types::f32())
-    );
+    let param_ty = decl.params[0].pattern_type().expect("Expected typed parameter");
+    assert!(types::is_unique(param_ty));
+    assert_eq!(types::strip_unique(param_ty), types::sized_array(3, types::f32()));
 }
 
 #[test]
 fn test_parse_nested_unique() {
     // Nested arrays with unique at different levels
-    let decl = single_decl("def baz(x: *[2][3]i32): i32 = x[0][0]");
+    let decl = single_decl("def baz x:*[2][3]i32 : i32 = x[0][0]");
 
     assert_eq!(decl.params.len(), 1);
-    let param = match &decl.params[0] {
-        DeclParam::Typed(p) => p,
-        _ => panic!("Expected typed parameter"),
-    };
-    assert!(types::is_unique(&param.ty));
+    let param_ty = decl.params[0].pattern_type().expect("Expected typed parameter");
+    assert!(types::is_unique(param_ty));
     assert_eq!(
-        types::strip_unique(&param.ty),
+        types::strip_unique(param_ty),
         types::sized_array(2, types::sized_array(3, types::i32()))
     );
 }
@@ -1538,4 +1561,80 @@ def main : i32 =
     } else {
         panic!("Expected Decl, got {:?}", program.declarations[1]);
     }
+}
+
+#[test]
+fn test_parse_pattern_x_i32() {
+    let source = "x:i32";
+    let tokens = tokenize(source).expect("Failed to tokenize");
+    println!("Tokens for 'x:i32': {:#?}", tokens);
+    let mut parser = Parser::new(tokens);
+    match parser.parse_pattern() {
+        Ok(pattern) => {
+            println!("Successfully parsed pattern: {:#?}", pattern);
+            assert_eq!(pattern.simple_name(), Some("x"));
+            assert!(pattern.pattern_type().is_some());
+        }
+        Err(e) => panic!("Failed to parse pattern: {:?}", e),
+    }
+}
+
+#[test]
+fn test_parse_pattern_y_i32() {
+    let source = "y:i32";
+    let tokens = tokenize(source).expect("Failed to tokenize");
+    println!("Tokens for 'y:i32': {:#?}", tokens);
+    let mut parser = Parser::new(tokens);
+    match parser.parse_pattern() {
+        Ok(pattern) => {
+            println!("Successfully parsed pattern: {:#?}", pattern);
+            assert_eq!(pattern.simple_name(), Some("y"));
+            assert!(pattern.pattern_type().is_some());
+        }
+        Err(e) => panic!("Failed to parse pattern: {:?}", e),
+    }
+}
+
+#[test]
+fn test_parse_two_patterns_sequentially() {
+    let source = "x:i32 y:i32";
+    let tokens = tokenize(source).expect("Failed to tokenize");
+    println!("Tokens for 'x:i32 y:i32': {:#?}", tokens);
+    let mut parser = Parser::new(tokens);
+
+    println!("\nParsing first pattern...");
+    match parser.parse_pattern() {
+        Ok(pattern) => {
+            println!("First pattern: {:#?}", pattern);
+            assert_eq!(pattern.simple_name(), Some("x"));
+        }
+        Err(e) => panic!("Failed to parse first pattern: {:?}", e),
+    }
+
+    println!("\nParsing second pattern...");
+    match parser.parse_pattern() {
+        Ok(pattern) => {
+            println!("Second pattern: {:#?}", pattern);
+            assert_eq!(pattern.simple_name(), Some("y"));
+        }
+        Err(e) => panic!("Failed to parse second pattern: {:?}", e),
+    }
+}
+
+#[test]
+fn test_parse_function_with_typed_patterns() {
+    let decl = single_decl("def add x:i32 y:i32 : i32 = x + y");
+    assert_eq!(decl.name, "add");
+    assert_eq!(decl.params.len(), 2);
+
+    // Check first parameter: x:i32
+    assert_eq!(decl.params[0].simple_name(), Some("x"));
+    assert!(decl.params[0].pattern_type().is_some());
+
+    // Check second parameter: y:i32
+    assert_eq!(decl.params[1].simple_name(), Some("y"));
+    assert!(decl.params[1].pattern_type().is_some());
+
+    // Check return type
+    assert!(decl.ty.is_some());
 }

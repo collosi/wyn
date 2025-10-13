@@ -102,9 +102,8 @@ impl BorrowChecker {
 
                     // Parameters create lifetimes
                     for param in &decl.params {
-                        let param_name = match param {
-                            DeclParam::Untyped(name) => name,
-                            DeclParam::Typed(p) => &p.name,
+                        let Some(param_name) = param.simple_name() else {
+                            continue;
                         };
                         let lifetime_id = self.get_next_lifetime_id();
                         let location_id = *location_counter;

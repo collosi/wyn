@@ -383,9 +383,9 @@ impl TypeChecker {
             let param_types: Vec<Type> = decl
                 .params
                 .iter()
-                .map(|p| match p {
-                    DeclParam::Untyped(_) => self.context.new_variable(),
-                    DeclParam::Typed(param) => param.ty.clone(),
+                .map(|p| {
+                    // If pattern has a type annotation, use it; otherwise create a type variable
+                    p.pattern_type().cloned().unwrap_or_else(|| self.context.new_variable())
                 })
                 .collect();
 
@@ -394,10 +394,14 @@ impl TypeChecker {
 
             // Add parameters to scope
             for (param, param_type) in decl.params.iter().zip(param_types.iter()) {
-                let param_name = match param {
-                    DeclParam::Untyped(name) => name.clone(),
-                    DeclParam::Typed(p) => p.name.clone(),
-                };
+                let param_name = param
+                    .simple_name()
+                    .ok_or_else(|| {
+                        CompilerError::TypeError(format!(
+                            "Complex patterns in function parameters not yet supported"
+                        ))
+                    })?
+                    .to_string();
                 let type_scheme = TypeScheme::Monotype(param_type.clone());
                 debug!(
                     "Adding parameter '{}' to scope with type: {:?}",

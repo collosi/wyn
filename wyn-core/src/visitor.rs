@@ -119,6 +119,10 @@ pub trait Visitor: Sized {
         ControlFlow::Continue(())
     }
 
+    fn visit_pattern(&mut self, p: &Pattern) -> ControlFlow<Self::Break> {
+        walk_pattern(self, p)
+    }
+
     fn visit_parameter(&mut self, p: &Parameter) -> ControlFlow<Self::Break> {
         walk_parameter(self, p)
     }
@@ -160,11 +164,9 @@ pub fn walk_declaration<V: Visitor>(v: &mut V, d: &Declaration) -> ControlFlow<V
 }
 
 pub fn walk_decl<V: Visitor>(v: &mut V, d: &Decl) -> ControlFlow<V::Break> {
-    // Visit parameters
+    // Visit parameters (visit patterns)
     for param in &d.params {
-        if let DeclParam::Typed(p) = param {
-            v.visit_parameter(p)?;
-        }
+        v.visit_pattern(param)?;
     }
 
     // Visit type annotation if present
@@ -193,6 +195,39 @@ pub fn walk_val_decl<V: Visitor>(v: &mut V, val: &ValDecl) -> ControlFlow<V::Bre
 
 pub fn walk_parameter<V: Visitor>(v: &mut V, p: &Parameter) -> ControlFlow<V::Break> {
     v.visit_type(&p.ty)
+}
+
+pub fn walk_pattern<V: Visitor>(v: &mut V, pat: &Pattern) -> ControlFlow<V::Break> {
+    match &pat.kind {
+        PatternKind::Name(_) | PatternKind::Wildcard | PatternKind::Unit | PatternKind::Literal(_) => {
+            ControlFlow::Continue(())
+        }
+        PatternKind::Tuple(patterns) => {
+            for p in patterns {
+                v.visit_pattern(p)?;
+            }
+            ControlFlow::Continue(())
+        }
+        PatternKind::Record(fields) => {
+            for field in fields {
+                if let Some(p) = &field.pattern {
+                    v.visit_pattern(p)?;
+                }
+            }
+            ControlFlow::Continue(())
+        }
+        PatternKind::Constructor(_, patterns) => {
+            for p in patterns {
+                v.visit_pattern(p)?;
+            }
+            ControlFlow::Continue(())
+        }
+        PatternKind::Typed(inner, ty) => {
+            v.visit_pattern(inner)?;
+            v.visit_type(ty)
+        }
+        PatternKind::Attributed(_, inner) => v.visit_pattern(inner),
+    }
 }
 
 pub fn walk_expression<V: Visitor>(v: &mut V, e: &Expression) -> ControlFlow<V::Break> {

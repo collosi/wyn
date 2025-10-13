@@ -286,17 +286,11 @@ pub struct Decl {
     pub keyword: &'static str, // Either "let" or "def"
     pub attributes: Vec<Attribute>,
     pub name: String,
-    pub params: Vec<DeclParam>,            // Parameters - can be typed or untyped
-    pub ty: Option<Type>,                  // Return type for functions or type annotation for variables
+    pub params: Vec<Pattern>, // Parameters as patterns (name, name:type, tuples, etc.)
+    pub ty: Option<Type>,     // Return type for functions or type annotation for variables
     pub return_attributes: Vec<Attribute>, // Attributes on the return type (for entry points)
     pub attributed_return_type: Option<Vec<AttributedType>>, // For multiple outputs with per-component attributes
     pub body: Expression, // The value/expression for let/def declarations
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum DeclParam {
-    Untyped(String),  // Just a name for regular functions
-    Typed(Parameter), // Full parameter with type and attributes for entry points
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -524,6 +518,31 @@ pub enum PatternKind {
 }
 
 pub type Pattern = Node<PatternKind>;
+
+impl Pattern {
+    /// Extract the simple name from a pattern if possible
+    /// For Name("x") returns Some("x")
+    /// For Typed(Name("x"), _) returns Some("x")
+    /// For Attributed(_, Name("x")) returns Some("x")
+    /// Returns None for complex patterns like tuples, records, etc.
+    pub fn simple_name(&self) -> Option<&str> {
+        match &self.kind {
+            PatternKind::Name(name) => Some(name),
+            PatternKind::Typed(inner, _) => inner.simple_name(),
+            PatternKind::Attributed(_, inner) => inner.simple_name(),
+            _ => None,
+        }
+    }
+
+    /// Extract the type from a typed pattern
+    pub fn pattern_type(&self) -> Option<&Type> {
+        match &self.kind {
+            PatternKind::Typed(_, ty) => Some(ty),
+            PatternKind::Attributed(_, inner) => inner.pattern_type(),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PatternLiteral {
