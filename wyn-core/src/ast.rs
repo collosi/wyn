@@ -60,11 +60,7 @@ impl Span {
 impl std::fmt::Display for Span {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         if self.start_line == self.end_line {
-            write!(
-                f,
-                "{}:{}..{}",
-                self.start_line, self.start_col, self.end_col
-            )
+            write!(f, "{}:{}..{}", self.start_line, self.start_col, self.end_col)
         } else {
             write!(
                 f,

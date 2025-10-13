@@ -1,5 +1,6 @@
 mod literal;
 
+use crate::ast::Span;
 use nom::{
     IResult,
     branch::alt,
@@ -11,6 +12,27 @@ use nom::{
 };
 
 use literal::{parse_char_literal, parse_float_literal, parse_int_literal, parse_string_literal};
+
+/// Token with source location information
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocatedToken {
+    pub token: Token,
+    pub span: Span,
+}
+
+impl LocatedToken {
+    pub fn new(token: Token, span: Span) -> Self {
+        LocatedToken { token, span }
+    }
+
+    /// Create a located token with dummy span (for testing/migration)
+    pub fn dummy(token: Token) -> Self {
+        LocatedToken {
+            token,
+            span: Span::dummy(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -245,7 +267,7 @@ fn parse_token(input: &str) -> IResult<&str, Token> {
     )(input)
 }
 
-pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
+pub fn tokenize(input: &str) -> Result<Vec<LocatedToken>, String> {
     let mut remaining = input;
     let mut tokens = Vec::new();
     let mut had_whitespace = true; // Start of input counts as having whitespace
@@ -272,7 +294,9 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     token = if had_whitespace { Token::LeftBracketSpaced } else { Token::LeftBracket };
                 }
 
-                tokens.push(token);
+                // Calculate span based on position in original input
+                let span = calculate_span(input, remaining, rest);
+                tokens.push(LocatedToken::new(token, span));
                 remaining = rest;
                 had_whitespace = false; // Next token won't have whitespace unless we skip some
             }
@@ -284,21 +308,61 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
     Ok(tokens)
 }
 
+/// Calculate the span of a token given the original input and the before/after strings
+fn calculate_span(original: &str, before: &str, after: &str) -> Span {
+    // Calculate byte offsets
+    let start_offset = original.len() - before.len();
+    let end_offset = original.len() - after.len();
+
+    // Calculate line and column for start position
+    let (start_line, start_col) = offset_to_line_col(original, start_offset);
+    let (end_line, end_col) = offset_to_line_col(original, end_offset);
+
+    Span::new(start_line, start_col, end_line, end_col)
+}
+
+/// Convert byte offset to (line, column) - both 1-indexed
+// TODO: This needs to be reworked for efficiency - currently O(n) for each token.
+// Should build a line offset table once during tokenization and use binary search.
+fn offset_to_line_col(input: &str, offset: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut col = 1;
+
+    for (i, ch) in input.chars().enumerate() {
+        if i >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+
+    (line, col)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // Helper to extract just the tokens from LocatedToken for testing
+    fn tokens_only(input: &str) -> Vec<Token> {
+        tokenize(input).unwrap().into_iter().map(|lt| lt.token).collect()
+    }
+
     #[test]
     fn test_tokenize_keywords() {
         let input = "let def";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(tokens, vec![Token::Let, Token::Def]);
     }
 
     #[test]
     fn test_tokenize_types() {
         let input = "i32 f32";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -311,7 +375,7 @@ mod tests {
     #[test]
     fn test_tokenize_identifiers() {
         let input = "vertex_main SKY_RGBA verts";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -325,7 +389,7 @@ mod tests {
     #[test]
     fn test_tokenize_literals() {
         let input = "-1.0f32 42 3.14f32";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -340,7 +404,7 @@ mod tests {
     fn test_all_literal_types() {
         // literal ::= intnumber | floatnumber | "true" | "false"
         let input = "true false 123 45.67f32";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -356,7 +420,7 @@ mod tests {
     fn test_integer_literal_formats() {
         // Test decimal integers (basic support)
         let input = "42 -10 0";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -372,7 +436,7 @@ mod tests {
     #[test]
     fn test_tokenize_with_comments() {
         let input = "-- This is a comment\nlet x = 42";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -387,7 +451,7 @@ mod tests {
     #[test]
     fn test_tokenize_array_syntax() {
         let input = "[3][4]f32";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -405,7 +469,7 @@ mod tests {
     #[test]
     fn test_tokenize_division() {
         let input = "135f32/255f32";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -419,7 +483,7 @@ mod tests {
     #[test]
     fn test_tokenize_binary_operators() {
         let input = "a + b - c * d / e";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -439,7 +503,7 @@ mod tests {
     #[test]
     fn test_tokenize_attributes() {
         let input = "#[vertex]";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -455,7 +519,7 @@ mod tests {
     fn test_name_with_prime() {
         // constituent ::= letter | digit | "_" | "'"
         let input = "acc' uv' x'' my_var'";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -471,7 +535,7 @@ mod tests {
     fn test_name_starting_with_underscore() {
         // name ::= lowercase constituent* | "_" constituent*
         let input = "_foo _bar123 _x'";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -486,7 +550,7 @@ mod tests {
     fn test_constructor_names() {
         // constructor ::= uppercase constituent*
         let input = "Some None True' MyType123";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -502,7 +566,7 @@ mod tests {
     fn test_new_operators() {
         // Test |>, .., ..., ..<, ..>, |, !, ?, @
         let input = "|> .. ... ..< ..>";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -518,7 +582,7 @@ mod tests {
     #[test]
     fn test_bang_and_pipe() {
         let input = "! | !x |> y";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -535,7 +599,7 @@ mod tests {
     #[test]
     fn test_question_and_at() {
         let input = "? @ x ?[n]";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -553,7 +617,7 @@ mod tests {
     #[test]
     fn test_new_keywords() {
         let input = "loop for while do match case unsafe assert";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -575,7 +639,7 @@ mod tests {
         // qualname ::= name | quals name
         // The parser will handle this, but lexer should produce: Identifier, Dot, Identifier
         let input = "f32.sin i32.max std.math.sqrt";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -598,7 +662,7 @@ mod tests {
     fn test_range_operators_in_context() {
         // Test that range operators work in realistic context
         let input = "a..b a...b a..<b a..>b";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -621,7 +685,7 @@ mod tests {
     #[test]
     fn test_comparison_operators() {
         let input = "== != <= >= < >";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![
@@ -639,7 +703,7 @@ mod tests {
     fn test_mixed_identifiers_and_operators() {
         // Test realistic expression with new features
         let input = "acc' |> map (\\x -> -x) arr[0]";
-        let tokens = tokenize(input).unwrap();
+        let tokens = tokens_only(input);
         assert_eq!(
             tokens,
             vec![

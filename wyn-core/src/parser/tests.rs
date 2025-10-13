@@ -1470,3 +1470,72 @@ fn test_function_call_with_and_without_parens() {
         }
     }
 }
+
+#[test]
+fn test_span_tracking() {
+    // Test that spans are correctly tracked for a multi-line program
+    let source = r#"def sum : i32 =
+  let x = 10 + 20
+  in x * 2
+
+def main : i32 =
+  sum"#;
+
+    let tokens = tokenize(source).expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().expect("Failed to parse");
+
+    assert_eq!(program.declarations.len(), 2);
+
+    // Check first declaration (sum function) - spans line 1-3
+    if let Declaration::Decl(sum_decl) = &program.declarations[0] {
+        assert_eq!(sum_decl.name, "sum");
+        // The declaration should span from line 1 to line 3
+        assert!(
+            sum_decl.body.h.span.start_line >= 1 && sum_decl.body.h.span.end_line <= 3,
+            "sum body span should be lines 1-3, got {}..{}",
+            sum_decl.body.h.span.start_line,
+            sum_decl.body.h.span.end_line
+        );
+
+        // Check that the let-in expression has the right span
+        if let ExprKind::LetIn(let_in) = &sum_decl.body.kind {
+            // The let-in should start at "let" on line 2
+            assert_eq!(
+                let_in.value.h.span.start_line, 2,
+                "let value should start on line 2"
+            );
+
+            // The binary op (a + b) should be on line 2
+            if let ExprKind::BinaryOp(_, left, right) = &let_in.value.kind {
+                assert_eq!(left.h.span.start_line, 2, "left operand should be on line 2");
+                assert_eq!(right.h.span.start_line, 2, "right operand should be on line 2");
+            }
+
+            // The body (x * 2) should be on line 3
+            assert_eq!(let_in.body.h.span.start_line, 3, "let body should be on line 3");
+        } else {
+            panic!("Expected LetIn expression, got {:?}", sum_decl.body.kind);
+        }
+    } else {
+        panic!("Expected Decl, got {:?}", program.declarations[0]);
+    }
+
+    // Check second declaration (main function) - should be on line 5-6
+    if let Declaration::Decl(main_decl) = &program.declarations[1] {
+        assert_eq!(main_decl.name, "main");
+
+        // The identifier should be on line 6
+        if let ExprKind::Identifier(name) = &main_decl.body.kind {
+            assert_eq!(name, "sum");
+            assert_eq!(
+                main_decl.body.h.span.start_line, 6,
+                "identifier should be on line 6"
+            );
+        } else {
+            panic!("Expected Identifier, got {:?}", main_decl.body.kind);
+        }
+    } else {
+        panic!("Expected Decl, got {:?}", program.declarations[1]);
+    }
+}

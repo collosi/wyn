@@ -514,7 +514,8 @@ impl Defunctionalizer {
                         let mut all_args = existing_args.clone();
                         all_args.extend(transformed_args);
                         Ok((
-                            self.node_counter.mk_node_dummy(ExprKind::FunctionCall(func_name.clone(), all_args)),
+                            self.node_counter
+                                .mk_node_dummy(ExprKind::FunctionCall(func_name.clone(), all_args)),
                             StaticValue::Dyn(polytype::Type::Variable(2)),
                         ))
                     }
@@ -651,7 +652,8 @@ impl Defunctionalizer {
         // For SPIR-V compatibility, we might need to represent this as an array or struct
 
         // Create a tuple with function name and free variables
-        let mut elements = vec![self.node_counter.mk_node_dummy(ExprKind::Identifier(func_name.to_string()))];
+        let mut elements =
+            vec![self.node_counter.mk_node_dummy(ExprKind::Identifier(func_name.to_string()))];
         for var in free_vars {
             elements.push(self.node_counter.mk_node_dummy(ExprKind::Identifier(var.clone())));
         }

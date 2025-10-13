@@ -222,7 +222,9 @@ impl ConstantFolder {
                 for arg in args {
                     folded_args.push(self.fold_expression(arg)?);
                 }
-                Ok(self.node_counter.mk_node_dummy(ExprKind::Application(Box::new(folded_func), folded_args)))
+                Ok(self
+                    .node_counter
+                    .mk_node_dummy(ExprKind::Application(Box::new(folded_func), folded_args)))
             }
 
             // Handle array indexing - fold array and index
@@ -238,7 +240,9 @@ impl ConstantFolder {
             // Handle field access - fold the object
             ExprKind::FieldAccess(obj, field) => {
                 let folded_obj = self.fold_expression(obj)?;
-                Ok(self.node_counter.mk_node_dummy(ExprKind::FieldAccess(Box::new(folded_obj), field.clone())))
+                Ok(self
+                    .node_counter
+                    .mk_node_dummy(ExprKind::FieldAccess(Box::new(folded_obj), field.clone())))
             }
 
             // Literals and identifiers don't need folding
@@ -251,10 +255,9 @@ impl ConstantFolder {
             ExprKind::Pipe(left, right) => {
                 let folded_left = self.fold_expression(left)?;
                 let folded_right = self.fold_expression(right)?;
-                Ok(
-                    self.node_counter
-                        .mk_node_dummy(ExprKind::Pipe(Box::new(folded_left), Box::new(folded_right))),
-                )
+                Ok(self
+                    .node_counter
+                    .mk_node_dummy(ExprKind::Pipe(Box::new(folded_left), Box::new(folded_right))))
             }
 
             ExprKind::QualifiedName(_, _)

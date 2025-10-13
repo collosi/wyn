@@ -1,6 +1,6 @@
 use crate::ast::*;
 use crate::error::{CompilerError, Result};
-use crate::lexer::Token;
+use crate::lexer::{LocatedToken, Token};
 use log::trace;
 
 mod module;
@@ -9,13 +9,13 @@ mod pattern;
 mod tests;
 
 pub struct Parser {
-    tokens: Vec<Token>,
+    tokens: Vec<LocatedToken>,
     current: usize,
     node_counter: NodeCounter,
 }
 
 impl Parser {
-    pub fn new(tokens: Vec<Token>) -> Self {
+    pub fn new(tokens: Vec<LocatedToken>) -> Self {
         Parser {
             tokens,
             current: 0,
@@ -23,11 +23,25 @@ impl Parser {
         }
     }
 
-    pub fn new_with_counter(tokens: Vec<Token>, node_counter: NodeCounter) -> Self {
+    pub fn new_with_counter(tokens: Vec<LocatedToken>, node_counter: NodeCounter) -> Self {
         Parser {
             tokens,
             current: 0,
             node_counter,
+        }
+    }
+
+    /// Get the span of the current token
+    fn current_span(&self) -> Span {
+        self.tokens.get(self.current).map(|t| t.span).unwrap_or_else(Span::dummy)
+    }
+
+    /// Get the span of the previous token
+    fn previous_span(&self) -> Span {
+        if self.current > 0 {
+            self.tokens.get(self.current - 1).map(|t| t.span).unwrap_or_else(Span::dummy)
+        } else {
+            Span::dummy()
         }
     }
 
@@ -836,14 +850,20 @@ impl Parser {
         // Check for type ascription (:) or type coercion (:>)
         match self.peek() {
             Some(Token::Colon) => {
+                let start_span = expr.h.span;
                 self.advance();
                 let ty = self.parse_type()?;
-                expr = self.node_counter.mk_node_dummy(ExprKind::TypeAscription(Box::new(expr), ty));
+                let end_span = self.previous_span();
+                let span = start_span.merge(&end_span);
+                expr = self.node_counter.mk_node(ExprKind::TypeAscription(Box::new(expr), ty), span);
             }
             Some(Token::TypeCoercion) => {
+                let start_span = expr.h.span;
                 self.advance();
                 let ty = self.parse_type()?;
-                expr = self.node_counter.mk_node_dummy(ExprKind::TypeCoercion(Box::new(expr), ty));
+                let end_span = self.previous_span();
+                let span = start_span.merge(&end_span);
+                expr = self.node_counter.mk_node(ExprKind::TypeCoercion(Box::new(expr), ty), span);
             }
             _ => {}
         }
@@ -858,8 +878,9 @@ impl Parser {
         // Check if we have a range operator
         match self.peek() {
             Some(Token::DotDot) | Some(Token::DotDotLt) | Some(Token::DotDotGt) | Some(Token::Ellipsis) => {
+                let start_span = start.h.span;
                 self.advance();
-                let first_op = self.tokens[self.current - 1].clone();
+                let first_op = self.tokens[self.current - 1].token.clone();
 
                 // Check if there's a step value (for a..step..end)
                 let (step, end_op) = if matches!(first_op, Token::DotDot) {
@@ -870,17 +891,22 @@ impl Parser {
                     match self.peek() {
                         Some(Token::DotDotLt) | Some(Token::DotDotGt) | Some(Token::Ellipsis) => {
                             self.advance();
-                            let second_op = self.tokens[self.current - 1].clone();
+                            let second_op = self.tokens[self.current - 1].token.clone();
                             (Some(Box::new(step_expr)), second_op)
                         }
                         _ => {
                             // No second operator, step_expr is actually the end
-                            return Ok(self.node_counter.mk_node_dummy(ExprKind::Range(RangeExpr {
-                                start: Box::new(start),
-                                step: None,
-                                end: Box::new(step_expr),
-                                kind: RangeKind::Exclusive,
-                            })));
+                            let end_span = step_expr.h.span;
+                            let span = start_span.merge(&end_span);
+                            return Ok(self.node_counter.mk_node(
+                                ExprKind::Range(RangeExpr {
+                                    start: Box::new(start),
+                                    step: None,
+                                    end: Box::new(step_expr),
+                                    kind: RangeKind::Exclusive,
+                                }),
+                                span,
+                            ));
                         }
                     }
                 } else {
@@ -889,6 +915,7 @@ impl Parser {
 
                 // Parse the end expression
                 let end = self.parse_binary_expression()?;
+                let end_span = end.h.span;
 
                 // Determine range kind
                 let kind = match end_op {
@@ -899,12 +926,16 @@ impl Parser {
                     _ => unreachable!(),
                 };
 
-                start = self.node_counter.mk_node_dummy(ExprKind::Range(RangeExpr {
-                    start: Box::new(start),
-                    step,
-                    end: Box::new(end),
-                    kind,
-                }));
+                let span = start_span.merge(&end_span);
+                start = self.node_counter.mk_node(
+                    ExprKind::Range(RangeExpr {
+                        start: Box::new(start),
+                        step,
+                        end: Box::new(end),
+                        kind,
+                    }),
+                    span,
+                );
             }
             _ => {}
         }
@@ -968,17 +999,17 @@ impl Parser {
 
             let right = self.parse_binary_expression_with_precedence(next_min_precedence)?;
 
-            // Build the appropriate operation
+            // Build the appropriate operation with span from left to right
+            let span = left.h.span.merge(&right.h.span);
             left = if op_string == "|>" {
                 // Pipe operator creates a Pipe node
-                self.node_counter.mk_node_dummy(ExprKind::Pipe(Box::new(left), Box::new(right)))
+                self.node_counter.mk_node(ExprKind::Pipe(Box::new(left), Box::new(right)), span)
             } else {
                 // Regular binary operation
-                self.node_counter.mk_node_dummy(ExprKind::BinaryOp(
-                    BinaryOp { op: op_string },
-                    Box::new(left),
-                    Box::new(right),
-                ))
+                self.node_counter.mk_node(
+                    ExprKind::BinaryOp(BinaryOp { op: op_string }, Box::new(left), Box::new(right)),
+                    span,
+                )
             };
         }
 
@@ -1012,20 +1043,22 @@ impl Parser {
 
             let arg = self.parse_postfix_expression()?;
 
-            // Convert to FunctionCall or Application
+            // Convert to FunctionCall or Application with span
+            let span = expr.h.span.merge(&arg.h.span);
             match expr.kind {
                 ExprKind::Identifier(name) => {
                     // First argument: convert identifier to function call
-                    expr = self.node_counter.mk_node_dummy(ExprKind::FunctionCall(name, vec![arg]));
+                    expr = self.node_counter.mk_node(ExprKind::FunctionCall(name, vec![arg]), span);
                 }
                 ExprKind::FunctionCall(name, mut args) => {
                     // Additional arguments: extend existing function call
                     args.push(arg);
-                    expr = self.node_counter.mk_node_dummy(ExprKind::FunctionCall(name, args));
+                    expr = self.node_counter.mk_node(ExprKind::FunctionCall(name, args), span);
                 }
                 _ => {
                     // Higher-order function application: use Application node
-                    expr = self.node_counter.mk_node_dummy(ExprKind::Application(Box::new(expr), vec![arg]));
+                    expr =
+                        self.node_counter.mk_node(ExprKind::Application(Box::new(expr), vec![arg]), span);
                 }
             }
         }
@@ -1056,10 +1089,15 @@ impl Parser {
             match self.peek() {
                 Some(Token::LeftBracket) => {
                     // Array indexing (no space before [): arr[0]
+                    let start_span = expr.h.span;
                     self.advance();
                     let index = self.parse_expression()?;
                     self.expect(Token::RightBracket)?;
-                    expr = self.node_counter.mk_node_dummy(ExprKind::ArrayIndex(Box::new(expr), Box::new(index)));
+                    let end_span = self.previous_span();
+                    let span = start_span.merge(&end_span);
+                    expr = self
+                        .node_counter
+                        .mk_node(ExprKind::ArrayIndex(Box::new(expr), Box::new(index)), span);
                 }
                 Some(Token::LeftBracketSpaced) => {
                     // Space before [ means it's not array indexing, it's a new expression
@@ -1068,10 +1106,15 @@ impl Parser {
                 }
                 Some(Token::Dot) => {
                     // Field access (e.g., v.x, v.y, v.z, v.w)
+                    let start_span = expr.h.span;
                     self.advance();
                     if let Some(Token::Identifier(field_name)) = self.peek().cloned() {
                         self.advance();
-                        expr = self.node_counter.mk_node_dummy(ExprKind::FieldAccess(Box::new(expr), field_name));
+                        let end_span = self.previous_span();
+                        let span = start_span.merge(&end_span);
+                        expr = self
+                            .node_counter
+                            .mk_node(ExprKind::FieldAccess(Box::new(expr), field_name), span);
                     } else {
                         return Err(CompilerError::ParseError(
                             "Expected field name after '.'".to_string(),
@@ -1094,18 +1137,20 @@ impl Parser {
                     }
 
                     self.expect(Token::RightParen)?;
+                    let end_span = self.previous_span();
+                    let span = expr.h.span.merge(&end_span);
 
                     // Create FunctionCall for identifiers, Application for higher-order
                     expr = match &expr.kind {
                         ExprKind::Identifier(name) => {
-                            self.node_counter.mk_node_dummy(ExprKind::FunctionCall(name.clone(), args))
+                            self.node_counter.mk_node(ExprKind::FunctionCall(name.clone(), args), span)
                         }
                         ExprKind::FunctionCall(name, existing_args) => {
                             let mut all_args = existing_args.clone();
                             all_args.extend(args);
-                            self.node_counter.mk_node_dummy(ExprKind::FunctionCall(name.clone(), all_args))
+                            self.node_counter.mk_node(ExprKind::FunctionCall(name.clone(), all_args), span)
                         }
-                        _ => self.node_counter.mk_node_dummy(ExprKind::Application(Box::new(expr), args)),
+                        _ => self.node_counter.mk_node(ExprKind::Application(Box::new(expr), args), span),
                     };
                 }
                 _ => break,
@@ -1120,20 +1165,24 @@ impl Parser {
         // Check for unary operators: - and !
         match self.peek() {
             Some(Token::BinOp(op)) if op == "-" => {
+                let start_span = self.current_span();
                 self.advance();
                 let operand = self.parse_unary_expression()?; // Right-associative
-                Ok(self.node_counter.mk_node_dummy(ExprKind::UnaryOp(
-                    UnaryOp { op: "-".to_string() },
-                    Box::new(operand),
-                )))
+                let span = start_span.merge(&operand.h.span);
+                Ok(self.node_counter.mk_node(
+                    ExprKind::UnaryOp(UnaryOp { op: "-".to_string() }, Box::new(operand)),
+                    span,
+                ))
             }
             Some(Token::Bang) => {
+                let start_span = self.current_span();
                 self.advance();
                 let operand = self.parse_unary_expression()?; // Right-associative
-                Ok(self.node_counter.mk_node_dummy(ExprKind::UnaryOp(
-                    UnaryOp { op: "!".to_string() },
-                    Box::new(operand),
-                )))
+                let span = start_span.merge(&operand.h.span);
+                Ok(self.node_counter.mk_node(
+                    ExprKind::UnaryOp(UnaryOp { op: "!".to_string() }, Box::new(operand)),
+                    span,
+                ))
             }
             _ => self.parse_primary_expression(),
         }
@@ -1143,40 +1192,49 @@ impl Parser {
         trace!("parse_primary_expression: next token = {:?}", self.peek());
         match self.peek() {
             Some(Token::TypeHole) => {
+                let span = self.current_span();
                 self.advance();
-                Ok(self.node_counter.mk_node_dummy(ExprKind::TypeHole))
+                Ok(self.node_counter.mk_node(ExprKind::TypeHole, span))
             }
             Some(Token::IntLiteral(n)) => {
                 let n = *n;
+                let span = self.current_span();
                 self.advance();
-                Ok(self.node_counter.mk_node_dummy(ExprKind::IntLiteral(n)))
+                Ok(self.node_counter.mk_node(ExprKind::IntLiteral(n), span))
             }
             Some(Token::FloatLiteral(f)) => {
                 let f = *f;
+                let span = self.current_span();
                 self.advance();
-                Ok(self.node_counter.mk_node_dummy(ExprKind::FloatLiteral(f)))
+                Ok(self.node_counter.mk_node(ExprKind::FloatLiteral(f), span))
             }
             Some(Token::True) => {
+                let span = self.current_span();
                 self.advance();
-                Ok(self.node_counter.mk_node_dummy(ExprKind::BoolLiteral(true)))
+                Ok(self.node_counter.mk_node(ExprKind::BoolLiteral(true), span))
             }
             Some(Token::False) => {
+                let span = self.current_span();
                 self.advance();
-                Ok(self.node_counter.mk_node_dummy(ExprKind::BoolLiteral(false)))
+                Ok(self.node_counter.mk_node(ExprKind::BoolLiteral(false), span))
             }
             Some(Token::Identifier(name)) => {
                 let name = name.clone();
+                let span = self.current_span();
                 self.advance();
-                Ok(self.node_counter.mk_node_dummy(ExprKind::Identifier(name)))
+                Ok(self.node_counter.mk_node(ExprKind::Identifier(name), span))
             }
             Some(Token::LeftBracket) | Some(Token::LeftBracketSpaced) => self.parse_array_literal(),
             Some(Token::LeftParen) => {
+                let start_span = self.current_span();
                 self.advance(); // consume '('
 
                 // Check for empty tuple
                 if self.check(&Token::RightParen) {
                     self.advance();
-                    return Ok(self.node_counter.mk_node_dummy(ExprKind::Tuple(vec![])));
+                    let end_span = self.previous_span();
+                    let span = start_span.merge(&end_span);
+                    return Ok(self.node_counter.mk_node(ExprKind::Tuple(vec![]), span));
                 }
 
                 // Parse first expression
@@ -1194,7 +1252,9 @@ impl Parser {
                         elements.push(self.parse_expression()?);
                     }
                     self.expect(Token::RightParen)?;
-                    Ok(self.node_counter.mk_node_dummy(ExprKind::Tuple(elements)))
+                    let end_span = self.previous_span();
+                    let span = start_span.merge(&end_span);
+                    Ok(self.node_counter.mk_node(ExprKind::Tuple(elements), span))
                 } else {
                     // Just a parenthesized expression
                     self.expect(Token::RightParen)?;
@@ -1215,6 +1275,7 @@ impl Parser {
     fn parse_array_literal(&mut self) -> Result<Expression> {
         trace!("parse_array_literal: next token = {:?}", self.peek());
         // Accept either LeftBracket or LeftBracketSpaced
+        let start_span = self.current_span();
         match self.peek() {
             Some(Token::LeftBracket) | Some(Token::LeftBracketSpaced) => {
                 self.advance();
@@ -1234,11 +1295,14 @@ impl Parser {
         }
 
         self.expect(Token::RightBracket)?;
-        Ok(self.node_counter.mk_node_dummy(ExprKind::ArrayLiteral(elements)))
+        let end_span = self.previous_span();
+        let span = start_span.merge(&end_span);
+        Ok(self.node_counter.mk_node(ExprKind::ArrayLiteral(elements), span))
     }
 
     fn parse_lambda(&mut self) -> Result<Expression> {
         trace!("parse_lambda: next token = {:?}", self.peek());
+        let start_span = self.current_span();
         self.expect(Token::Backslash)?;
 
         // Parse parameter list: \x y z: t -> e (Futhark syntax)
@@ -1280,18 +1344,23 @@ impl Parser {
 
         // Parse body expression
         let body = Box::new(self.parse_expression()?);
+        let span = start_span.merge(&body.h.span);
 
-        Ok(self.node_counter.mk_node_dummy(ExprKind::Lambda(LambdaExpr {
-            params,
-            return_type,
-            body,
-        })))
+        Ok(self.node_counter.mk_node(
+            ExprKind::Lambda(LambdaExpr {
+                params,
+                return_type,
+                body,
+            }),
+            span,
+        ))
     }
 
     fn parse_let_in(&mut self) -> Result<Expression> {
         trace!("parse_let_in: next token = {:?}", self.peek());
         use crate::ast::LetInExpr;
 
+        let start_span = self.current_span();
         self.expect(Token::Let)?;
         let name = self.expect_identifier()?;
 
@@ -1307,37 +1376,47 @@ impl Parser {
         let value = Box::new(self.parse_expression()?);
         self.expect(Token::In)?;
         let body = Box::new(self.parse_expression()?);
+        let span = start_span.merge(&body.h.span);
 
-        Ok(self.node_counter.mk_node_dummy(ExprKind::LetIn(LetInExpr {
-            name,
-            ty,
-            value,
-            body,
-        })))
+        Ok(self.node_counter.mk_node(
+            ExprKind::LetIn(LetInExpr {
+                name,
+                ty,
+                value,
+                body,
+            }),
+            span,
+        ))
     }
 
     fn parse_if_then_else(&mut self) -> Result<Expression> {
         trace!("parse_if_then_else: next token = {:?}", self.peek());
         use crate::ast::IfExpr;
 
+        let start_span = self.current_span();
         self.expect(Token::If)?;
         let condition = Box::new(self.parse_expression()?);
         self.expect(Token::Then)?;
         let then_branch = Box::new(self.parse_expression()?);
         self.expect(Token::Else)?;
         let else_branch = Box::new(self.parse_expression()?);
+        let span = start_span.merge(&else_branch.h.span);
 
-        Ok(self.node_counter.mk_node_dummy(ExprKind::If(IfExpr {
-            condition,
-            then_branch,
-            else_branch,
-        })))
+        Ok(self.node_counter.mk_node(
+            ExprKind::If(IfExpr {
+                condition,
+                then_branch,
+                else_branch,
+            }),
+            span,
+        ))
     }
 
     fn parse_loop(&mut self) -> Result<Expression> {
         trace!("parse_loop: next token = {:?}", self.peek());
         use crate::ast::{LoopExpr, LoopForm};
 
+        let start_span = self.current_span();
         self.expect(Token::Loop)?;
         let pattern = self.parse_pattern()?;
 
@@ -1387,29 +1466,36 @@ impl Parser {
 
         self.expect(Token::Do)?;
         let body = Box::new(self.parse_expression()?);
+        let span = start_span.merge(&body.h.span);
 
-        Ok(self.node_counter.mk_node_dummy(ExprKind::Loop(LoopExpr {
-            pattern,
-            init,
-            form,
-            body,
-        })))
+        Ok(self.node_counter.mk_node(
+            ExprKind::Loop(LoopExpr {
+                pattern,
+                init,
+                form,
+                body,
+            }),
+            span,
+        ))
     }
 
     fn parse_match(&mut self) -> Result<Expression> {
         trace!("parse_match: next token = {:?}", self.peek());
         use crate::ast::{MatchCase, MatchExpr};
 
+        let start_span = self.current_span();
         self.expect(Token::Match)?;
         let scrutinee = Box::new(self.parse_expression()?);
 
         // Parse one or more case branches
         let mut cases = Vec::new();
+        let mut last_span = scrutinee.h.span;
         while self.check(&Token::Case) {
             self.advance();
             let pattern = self.parse_pattern()?;
             self.expect(Token::Arrow)?;
             let body = Box::new(self.parse_expression()?);
+            last_span = body.h.span;
             cases.push(MatchCase { pattern, body });
         }
 
@@ -1419,35 +1505,40 @@ impl Parser {
             ));
         }
 
-        Ok(self.node_counter.mk_node_dummy(ExprKind::Match(MatchExpr { scrutinee, cases })))
+        let span = start_span.merge(&last_span);
+        Ok(self.node_counter.mk_node(ExprKind::Match(MatchExpr { scrutinee, cases }), span))
     }
 
     fn parse_unsafe(&mut self) -> Result<Expression> {
         trace!("parse_unsafe: next token = {:?}", self.peek());
+        let start_span = self.current_span();
         self.expect(Token::Unsafe)?;
         let expr = Box::new(self.parse_expression()?);
-        Ok(self.node_counter.mk_node_dummy(ExprKind::Unsafe(expr)))
+        let span = start_span.merge(&expr.h.span);
+        Ok(self.node_counter.mk_node(ExprKind::Unsafe(expr), span))
     }
 
     fn parse_assert(&mut self) -> Result<Expression> {
         trace!("parse_assert: next token = {:?}", self.peek());
+        let start_span = self.current_span();
         self.expect(Token::Assert)?;
         // According to grammar: "assert" atom exp
         // atom is a primary expression (condition)
         let condition = Box::new(self.parse_primary_expression()?);
         let body = Box::new(self.parse_expression()?);
-        Ok(self.node_counter.mk_node_dummy(ExprKind::Assert(condition, body)))
+        let span = start_span.merge(&body.h.span);
+        Ok(self.node_counter.mk_node(ExprKind::Assert(condition, body), span))
     }
 
     // Helper methods
     fn peek(&self) -> Option<&Token> {
-        self.tokens.get(self.current)
+        self.tokens.get(self.current).map(|lt| &lt.token)
     }
 
     fn advance(&mut self) -> Option<&Token> {
         if !self.is_at_end() {
             self.current += 1;
-            self.tokens.get(self.current - 1)
+            self.tokens.get(self.current - 1).map(|lt| &lt.token)
         } else {
             None
         }
