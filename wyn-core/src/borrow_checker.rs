@@ -397,16 +397,18 @@ impl<'a, W: Write> Visitor for FactExtractor<'a, W> {
                     .write_location_fact(param_location_id, &param_location)
                     .map_err(BorrowChecker::io_error)
             );
-            try_cf!(
-                self.fact_writer
-                    .write_var_def_fact(param_location_id, &param.name)
-                    .map_err(BorrowChecker::io_error)
-            );
-            try_cf!(
-                self.fact_writer
-                    .write_lifetime_start_fact(lifetime_id, param_location_id, &param.name)
-                    .map_err(BorrowChecker::io_error)
-            );
+            if let Some(param_name) = param.simple_name() {
+                try_cf!(
+                    self.fact_writer
+                        .write_var_def_fact(param_location_id, param_name)
+                        .map_err(BorrowChecker::io_error)
+                );
+                try_cf!(
+                    self.fact_writer
+                        .write_lifetime_start_fact(lifetime_id, param_location_id, param_name)
+                        .map_err(BorrowChecker::io_error)
+                );
+            }
         }
 
         // Analyze lambda body in new block

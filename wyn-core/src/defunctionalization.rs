@@ -392,7 +392,7 @@ impl Defunctionalizer {
         // Find free variables in the lambda body
         let free_vars = self.find_free_variables(
             &lambda.body,
-            &lambda.params.iter().map(|p| p.name.clone()).collect(),
+            &lambda.params.iter().filter_map(|p| p.simple_name().map(|s| s.to_string())).collect(),
         )?;
 
         // Create a closure record with free variables
@@ -415,20 +415,35 @@ impl Defunctionalizer {
         }];
 
         for param in &lambda.params {
+            let param_name = param
+                .simple_name()
+                .ok_or_else(|| {
+                    CompilerError::ParseError(
+                        "Complex patterns in lambda parameters not yet supported".to_string(),
+                    )
+                })?
+                .to_string();
+            let param_ty = param.pattern_type().cloned().unwrap_or(polytype::Type::Variable(5));
             func_params.push(Parameter {
                 attributes: vec![],
-                name: param.name.clone(),
-                ty: param.ty.clone().unwrap_or(polytype::Type::Variable(5)),
+                name: param_name,
+                ty: param_ty,
             });
         }
 
         // Transform lambda body with parameter scope
         scope_stack.push_scope();
         for param in &lambda.params {
-            scope_stack.insert(
-                param.name.clone(),
-                StaticValue::Dyn(param.ty.clone().unwrap_or(polytype::Type::Variable(6))),
-            );
+            let param_name = param
+                .simple_name()
+                .ok_or_else(|| {
+                    CompilerError::ParseError(
+                        "Complex patterns in lambda parameters not yet supported".to_string(),
+                    )
+                })?
+                .to_string();
+            let param_ty = param.pattern_type().cloned().unwrap_or(polytype::Type::Variable(6));
+            scope_stack.insert(param_name, StaticValue::Dyn(param_ty));
         }
 
         let (transformed_body, _body_sv) = self.defunctionalize_expression(&lambda.body, scope_stack)?;
@@ -570,7 +585,9 @@ impl Defunctionalizer {
             ExprKind::Lambda(lambda) => {
                 let mut extended_bound = bound_vars.clone();
                 for param in &lambda.params {
-                    extended_bound.insert(param.name.clone());
+                    if let Some(name) = param.simple_name() {
+                        extended_bound.insert(name.to_string());
+                    }
                 }
                 self.collect_free_variables(&lambda.body, &extended_bound, free_vars)?;
             }

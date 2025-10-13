@@ -423,14 +423,8 @@ pub enum ExprKind {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct LambdaParam {
-    pub name: String,
-    pub ty: Option<Type>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct LambdaExpr {
-    pub params: Vec<LambdaParam>,
+    pub params: Vec<Pattern>,
     pub return_type: Option<Type>,
     pub body: Box<Expression>,
 }

@@ -303,11 +303,9 @@ pub fn walk_expr_tuple<V: Visitor>(v: &mut V, elements: &[Expression]) -> Contro
 }
 
 pub fn walk_expr_lambda<V: Visitor>(v: &mut V, lambda: &LambdaExpr) -> ControlFlow<V::Break> {
-    // Visit parameter types
+    // Visit parameter patterns
     for param in &lambda.params {
-        if let Some(ty) = &param.ty {
-            v.visit_type(ty)?;
-        }
+        v.visit_pattern(param)?;
     }
 
     // Visit return type

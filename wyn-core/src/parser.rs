@@ -139,11 +139,16 @@ impl Parser {
         }
 
         // Check for optional return type annotation
-        let ty = if self.check(&Token::Colon) {
+        let (ty, attributed_return_type) = if self.check(&Token::Colon) {
             self.advance();
-            Some(self.parse_type()?)
+            // Check if it's an attributed return type
+            if self.check(&Token::AttributeStart) {
+                self.parse_return_type()?
+            } else {
+                (Some(self.parse_type()?), None)
+            }
         } else {
-            None
+            (None, None)
         };
 
         self.expect(Token::Assign)?;
@@ -156,7 +161,7 @@ impl Parser {
             params,
             ty,
             return_attributes: vec![],
-            attributed_return_type: None,
+            attributed_return_type,
             body,
         }))
     }
@@ -1211,7 +1216,14 @@ impl Parser {
             Some(Token::Match) => self.parse_match(),
             Some(Token::Unsafe) => self.parse_unsafe(),
             Some(Token::Assert) => self.parse_assert(),
-            _ => Err(CompilerError::ParseError("Expected expression".to_string())),
+            _ => {
+                let span = self.current_span();
+                Err(CompilerError::ParseError(format!(
+                    "Expected expression, got {:?} at {}",
+                    self.peek(),
+                    span
+                )))
+            }
         }
     }
 
@@ -1248,33 +1260,23 @@ impl Parser {
         let start_span = self.current_span();
         self.expect(Token::Backslash)?;
 
-        // Parse parameter list: \x y z: t -> e (Futhark syntax)
-        // Parameters are untyped, optional return type after all params
+        // Parse parameter patterns: \pat1 pat2 ... [: type] -> exp
         let mut params = Vec::new();
 
-        // Parse parameters (identifiers only)
-        while let Some(Token::Identifier(name)) = self.peek() {
-            let param_name = name.clone();
-            self.advance();
-
-            params.push(LambdaParam {
-                name: param_name,
-                ty: None, // Parameters are untyped in Futhark lambdas
-            });
-
-            // If we see a colon or arrow, we're done with parameters
-            if self.check(&Token::Colon) || self.check(&Token::Arrow) {
-                break;
-            }
+        // Parse patterns until we hit : or ->
+        while !self.check(&Token::Colon) && !self.check(&Token::Arrow) && !self.is_at_end() {
+            params.push(self.parse_pattern()?);
         }
 
         if params.is_empty() {
-            return Err(CompilerError::ParseError(
-                "Lambda must have at least one parameter".to_string(),
-            ));
+            let span = self.current_span();
+            return Err(CompilerError::ParseError(format!(
+                "Lambda must have at least one parameter at {}",
+                span
+            )));
         }
 
-        // Parse optional return type annotation: \x y z: t ->
+        // Parse optional return type annotation: \pat1 pat2: t ->
         let return_type = if self.check(&Token::Colon) {
             self.advance(); // consume ':'
             Some(self.parse_type()?)

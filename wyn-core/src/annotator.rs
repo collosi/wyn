@@ -337,8 +337,13 @@ impl Visitor for CodeAnnotator {
             if i > 0 {
                 self.output.push(' ');
             }
-            self.output.push_str(&param.name);
-            if let Some(ref ty) = param.ty {
+            // For now, only handle simple name patterns
+            if let Some(name) = param.simple_name() {
+                self.output.push_str(name);
+            } else {
+                self.output.push_str("_pattern_");
+            }
+            if let Some(ref ty) = param.pattern_type() {
                 self.output.push(':');
                 self.write_type(ty);
             }

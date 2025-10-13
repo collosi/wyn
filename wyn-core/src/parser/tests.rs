@@ -393,8 +393,8 @@ fn test_parse_simple_lambda() {
         &decl.body.kind,
         ExprKind::Lambda(lambda)
             if lambda.params.len() == 1
-            && lambda.params[0].name == "x"
-            && lambda.params[0].ty.is_none()
+            && lambda.params[0].simple_name() == Some("x")
+            && lambda.params[0].pattern_type().is_none()
             && lambda.return_type.is_none()
             && matches!(lambda.body.kind, ExprKind::Identifier(ref name) if name == "x")
     ));
@@ -462,8 +462,8 @@ fn test_parse_lambda_with_type_annotation() {
         &decl.body.kind,
         ExprKind::Lambda(lambda)
             if lambda.params.len() == 1
-            && lambda.params[0].name == "x"
-            && lambda.params[0].ty.is_none()
+            && lambda.params[0].simple_name() == Some("x")
+            && lambda.params[0].pattern_type().is_none()
             && lambda.return_type.is_none()
             && matches!(lambda.body.kind, ExprKind::Identifier(ref name) if name == "x")
     ));
@@ -477,10 +477,10 @@ fn test_parse_lambda_with_multiple_params() {
         &decl.body.kind,
         ExprKind::Lambda(lambda)
             if lambda.params.len() == 2
-            && lambda.params[0].name == "x"
-            && lambda.params[0].ty.is_none()
-            && lambda.params[1].name == "y"
-            && lambda.params[1].ty.is_none()
+            && lambda.params[0].simple_name() == Some("x")
+            && lambda.params[0].pattern_type().is_none()
+            && lambda.params[1].simple_name() == Some("y")
+            && lambda.params[1].pattern_type().is_none()
             && lambda.return_type.is_none()
             && matches!(lambda.body.kind, ExprKind::Identifier(ref name) if name == "x")
     ));
@@ -1619,6 +1619,66 @@ fn test_parse_two_patterns_sequentially() {
         }
         Err(e) => panic!("Failed to parse second pattern: {:?}", e),
     }
+}
+
+#[test]
+fn test_parse_lambda_with_tuple_pattern() {
+    let source = r#"def test : i32 = let f = \(x,y) -> x in f (1, 2)"#;
+    let tokens = tokenize(source).expect("Failed to tokenize");
+    println!("Tokens: {:#?}", tokens);
+    let mut parser = Parser::new(tokens);
+    match parser.parse() {
+        Ok(program) => {
+            println!("Parsed: {:#?}", program);
+            // Check that we have a lambda with a tuple pattern
+            assert_eq!(program.declarations.len(), 1);
+        }
+        Err(e) => {
+            println!("Parse error: {:?}", e);
+            panic!("Failed to parse: {:?}", e);
+        }
+    }
+}
+
+#[test]
+fn test_parse_lambda_with_wildcard_in_tuple() {
+    let source = r#"def test : i32 = let f = \(_,acc) -> acc in f (1, 2)"#;
+    let tokens = tokenize(source).expect("Failed to tokenize");
+    println!("Tokens: {:#?}", tokens);
+    let mut parser = Parser::new(tokens);
+    match parser.parse() {
+        Ok(program) => {
+            println!("Parsed: {:#?}", program);
+            // Check that we have a lambda with a tuple pattern containing wildcard
+            assert_eq!(program.declarations.len(), 1);
+        }
+        Err(e) => {
+            println!("Parse error: {:?}", e);
+            panic!("Failed to parse: {:?}", e);
+        }
+    }
+}
+
+#[test]
+fn test_parse_nested_let_in() {
+    let source = r#"def test : i32 =
+  let x = 1 in
+  let y = 2 in
+  let z = 3 in
+  x + y + z"#;
+    let decl = single_decl(source);
+    assert_eq!(decl.name, "test");
+}
+
+#[test]
+fn test_parse_loop_with_nested_lets() {
+    let source = r#"def test : (i32, i32) =
+  loop (idx, acc) = (0, 0) while idx < 10 do
+    let x = idx * 2 in
+    let y = x + 1 in
+    (idx + 1, acc + y)"#;
+    let decl = single_decl(source);
+    assert_eq!(decl.name, "test");
 }
 
 #[test]

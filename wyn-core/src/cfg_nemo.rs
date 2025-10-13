@@ -192,9 +192,13 @@ impl<W: Write> Visitor for CfgNemoExtractor<W> {
             try_cf!(
                 self.nemo_writer.write_location_fact(param_location_id, &location).map_err(Self::io_error)
             );
-            try_cf!(
-                self.nemo_writer.write_var_def_fact(param_location_id, &param.name).map_err(Self::io_error)
-            );
+            if let Some(param_name) = param.simple_name() {
+                try_cf!(
+                    self.nemo_writer
+                        .write_var_def_fact(param_location_id, param_name)
+                        .map_err(Self::io_error)
+                );
+            }
             self.current_index += 1;
         }
 

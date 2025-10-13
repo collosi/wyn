@@ -692,11 +692,16 @@ impl TypeChecker {
 
                 // Add parameters to scope with their types (or fresh type variables)
                 for param in &lambda.params {
-                    let param_type = param.ty.clone().unwrap_or_else(|| {
+                    let param_type = param.pattern_type().cloned().unwrap_or_else(|| {
                         self.context.new_variable() // Use polytype's context to create fresh variables
                     });
-                    let type_scheme = TypeScheme::Monotype(param_type);
-                    self.scope_stack.insert(param.name.clone(), type_scheme);
+                    let type_scheme = TypeScheme::Monotype(param_type.clone());
+
+                    // For now, only support simple name patterns in lambda parameters
+                    let param_name = param.simple_name().ok_or_else(|| {
+                        CompilerError::TypeError("Complex patterns in lambda parameters not yet supported".to_string())
+                    })?;
+                    self.scope_stack.insert(param_name.to_string(), type_scheme);
                 }
 
                 // Type check the lambda body with parameters in scope
@@ -709,7 +714,7 @@ impl TypeChecker {
                 // For multiple parameters, create nested function types
                 let mut func_type = return_type;
                 for param in lambda.params.iter().rev() {
-                    let param_type = param.ty.clone().unwrap_or_else(|| self.context.new_variable());
+                    let param_type = param.pattern_type().cloned().unwrap_or_else(|| self.context.new_variable());
                     func_type = types::function(param_type, func_type);
                 }
 
