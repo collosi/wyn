@@ -49,9 +49,6 @@ pub struct Lowering {
 
     // Entry point interface variables - maps function ID to (inputs, outputs)
     entry_point_interfaces: HashMap<FunctionId, (Vec<spirv::Word>, Vec<spirv::Word>)>,
-
-    // Constants storage buffer (created if constants_buffer_size > 0)
-    constants_buffer_var: Option<spirv::Word>,
 }
 
 impl Default for Lowering {
@@ -84,7 +81,6 @@ impl Lowering {
             current_input_vars: Vec::new(),
             current_function_blocks: Vec::new(),
             entry_point_interfaces: HashMap::new(),
-            constants_buffer_var: None,
         };
 
         // Initialize common types
@@ -101,13 +97,6 @@ impl Lowering {
         // Set up SPIR-V capabilities and addressing model
         self.builder.capability(Capability::Shader);
         self.builder.memory_model(AddressingModel::Logical, MemoryModel::GLSL450);
-
-        // Create constants storage buffer if needed
-        if mir.constants_buffer_size > 0 {
-            // Add extension for StorageBuffer storage class
-            self.builder.extension("SPV_KHR_storage_buffer_storage_class");
-            self.create_constants_buffer()?;
-        }
 
         // Lower all functions
         for function in &mir.functions {
@@ -268,48 +257,6 @@ impl Lowering {
         const_id
     }
 
-    /// Create the global constants storage buffer
-    fn create_constants_buffer(&mut self) -> Result<()> {
-        // Create a runtime array of u32 for the buffer contents
-        // This gives us a byte-addressable buffer (each u32 = 4 bytes)
-        let u32_type = self.builder.type_int(32, 0); // unsigned
-        let runtime_array_type = self.builder.type_runtime_array(u32_type);
-
-        // Wrap in a struct (required for storage buffers in SPIR-V)
-        let struct_type = self.builder.type_struct([runtime_array_type]);
-
-        // Decorate the struct
-        self.builder.decorate(struct_type, spirv::Decoration::Block, []);
-
-        // Decorate the member (offset 0)
-        self.builder.member_decorate(
-            struct_type,
-            0,
-            spirv::Decoration::Offset,
-            [rspirv::dr::Operand::LiteralBit32(0)],
-        );
-
-        // Create pointer type for StorageBuffer storage class
-        let ptr_type = self.builder.type_pointer(None, StorageClass::StorageBuffer, struct_type);
-
-        // Create the global variable
-        let var_id = self.builder.variable(ptr_type, None, StorageClass::StorageBuffer, None);
-
-        // Add decorations for binding
-        self.builder.decorate(
-            var_id,
-            spirv::Decoration::DescriptorSet,
-            [rspirv::dr::Operand::LiteralBit32(0)],
-        );
-        self.builder.decorate(
-            var_id,
-            spirv::Decoration::Binding,
-            [rspirv::dr::Operand::LiteralBit32(0)],
-        );
-
-        self.constants_buffer_var = Some(var_id);
-        Ok(())
-    }
     /// Lower a MIR function to SPIR-V
     fn lower_function(&mut self, func: &mir::Function, is_entry_point: bool) -> Result<()> {
         // For entry points, create void(void) signature and use global variables
@@ -643,26 +590,28 @@ impl Lowering {
                 let array_id = self.get_register(array)?;
                 let index_id = self.get_register(index)?;
 
-                // Use OpCompositeExtract if index is a constant, otherwise OpAccessChain + OpLoad
-                // For now, use OpAccessChain which works for both cases
-                let array_elem_ptr_type = self.get_or_create_ptr_type(StorageClass::Function, type_id);
+                // Check if index is a constant integer
+                // Look up the index register to see if it was created by ConstInt
+                let is_const_index = self.int_const_cache.values().any(|&id| id == index_id);
 
-                // First allocate storage for the array (if not already a pointer)
-                let array_ptr = if self.is_pointer_type(&array.ty) {
-                    array_id
+                if is_const_index {
+                    // Use OpCompositeExtract for constant indices
+                    // Need to get the actual constant value
+                    let index_value = self.int_const_cache
+                        .iter()
+                        .find(|(_, &id)| id == index_id)
+                        .map(|((val, _), _)| *val as u32)
+                        .unwrap_or(0);
+
+                    let result_id = self.builder.composite_extract(type_id, None, array_id, [index_value])?;
+                    self.current_register_map.insert(dest.id, result_id);
                 } else {
-                    // Need to store array in a temporary variable
-                    let array_type_id = self.get_or_create_type(&array.ty)?;
-                    let array_ptr_type = self.get_or_create_ptr_type(StorageClass::Function, array_type_id);
-                    let temp_var = self.builder.variable(array_ptr_type, None, StorageClass::Function, None);
-                    self.builder.store(temp_var, array_id, None, [])?;
-                    temp_var
-                };
-
-                // Access the element
-                let elem_ptr = self.builder.access_chain(array_elem_ptr_type, None, array_ptr, [index_id])?;
-                let result_id = self.builder.load(type_id, None, elem_ptr, None, [])?;
-                self.current_register_map.insert(dest.id, result_id);
+                    // Dynamic index - use OpAccessChain (requires array to be in memory)
+                    // For now, this is not supported without proper variable allocation
+                    return Err(CompilerError::SpirvError(
+                        "Dynamic array indexing not yet supported (requires proper variable allocation)".to_string()
+                    ));
+                }
             }
 
             Instruction::ReturnVoid => {
@@ -710,64 +659,23 @@ impl Lowering {
                 }
             }
 
-            Instruction::BufferStore(offset, value) => {
-                let buffer_var = self.constants_buffer_var.ok_or_else(|| {
-                    CompilerError::SpirvError("BufferStore used but no constants buffer exists".to_string())
+            Instruction::Call(dest, func_id, args) => {
+                let result_type_id = self.get_or_create_type(&dest.ty)?;
+
+                // Get SPIR-V function ID
+                let spirv_func_id = self.function_map.get(func_id).copied().ok_or_else(|| {
+                    CompilerError::SpirvError(format!("Function {} not found in lowering", func_id))
                 })?;
 
-                // Get value to store
-                let value_id = self.get_register(value)?;
+                // Get argument IDs
+                let mut arg_ids = Vec::new();
+                for arg in args {
+                    arg_ids.push(self.get_register(arg)?);
+                }
 
-                // Calculate byte offset as u32 index (divide by 4 since buffer is u32 array)
-                let index = offset / 4;
-                let index_const = self.get_or_create_int_const(index as i32, self.i32_type);
-
-                // Access chain: first index 0 for struct member, then the array index
-                let u32_type = self.builder.type_int(32, 0);
-                let ptr_type_id = self.get_or_create_ptr_type(StorageClass::StorageBuffer, u32_type);
-                let member_zero = self.get_or_create_int_const(0, self.i32_type);
-
-                let ptr_id =
-                    self.builder.access_chain(ptr_type_id, None, buffer_var, [member_zero, index_const])?;
-
-                // OpStore the value (bitcast if needed for f32)
-                let store_value = if self.is_float_type(&value.ty) {
-                    self.builder.bitcast(u32_type, None, value_id)?
-                } else {
-                    value_id
-                };
-                self.builder.store(ptr_id, store_value, None, [])?;
-            }
-
-            Instruction::BufferLoad(dest, offset) => {
-                let buffer_var = self.constants_buffer_var.ok_or_else(|| {
-                    CompilerError::SpirvError("BufferLoad used but no constants buffer exists".to_string())
-                })?;
-
-                // Calculate byte offset as u32 index (divide by 4 since buffer is u32 array)
-                let index = offset / 4;
-                let index_const = self.get_or_create_int_const(index as i32, self.i32_type);
-
-                // Access chain: first index 0 for struct member, then the array index
-                let u32_type = self.builder.type_int(32, 0);
-                let ptr_type_id = self.get_or_create_ptr_type(StorageClass::StorageBuffer, u32_type);
-                let member_zero = self.get_or_create_int_const(0, self.i32_type);
-
-                let ptr_id =
-                    self.builder.access_chain(ptr_type_id, None, buffer_var, [member_zero, index_const])?;
-
-                // OpLoad from buffer (as u32)
-                let loaded_u32 = self.builder.load(u32_type, None, ptr_id, None, [])?;
-
-                // Bitcast to destination type if needed (for f32, etc.)
-                let loaded_type_id = self.get_or_create_type(&dest.ty)?;
-                let loaded_id = if self.is_float_type(&dest.ty) {
-                    self.builder.bitcast(loaded_type_id, None, loaded_u32)?
-                } else {
-                    loaded_u32
-                };
-
-                self.current_register_map.insert(dest.id, loaded_id);
+                // Generate function call
+                let result_id = self.builder.function_call(result_type_id, None, spirv_func_id, arg_ids)?;
+                self.current_register_map.insert(dest.id, result_id);
             }
 
             // TODO: Implement remaining instructions

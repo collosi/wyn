@@ -55,9 +55,9 @@ impl Mirize {
             }
         }
 
-        // Generate _init() compute shader if there are constants
-        if !constant_decls.is_empty() {
-            self.generate_init_function(&constant_decls)?;
+        // First pass continued: Convert constants to zero-argument functions
+        for decl in &constant_decls {
+            self.mirize_constant_as_function(decl)?;
         }
 
         // Second pass: process functions
@@ -68,56 +68,33 @@ impl Mirize {
         Ok(self.builder.finish(self.entry_points))
     }
 
-    /// Generate _init() compute shader that initializes top-level constants
-    fn generate_init_function(&mut self, constant_decls: &[&Decl]) -> Result<()> {
-        use crate::ast::TypeName;
+    /// Convert a top-level constant to a zero-argument function
+    fn mirize_constant_as_function(&mut self, decl: &Decl) -> Result<()> {
+        // Get the type of the constant
+        let return_type = if let Some(ty) = &decl.ty {
+            ty.clone()
+        } else {
+            // Use type from type table
+            let node_id = decl.body.h.id;
+            self.type_table
+                .get(&node_id)
+                .ok_or_else(|| {
+                    CompilerError::MirError(format!(
+                        "Type not found for constant '{}' in type table",
+                        decl.name
+                    ))
+                })?
+                .clone()
+        };
 
-        // Register all constants with the builder
-        for decl in constant_decls {
-            let ty = if let Some(ty) = &decl.ty {
-                ty.clone()
-            } else {
-                // Use type from type table
-                let node_id = decl.body.h.id;
-                self.type_table
-                    .get(&node_id)
-                    .ok_or_else(|| {
-                        CompilerError::MirError(format!(
-                            "Type not found for constant '{}' in type table",
-                            decl.name
-                        ))
-                    })?
-                    .clone()
-            };
+        // Create a zero-argument function
+        self.builder.begin_function(decl.name.clone(), vec![], return_type);
 
-            self.builder.register_constant(decl.name.clone(), ty);
-        }
+        // Evaluate the constant expression
+        let value_reg = self.mirize_expression(&decl.body)?;
 
-        // Create _init() function with void return
-        let void_type = Type::Constructed(TypeName::Str("void"), vec![]);
-        let func_id = self.builder.begin_function("_init".to_string(), vec![], void_type);
-
-        // Mark as compute shader entry point
-        self.entry_points.push(func_id);
-
-        // TODO: Add compute entry point attribute to MIR
-
-        // Compute each constant and store to buffer
-        for decl in constant_decls {
-            // Evaluate the constant expression
-            let value_reg = self.mirize_expression(&decl.body)?;
-
-            // Get the offset for this constant
-            let offset = self.builder.get_constant_offset(&decl.name).ok_or_else(|| {
-                CompilerError::MirError(format!("Constant '{}' not found in layout", decl.name))
-            })?;
-
-            // Store to buffer at offset
-            self.builder.build_buffer_store(offset, value_reg);
-        }
-
-        // Return void
-        self.builder.build_return_void();
+        // Return the value
+        self.builder.build_return(value_reg);
         self.builder.end_function();
 
         Ok(())
@@ -250,16 +227,12 @@ impl Mirize {
             ExprKind::BoolLiteral(b) => Ok(self.builder.build_const_bool(*b, expr_type)),
 
             ExprKind::Identifier(name) => {
-                // Check if this is a constant reference
-                if let Some(offset) = self.builder.get_constant_offset(name) {
-                    // Load from constants buffer
-                    Ok(self.builder.build_buffer_load(offset, expr_type))
+                // Check if this is a variable in scope
+                if let Some(reg) = self.env.get(name) {
+                    Ok(reg.clone())
                 } else {
-                    // Regular variable lookup
-                    self.env
-                        .get(name)
-                        .cloned()
-                        .ok_or_else(|| CompilerError::MirError(format!("Undefined variable: {}", name)))
+                    // Must be a constant (zero-argument function) - call it
+                    Ok(self.builder.build_call(name, vec![], expr_type))
                 }
             }
 
