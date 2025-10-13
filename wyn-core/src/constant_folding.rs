@@ -248,12 +248,17 @@ impl ConstantFolder {
             | ExprKind::BoolLiteral(_)
             | ExprKind::TypeHole => Ok(expr.clone()),
 
+            ExprKind::Pipe(left, right) => {
+                let folded_left = self.fold_expression(left)?;
+                let folded_right = self.fold_expression(right)?;
+                Ok(self.node_counter.mk_node(ExprKind::Pipe(Box::new(folded_left), Box::new(folded_right))))
+            }
+
             ExprKind::QualifiedName(_, _)
             | ExprKind::UnaryOp(_, _)
             | ExprKind::Loop(_)
             | ExprKind::Match(_)
             | ExprKind::Range(_)
-            | ExprKind::Pipe(_, _)
             | ExprKind::TypeAscription(_, _)
             | ExprKind::TypeCoercion(_, _)
             | ExprKind::Unsafe(_)

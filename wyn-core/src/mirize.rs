@@ -420,7 +420,9 @@ impl Mirize {
             }
 
             ExprKind::Pipe(_, _) => {
-                todo!("Pipe not yet implemented in MIR")
+                Err(CompilerError::MirError(
+                    "Pipe operator should have been desugared by defunctionalization".to_string()
+                ))
             }
 
             ExprKind::TypeAscription(_, _) => {

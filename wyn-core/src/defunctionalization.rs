@@ -356,12 +356,21 @@ impl Defunctionalizer {
                 StaticValue::Dyn(polytype::Type::Variable(0)), // Type to be inferred
             )),
 
+            ExprKind::Pipe(left, right) => {
+                // a |> f desugars to f(a)
+                // Defunctionalize both sides
+                let (left_expr, _left_sv) = self.defunctionalize_expression(left, scope_stack)?;
+                let (right_expr, _right_sv) = self.defunctionalize_expression(right, scope_stack)?;
+
+                // Desugar into application
+                self.defunctionalize_application(&right_expr, &[left_expr], scope_stack)
+            }
+
             ExprKind::QualifiedName(_, _)
             | ExprKind::UnaryOp(_, _)
             | ExprKind::Loop(_)
             | ExprKind::Match(_)
             | ExprKind::Range(_)
-            | ExprKind::Pipe(_, _)
             | ExprKind::TypeAscription(_, _)
             | ExprKind::TypeCoercion(_, _)
             | ExprKind::Unsafe(_)
@@ -586,13 +595,16 @@ impl Defunctionalizer {
                 self.collect_free_variables(&if_expr.then_branch, bound_vars, free_vars)?;
                 self.collect_free_variables(&if_expr.else_branch, bound_vars, free_vars)?;
             }
+            ExprKind::Pipe(left, right) => {
+                self.collect_free_variables(left, bound_vars, free_vars)?;
+                self.collect_free_variables(right, bound_vars, free_vars)?;
+            }
 
             ExprKind::QualifiedName(_, _)
             | ExprKind::UnaryOp(_, _)
             | ExprKind::Loop(_)
             | ExprKind::Match(_)
             | ExprKind::Range(_)
-            | ExprKind::Pipe(_, _)
             | ExprKind::TypeAscription(_, _)
             | ExprKind::TypeCoercion(_, _)
             | ExprKind::Unsafe(_)

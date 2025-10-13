@@ -1736,12 +1736,17 @@ impl CodeGenerator {
                 unimplemented!("Lambda expressions are not yet supported in code generation")
             }
 
+            ExprKind::Pipe(_, _) => {
+                Err(CompilerError::SpirvError(
+                    "Pipe operator should have been desugared by defunctionalization".to_string()
+                ))
+            }
+
             ExprKind::QualifiedName(_, _)
             | ExprKind::UnaryOp(_, _)
             | ExprKind::Loop(_)
             | ExprKind::Match(_)
             | ExprKind::Range(_)
-            | ExprKind::Pipe(_, _)
             | ExprKind::TypeAscription(_, _)
             | ExprKind::TypeCoercion(_, _)
             | ExprKind::Unsafe(_)

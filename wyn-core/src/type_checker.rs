@@ -883,8 +883,24 @@ impl TypeChecker {
                 todo!("Range not yet implemented in type checker")
             }
 
-            ExprKind::Pipe(_, _) => {
-                todo!("Pipe not yet implemented in type checker")
+            ExprKind::Pipe(left, right) => {
+                // a |> f desugars to f(a)
+                // Type check left to get argument type
+                let arg_type = self.infer_expression(left)?;
+
+                // Type check right (the function)
+                let func_type = self.infer_expression(right)?;
+
+                // Create a fresh result type variable
+                let result_type = self.context.new_variable();
+
+                // Unify func_type with (arg_type -> result_type)
+                let expected_func_type = types::function(arg_type, result_type.clone());
+                self.context.unify(&func_type, &expected_func_type).map_err(|e| {
+                    CompilerError::TypeError(format!("Pipe operator type error: {:?}", e))
+                })?;
+
+                Ok(result_type)
             }
 
             ExprKind::TypeAscription(_, _) => {
