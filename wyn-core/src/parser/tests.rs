@@ -627,7 +627,7 @@ fn test_parse_multiple_shader_outputs() {
 
 #[test]
 fn test_parse_complete_shader_example() {
-    expect_parse(
+    let program = parse_ok(
         r#"
             -- Complete shader example with multiple outputs
             #[uniform] def material_color: vec3
@@ -641,363 +641,131 @@ fn test_parse_complete_shader_example() {
               let color: vec3 = material_color in
               (position, color)
 
-            #[fragment] def fragment_main(): (#[location(0)] vec4, #[location(1)] vec3) = 
+            #[fragment] def fragment_main(): (#[location(0)] vec4, #[location(1)] vec3) =
               let final_color: vec4 = vec4 1.0f32 0.5f32 0.2f32 1.0f32 in
               let normal: vec3 = vec3 0.0f32 1.0f32 0.0f32 in
               (final_color, normal)
             "#,
-        |declarations| {
-            if declarations.len() != 4 {
-                return Err(format!("Expected 4 declarations, got {}", declarations.len()));
-            }
-
-            // Check uniform declarations
-            match &declarations[0] {
-                Declaration::Uniform(uniform) => {
-                    if uniform.name != "material_color" {
-                        return Err("Expected uniform material_color".to_string());
-                    }
-                }
-                _ => return Err("Expected uniform declaration".to_string()),
-            }
-
-            match &declarations[1] {
-                Declaration::Uniform(uniform) => {
-                    if uniform.name != "time" {
-                        return Err("Expected uniform time".to_string());
-                    }
-                }
-                _ => return Err("Expected uniform declaration".to_string()),
-            }
-
-            // Check vertex shader with multiple outputs
-            match &declarations[2] {
-                Declaration::Decl(decl) => {
-                    if decl.name != "vertex_main" || !decl.attributes.contains(&Attribute::Vertex) {
-                        return Err("Expected vertex shader".to_string());
-                    }
-                    if decl.attributed_return_type.is_none() {
-                        return Err("Expected attributed return type for vertex shader".to_string());
-                    }
-                }
-                _ => return Err("Expected vertex declaration".to_string()),
-            }
-
-            // Check fragment shader with multiple outputs
-            match &declarations[3] {
-                Declaration::Decl(decl) => {
-                    if decl.name != "fragment_main" || !decl.attributes.contains(&Attribute::Fragment) {
-                        return Err("Expected fragment shader".to_string());
-                    }
-                    if decl.attributed_return_type.is_none() {
-                        return Err("Expected attributed return type for fragment shader".to_string());
-                    }
-                }
-                _ => return Err("Expected fragment declaration".to_string()),
-            }
-
-            Ok(())
-        },
     );
+
+    assert_eq!(program.declarations.len(), 4);
+
+    // Check uniform declarations
+    assert!(matches!(&program.declarations[0], Declaration::Uniform(u) if u.name == "material_color"));
+    assert!(matches!(&program.declarations[1], Declaration::Uniform(u) if u.name == "time"));
+
+    // Check vertex shader with multiple outputs
+    assert!(matches!(&program.declarations[2], Declaration::Decl(decl) if decl.name == "vertex_main" && decl.attributes.contains(&Attribute::Vertex) && decl.attributed_return_type.is_some()));
+
+    // Check fragment shader with multiple outputs
+    assert!(matches!(&program.declarations[3], Declaration::Decl(decl) if decl.name == "fragment_main" && decl.attributes.contains(&Attribute::Fragment) && decl.attributed_return_type.is_some()));
 }
 
 #[test]
 fn test_if_then_else_parsing() {
-    // Test simple if-then-else
-    expect_parse("def test: i32 = if x == 0 then 1 else 2", |declarations| {
-        if declarations.len() != 1 {
-            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-        }
+    let decl = single_decl("def test: i32 = if x == 0 then 1 else 2");
 
-        match &declarations[0] {
-            Declaration::Decl(decl) => {
-                if decl.name != "test" {
-                    return Err(format!("Expected name 'test', got '{}'", decl.name));
-                }
+    assert_eq!(decl.name, "test");
 
-                // Check the if-then-else expression structure
-                match &decl.body.kind {
-                    ExprKind::If(if_expr) => {
-                        // Check condition is a comparison
-                        match &if_expr.condition.kind {
-                            ExprKind::BinaryOp(op, left, right) => {
-                                if op.op != "==" {
-                                    return Err(format!("Expected '==' operator, got '{}'", op.op));
-                                }
-
-                                // Check left side is identifier 'x'
-                                match &left.kind {
-                                    ExprKind::Identifier(name) if name == "x" => {}
-                                    _ => {
-                                        return Err(format!(
-                                            "Expected identifier 'x' on left side of comparison, got {:?}",
-                                            left
-                                        ));
-                                    }
-                                }
-
-                                // Check right side is literal 0
-                                match &right.kind {
-                                    ExprKind::IntLiteral(0) => {}
-                                    _ => {
-                                        return Err(format!(
-                                            "Expected literal 0 on right side of comparison, got {:?}",
-                                            right
-                                        ));
-                                    }
-                                }
-                            }
-                            _ => {
-                                return Err(format!(
-                                    "Expected comparison expression in if condition, got {:?}",
-                                    if_expr.condition
-                                ));
-                            }
-                        }
-
-                        // Check then branch is literal 1
-                        match &if_expr.then_branch.kind {
-                            ExprKind::IntLiteral(1) => {}
-                            _ => {
-                                return Err(format!(
-                                    "Expected literal 1 in then branch, got {:?}",
-                                    if_expr.then_branch
-                                ));
-                            }
-                        }
-
-                        // Check else branch is literal 2
-                        match &if_expr.else_branch.kind {
-                            ExprKind::IntLiteral(2) => {}
-                            _ => {
-                                return Err(format!(
-                                    "Expected literal 2 in else branch, got {:?}",
-                                    if_expr.else_branch
-                                ));
-                            }
-                        }
-                    }
-                    _ => return Err(format!("Expected if-then-else expression, got {:?}", decl.body)),
-                }
-
-                Ok(())
-            }
-            _ => Err("Expected Decl declaration".to_string()),
-        }
-    });
+    // Check the if-then-else expression structure
+    assert!(matches!(
+        &decl.body.kind,
+        ExprKind::If(if_expr)
+            if matches!(&if_expr.condition.kind, ExprKind::BinaryOp(op, left, right)
+                if op.op == "=="
+                && matches!(left.kind, ExprKind::Identifier(ref name) if name == "x")
+                && matches!(right.kind, ExprKind::IntLiteral(0))
+            )
+            && matches!(if_expr.then_branch.kind, ExprKind::IntLiteral(1))
+            && matches!(if_expr.else_branch.kind, ExprKind::IntLiteral(2))
+    ));
 }
 #[test]
 fn test_array_literal() {
-    // Test simple if-then-else
-    expect_parse(
-        "#[vertex] def test(): #[builtin(position)] [4]f32 = [0.0f32, 0.5f32, 0.0f32, 1.0f32]",
-        |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            Ok(())
-        },
-    );
+    // Just verify it parses successfully
+    let _decl = single_decl("#[vertex] def test(): #[builtin(position)] [4]f32 = [0.0f32, 0.5f32, 0.0f32, 1.0f32]");
 }
 
 #[test]
 fn test_parse_array_type_directly() {
     let tokens = tokenize("[4]f32").expect("Failed to tokenize");
     let mut parser = Parser::new(tokens);
-    match parser.parse_type() {
-        Ok(ty) => println!("Successfully parsed type: {:?}", ty),
-        Err(e) => panic!("Failed to parse [4]f32: {:?}", e),
-    }
+    parser.parse_type().expect("Failed to parse [4]f32");
 }
 
 #[test]
 fn test_parse_array_literal() {
     let tokens = tokenize("[0.0f32, 0.5f32, 0.0f32, 1.0f32]").expect("Failed to tokenize");
-    println!("Tokens: {:?}", tokens);
     let mut parser = Parser::new(tokens);
-    match parser.parse_expression() {
-        Ok(expr) => {
-            println!("Successfully parsed array literal: {:?}", expr);
-            // Check that it's actually an array literal
-            match expr.kind {
-                ExprKind::ArrayLiteral(_) => {
-                    // Good, this is what we expect
-                }
-                _ => panic!("Expected ArrayLiteral, got {:?}", expr),
-            }
-        }
-        Err(e) => {
-            panic!("Failed to parse array literal: {:?}", e);
-        }
-    }
+    let expr = parser.parse_expression().expect("Failed to parse array literal");
+    assert!(matches!(expr.kind, ExprKind::ArrayLiteral(_)));
 }
 
 #[test]
 fn test_parse_attributed_return_type() {
-    let input = r#"#[vertex]
+    let decl = single_decl(r#"#[vertex]
 def test_vertex : #[builtin(position)] vec4 =
   let angle = 1.0f32 in
   let s = f32.sin angle in
-  vec4 s s 0.0f32 1.0f32"#;
+  vec4 s s 0.0f32 1.0f32"#);
 
-    expect_parse(input, |declarations| {
-        if declarations.len() != 1 {
-            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-        }
-
-        match &declarations[0] {
-            Declaration::Decl(decl) => {
-                if decl.name != "test_vertex" {
-                    return Err(format!("Expected 'test_vertex', got '{}'", decl.name));
-                }
-                if decl.attributed_return_type.is_none() {
-                    return Err("Expected attributed return type".to_string());
-                }
-                Ok(())
-            }
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    assert_eq!(decl.name, "test_vertex");
+    assert!(decl.attributed_return_type.is_some());
 }
 
 #[test]
 fn test_parse_unique_type() {
-    expect_parse("def foo(x: *i32): i32 = x", |declarations| {
-        if declarations.len() != 1 {
-            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-        }
-        match &declarations[0] {
-            Declaration::Decl(decl) => {
-                if decl.params.len() != 1 {
-                    return Err(format!("Expected 1 parameter, got {}", decl.params.len()));
-                }
-                match &decl.params[0] {
-                    DeclParam::Typed(param) => {
-                        let param_ty = &param.ty;
-                        // Should be Unique(i32)
-                        if !types::is_unique(param_ty) {
-                            return Err(format!("Expected unique type, got {:?}", param_ty));
-                        }
-                        let inner = types::strip_unique(param_ty);
-                        if inner != types::i32() {
-                            return Err(format!("Expected i32 inside unique, got {:?}", inner));
-                        }
-                        Ok(())
-                    }
-                    _ => Err("Expected typed parameter".to_string()),
-                }
-            }
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("def foo(x: *i32): i32 = x");
+
+    assert_eq!(decl.params.len(), 1);
+    let param = match &decl.params[0] {
+        DeclParam::Typed(p) => p,
+        _ => panic!("Expected typed parameter"),
+    };
+    assert!(types::is_unique(&param.ty));
+    assert_eq!(types::strip_unique(&param.ty), types::i32());
 }
 
 #[test]
 fn test_parse_unique_array_type() {
-    expect_parse("def bar(arr: *[3]f32): f32 = arr[0]", |declarations| {
-        if declarations.len() != 1 {
-            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-        }
-        match &declarations[0] {
-            Declaration::Decl(decl) => {
-                if decl.params.len() != 1 {
-                    return Err(format!("Expected 1 parameter, got {}", decl.params.len()));
-                }
-                match &decl.params[0] {
-                    DeclParam::Typed(param) => {
-                        let param_ty = &param.ty;
-                        // Should be Unique(Array(3, f32))
-                        if !types::is_unique(param_ty) {
-                            return Err(format!("Expected unique type, got {:?}", param_ty));
-                        }
-                        let inner = types::strip_unique(param_ty);
-                        let expected = types::sized_array(3, types::f32());
-                        if inner != expected {
-                            return Err(format!("Expected [3]f32 inside unique, got {:?}", inner));
-                        }
-                        Ok(())
-                    }
-                    _ => Err("Expected typed parameter".to_string()),
-                }
-            }
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("def bar(arr: *[3]f32): f32 = arr[0]");
+
+    assert_eq!(decl.params.len(), 1);
+    let param = match &decl.params[0] {
+        DeclParam::Typed(p) => p,
+        _ => panic!("Expected typed parameter"),
+    };
+    assert!(types::is_unique(&param.ty));
+    assert_eq!(types::strip_unique(&param.ty), types::sized_array(3, types::f32()));
 }
 
 #[test]
 fn test_parse_nested_unique() {
     // Nested arrays with unique at different levels
-    expect_parse("def baz(x: *[2][3]i32): i32 = x[0][0]", |declarations| {
-        if declarations.len() != 1 {
-            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-        }
-        match &declarations[0] {
-            Declaration::Decl(decl) => {
-                if decl.params.len() != 1 {
-                    return Err(format!("Expected 1 parameter, got {}", decl.params.len()));
-                }
-                match &decl.params[0] {
-                    DeclParam::Typed(param) => {
-                        let param_ty = &param.ty;
-                        // Should be Unique(Array(2, Array(3, i32)))
-                        if !types::is_unique(param_ty) {
-                            return Err(format!("Expected unique type, got {:?}", param_ty));
-                        }
-                        let inner = types::strip_unique(param_ty);
-                        let expected = types::sized_array(2, types::sized_array(3, types::i32()));
-                        if inner != expected {
-                            return Err(format!("Expected [2][3]i32 inside unique, got {:?}", inner));
-                        }
-                        Ok(())
-                    }
-                    _ => Err("Expected typed parameter".to_string()),
-                }
-            }
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("def baz(x: *[2][3]i32): i32 = x[0][0]");
+
+    assert_eq!(decl.params.len(), 1);
+    let param = match &decl.params[0] {
+        DeclParam::Typed(p) => p,
+        _ => panic!("Expected typed parameter"),
+    };
+    assert!(types::is_unique(&param.ty));
+    assert_eq!(types::strip_unique(&param.ty), types::sized_array(2, types::sized_array(3, types::i32())));
 }
 
 #[test]
 fn test_parse_function_application_with_array_literal() {
     let _ = env_logger::builder().is_test(true).try_init();
-    expect_parse(
-        "def test: vec4 = to_vec4 [1.0f32, 2.0f32, 3.0f32, 4.0f32]",
-        |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            match &declarations[0] {
-                Declaration::Decl(decl) => {
-                    if decl.name != "test" {
-                        return Err(format!("Expected name 'test', got '{}'", decl.name));
-                    }
-                    // Body should be FunctionCall("to_vec4", [ArrayLiteral(...)])
-                    match &decl.body.kind {
-                        ExprKind::FunctionCall(name, args) => {
-                            if name != "to_vec4" {
-                                return Err(format!("Expected function 'to_vec4', got '{}'", name));
-                            }
-                            if args.len() != 1 {
-                                return Err(format!("Expected 1 arg, got {}", args.len()));
-                            }
-                            if let ExprKind::ArrayLiteral(elements) = &args[0].kind {
-                                if elements.len() != 4 {
-                                    return Err(format!("Expected 4 elements, got {}", elements.len()));
-                                }
-                            } else {
-                                return Err(format!("Expected ArrayLiteral, got {:?}", args[0].kind));
-                            }
-                            Ok(())
-                        }
-                        _ => Err(format!("Expected FunctionCall, got {:?}", decl.body.kind)),
-                    }
-                }
-                _ => Err("Expected Decl".to_string()),
-            }
-        },
-    );
+    let decl = single_decl("def test: vec4 = to_vec4 [1.0f32, 2.0f32, 3.0f32, 4.0f32]");
+
+    assert_eq!(decl.name, "test");
+    assert!(matches!(
+        &decl.body.kind,
+        ExprKind::FunctionCall(name, args)
+            if name == "to_vec4"
+            && args.len() == 1
+            && matches!(&args[0].kind, ExprKind::ArrayLiteral(elements) if elements.len() == 4)
+    ));
 }
 
 // Pattern parsing tests
