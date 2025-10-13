@@ -1,3 +1,11 @@
+-- Vertex shader: full-screen triangle
+def verts: [3]vec4 =
+  [vec4 -1.0f32 -1.0f32 0.0f32 1.0f32,
+   vec4 3.0f32 -1.0f32 0.0f32 1.0f32,
+   vec4 -1.0f32 3.0f32 0.0f32 1.0f32]
+
+#[vertex]
+def vertex_main(vertex_id: i32): #[builtin(position)] vec4 = verts[vertex_id]
 
 -- Constants (changed to def for top-level, using vec3 constructors)
 def RED : vec3 = vec3 1.0f32 0.0f32 0.0f32
@@ -97,7 +105,7 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2) : vec4 =
       [ 0.0f32,-1.0f32, 1.0f32] ]
 
   -- Accumulate color
-  let (c_box:vec3) =
+  let c_box : vec3 =
     loop (idx = 0i32, acc = base_col) while idx < 18 do
       let pos  = getPosMatrix (map (* 4.0f32) instA[idx])
       let mat  : mat4 = mul_mat4 (mul_mat4 pos rot) cam
@@ -165,13 +173,12 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2) : vec4 =
 
   in [ c_final[0], c_final[1], c_final[2], 1.0f32 ]
 
--- (Optional) Example image entry point:
--- Generate an image for a whole viewport. This mirrors ShaderToy-style dispatch.
--- width, height are integers; time is seconds.
-entry render (width:i32) (height:i32) (time:f32) : [height][width][4]f32 =
-  let res : [2]f32 = [ f32 width, f32 height ]
-  in map (\y ->
-       map (\x ->
-         main_image res time [ f32 x, f32 (height - 1 - y) ])
-       (iota width))
-     (iota height)
+-- Fragment shader entry point
+-- For now, uses fixed resolution and time
+#[fragment]
+def fragment_main(): #[location(0)] vec4 =
+  let width = 800.0f32
+  let height = 600.0f32
+  let time = 1.0f32
+  let fragCoord : vec2 = [400.0f32, 300.0f32]  -- center of screen for now
+  in main_image [width, height] time fragCoord
