@@ -449,38 +449,22 @@ fn test_parse_simple_let_in() {
 
 #[test]
 fn test_parse_let_in_expression_only() {
-    // Test parsing just the let..in expression by itself
+    // Test parsing just the let..in expression by itself - just verify it parses
     let input = r#"let f = \y -> y + x in f 10"#;
     let tokens = tokenize(input).expect("Failed to tokenize");
     let mut parser = Parser::new(tokens);
-    let result = parser.parse_expression();
-
-    // Just verify it parses without error - this is a complex expression
-    match result {
-        Ok(_expr) => {
-            // Test passes if parsing succeeds
-        }
-        Err(e) => panic!("Failed to parse let..in expression: {:?}", e),
-    }
+    parser.parse_expression().expect("Failed to parse let..in expression");
 }
 
 #[test]
 fn test_parse_let_in_with_lambda() {
-    expect_parse(
-        r#"#[vertex] def main(x: i32): i32 = let f = \y -> y + x in f 10"#,
-        |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            // Just verify it parses successfully - the lambda let..in structure is complex
-            Ok(())
-        },
-    );
+    // Just verify it parses successfully - the lambda let..in structure is complex
+    let _decl = single_decl(r#"#[vertex] def main(x: i32): i32 = let f = \y -> y + x in f 10"#);
 }
 
 #[test]
 fn test_parse_multiple_top_level_lets_with_entry() {
-    // Test the failing case from integration tests: multiple let declarations with entry points
+    // Test multiple let declarations with entry points
     let input = r#"
 def verts: [3][4]f32 =
   [[-1.0f32, -1.0f32, 0.0f32, 1.0f32],
@@ -497,191 +481,69 @@ def SKY_RGBA: [4]f32 =
 def fragment_main(): [4]f32 = SKY_RGBA
 "#;
 
-    expect_parse(input, |declarations| {
-        if declarations.len() != 4 {
-            return Err(format!(
-                "Expected 4 declarations (2 lets + 2 entries), got {}",
-                declarations.len()
-            ));
-        }
+    let program = parse_ok(input);
+    assert_eq!(program.declarations.len(), 4);
 
-        // First should be def verts
-        match &declarations[0] {
-            Declaration::Decl(decl) if decl.keyword == "def" => {
-                if decl.name != "verts" {
-                    return Err(format!("Expected first def to be 'verts', got '{}'", decl.name));
-                }
-            }
-            _ => return Err("Expected first declaration to be Def".to_string()),
-        }
+    // First: def verts
+    assert!(matches!(&program.declarations[0], Declaration::Decl(decl) if decl.keyword == "def" && decl.name == "verts"));
 
-        // Second should be vertex entry point (now a Decl with vertex attribute)
-        match &declarations[1] {
-            Declaration::Decl(decl) => {
-                if decl.name != "vertex_main" {
-                    return Err(format!(
-                        "Expected vertex entry to be 'vertex_main', got '{}'",
-                        decl.name
-                    ));
-                }
-                if !decl.attributes.contains(&Attribute::Vertex) {
-                    return Err(format!(
-                        "Expected vertex attribute on vertex_main, got {:?}",
-                        decl.attributes
-                    ));
-                }
-            }
-            _ => return Err("Expected second declaration to be Decl".to_string()),
-        }
+    // Second: vertex entry point
+    assert!(matches!(&program.declarations[1], Declaration::Decl(decl) if decl.name == "vertex_main" && decl.attributes.contains(&Attribute::Vertex)));
 
-        // Third should be def SKY_RGBA
-        match &declarations[2] {
-            Declaration::Decl(decl) if decl.keyword == "def" => {
-                if decl.name != "SKY_RGBA" {
-                    return Err(format!(
-                        "Expected third def to be 'SKY_RGBA', got '{}'",
-                        decl.name
-                    ));
-                }
-            }
-            _ => return Err("Expected third declaration to be Def".to_string()),
-        }
+    // Third: def SKY_RGBA
+    assert!(matches!(&program.declarations[2], Declaration::Decl(decl) if decl.keyword == "def" && decl.name == "SKY_RGBA"));
 
-        // Fourth should be fragment entry point (now a Decl with fragment attribute)
-        match &declarations[3] {
-            Declaration::Decl(decl) => {
-                if decl.name != "fragment_main" {
-                    return Err(format!(
-                        "Expected fragment entry to be 'fragment_main', got '{}'",
-                        decl.name
-                    ));
-                }
-                if !decl.attributes.contains(&Attribute::Fragment) {
-                    return Err(format!(
-                        "Expected fragment attribute on fragment_main, got {:?}",
-                        decl.attributes
-                    ));
-                }
-            }
-            _ => return Err("Expected fourth declaration to be Decl".to_string()),
-        }
-
-        Ok(())
-    });
+    // Fourth: fragment entry point
+    assert!(matches!(&program.declarations[3], Declaration::Decl(decl) if decl.name == "fragment_main" && decl.attributes.contains(&Attribute::Fragment)));
 }
 
 #[test]
 fn test_field_access_parsing() {
-    expect_parse("def x: f32 = v.x", |declarations| {
-        assert_eq!(declarations.len(), 1);
-        match &declarations[0] {
-            Declaration::Decl(decl) => {
-                assert_eq!(decl.name, "x");
-                match &decl.body.kind {
-                    ExprKind::FieldAccess(expr, field) => {
-                        assert_eq!(field, "x");
-                        match expr.kind {
-                            ExprKind::Identifier(ref name) => {
-                                if name == "v" {
-                                    Ok(())
-                                } else {
-                                    Err(format!("Expected identifier 'v', got '{}'", name))
-                                }
-                            }
-                            _ => Err(format!("Expected identifier in field access, got: {:?}", expr)),
-                        }
-                    }
-                    _ => Err(format!("Expected field access expression, got: {:?}", decl.body)),
-                }
-            }
-            _ => Err("Expected Decl declaration".to_string()),
-        }
-    });
+    let decl = single_decl("def x: f32 = v.x");
+
+    assert_eq!(decl.name, "x");
+    assert!(matches!(
+        &decl.body.kind,
+        ExprKind::FieldAccess(expr, field)
+            if field == "x" && matches!(expr.kind, ExprKind::Identifier(ref name) if name == "v")
+    ));
 }
 
 #[test]
 fn test_simple_identifier_parsing() {
-    expect_parse("def x: f32 = y", |declarations| {
-        assert_eq!(declarations.len(), 1);
-        match &declarations[0] {
-            Declaration::Decl(decl) => {
-                assert_eq!(decl.name, "x");
-                match &decl.body.kind {
-                    ExprKind::Identifier(name) => {
-                        if name == "y" {
-                            Ok(())
-                        } else {
-                            Err(format!("Expected identifier 'y', got '{}'", name))
-                        }
-                    }
-                    _ => Err(format!("Expected identifier expression, got: {:?}", decl.body)),
-                }
-            }
-            _ => Err("Expected Decl declaration".to_string()),
-        }
-    });
+    let decl = single_decl("def x: f32 = y");
+
+    assert_eq!(decl.name, "x");
+    assert!(matches!(&decl.body.kind, ExprKind::Identifier(name) if name == "y"));
 }
 
 #[test]
 fn test_vector_field_access_file() {
-    expect_parse(
-        "def v: vec3 = vec3 1.0f32 2.0f32 3.0f32\ndef x: f32 = v.x",
-        |declarations| {
-            assert_eq!(declarations.len(), 2);
+    let program = parse_ok("def v: vec3 = vec3 1.0f32 2.0f32 3.0f32\ndef x: f32 = v.x");
+    assert_eq!(program.declarations.len(), 2);
 
-            // Check first declaration: def v: vec3 = vec3 1.0f32 2.0f32 3.0f32
-            match &declarations[0] {
-                Declaration::Decl(decl) => {
-                    assert_eq!(decl.name, "v");
-                    // Body should be a function call: vec3 1.0f32 2.0f32 3.0f32
-                    match &decl.body.kind {
-                        ExprKind::FunctionCall(func_name, args) => {
-                            assert_eq!(func_name, "vec3");
-                            assert_eq!(args.len(), 3);
-                        }
-                        _ => {
-                            return Err(format!(
-                                "Expected function call for vec3 constructor, got: {:?}",
-                                decl.body
-                            ));
-                        }
-                    }
-                }
-                _ => return Err("Expected first declaration to be Decl".to_string()),
-            }
+    // Check first declaration: def v: vec3 = vec3 1.0f32 2.0f32 3.0f32
+    let decl1 = match &program.declarations[0] {
+        Declaration::Decl(d) => d,
+        _ => panic!("Expected first declaration to be Decl"),
+    };
+    assert_eq!(decl1.name, "v");
+    assert!(matches!(&decl1.body.kind, ExprKind::FunctionCall(func_name, args) if func_name == "vec3" && args.len() == 3));
 
-            // Check second declaration: def x: f32 = v.x
-            match &declarations[1] {
-                Declaration::Decl(decl) => {
-                    assert_eq!(decl.name, "x");
-                    match &decl.body.kind {
-                        ExprKind::FieldAccess(expr, field) => {
-                            assert_eq!(field, "x");
-                            match expr.kind {
-                                ExprKind::Identifier(ref name) => {
-                                    if name == "v" {
-                                        Ok(())
-                                    } else {
-                                        Err(format!("Expected identifier 'v', got '{}'", name))
-                                    }
-                                }
-                                _ => Err(format!("Expected identifier in field access, got: {:?}", expr)),
-                            }
-                        }
-                        _ => Err(format!("Expected field access expression, got: {:?}", decl.body)),
-                    }
-                }
-                _ => Err("Expected second declaration to be Decl".to_string()),
-            }
-        },
-    );
+    // Check second declaration: def x: f32 = v.x
+    let decl2 = match &program.declarations[1] {
+        Declaration::Decl(d) => d,
+        _ => panic!("Expected second declaration to be Decl"),
+    };
+    assert_eq!(decl2.name, "x");
+    assert!(matches!(&decl2.body.kind, ExprKind::FieldAccess(expr, field) if field == "x" && matches!(expr.kind, ExprKind::Identifier(ref name) if name == "v")));
 }
 
 #[test]
 fn test_parse_vector_arithmetic() {
-    expect_parse(
+    let decl = single_decl(
         r#"
-            def test_vector_arithmetic: f32 = 
+            def test_vector_arithmetic: f32 =
               let v1: vec3 = vec3 1.0f32 2.0f32 3.0f32 in
               let v2: vec3 = vec3 4.0f32 5.0f32 6.0f32 in
               let sum: vec3 = v1 + v2 in
@@ -694,167 +556,73 @@ fn test_parse_vector_arithmetic() {
               let scalar_prod: f32 = a * b in
               scalar_sum
             "#,
-        |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            match &declarations[0] {
-                Declaration::Decl(decl) => {
-                    if decl.name != "test_vector_arithmetic" {
-                        return Err(format!(
-                            "Expected name 'test_vector_arithmetic', got '{}'",
-                            decl.name
-                        ));
-                    }
-                    if decl.ty != Some(crate::ast::types::f32()) {
-                        return Err(format!("Expected f32 type, got {:?}", decl.ty));
-                    }
-                    // Check that the body contains nested let-in expressions with binary operations
-                    match &decl.body.kind {
-                        ExprKind::LetIn(_) => Ok(()),
-                        _ => Err(format!("Expected LetIn expression, got {:?}", decl.body)),
-                    }
-                }
-                _ => Err("Expected Decl declaration".to_string()),
-            }
-        },
     );
+
+    assert_eq!(decl.name, "test_vector_arithmetic");
+    assert_eq!(decl.ty, Some(crate::ast::types::f32()));
+    assert!(matches!(&decl.body.kind, ExprKind::LetIn(_)));
 }
 
 #[test]
 fn test_parse_uniform_attribute() {
-    expect_parse(
-        r#"
-            #[uniform] def material_color: vec3
-            "#,
-        |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            match &declarations[0] {
-                Declaration::Uniform(uniform_decl) => {
-                    if uniform_decl.name != "material_color" {
-                        return Err(format!(
-                            "Expected name 'material_color', got '{}'",
-                            uniform_decl.name
-                        ));
-                    }
-                    if uniform_decl.ty != crate::ast::types::vec3() {
-                        return Err(format!("Expected vec3 type, got {:?}", uniform_decl.ty));
-                    }
-                    Ok(())
-                }
-                _ => Err("Expected Uniform declaration".to_string()),
-            }
-        },
-    );
+    let program = parse_ok("#[uniform] def material_color: vec3");
+    assert_eq!(program.declarations.len(), 1);
+
+    let uniform_decl = match &program.declarations[0] {
+        Declaration::Uniform(u) => u,
+        _ => panic!("Expected Uniform declaration"),
+    };
+    assert_eq!(uniform_decl.name, "material_color");
+    assert_eq!(uniform_decl.ty, crate::ast::types::vec3());
 }
 
 #[test]
 fn test_parse_uniform_without_initializer() {
-    expect_parse(
-        r#"
-            #[uniform] def material_color: vec3
-            "#,
-        |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            match &declarations[0] {
-                Declaration::Uniform(uniform_decl) => {
-                    if uniform_decl.name != "material_color" {
-                        return Err(format!(
-                            "Expected name 'material_color', got '{}'",
-                            uniform_decl.name
-                        ));
-                    }
-                    if uniform_decl.ty != crate::ast::types::vec3() {
-                        return Err(format!("Expected vec3 type, got {:?}", uniform_decl.ty));
-                    }
-                    // Check that there's no initializer (uniforms don't have bodies)
-                    Ok(())
-                }
-                _ => Err("Expected Uniform declaration".to_string()),
-            }
-        },
-    );
+    let program = parse_ok("#[uniform] def material_color: vec3");
+    assert_eq!(program.declarations.len(), 1);
+
+    let uniform_decl = match &program.declarations[0] {
+        Declaration::Uniform(u) => u,
+        _ => panic!("Expected Uniform declaration"),
+    };
+    assert_eq!(uniform_decl.name, "material_color");
+    assert_eq!(uniform_decl.ty, crate::ast::types::vec3());
+    // Check that there's no initializer (uniforms don't have bodies)
 }
 
 #[test]
 fn test_uniform_with_initializer_error() {
     expect_parse_error(
-        r#"
-            #[uniform] def material_color: vec3 = vec3 1.0f32 0.5f32 0.2f32
-            "#,
+        "#[uniform] def material_color: vec3 = vec3 1.0f32 0.5f32 0.2f32",
         |error| match error {
-            CompilerError::ParseError(msg)
-                if msg.contains("Uniform declarations cannot have initializer values") =>
-            {
-                Ok(())
-            }
-            _ => Err(format!(
-                "Expected parse error about uniform initializer, got: {:?}",
-                error
-            )),
+            CompilerError::ParseError(msg) if msg.contains("Uniform declarations cannot have initializer values") => Ok(()),
+            _ => Err(format!("Expected parse error about uniform initializer, got: {:?}", error)),
         },
     );
 }
 
 #[test]
 fn test_parse_multiple_shader_outputs() {
-    expect_parse(
+    let decl = single_decl(
         r#"
-            #[fragment] def fragment_main(): (#[location(0)] vec4, #[location(1)] vec3) = 
+            #[fragment] def fragment_main(): (#[location(0)] vec4, #[location(1)] vec3) =
               let color = vec4 1.0f32 0.5f32 0.2f32 1.0f32 in
               let normal = vec3 0.0f32 1.0f32 0.0f32 in
               (color, normal)
             "#,
-        |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            match &declarations[0] {
-                Declaration::Decl(decl) => {
-                    if decl.name != "fragment_main" {
-                        return Err(format!("Expected name 'fragment_main', got '{}'", decl.name));
-                    }
-                    if !decl.attributes.contains(&Attribute::Fragment) {
-                        return Err(format!("Expected Fragment attribute, got {:?}", decl.attributes));
-                    }
-                    // Check that we have attributed return type
-                    if decl.attributed_return_type.is_none() {
-                        return Err("Expected attributed return type for multiple outputs".to_string());
-                    }
-                    let attributed_types = decl.attributed_return_type.as_ref().unwrap();
-                    if attributed_types.len() != 2 {
-                        return Err(format!(
-                            "Expected 2 output components, got {}",
-                            attributed_types.len()
-                        ));
-                    }
-
-                    // Check first output: [location(0)] vec4
-                    if attributed_types[0].attributes != vec![Attribute::Location(0)] {
-                        return Err(format!(
-                            "Expected Location(0) on first output, got {:?}",
-                            attributed_types[0].attributes
-                        ));
-                    }
-
-                    // Check second output: [location(1)] vec3
-                    if attributed_types[1].attributes != vec![Attribute::Location(1)] {
-                        return Err(format!(
-                            "Expected Location(1) on second output, got {:?}",
-                            attributed_types[1].attributes
-                        ));
-                    }
-
-                    Ok(())
-                }
-                _ => Err("Expected Decl declaration".to_string()),
-            }
-        },
     );
+
+    assert_eq!(decl.name, "fragment_main");
+    assert!(decl.attributes.contains(&Attribute::Fragment));
+
+    let attributed_types = decl.attributed_return_type.as_ref().expect("Expected attributed return type");
+    assert_eq!(attributed_types.len(), 2);
+
+    // Check first output: [location(0)] vec4
+    assert_eq!(attributed_types[0].attributes, vec![Attribute::Location(0)]);
+
+    // Check second output: [location(1)] vec3
+    assert_eq!(attributed_types[1].attributes, vec![Attribute::Location(1)]);
 }
 
 #[test]
