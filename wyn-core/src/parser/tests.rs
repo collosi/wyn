@@ -50,225 +50,115 @@ where
     }
 }
 
+/// Parse input and return the Program, panicking on failure
+fn parse_ok(input: &str) -> Program {
+    let tokens = tokenize(input).expect("tokenize failed");
+    Parser::new(tokens).parse().expect("parse failed")
+}
+
+/// Parse input and return the single Decl, panicking if not exactly one or not a Decl
+fn single_decl(input: &str) -> Decl {
+    let program = parse_ok(input);
+    assert_eq!(program.declarations.len(), 1, "expected exactly one declaration");
+    match program.declarations.into_iter().next().unwrap() {
+        Declaration::Decl(d) => d,
+        other => panic!("expected Declaration::Decl, got {:?}", other),
+    }
+}
+
+/// Assert that a DeclParam is Typed with given name, type, and no attributes
+macro_rules! assert_typed_param {
+    ($param:expr, $name:expr, $ty:expr) => {
+        assert!(
+            matches!(
+                $param,
+                DeclParam::Typed(p) if p.name == $name && p.ty == $ty && p.attributes.is_empty()
+            ),
+            "Expected Typed param with name {:?} and type {:?}, got {:?}",
+            $name, $ty, $param
+        );
+    };
+}
+
+/// Assert that a DeclParam is Typed with given name, type, and attributes
+macro_rules! assert_typed_param_with_attrs {
+    ($param:expr, $name:expr, $ty:expr, $attrs:expr) => {
+        assert!(
+            matches!(
+                $param,
+                DeclParam::Typed(p) if p.name == $name && p.ty == $ty && p.attributes == $attrs
+            ),
+            "Expected Typed param with name {:?}, type {:?}, and attrs {:?}, got {:?}",
+            $name, $ty, $attrs, $param
+        );
+    };
+}
+
 #[test]
 fn test_parse_let_decl() {
-    expect_parse("let x: i32 = 42", |declarations| {
-        if declarations.len() != 1 {
-            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-        }
-        match &declarations[0] {
-            Declaration::Decl(decl) => {
-                if decl.name != "x" {
-                    return Err(format!("Expected name 'x', got '{}'", decl.name));
-                }
-                if decl.ty != Some(crate::ast::types::i32()) {
-                    return Err(format!("Expected i32 type, got {:?}", decl.ty));
-                }
-                if decl.body.kind != ExprKind::IntLiteral(42) {
-                    return Err(format!("Expected IntLiteral(42), got {:?}", decl.body));
-                }
-                Ok(())
-            }
-            _ => Err("Expected Let declaration".to_string()),
-        }
-    });
+    let decl = single_decl("let x: i32 = 42");
+    assert_eq!(decl.name, "x");
+    assert_eq!(decl.ty, Some(crate::ast::types::i32()));
+    assert!(matches!(decl.body.kind, ExprKind::IntLiteral(42)));
 }
 
 #[test]
 fn test_parse_array_type() {
-    expect_parse(
-        "let arr: [3][4]f32 = [[1.0f32, 2.0f32], [3.0f32, 4.0f32]]",
-        |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            match &declarations[0] {
-                Declaration::Decl(decl) => {
-                    if decl.name != "arr" {
-                        return Err(format!("Expected name 'arr', got '{}'", decl.name));
-                    }
-                    if decl.ty.is_none() {
-                        return Err("Expected array type to be parsed".to_string());
-                    }
-                    Ok(())
-                }
-                _ => Err("Expected Let declaration".to_string()),
-            }
-        },
-    );
+    let decl = single_decl("let arr: [3][4]f32 = [[1.0f32, 2.0f32], [3.0f32, 4.0f32]]");
+    assert_eq!(decl.name, "arr");
+    assert!(decl.ty.is_some(), "Expected array type to be parsed");
 }
 
 #[test]
 fn test_parse_entry_point_decl() {
-    expect_parse(
-        "#[vertex] def main(x: i32, y: f32): [4]f32 = result",
-        |declarations| {
-            if declarations.len() != 1 {
-                return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-            }
-            match &declarations[0] {
-                Declaration::Decl(decl) => {
-                    if decl.name != "main" {
-                        return Err(format!("Expected name 'main', got '{}'", decl.name));
-                    }
-                    if decl.attributes != vec![Attribute::Vertex] {
-                        return Err(format!("Expected Vertex attribute, got {:?}", decl.attributes));
-                    }
-                    if decl.params.len() != 2 {
-                        return Err(format!("Expected 2 parameters, got {}", decl.params.len()));
-                    }
-                    match &decl.params[0] {
-                        DeclParam::Typed(param) => {
-                            if param.name != "x" {
-                                return Err(format!("Expected first param name 'x', got '{}'", param.name));
-                            }
-                            if param.ty != crate::ast::types::i32() {
-                                return Err(format!(
-                                    "Expected i32 type for first param, got {:?}",
-                                    param.ty
-                                ));
-                            }
-                            if !param.attributes.is_empty() {
-                                return Err(format!(
-                                    "Expected no attributes for first param, got {:?}",
-                                    param.attributes
-                                ));
-                            }
-                        }
-                        _ => return Err("Expected typed parameter".to_string()),
-                    }
-                    match &decl.params[1] {
-                        DeclParam::Typed(param) => {
-                            if param.name != "y" {
-                                return Err(format!(
-                                    "Expected second param name 'y', got '{}'",
-                                    param.name
-                                ));
-                            }
-                            if param.ty != crate::ast::types::f32() {
-                                return Err(format!(
-                                    "Expected f32 type for second param, got {:?}",
-                                    param.ty
-                                ));
-                            }
-                            if !param.attributes.is_empty() {
-                                return Err(format!(
-                                    "Expected no attributes for second param, got {:?}",
-                                    param.attributes
-                                ));
-                            }
-                        }
-                        _ => return Err("Expected typed parameter".to_string()),
-                    }
-                    if let Some(ref ty) = decl.ty {
-                        if *ty != crate::ast::types::sized_array(4, crate::ast::types::f32()) {
-                            return Err(format!("Expected [4]f32 return type, got {:?}", ty));
-                        }
-                    } else {
-                        return Err("Expected return type".to_string());
-                    }
-                    if !decl.return_attributes.is_empty() {
-                        return Err(format!(
-                            "Expected no attributes on return type, got {:?}",
-                            decl.return_attributes
-                        ));
-                    }
-                    Ok(())
-                }
-                _ => Err("Expected Decl declaration".to_string()),
-            }
-        },
-    );
+    let decl = single_decl("#[vertex] def main(x: i32, y: f32): [4]f32 = result");
+
+    assert_eq!(decl.name, "main");
+    assert_eq!(decl.attributes, vec![Attribute::Vertex]);
+    assert_eq!(decl.params.len(), 2);
+
+    assert_typed_param!(&decl.params[0], "x", crate::ast::types::i32());
+    assert_typed_param!(&decl.params[1], "y", crate::ast::types::f32());
+
+    assert_eq!(decl.ty, Some(crate::ast::types::sized_array(4, crate::ast::types::f32())));
+    assert!(decl.return_attributes.is_empty());
 }
 
 #[test]
 fn test_parse_array_index() {
-    expect_parse("let x: f32 = arr[0]", |declarations| {
-        if declarations.len() != 1 {
-            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-        }
-        match &declarations[0] {
-            Declaration::Decl(decl) => match &decl.body.kind {
-                ExprKind::ArrayIndex(arr, idx) => {
-                    if arr.kind != ExprKind::Identifier("arr".to_string()) {
-                        return Err(format!("Expected array identifier 'arr', got {:?}", **arr));
-                    }
-                    if idx.kind != ExprKind::IntLiteral(0) {
-                        return Err(format!("Expected index 0, got {:?}", **idx));
-                    }
-                    Ok(())
-                }
-                _ => Err(format!("Expected ArrayIndex expression, got {:?}", decl.body)),
-            },
-            _ => Err("Expected Let declaration".to_string()),
-        }
-    });
+    let decl = single_decl("let x: f32 = arr[0]");
+    assert!(matches!(
+        &decl.body.kind,
+        ExprKind::ArrayIndex(arr, idx)
+            if matches!(arr.kind, ExprKind::Identifier(ref name) if name == "arr")
+            && matches!(idx.kind, ExprKind::IntLiteral(0))
+    ));
 }
 
 #[test]
 fn test_parse_division() {
-    expect_parse("let x: f32 = 135f32/255f32", |declarations| {
-        if declarations.len() != 1 {
-            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-        }
-        match &declarations[0] {
-            Declaration::Decl(decl) => match &decl.body.kind {
-                ExprKind::BinaryOp(op, left, right) if op.op == "/" => {
-                    if left.kind != ExprKind::FloatLiteral(135.0) {
-                        return Err(format!("Expected left operand 135.0, got {:?}", **left));
-                    }
-                    if right.kind != ExprKind::FloatLiteral(255.0) {
-                        return Err(format!("Expected right operand 255.0, got {:?}", **right));
-                    }
-                    Ok(())
-                }
-                _ => Err(format!("Expected BinaryOp expression, got {:?}", decl.body)),
-            },
-            _ => Err("Expected Let declaration".to_string()),
-        }
-    });
+    let decl = single_decl("let x: f32 = 135f32/255f32");
+    assert!(matches!(
+        &decl.body.kind,
+        ExprKind::BinaryOp(op, left, right)
+            if op.op == "/"
+            && matches!(left.kind, ExprKind::FloatLiteral(135.0))
+            && matches!(right.kind, ExprKind::FloatLiteral(255.0))
+    ));
 }
 
 #[test]
 fn test_parse_vertex_attribute() {
-    expect_parse("#[vertex] def main(): [4]f32 = result", |declarations| {
-        if declarations.len() != 1 {
-            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-        }
-        match &declarations[0] {
-            Declaration::Decl(decl) => {
-                if decl.attributes != vec![Attribute::Vertex] {
-                    return Err(format!("Expected Vertex attribute, got {:?}", decl.attributes));
-                }
-                if decl.name != "main" {
-                    return Err(format!("Expected name 'main', got '{}'", decl.name));
-                }
-                Ok(())
-            }
-            _ => Err("Expected Decl declaration".to_string()),
-        }
-    });
+    let decl = single_decl("#[vertex] def main(): [4]f32 = result");
+    assert_eq!(decl.attributes, vec![Attribute::Vertex]);
+    assert_eq!(decl.name, "main");
 }
 
 #[test]
 fn test_parse_fragment_attribute() {
-    expect_parse("#[fragment] def frag(): [4]f32 = result", |declarations| {
-        if declarations.len() != 1 {
-            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-        }
-        match &declarations[0] {
-            Declaration::Decl(decl) => {
-                if decl.attributes != vec![Attribute::Fragment] {
-                    return Err(format!("Expected Fragment attribute, got {:?}", decl.attributes));
-                }
-                if decl.name != "frag" {
-                    return Err(format!("Expected name 'frag', got '{}'", decl.name));
-                }
-                Ok(())
-            }
-            _ => Err("Expected Decl declaration".to_string()),
-        }
-    });
+    let decl = single_decl("#[fragment] def frag(): [4]f32 = result");
+    assert_eq!(decl.attributes, vec![Attribute::Fragment]);
+    assert_eq!(decl.name, "frag");
 }
 
 #[test]
@@ -277,108 +167,44 @@ fn test_operator_precedence_and_associativity() {
     // According to spec, * and / have higher precedence than + and -
     // All are left-associative
     // Should parse as: ((a + (b * c)) - (d / e)) + f
-    expect_parse("def result: i32 = a + b * c - d / e + f", |declarations| {
-        if declarations.len() != 1 {
-            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-        }
-        match &declarations[0] {
-            Declaration::Decl(decl) => {
-                // The outermost operation should be the last + (left-associative)
-                match &decl.body.kind {
-                    ExprKind::BinaryOp(outer_op, outer_left, outer_right) if outer_op.op == "+" => {
-                        // Right side should be 'f'
-                        if !matches!(outer_right.kind, ExprKind::Identifier(ref name) if name == "f") {
-                            return Err(format!("Expected right side to be 'f', got {:?}", outer_right));
-                        }
+    let decl = single_decl("def result: i32 = a + b * c - d / e + f");
 
-                        // Left side should be (a + (b * c)) - (d / e)
-                        match &outer_left.kind {
-                            ExprKind::BinaryOp(sub_op, sub_left, sub_right) if sub_op.op == "-" => {
-                                // Right side of subtraction should be (d / e)
-                                match &sub_right.kind {
-                                    ExprKind::BinaryOp(div_op, div_left, div_right) if div_op.op == "/" => {
-                                        if !matches!(div_left.kind, ExprKind::Identifier(ref name) if name == "d")
-                                        {
-                                            return Err(format!(
-                                                "Expected 'd' in division left, got {:?}",
-                                                div_left
-                                            ));
-                                        }
-                                        if !matches!(div_right.kind, ExprKind::Identifier(ref name) if name == "e")
-                                        {
-                                            return Err(format!(
-                                                "Expected 'e' in division right, got {:?}",
-                                                div_right
-                                            ));
-                                        }
-                                    }
-                                    _ => {
-                                        return Err(format!(
-                                            "Expected division on right of subtraction, got {:?}",
-                                            sub_right
-                                        ));
-                                    }
-                                }
-
-                                // Left side of subtraction should be a + (b * c)
-                                match &sub_left.kind {
-                                    ExprKind::BinaryOp(add_op, add_left, add_right) if add_op.op == "+" => {
-                                        if !matches!(add_left.kind, ExprKind::Identifier(ref name) if name == "a")
-                                        {
-                                            return Err(format!(
-                                                "Expected 'a' on left of first addition, got {:?}",
-                                                add_left
-                                            ));
-                                        }
-
-                                        // Right side should be (b * c)
-                                        match &add_right.kind {
-                                            ExprKind::BinaryOp(mul_op, mul_left, mul_right)
-                                                if mul_op.op == "*" =>
-                                            {
-                                                if !matches!(mul_left.kind, ExprKind::Identifier(ref name) if name == "b")
-                                                {
-                                                    return Err(format!(
-                                                        "Expected 'b' in multiplication left, got {:?}",
-                                                        mul_left
-                                                    ));
-                                                }
-                                                if !matches!(mul_right.kind, ExprKind::Identifier(ref name) if name == "c")
-                                                {
-                                                    return Err(format!(
-                                                        "Expected 'c' in multiplication right, got {:?}",
-                                                        mul_right
-                                                    ));
-                                                }
-                                                Ok(())
-                                            }
-                                            _ => Err(format!(
-                                                "Expected multiplication on right of first addition, got {:?}",
-                                                add_right
-                                            )),
-                                        }
-                                    }
-                                    _ => Err(format!(
-                                        "Expected addition on left of subtraction, got {:?}",
-                                        sub_left
-                                    )),
-                                }
-                            }
-                            _ => Err(format!(
-                                "Expected subtraction on left of final addition, got {:?}",
-                                outer_left
-                            )),
-                        }
-                    }
-                    _ => Err(format!(
-                        "Expected outermost operation to be addition, got {:?}",
-                        decl.body
-                    )),
-                }
-            }
-            _ => Err("Expected Decl declaration".to_string()),
-        }
-    });
+    // Outermost: ((a + (b * c)) - (d / e)) + f
+    assert!(matches!(
+        &decl.body.kind,
+        ExprKind::BinaryOp(outer_op, outer_left, outer_right)
+            if outer_op.op == "+"
+            && matches!(outer_right.kind, ExprKind::Identifier(ref f) if f == "f")
+            // Left: (a + (b * c)) - (d / e)
+            && matches!(
+                &outer_left.kind,
+                ExprKind::BinaryOp(sub_op, sub_left, sub_right)
+                    if sub_op.op == "-"
+                    // Right of sub: d / e
+                    && matches!(
+                        &sub_right.kind,
+                        ExprKind::BinaryOp(div_op, div_left, div_right)
+                            if div_op.op == "/"
+                            && matches!(div_left.kind, ExprKind::Identifier(ref d) if d == "d")
+                            && matches!(div_right.kind, ExprKind::Identifier(ref e) if e == "e")
+                    )
+                    // Left of sub: a + (b * c)
+                    && matches!(
+                        &sub_left.kind,
+                        ExprKind::BinaryOp(add_op, add_left, add_right)
+                            if add_op.op == "+"
+                            && matches!(add_left.kind, ExprKind::Identifier(ref a) if a == "a")
+                            // Right: b * c
+                            && matches!(
+                                &add_right.kind,
+                                ExprKind::BinaryOp(mul_op, mul_left, mul_right)
+                                    if mul_op.op == "*"
+                                    && matches!(mul_left.kind, ExprKind::Identifier(ref b) if b == "b")
+                                    && matches!(mul_right.kind, ExprKind::Identifier(ref c) if c == "c")
+                            )
+                    )
+            )
+    ));
 }
 
 #[test]
