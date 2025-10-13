@@ -120,7 +120,10 @@ fn test_parse_entry_point_decl() {
     assert_typed_param!(&decl.params[0], "x", crate::ast::types::i32());
     assert_typed_param!(&decl.params[1], "y", crate::ast::types::f32());
 
-    assert_eq!(decl.ty, Some(crate::ast::types::sized_array(4, crate::ast::types::f32())));
+    assert_eq!(
+        decl.ty,
+        Some(crate::ast::types::sized_array(4, crate::ast::types::f32()))
+    );
     assert!(decl.return_attributes.is_empty());
 }
 
@@ -215,13 +218,21 @@ fn test_parse_builtin_attribute_on_return_type() {
 
     let attributed_types = decl.attributed_return_type.as_ref().expect("Expected attributed return type");
     assert_eq!(attributed_types.len(), 1);
-    assert_eq!(attributed_types[0].attributes, vec![Attribute::BuiltIn(spirv::BuiltIn::Position)]);
-    assert_eq!(attributed_types[0].ty, crate::ast::types::sized_array(4, crate::ast::types::f32()));
+    assert_eq!(
+        attributed_types[0].attributes,
+        vec![Attribute::BuiltIn(spirv::BuiltIn::Position)]
+    );
+    assert_eq!(
+        attributed_types[0].ty,
+        crate::ast::types::sized_array(4, crate::ast::types::f32())
+    );
 }
 
 #[test]
 fn test_parse_single_attributed_return_type() {
-    let decl = single_decl("#[vertex] def vertex_main(): #[builtin(position)] vec4 = vec4 0.0f32 0.0f32 0.0f32 1.0f32");
+    let decl = single_decl(
+        "#[vertex] def vertex_main(): #[builtin(position)] vec4 = vec4 0.0f32 0.0f32 0.0f32 1.0f32",
+    );
 
     assert!(decl.attributes.contains(&Attribute::Vertex));
 
@@ -230,12 +241,17 @@ fn test_parse_single_attributed_return_type() {
 
     let attr_type = &attributed_types[0];
     assert!(attr_type.attributes.contains(&Attribute::BuiltIn(spirv::BuiltIn::Position)));
-    assert!(matches!(&attr_type.ty, Type::Constructed(TypeName::Str("vec4"), _)));
+    assert!(matches!(
+        &attr_type.ty,
+        Type::Constructed(TypeName::Str("vec4"), _)
+    ));
 }
 
 #[test]
 fn test_parse_tuple_attributed_return_type() {
-    let decl = single_decl("#[vertex] def vertex_main(): (#[builtin(position)] vec4, #[location(0)] vec3) = result");
+    let decl = single_decl(
+        "#[vertex] def vertex_main(): (#[builtin(position)] vec4, #[location(0)] vec3) = result",
+    );
 
     let attributed_types = decl.attributed_return_type.as_ref().expect("Missing attributed return type");
     assert_eq!(attributed_types.len(), 2);
@@ -268,7 +284,10 @@ fn test_parse_location_attribute_on_return_type() {
     let attributed_types = decl.attributed_return_type.as_ref().expect("Expected attributed return type");
     assert_eq!(attributed_types.len(), 1);
     assert_eq!(attributed_types[0].attributes, vec![Attribute::Location(0)]);
-    assert_eq!(attributed_types[0].ty, crate::ast::types::sized_array(4, crate::ast::types::f32()));
+    assert_eq!(
+        attributed_types[0].ty,
+        crate::ast::types::sized_array(4, crate::ast::types::f32())
+    );
 }
 
 #[test]
@@ -299,7 +318,9 @@ fn test_parse_parameter_with_location_attribute() {
 
 #[test]
 fn test_parse_multiple_builtin_types() {
-    let decl = single_decl("#[vertex] def main(#[builtin(vertex_index)] vid: i32, #[builtin(instance_index)] iid: i32): #[builtin(position)] [4]f32 = result");
+    let decl = single_decl(
+        "#[vertex] def main(#[builtin(vertex_index)] vid: i32, #[builtin(instance_index)] iid: i32): #[builtin(position)] [4]f32 = result",
+    );
 
     assert_eq!(decl.params.len(), 2);
 
@@ -322,7 +343,10 @@ fn test_parse_multiple_builtin_types() {
     // Return type
     let attributed_types = decl.attributed_return_type.as_ref().expect("Expected attributed return type");
     assert_eq!(attributed_types.len(), 1);
-    assert_eq!(attributed_types[0].attributes, vec![Attribute::BuiltIn(spirv::BuiltIn::Position)]);
+    assert_eq!(
+        attributed_types[0].attributes,
+        vec![Attribute::BuiltIn(spirv::BuiltIn::Position)]
+    );
 }
 
 #[test]
@@ -485,16 +509,24 @@ def fragment_main(): [4]f32 = SKY_RGBA
     assert_eq!(program.declarations.len(), 4);
 
     // First: def verts
-    assert!(matches!(&program.declarations[0], Declaration::Decl(decl) if decl.keyword == "def" && decl.name == "verts"));
+    assert!(
+        matches!(&program.declarations[0], Declaration::Decl(decl) if decl.keyword == "def" && decl.name == "verts")
+    );
 
     // Second: vertex entry point
-    assert!(matches!(&program.declarations[1], Declaration::Decl(decl) if decl.name == "vertex_main" && decl.attributes.contains(&Attribute::Vertex)));
+    assert!(
+        matches!(&program.declarations[1], Declaration::Decl(decl) if decl.name == "vertex_main" && decl.attributes.contains(&Attribute::Vertex))
+    );
 
     // Third: def SKY_RGBA
-    assert!(matches!(&program.declarations[2], Declaration::Decl(decl) if decl.keyword == "def" && decl.name == "SKY_RGBA"));
+    assert!(
+        matches!(&program.declarations[2], Declaration::Decl(decl) if decl.keyword == "def" && decl.name == "SKY_RGBA")
+    );
 
     // Fourth: fragment entry point
-    assert!(matches!(&program.declarations[3], Declaration::Decl(decl) if decl.name == "fragment_main" && decl.attributes.contains(&Attribute::Fragment)));
+    assert!(
+        matches!(&program.declarations[3], Declaration::Decl(decl) if decl.name == "fragment_main" && decl.attributes.contains(&Attribute::Fragment))
+    );
 }
 
 #[test]
@@ -528,7 +560,9 @@ fn test_vector_field_access_file() {
         _ => panic!("Expected first declaration to be Decl"),
     };
     assert_eq!(decl1.name, "v");
-    assert!(matches!(&decl1.body.kind, ExprKind::FunctionCall(func_name, args) if func_name == "vec3" && args.len() == 3));
+    assert!(
+        matches!(&decl1.body.kind, ExprKind::FunctionCall(func_name, args) if func_name == "vec3" && args.len() == 3)
+    );
 
     // Check second declaration: def x: f32 = v.x
     let decl2 = match &program.declarations[1] {
@@ -536,7 +570,9 @@ fn test_vector_field_access_file() {
         _ => panic!("Expected second declaration to be Decl"),
     };
     assert_eq!(decl2.name, "x");
-    assert!(matches!(&decl2.body.kind, ExprKind::FieldAccess(expr, field) if field == "x" && matches!(expr.kind, ExprKind::Identifier(ref name) if name == "v")));
+    assert!(
+        matches!(&decl2.body.kind, ExprKind::FieldAccess(expr, field) if field == "x" && matches!(expr.kind, ExprKind::Identifier(ref name) if name == "v"))
+    );
 }
 
 #[test]
@@ -595,8 +631,15 @@ fn test_uniform_with_initializer_error() {
     expect_parse_error(
         "#[uniform] def material_color: vec3 = vec3 1.0f32 0.5f32 0.2f32",
         |error| match error {
-            CompilerError::ParseError(msg) if msg.contains("Uniform declarations cannot have initializer values") => Ok(()),
-            _ => Err(format!("Expected parse error about uniform initializer, got: {:?}", error)),
+            CompilerError::ParseError(msg)
+                if msg.contains("Uniform declarations cannot have initializer values") =>
+            {
+                Ok(())
+            }
+            _ => Err(format!(
+                "Expected parse error about uniform initializer, got: {:?}",
+                error
+            )),
         },
     );
 }
@@ -655,10 +698,14 @@ fn test_parse_complete_shader_example() {
     assert!(matches!(&program.declarations[1], Declaration::Uniform(u) if u.name == "time"));
 
     // Check vertex shader with multiple outputs
-    assert!(matches!(&program.declarations[2], Declaration::Decl(decl) if decl.name == "vertex_main" && decl.attributes.contains(&Attribute::Vertex) && decl.attributed_return_type.is_some()));
+    assert!(
+        matches!(&program.declarations[2], Declaration::Decl(decl) if decl.name == "vertex_main" && decl.attributes.contains(&Attribute::Vertex) && decl.attributed_return_type.is_some())
+    );
 
     // Check fragment shader with multiple outputs
-    assert!(matches!(&program.declarations[3], Declaration::Decl(decl) if decl.name == "fragment_main" && decl.attributes.contains(&Attribute::Fragment) && decl.attributed_return_type.is_some()));
+    assert!(
+        matches!(&program.declarations[3], Declaration::Decl(decl) if decl.name == "fragment_main" && decl.attributes.contains(&Attribute::Fragment) && decl.attributed_return_type.is_some())
+    );
 }
 
 #[test]
@@ -683,7 +730,8 @@ fn test_if_then_else_parsing() {
 #[test]
 fn test_array_literal() {
     // Just verify it parses successfully
-    let _decl = single_decl("#[vertex] def test(): #[builtin(position)] [4]f32 = [0.0f32, 0.5f32, 0.0f32, 1.0f32]");
+    let _decl =
+        single_decl("#[vertex] def test(): #[builtin(position)] [4]f32 = [0.0f32, 0.5f32, 0.0f32, 1.0f32]");
 }
 
 #[test]
@@ -703,11 +751,13 @@ fn test_parse_array_literal() {
 
 #[test]
 fn test_parse_attributed_return_type() {
-    let decl = single_decl(r#"#[vertex]
+    let decl = single_decl(
+        r#"#[vertex]
 def test_vertex : #[builtin(position)] vec4 =
   let angle = 1.0f32 in
   let s = f32.sin angle in
-  vec4 s s 0.0f32 1.0f32"#);
+  vec4 s s 0.0f32 1.0f32"#,
+    );
 
     assert_eq!(decl.name, "test_vertex");
     assert!(decl.attributed_return_type.is_some());
@@ -736,7 +786,10 @@ fn test_parse_unique_array_type() {
         _ => panic!("Expected typed parameter"),
     };
     assert!(types::is_unique(&param.ty));
-    assert_eq!(types::strip_unique(&param.ty), types::sized_array(3, types::f32()));
+    assert_eq!(
+        types::strip_unique(&param.ty),
+        types::sized_array(3, types::f32())
+    );
 }
 
 #[test]
@@ -750,7 +803,10 @@ fn test_parse_nested_unique() {
         _ => panic!("Expected typed parameter"),
     };
     assert!(types::is_unique(&param.ty));
-    assert_eq!(types::strip_unique(&param.ty), types::sized_array(2, types::sized_array(3, types::i32())));
+    assert_eq!(
+        types::strip_unique(&param.ty),
+        types::sized_array(2, types::sized_array(3, types::i32()))
+    );
 }
 
 #[test]
@@ -1207,7 +1263,9 @@ fn test_parse_local_declaration() {
     let program = parse_ok("local def x : i32 = 42");
     assert_eq!(program.declarations.len(), 1);
 
-    assert!(matches!(&program.declarations[0], Declaration::Local(inner) if matches!(**inner, Declaration::Decl(_))));
+    assert!(
+        matches!(&program.declarations[0], Declaration::Local(inner) if matches!(**inner, Declaration::Decl(_)))
+    );
 }
 
 #[test]
@@ -1225,7 +1283,9 @@ fn test_parse_record_type_single_field() {
     let decl = single_decl("let r: {x: i32} = ???");
 
     assert_eq!(decl.name, "r");
-    assert!(matches!(&decl.ty, Some(Type::Constructed(TypeName::Record(fields), _)) if fields.len() == 1 && fields[0].0 == "x"));
+    assert!(
+        matches!(&decl.ty, Some(Type::Constructed(TypeName::Record(fields), _)) if fields.len() == 1 && fields[0].0 == "x")
+    );
 }
 
 #[test]
@@ -1234,8 +1294,10 @@ fn test_parse_record_type_multiple_fields() {
     let decl = single_decl("let r: {x: i32, y: f32, z: vec3} = ???");
 
     assert_eq!(decl.name, "r");
-    assert!(matches!(&decl.ty, Some(Type::Constructed(TypeName::Record(fields), _))
-        if fields.len() == 3 && fields[0].0 == "x" && fields[1].0 == "y" && fields[2].0 == "z"));
+    assert!(
+        matches!(&decl.ty, Some(Type::Constructed(TypeName::Record(fields), _))
+        if fields.len() == 3 && fields[0].0 == "x" && fields[1].0 == "y" && fields[2].0 == "z")
+    );
 }
 
 #[test]
@@ -1244,9 +1306,11 @@ fn test_parse_sum_type_simple() {
     let decl = single_decl("let x: Some i32 | None = ???");
 
     assert_eq!(decl.name, "x");
-    assert!(matches!(&decl.ty, Some(Type::Constructed(TypeName::Sum(variants), _))
+    assert!(
+        matches!(&decl.ty, Some(Type::Constructed(TypeName::Sum(variants), _))
         if variants.len() == 2 && variants[0].0 == "Some" && variants[0].1.len() == 1
-        && variants[1].0 == "None" && variants[1].1.len() == 0));
+        && variants[1].0 == "None" && variants[1].1.len() == 0)
+    );
 }
 
 #[test]
@@ -1255,10 +1319,12 @@ fn test_parse_sum_type_multiple_args() {
     let decl = single_decl("let x: Result i32 f32 | Error | Ok = ???");
 
     assert_eq!(decl.name, "x");
-    assert!(matches!(&decl.ty, Some(Type::Constructed(TypeName::Sum(variants), _))
+    assert!(
+        matches!(&decl.ty, Some(Type::Constructed(TypeName::Sum(variants), _))
         if variants.len() == 3 && variants[0].0 == "Result" && variants[0].1.len() == 2
         && variants[1].0 == "Error" && variants[1].1.len() == 0
-        && variants[2].0 == "Ok" && variants[2].1.len() == 0));
+        && variants[2].0 == "Ok" && variants[2].1.len() == 0)
+    );
 }
 
 // ============================================================================
@@ -1314,92 +1380,48 @@ fn test_ambiguity_prefix_binds_tighter_than_infix() {
 #[test]
 fn test_ambiguity_function_application_binds_tighter() {
     // f x + y should parse as (f x) + y, not f (x + y)
-    expect_parse("def test(): i32 = f x + y", |declarations| {
-        match &declarations[0] {
-            Declaration::Decl(decl) => match &decl.body.kind {
-                ExprKind::BinaryOp(op, left, _) if op.op == "+" => match &left.kind {
-                    ExprKind::FunctionCall(_, args) if args.len() == 1 => Ok(()),
-                    _ => Err("Expected function call on left".to_string()),
-                },
-                _ => Err("Expected binary operation".to_string()),
-            },
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("def test(): i32 = f x + y");
+
+    assert!(matches!(&decl.body.kind, ExprKind::BinaryOp(op, left, _)
+        if op.op == "+" && matches!(&left.kind, ExprKind::FunctionCall(_, args) if args.len() == 1)));
 }
 
 #[test]
 fn test_ambiguity_let_extends_right() {
     // let x = 1 in x + y should parse with (x + y) as the body
-    expect_parse("def test(): i32 = let x = 1 in x + y", |declarations| {
-        match &declarations[0] {
-            Declaration::Decl(decl) => match &decl.body.kind {
-                ExprKind::LetIn(let_in) => match &let_in.body.kind {
-                    ExprKind::BinaryOp(op, _, _) if op.op == "+" => Ok(()),
-                    _ => Err("Expected binary op in let body".to_string()),
-                },
-                _ => Err("Expected let-in expression".to_string()),
-            },
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("def test(): i32 = let x = 1 in x + y");
+
+    assert!(matches!(&decl.body.kind, ExprKind::LetIn(let_in)
+        if matches!(&let_in.body.kind, ExprKind::BinaryOp(op, _, _) if op.op == "+")));
 }
 
 #[test]
 fn test_ambiguity_if_extends_right() {
     // if cond then x else y + z should parse with (y + z) as else branch
-    expect_parse("def test(): i32 = if true then 1 else 2 + 3", |declarations| {
-        match &declarations[0] {
-            Declaration::Decl(decl) => match &decl.body.kind {
-                ExprKind::If(if_expr) => match &if_expr.else_branch.kind {
-                    ExprKind::BinaryOp(op, _, _) if op.op == "+" => Ok(()),
-                    _ => Err("Expected binary op in else branch".to_string()),
-                },
-                _ => Err("Expected if expression".to_string()),
-            },
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("def test(): i32 = if true then 1 else 2 + 3");
+
+    assert!(matches!(&decl.body.kind, ExprKind::If(if_expr)
+        if matches!(&if_expr.else_branch.kind, ExprKind::BinaryOp(op, _, _) if op.op == "+")));
 }
 
 #[test]
 fn test_ambiguity_type_ascription() {
     // x : i32 should parse as type ascription
-    expect_parse("def test(): i32 = x : i32", |declarations| {
-        match &declarations[0] {
-            Declaration::Decl(decl) => match &decl.body.kind {
-                ExprKind::TypeAscription(inner, ty) => match (&inner.kind, ty) {
-                    (ExprKind::Identifier(name), Type::Constructed(TypeName::Str("i32"), _))
-                        if name == "x" =>
-                    {
-                        Ok(())
-                    }
-                    _ => Err("Expected x : i32".to_string()),
-                },
-                _ => Err("Expected type ascription".to_string()),
-            },
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("def test(): i32 = x : i32");
+
+    assert!(matches!(&decl.body.kind, ExprKind::TypeAscription(inner, ty)
+        if matches!(&inner.kind, ExprKind::Identifier(name) if name == "x")
+        && matches!(ty, Type::Constructed(TypeName::Str("i32"), _))));
 }
 
 #[test]
 fn test_ambiguity_pipe_operator() {
     // x |> f should parse as pipe operation
-    expect_parse("def test(): i32 = x |> f", |declarations| {
-        match &declarations[0] {
-            Declaration::Decl(decl) => match &decl.body.kind {
-                ExprKind::Pipe(left, right) => match (&left.kind, &right.kind) {
-                    (ExprKind::Identifier(l), ExprKind::Identifier(r)) if l == "x" && r == "f" => {
-                        Ok(())
-                    }
-                    _ => Err("Expected x |> f".to_string()),
-                },
-                _ => Err("Expected pipe operation".to_string()),
-            },
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("def test(): i32 = x |> f");
+
+    assert!(matches!(&decl.body.kind, ExprKind::Pipe(left, right)
+        if matches!(&left.kind, ExprKind::Identifier(l) if l == "x")
+        && matches!(&right.kind, ExprKind::Identifier(r) if r == "f")));
 }
 
 #[test]
