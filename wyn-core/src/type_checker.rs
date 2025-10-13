@@ -949,11 +949,67 @@ impl TypeChecker {
     }
 
     /// Check that the expression type matches the expected inner types of attributed return types
+    /// Get the required SPIR-V type for a builtin attribute
+    fn get_required_builtin_type(&self, builtin: spirv::BuiltIn) -> Option<Type> {
+        use crate::ast::TypeName;
+        match builtin {
+            // Integer builtins
+            spirv::BuiltIn::VertexIndex
+            | spirv::BuiltIn::InstanceIndex
+            | spirv::BuiltIn::VertexId
+            | spirv::BuiltIn::InstanceId
+            | spirv::BuiltIn::BaseVertex
+            | spirv::BuiltIn::BaseInstance
+            | spirv::BuiltIn::DrawIndex
+            | spirv::BuiltIn::SampleId
+            | spirv::BuiltIn::PrimitiveId
+            | spirv::BuiltIn::Layer
+            | spirv::BuiltIn::ViewportIndex => Some(Type::Constructed(TypeName::Str("i32"), vec![])),
+
+            // Float builtins
+            spirv::BuiltIn::PointSize | spirv::BuiltIn::FragDepth => {
+                Some(Type::Constructed(TypeName::Str("f32"), vec![]))
+            }
+
+            // Vector builtins - require vec types, not arrays
+            spirv::BuiltIn::Position | spirv::BuiltIn::FragCoord => {
+                Some(Type::Constructed(TypeName::Str("vec4"), vec![]))
+            }
+            spirv::BuiltIn::PointCoord | spirv::BuiltIn::SamplePosition => {
+                Some(Type::Constructed(TypeName::Str("vec2"), vec![]))
+            }
+
+            // Boolean builtins
+            spirv::BuiltIn::FrontFacing => Some(Type::Constructed(TypeName::Str("bool"), vec![])),
+
+            // For array builtins and unknown builtins, we don't enforce specific types yet
+            _ => None,
+        }
+    }
+
     fn check_attributed_return_type(&mut self, expr_type: &Type, decl: &Decl) -> Result<()> {
         if let Some(attributed_return_type) = &decl.attributed_return_type {
             if attributed_return_type.len() == 1 {
                 // Single attributed return type - expression should match the inner type
-                let expected_type = &attributed_return_type[0].ty;
+                let attr_ty = &attributed_return_type[0];
+                let expected_type = &attr_ty.ty;
+
+                // Check if there's a builtin attribute that requires a specific type
+                for attr in &attr_ty.attributes {
+                    if let Attribute::BuiltIn(builtin) = attr {
+                        if let Some(required_type) = self.get_required_builtin_type(*builtin) {
+                            if !self.types_match(expected_type, &required_type) {
+                                return Err(CompilerError::TypeError(format!(
+                                    "Builtin {:?} requires type {}, but {} was specified",
+                                    builtin,
+                                    self.format_type(&required_type),
+                                    self.format_type(expected_type)
+                                )));
+                            }
+                        }
+                    }
+                }
+
                 if !self.types_match(expr_type, expected_type) {
                     return Err(CompilerError::TypeError(format!(
                         "Type mismatch in entry point: expected {}, got {}",
@@ -962,6 +1018,25 @@ impl TypeChecker {
                 }
             } else {
                 // Multiple attributed return types - expression should be a tuple of the inner types
+
+                // Check each attributed type for builtin requirements
+                for attr_ty in attributed_return_type.iter() {
+                    for attr in &attr_ty.attributes {
+                        if let Attribute::BuiltIn(builtin) = attr {
+                            if let Some(required_type) = self.get_required_builtin_type(*builtin) {
+                                if !self.types_match(&attr_ty.ty, &required_type) {
+                                    return Err(CompilerError::TypeError(format!(
+                                        "Builtin {:?} requires type {}, but {} was specified",
+                                        builtin,
+                                        self.format_type(&required_type),
+                                        self.format_type(&attr_ty.ty)
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let expected_inner_types: Vec<Type> =
                     attributed_return_type.iter().map(|attr_type| attr_type.ty.clone()).collect();
 

@@ -1094,7 +1094,21 @@ impl Parser {
                     }
 
                     self.expect(Token::RightParen)?;
-                    expr = self.node_counter.mk_node(ExprKind::Application(Box::new(expr), args));
+
+                    // Create FunctionCall for identifiers, Application for higher-order
+                    expr = match &expr.kind {
+                        ExprKind::Identifier(name) => {
+                            self.node_counter.mk_node(ExprKind::FunctionCall(name.clone(), args))
+                        }
+                        ExprKind::FunctionCall(name, existing_args) => {
+                            let mut all_args = existing_args.clone();
+                            all_args.extend(args);
+                            self.node_counter.mk_node(ExprKind::FunctionCall(name.clone(), all_args))
+                        }
+                        _ => {
+                            self.node_counter.mk_node(ExprKind::Application(Box::new(expr), args))
+                        }
+                    };
                 }
                 _ => break,
             }

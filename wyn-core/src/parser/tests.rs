@@ -982,14 +982,9 @@ fn test_parse_function_application() {
         }
         match &declarations[0] {
             Declaration::Decl(decl) => match &decl.body.kind {
-                ExprKind::Application(func, args) => {
-                    match func.kind {
-                        ExprKind::Identifier(ref name) => {
-                            if name != "f" {
-                                return Err(format!("Expected function identifier 'f', got '{}'", name));
-                            }
-                        }
-                        _ => return Err(format!("Expected function identifier, got {:?}", func)),
+                ExprKind::FunctionCall(name, args) => {
+                    if name != "f" {
+                        return Err(format!("Expected function name 'f', got '{}'", name));
                     }
                     if args.len() != 2 {
                         return Err(format!("Expected 2 arguments, got {}", args.len()));
@@ -2600,4 +2595,51 @@ fn test_ambiguity_pipe_operator() {
             _ => Err("Expected Decl".to_string()),
         }
     });
+}
+
+#[test]
+fn test_function_call_with_and_without_parens() {
+    // Test that "vec3 1.0 0.5 0.25" and "vec3 (1.0) (0.5) (0.25)" produce the same structure
+    let input1 = "def test = vec3 1.0f32 0.5f32 0.25f32";
+    let input2 = "def test = vec3 (1.0f32) (0.5f32) (0.25f32)";
+
+    let tokens1 = tokenize(input1).unwrap();
+    let mut parser1 = Parser::new(tokens1);
+    let program1 = parser1.parse().unwrap();
+
+    let tokens2 = tokenize(input2).unwrap();
+    let mut parser2 = Parser::new(tokens2);
+    let program2 = parser2.parse().unwrap();
+
+    // Both should produce a FunctionCall, not Applications
+    let decl1 = &program1.declarations[0];
+    let decl2 = &program2.declarations[0];
+
+    if let Declaration::Decl(d1) = decl1 {
+        if let Declaration::Decl(d2) = decl2 {
+            eprintln!("Without parens: {:?}", d1.body.kind);
+            eprintln!("With parens: {:?}", d2.body.kind);
+
+            // Check that both are FunctionCall
+            match (&d1.body.kind, &d2.body.kind) {
+                (ExprKind::FunctionCall(name1, args1), ExprKind::FunctionCall(name2, args2)) => {
+                    assert_eq!(name1, name2);
+                    assert_eq!(args1.len(), args2.len());
+                    assert_eq!(args1.len(), 3, "Should have 3 arguments");
+                }
+                (ExprKind::FunctionCall(_, _), ExprKind::Application(_, _)) => {
+                    panic!("Parenthesized arguments created Application instead of FunctionCall");
+                }
+                (ExprKind::Application(_, _), ExprKind::FunctionCall(_, _)) => {
+                    panic!("Non-parenthesized arguments created Application (unexpected)");
+                }
+                (ExprKind::Application(_, _), ExprKind::Application(_, _)) => {
+                    panic!("Both created Application - neither created FunctionCall");
+                }
+                (kind1, kind2) => {
+                    panic!("Unexpected expression kinds: {:?} and {:?}", kind1, kind2);
+                }
+            }
+        }
+    }
 }
