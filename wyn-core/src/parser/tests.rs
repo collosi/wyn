@@ -1156,209 +1156,109 @@ fn test_parse_pattern_lowercase_not_constructor() {
     let mut parser = Parser::new(tokens);
     let pattern = parser.parse_pattern().expect("Failed to parse pattern");
 
-    match pattern.kind {
-        PatternKind::Name(name) => {
-            assert_eq!(name, "some", "Expected name pattern 'some'");
-        }
-        _ => panic!("Expected Name pattern (not Constructor), got {:?}", pattern.kind),
-    }
+    assert!(matches!(&pattern.kind, PatternKind::Name(name) if name == "some"));
 }
 
 // Module parsing tests
 
 #[test]
 fn test_parse_type_bind_simple() {
-    expect_parse("type Point = (i32, i32)", |declarations| {
-        if declarations.len() != 1 {
-            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-        }
-        match &declarations[0] {
-            Declaration::TypeBind(bind) => {
-                assert_eq!(bind.name, "Point");
-                assert_eq!(bind.kind, TypeBindKind::Normal);
-                assert_eq!(bind.type_params.len(), 0);
-                Ok(())
-            }
-            _ => Err("Expected TypeBind declaration".to_string()),
-        }
-    });
+    let program = parse_ok("type Point = (i32, i32)");
+    assert_eq!(program.declarations.len(), 1);
+
+    let bind = match &program.declarations[0] {
+        Declaration::TypeBind(b) => b,
+        _ => panic!("Expected TypeBind declaration"),
+    };
+    assert_eq!(bind.name, "Point");
+    assert_eq!(bind.kind, TypeBindKind::Normal);
+    assert_eq!(bind.type_params.len(), 0);
 }
 
 #[test]
 fn test_parse_import() {
-    expect_parse("import \"path/to/module\"", |declarations| {
-        if declarations.len() != 1 {
-            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-        }
-        match &declarations[0] {
-            Declaration::Import(path) => {
-                assert_eq!(path, "path/to/module");
-                Ok(())
-            }
-            _ => Err("Expected Import declaration".to_string()),
-        }
-    });
+    let program = parse_ok("import \"path/to/module\"");
+    assert_eq!(program.declarations.len(), 1);
+
+    let path = match &program.declarations[0] {
+        Declaration::Import(p) => p,
+        _ => panic!("Expected Import declaration"),
+    };
+    assert_eq!(path, "path/to/module");
 }
 
 #[test]
 fn test_parse_module_bind_simple() {
-    expect_parse("module M = { def x : i32 = 42 }", |declarations| {
-        if declarations.len() != 1 {
-            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-        }
-        match &declarations[0] {
-            Declaration::ModuleBind(bind) => {
-                assert_eq!(bind.name, "M");
-                assert_eq!(bind.params.len(), 0);
-                assert!(bind.signature.is_none());
-                match &bind.body {
-                    ModuleExpression::Struct(decls) => {
-                        if decls.len() != 1 {
-                            return Err(format!("Expected 1 inner declaration, got {}", decls.len()));
-                        }
-                        Ok(())
-                    }
-                    _ => Err("Expected Struct module expression".to_string()),
-                }
-            }
-            _ => Err("Expected ModuleBind declaration".to_string()),
-        }
-    });
+    let program = parse_ok("module M = { def x : i32 = 42 }");
+    assert_eq!(program.declarations.len(), 1);
+
+    let bind = match &program.declarations[0] {
+        Declaration::ModuleBind(b) => b,
+        _ => panic!("Expected ModuleBind declaration"),
+    };
+    assert_eq!(bind.name, "M");
+    assert_eq!(bind.params.len(), 0);
+    assert!(bind.signature.is_none());
+    assert!(matches!(&bind.body, ModuleExpression::Struct(decls) if decls.len() == 1));
 }
 
 #[test]
 fn test_parse_local_declaration() {
-    expect_parse("local def x : i32 = 42", |declarations| {
-        if declarations.len() != 1 {
-            return Err(format!("Expected 1 declaration, got {}", declarations.len()));
-        }
-        match &declarations[0] {
-            Declaration::Local(inner) => match **inner {
-                Declaration::Decl(_) => Ok(()),
-                _ => Err("Expected Decl inside Local".to_string()),
-            },
-            _ => Err("Expected Local declaration".to_string()),
-        }
-    });
+    let program = parse_ok("local def x : i32 = 42");
+    assert_eq!(program.declarations.len(), 1);
+
+    assert!(matches!(&program.declarations[0], Declaration::Local(inner) if matches!(**inner, Declaration::Decl(_))));
 }
 
 #[test]
 fn test_parse_record_type_empty() {
     // Test empty record type {}
-    expect_parse("let x: {} = ???", |declarations| {
-        assert_eq!(declarations.len(), 1);
-        match &declarations[0] {
-            Declaration::Decl(decl) => {
-                assert_eq!(decl.name, "x");
-                match &decl.ty {
-                    Some(Type::Constructed(TypeName::Record(fields), _)) => {
-                        assert_eq!(fields.len(), 0);
-                        Ok(())
-                    }
-                    _ => Err("Expected record type".to_string()),
-                }
-            }
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("let x: {} = ???");
+
+    assert_eq!(decl.name, "x");
+    assert!(matches!(&decl.ty, Some(Type::Constructed(TypeName::Record(fields), _)) if fields.len() == 0));
 }
 
 #[test]
 fn test_parse_record_type_single_field() {
     // Test record type with single field {x: i32}
-    expect_parse("let r: {x: i32} = ???", |declarations| {
-        assert_eq!(declarations.len(), 1);
-        match &declarations[0] {
-            Declaration::Decl(decl) => {
-                assert_eq!(decl.name, "r");
-                match &decl.ty {
-                    Some(Type::Constructed(TypeName::Record(fields), _)) => {
-                        assert_eq!(fields.len(), 1);
-                        assert_eq!(fields[0].0, "x");
-                        Ok(())
-                    }
-                    _ => Err("Expected record type".to_string()),
-                }
-            }
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("let r: {x: i32} = ???");
+
+    assert_eq!(decl.name, "r");
+    assert!(matches!(&decl.ty, Some(Type::Constructed(TypeName::Record(fields), _)) if fields.len() == 1 && fields[0].0 == "x"));
 }
 
 #[test]
 fn test_parse_record_type_multiple_fields() {
     // Test record type with multiple fields {x: i32, y: f32, z: vec3}
-    expect_parse("let r: {x: i32, y: f32, z: vec3} = ???", |declarations| {
-        assert_eq!(declarations.len(), 1);
-        match &declarations[0] {
-            Declaration::Decl(decl) => {
-                assert_eq!(decl.name, "r");
-                match &decl.ty {
-                    Some(Type::Constructed(TypeName::Record(fields), _)) => {
-                        assert_eq!(fields.len(), 3);
-                        assert_eq!(fields[0].0, "x");
-                        assert_eq!(fields[1].0, "y");
-                        assert_eq!(fields[2].0, "z");
-                        Ok(())
-                    }
-                    _ => Err("Expected record type".to_string()),
-                }
-            }
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("let r: {x: i32, y: f32, z: vec3} = ???");
+
+    assert_eq!(decl.name, "r");
+    assert!(matches!(&decl.ty, Some(Type::Constructed(TypeName::Record(fields), _))
+        if fields.len() == 3 && fields[0].0 == "x" && fields[1].0 == "y" && fields[2].0 == "z"));
 }
 
 #[test]
 fn test_parse_sum_type_simple() {
     // Test sum type: Option i32
-    expect_parse("let x: Some i32 | None = ???", |declarations| {
-        assert_eq!(declarations.len(), 1);
-        match &declarations[0] {
-            Declaration::Decl(decl) => {
-                assert_eq!(decl.name, "x");
-                match &decl.ty {
-                    Some(Type::Constructed(TypeName::Sum(variants), _)) => {
-                        assert_eq!(variants.len(), 2);
-                        assert_eq!(variants[0].0, "Some");
-                        assert_eq!(variants[0].1.len(), 1); // Some has 1 type arg
-                        assert_eq!(variants[1].0, "None");
-                        assert_eq!(variants[1].1.len(), 0); // None has 0 type args
-                        Ok(())
-                    }
-                    _ => Err("Expected sum type".to_string()),
-                }
-            }
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("let x: Some i32 | None = ???");
+
+    assert_eq!(decl.name, "x");
+    assert!(matches!(&decl.ty, Some(Type::Constructed(TypeName::Sum(variants), _))
+        if variants.len() == 2 && variants[0].0 == "Some" && variants[0].1.len() == 1
+        && variants[1].0 == "None" && variants[1].1.len() == 0));
 }
 
 #[test]
 fn test_parse_sum_type_multiple_args() {
     // Test sum type with multiple type arguments
-    expect_parse("let x: Result i32 f32 | Error | Ok = ???", |declarations| {
-        assert_eq!(declarations.len(), 1);
-        match &declarations[0] {
-            Declaration::Decl(decl) => {
-                assert_eq!(decl.name, "x");
-                match &decl.ty {
-                    Some(Type::Constructed(TypeName::Sum(variants), _)) => {
-                        assert_eq!(variants.len(), 3);
-                        assert_eq!(variants[0].0, "Result");
-                        assert_eq!(variants[0].1.len(), 2); // Result has 2 type args
-                        assert_eq!(variants[1].0, "Error");
-                        assert_eq!(variants[1].1.len(), 0);
-                        assert_eq!(variants[2].0, "Ok");
-                        assert_eq!(variants[2].1.len(), 0);
-                        Ok(())
-                    }
-                    _ => Err("Expected sum type".to_string()),
-                }
-            }
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("let x: Result i32 f32 | Error | Ok = ???");
+
+    assert_eq!(decl.name, "x");
+    assert!(matches!(&decl.ty, Some(Type::Constructed(TypeName::Sum(variants), _))
+        if variants.len() == 3 && variants[0].0 == "Result" && variants[0].1.len() == 2
+        && variants[1].0 == "Error" && variants[1].1.len() == 0
+        && variants[2].0 == "Ok" && variants[2].1.len() == 0));
 }
 
 // ============================================================================
@@ -1369,86 +1269,46 @@ fn test_parse_sum_type_multiple_args() {
 #[test]
 fn test_ambiguity_field_access_parses_as_field() {
     // x.y should parse as field access on record x
-    expect_parse("def test(): i32 = x.y", |declarations| {
-        match &declarations[0] {
-            Declaration::Decl(decl) => match &decl.body.kind {
-                ExprKind::FieldAccess(base, field) => match &base.kind {
-                    ExprKind::Identifier(name) if name == "x" && field == "y" => Ok(()),
-                    _ => Err("Expected x.y field access".to_string()),
-                },
-                _ => Err("Expected field access".to_string()),
-            },
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("def test(): i32 = x.y");
+
+    assert!(matches!(&decl.body.kind, ExprKind::FieldAccess(base, field)
+        if matches!(&base.kind, ExprKind::Identifier(name) if name == "x") && field == "y"));
 }
 
 #[test]
 fn test_ambiguity_array_index_with_space_is_function_call() {
     // f [x] with space should parse as function call with array argument
-    expect_parse("def test(): i32 = f [1, 2, 3]", |declarations| {
-        match &declarations[0] {
-            Declaration::Decl(decl) => match &decl.body.kind {
-                ExprKind::FunctionCall(name, args) if name == "f" && args.len() == 1 => match &args[0].kind {
-                    ExprKind::ArrayLiteral(_) => Ok(()),
-                    _ => Err("Expected array literal".to_string()),
-                },
-                _ => Err("Expected function call".to_string()),
-            },
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("def test(): i32 = f [1, 2, 3]");
+
+    assert!(matches!(&decl.body.kind, ExprKind::FunctionCall(name, args)
+        if name == "f" && args.len() == 1 && matches!(&args[0].kind, ExprKind::ArrayLiteral(_))));
 }
 
 #[test]
 fn test_ambiguity_array_index_without_space_is_indexing() {
     // f[x] without space should parse as array indexing
-    expect_parse("def test(): i32 = f[0]", |declarations| {
-        match &declarations[0] {
-            Declaration::Decl(decl) => match &decl.body.kind {
-                ExprKind::ArrayIndex(array, _) => match &array.kind {
-                    ExprKind::Identifier(name) if name == "f" => Ok(()),
-                    _ => Err("Expected identifier 'f'".to_string()),
-                },
-                _ => Err("Expected array index".to_string()),
-            },
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("def test(): i32 = f[0]");
+
+    assert!(matches!(&decl.body.kind, ExprKind::ArrayIndex(array, _)
+        if matches!(&array.kind, ExprKind::Identifier(name) if name == "f")));
 }
 
 #[test]
 fn test_ambiguity_negative_in_parens() {
     // (-x) should parse as negation of x in parentheses
-    expect_parse("def test(): i32 = (-x)", |declarations| {
-        match &declarations[0] {
-            Declaration::Decl(decl) => match &decl.body.kind {
-                ExprKind::UnaryOp(op, operand) if op.op == "-" => match &operand.kind {
-                    ExprKind::Identifier(name) if name == "x" => Ok(()),
-                    _ => Err("Expected identifier 'x'".to_string()),
-                },
-                _ => Err("Expected unary operation".to_string()),
-            },
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("def test(): i32 = (-x)");
+
+    assert!(matches!(&decl.body.kind, ExprKind::UnaryOp(op, operand)
+        if op.op == "-" && matches!(&operand.kind, ExprKind::Identifier(name) if name == "x")));
 }
 
 #[test]
 fn test_ambiguity_prefix_binds_tighter_than_infix() {
     // !x + y should parse as (!x) + y, not !(x + y)
-    expect_parse("def test(): i32 = !x + y", |declarations| {
-        match &declarations[0] {
-            Declaration::Decl(decl) => match &decl.body.kind {
-                ExprKind::BinaryOp(op, left, _) if op.op == "+" => match &left.kind {
-                    ExprKind::UnaryOp(unary_op, _) if unary_op.op == "!" => Ok(()),
-                    _ => Err("Expected unary ! on left".to_string()),
-                },
-                _ => Err("Expected binary operation".to_string()),
-            },
-            _ => Err("Expected Decl".to_string()),
-        }
-    });
+    let decl = single_decl("def test(): i32 = !x + y");
+
+    assert!(matches!(&decl.body.kind, ExprKind::BinaryOp(op, left, _)
+        if op.op == "+" && matches!(&left.kind, ExprKind::UnaryOp(unary_op, _) if unary_op.op == "!")));
 }
 
 #[test]
