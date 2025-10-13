@@ -1,15 +1,9 @@
 #[cfg(test)]
 mod tests {
     use crate::Compiler;
-    use std::sync::Mutex;
-
-    // LLVM contexts are not thread-safe when created in parallel
-    // Use a mutex to ensure tests run sequentially
-    static LLVM_TEST_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_full_example_program() {
-        let _guard = LLVM_TEST_MUTEX.lock().unwrap();
 
         let source = r#"
 -- Full-screen triangle in NDC (like classic shader demos).
@@ -48,10 +42,8 @@ def fragment_main () : #[location(0)] [4]f32 =
 
     #[test]
     fn test_vertex_shader_only() {
-        let _guard = LLVM_TEST_MUTEX.lock().unwrap();
-
         let source = r#"
-let positions: [3][4]f32 =
+def positions: [3][4]f32 =
   [[0.0f32, 0.5f32, 0.0f32, 1.0f32],
    [-0.5f32, -0.5f32, 0.0f32, 1.0f32],
    [0.5f32, -0.5f32, 0.0f32, 1.0f32]]
@@ -67,10 +59,8 @@ def vertex_main(vertex_id: i32): #[builtin(position)] [4]f32 = positions[vertex_
 
     #[test]
     fn test_fragment_shader_only() {
-        let _guard = LLVM_TEST_MUTEX.lock().unwrap();
-
         let source = r#"
-let red: [4]f32 = [1.0f32, 0.0f32, 0.0f32, 1.0f32]
+def red: [4]f32 = [1.0f32, 0.0f32, 0.0f32, 1.0f32]
 #[fragment]
 def fragment_main(): #[location(0)] [4]f32 = red
 "#;
@@ -82,10 +72,8 @@ def fragment_main(): #[location(0)] [4]f32 = red
 
     #[test]
     fn test_division_in_array() {
-        let _guard = LLVM_TEST_MUTEX.lock().unwrap();
-
         let source = r#"
-let normalized_color: [3]f32 = [128f32/255f32, 64f32/255f32, 32f32/255f32]
+def normalized_color: [3]f32 = [128f32/255f32, 64f32/255f32, 32f32/255f32]
 #[fragment]
 entry fragment_color(): [4]f32 = [normalized_color[0], normalized_color[1], normalized_color[2], 1.0f32]
 "#;

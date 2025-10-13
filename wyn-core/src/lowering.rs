@@ -186,25 +186,25 @@ impl Lowering {
                         }
                         self.builder.type_struct(component_type_ids)
                     }
-                    "Array" if args.len() == 2 => {
-                        // Array(Size(n), element_type)
-                        if let Type::Constructed(TypeName::Size(n), _) = &args[0] {
-                            let elem_type_id = self.get_or_create_type(&args[1])?;
-                            let len_const = self.get_or_create_int_const(*n as i32, self.i32_type);
-                            self.builder.type_array(elem_type_id, len_const)
-                        } else {
-                            return Err(CompilerError::SpirvError(format!(
-                                "Invalid array size type: {:?}",
-                                args[0]
-                            )));
-                        }
-                    }
                     "pointer" if args.len() == 1 => {
                         // Pointer to some type (default to Function storage class)
                         let pointee_id = self.get_or_create_type(&args[0])?;
                         self.get_or_create_ptr_type(StorageClass::Function, pointee_id)
                     }
                     _ => return Err(CompilerError::SpirvError(format!("Unsupported type: {:?}", ty))),
+                }
+            }
+            Type::Constructed(TypeName::Array, args) if args.len() == 2 => {
+                // Array(Size(n), element_type)
+                if let Type::Constructed(TypeName::Size(n), _) = &args[0] {
+                    let elem_type_id = self.get_or_create_type(&args[1])?;
+                    let len_const = self.get_or_create_int_const(*n as i32, self.i32_type);
+                    self.builder.type_array(elem_type_id, len_const)
+                } else {
+                    return Err(CompilerError::SpirvError(format!(
+                        "Invalid array size type: {:?}",
+                        args[0]
+                    )));
                 }
             }
             _ => return Err(CompilerError::SpirvError(format!("Unsupported type: {:?}", ty))),
@@ -628,6 +628,43 @@ impl Lowering {
                 self.current_register_map.insert(dest.id, result_id);
             }
 
+            Instruction::MakeArray(dest, elements) => {
+                let type_id = self.get_or_create_type(&dest.ty)?;
+                let mut element_ids = Vec::new();
+                for elem in elements {
+                    element_ids.push(self.get_register(elem)?);
+                }
+                let result_id = self.builder.composite_construct(type_id, None, element_ids)?;
+                self.current_register_map.insert(dest.id, result_id);
+            }
+
+            Instruction::ArrayIndex(dest, array, index) => {
+                let type_id = self.get_or_create_type(&dest.ty)?;
+                let array_id = self.get_register(array)?;
+                let index_id = self.get_register(index)?;
+
+                // Use OpCompositeExtract if index is a constant, otherwise OpAccessChain + OpLoad
+                // For now, use OpAccessChain which works for both cases
+                let array_elem_ptr_type = self.get_or_create_ptr_type(StorageClass::Function, type_id);
+
+                // First allocate storage for the array (if not already a pointer)
+                let array_ptr = if self.is_pointer_type(&array.ty) {
+                    array_id
+                } else {
+                    // Need to store array in a temporary variable
+                    let array_type_id = self.get_or_create_type(&array.ty)?;
+                    let array_ptr_type = self.get_or_create_ptr_type(StorageClass::Function, array_type_id);
+                    let temp_var = self.builder.variable(array_ptr_type, None, StorageClass::Function, None);
+                    self.builder.store(temp_var, array_id, None, [])?;
+                    temp_var
+                };
+
+                // Access the element
+                let elem_ptr = self.builder.access_chain(array_elem_ptr_type, None, array_ptr, [index_id])?;
+                let result_id = self.builder.load(type_id, None, elem_ptr, None, [])?;
+                self.current_register_map.insert(dest.id, result_id);
+            }
+
             Instruction::ReturnVoid => {
                 self.builder.ret()?;
             }
@@ -756,6 +793,11 @@ impl Lowering {
     /// Check if a type is a floating point type
     fn is_float_type(&self, ty: &Type<TypeName>) -> bool {
         matches!(ty, Type::Constructed(TypeName::Str(name), _) if *name == "f32" || name.starts_with("vec"))
+    }
+
+    /// Check if a type is a pointer type
+    fn is_pointer_type(&self, ty: &Type<TypeName>) -> bool {
+        matches!(ty, Type::Constructed(TypeName::Str("pointer"), _))
     }
 
     /// Create global Input/Output variables for entry point interface
