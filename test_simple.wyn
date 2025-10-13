@@ -1,1 +1,6 @@
-def add(x: i32, y: i32): i32 = x + y
+-- Simple test
+def x: i32 = 42
+
+#[fragment]
+def fragment_main(): #[location(0)] [4]f32 =
+  [1.0f32, 0.0f32, 0.0f32, 1.0f32]

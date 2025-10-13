@@ -4,7 +4,6 @@ mod tests {
 
     #[test]
     fn test_full_example_program() {
-
         let source = r#"
 -- Full-screen triangle in NDC (like classic shader demos).
 def verts: [3]vec4 =

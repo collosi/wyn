@@ -307,9 +307,11 @@ impl Mirize {
                 Ok(result_reg)
             }
 
-            ExprKind::Application(_, _) => Err(CompilerError::MirError(
-                "Application should be eliminated by defunctionalization".to_string(),
-            )),
+            ExprKind::Application(func, args) => Err(CompilerError::MirError(format!(
+                "Application should be eliminated by defunctionalization: {:?} applied to {} args",
+                func.kind,
+                args.len()
+            ))),
 
             ExprKind::FieldAccess(record, field_name) => {
                 let record_reg = self.mirize_expression(record)?;
@@ -392,11 +394,9 @@ impl Mirize {
                 todo!("Range not yet implemented in MIR")
             }
 
-            ExprKind::Pipe(_, _) => {
-                Err(CompilerError::MirError(
-                    "Pipe operator should have been desugared by defunctionalization".to_string()
-                ))
-            }
+            ExprKind::Pipe(_, _) => Err(CompilerError::MirError(
+                "Pipe operator should have been desugared by defunctionalization".to_string(),
+            )),
 
             ExprKind::TypeAscription(_, _) => {
                 todo!("TypeAscription not yet implemented in MIR")

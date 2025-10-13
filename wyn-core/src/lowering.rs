@@ -575,6 +575,14 @@ impl Lowering {
                 self.current_register_map.insert(dest.id, result_id);
             }
 
+            Instruction::ExtractElement(dest, composite, index) => {
+                let type_id = self.get_or_create_type(&dest.ty)?;
+                let composite_id = self.get_register(composite)?;
+                // Index is a u32 constant, use OpCompositeExtract
+                let result_id = self.builder.composite_extract(type_id, None, composite_id, [*index])?;
+                self.current_register_map.insert(dest.id, result_id);
+            }
+
             Instruction::MakeArray(dest, elements) => {
                 let type_id = self.get_or_create_type(&dest.ty)?;
                 let mut element_ids = Vec::new();
@@ -597,19 +605,22 @@ impl Lowering {
                 if is_const_index {
                     // Use OpCompositeExtract for constant indices
                     // Need to get the actual constant value
-                    let index_value = self.int_const_cache
+                    let index_value = self
+                        .int_const_cache
                         .iter()
                         .find(|(_, &id)| id == index_id)
                         .map(|((val, _), _)| *val as u32)
                         .unwrap_or(0);
 
-                    let result_id = self.builder.composite_extract(type_id, None, array_id, [index_value])?;
+                    let result_id =
+                        self.builder.composite_extract(type_id, None, array_id, [index_value])?;
                     self.current_register_map.insert(dest.id, result_id);
                 } else {
                     // Dynamic index - use OpAccessChain (requires array to be in memory)
                     // For now, this is not supported without proper variable allocation
                     return Err(CompilerError::SpirvError(
-                        "Dynamic array indexing not yet supported (requires proper variable allocation)".to_string()
+                        "Dynamic array indexing not yet supported (requires proper variable allocation)"
+                            .to_string(),
                     ));
                 }
             }

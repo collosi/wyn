@@ -1,6 +1,80 @@
 pub use polytype::TypeScheme;
 pub use spirv;
 
+/// Source location span tracking (line, column) start and end positions
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Span {
+    pub start_line: usize,
+    pub start_col: usize,
+    pub end_line: usize,
+    pub end_col: usize,
+}
+
+impl Span {
+    pub fn new(start_line: usize, start_col: usize, end_line: usize, end_col: usize) -> Self {
+        Span {
+            start_line,
+            start_col,
+            end_line,
+            end_col,
+        }
+    }
+
+    /// Create a dummy span for testing or when location is unknown
+    pub fn dummy() -> Self {
+        Span {
+            start_line: 0,
+            start_col: 0,
+            end_line: 0,
+            end_col: 0,
+        }
+    }
+
+    /// Merge two spans to create a span covering both
+    pub fn merge(&self, other: &Span) -> Span {
+        let (start_line, start_col) = if self.start_line < other.start_line
+            || (self.start_line == other.start_line && self.start_col <= other.start_col)
+        {
+            (self.start_line, self.start_col)
+        } else {
+            (other.start_line, other.start_col)
+        };
+
+        let (end_line, end_col) = if self.end_line > other.end_line
+            || (self.end_line == other.end_line && self.end_col >= other.end_col)
+        {
+            (self.end_line, self.end_col)
+        } else {
+            (other.end_line, other.end_col)
+        };
+
+        Span {
+            start_line,
+            start_col,
+            end_line,
+            end_col,
+        }
+    }
+}
+
+impl std::fmt::Display for Span {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        if self.start_line == self.end_line {
+            write!(
+                f,
+                "{}:{}..{}",
+                self.start_line, self.start_col, self.end_col
+            )
+        } else {
+            write!(
+                f,
+                "{}:{}..{}:{}",
+                self.start_line, self.start_col, self.end_line, self.end_col
+            )
+        }
+    }
+}
+
 /// Unique identifier for AST nodes (expressions)
 /// Used to look up inferred types in the type table
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -35,11 +109,19 @@ impl NodeCounter {
         NodeId(id)
     }
 
-    pub fn mk_node<T>(&mut self, kind: T) -> Node<T> {
+    pub fn mk_node<T>(&mut self, kind: T, span: Span) -> Node<T> {
         Node {
-            h: Header { id: self.next() },
+            h: Header {
+                id: self.next(),
+                span,
+            },
             kind,
         }
+    }
+
+    /// Create a node with a dummy span (for testing/migration)
+    pub fn mk_node_dummy<T>(&mut self, kind: T) -> Node<T> {
+        self.mk_node(kind, Span::dummy())
     }
 }
 
@@ -52,7 +134,7 @@ impl Default for NodeCounter {
 #[derive(Clone, Debug)]
 pub struct Header {
     pub id: NodeId,
-    //pub span: Span,          // or Option<Span>
+    pub span: Span,
     // hygiene, source file id, etc.
 }
 

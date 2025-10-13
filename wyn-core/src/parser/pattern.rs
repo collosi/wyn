@@ -28,7 +28,7 @@ impl Parser {
         let pattern = if !attributes.is_empty() {
             // #[attr] pat
             let inner = self.parse_pattern_without_attributes()?;
-            self.node_counter.mk_node(PatternKind::Attributed(attributes, Box::new(inner)))
+            self.node_counter.mk_node_dummy(PatternKind::Attributed(attributes, Box::new(inner)))
         } else {
             self.parse_pattern_without_attributes()?
         };
@@ -37,7 +37,7 @@ impl Parser {
         if self.check(&Token::Colon) {
             self.advance();
             let ty = self.parse_type()?;
-            return Ok(self.node_counter.mk_node(PatternKind::Typed(Box::new(pattern), ty)));
+            return Ok(self.node_counter.mk_node_dummy(PatternKind::Typed(Box::new(pattern), ty)));
         }
 
         Ok(pattern)
@@ -47,7 +47,7 @@ impl Parser {
         match self.peek() {
             Some(Token::Underscore) => {
                 self.advance();
-                Ok(self.node_counter.mk_node(PatternKind::Wildcard))
+                Ok(self.node_counter.mk_node_dummy(PatternKind::Wildcard))
             }
 
             Some(Token::LeftParen) => self.parse_paren_pattern(),
@@ -61,7 +61,7 @@ impl Parser {
                 } else {
                     // Simple name binding
                     let name = self.expect_identifier()?;
-                    Ok(self.node_counter.mk_node(PatternKind::Name(name)))
+                    Ok(self.node_counter.mk_node_dummy(PatternKind::Name(name)))
                 }
             }
 
@@ -89,7 +89,7 @@ impl Parser {
         if self.check(&Token::RightParen) {
             // () unit pattern
             self.advance();
-            return Ok(self.node_counter.mk_node(PatternKind::Unit));
+            return Ok(self.node_counter.mk_node_dummy(PatternKind::Unit));
         }
 
         let first = self.parse_pattern()?;
@@ -108,7 +108,7 @@ impl Parser {
             }
 
             self.expect(Token::RightParen)?;
-            Ok(self.node_counter.mk_node(PatternKind::Tuple(patterns)))
+            Ok(self.node_counter.mk_node_dummy(PatternKind::Tuple(patterns)))
         } else {
             // Single pattern in parens: (pat)
             self.expect(Token::RightParen)?;
@@ -122,7 +122,7 @@ impl Parser {
         if self.check(&Token::RightBrace) {
             // {} empty record
             self.advance();
-            return Ok(self.node_counter.mk_node(PatternKind::Record(vec![])));
+            return Ok(self.node_counter.mk_node_dummy(PatternKind::Record(vec![])));
         }
 
         let mut fields = Vec::new();
@@ -156,7 +156,7 @@ impl Parser {
         }
 
         self.expect(Token::RightBrace)?;
-        Ok(self.node_counter.mk_node(PatternKind::Record(fields)))
+        Ok(self.node_counter.mk_node_dummy(PatternKind::Record(fields)))
     }
 
     fn parse_constructor_pattern(&mut self) -> Result<Pattern> {
@@ -171,7 +171,7 @@ impl Parser {
             args.push(self.parse_pattern_without_attributes()?);
         }
 
-        Ok(self.node_counter.mk_node(PatternKind::Constructor(constructor, args)))
+        Ok(self.node_counter.mk_node_dummy(PatternKind::Constructor(constructor, args)))
     }
 
     fn can_start_pattern(&self) -> bool {
@@ -274,6 +274,6 @@ impl Parser {
             }
         };
 
-        Ok(self.node_counter.mk_node(PatternKind::Literal(literal)))
+        Ok(self.node_counter.mk_node_dummy(PatternKind::Literal(literal)))
     }
 }

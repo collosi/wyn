@@ -838,12 +838,12 @@ impl Parser {
             Some(Token::Colon) => {
                 self.advance();
                 let ty = self.parse_type()?;
-                expr = self.node_counter.mk_node(ExprKind::TypeAscription(Box::new(expr), ty));
+                expr = self.node_counter.mk_node_dummy(ExprKind::TypeAscription(Box::new(expr), ty));
             }
             Some(Token::TypeCoercion) => {
                 self.advance();
                 let ty = self.parse_type()?;
-                expr = self.node_counter.mk_node(ExprKind::TypeCoercion(Box::new(expr), ty));
+                expr = self.node_counter.mk_node_dummy(ExprKind::TypeCoercion(Box::new(expr), ty));
             }
             _ => {}
         }
@@ -875,7 +875,7 @@ impl Parser {
                         }
                         _ => {
                             // No second operator, step_expr is actually the end
-                            return Ok(self.node_counter.mk_node(ExprKind::Range(RangeExpr {
+                            return Ok(self.node_counter.mk_node_dummy(ExprKind::Range(RangeExpr {
                                 start: Box::new(start),
                                 step: None,
                                 end: Box::new(step_expr),
@@ -899,7 +899,7 @@ impl Parser {
                     _ => unreachable!(),
                 };
 
-                start = self.node_counter.mk_node(ExprKind::Range(RangeExpr {
+                start = self.node_counter.mk_node_dummy(ExprKind::Range(RangeExpr {
                     start: Box::new(start),
                     step,
                     end: Box::new(end),
@@ -921,9 +921,9 @@ impl Parser {
         // Returns (precedence, is_left_associative)
         // Higher precedence binds tighter
         match op {
-            "|>" => Some((8, true)),      // Pipe operator
-            "*" | "/" => Some((3, true)), // Multiplication and division
-            "+" | "-" => Some((2, true)), // Addition and subtraction
+            "|>" => Some((8, true)),                                  // Pipe operator
+            "*" | "/" => Some((3, true)),                             // Multiplication and division
+            "+" | "-" => Some((2, true)),                             // Addition and subtraction
             "==" | "!=" | "<" | ">" | "<=" | ">=" => Some((1, true)), // Comparison operators
             _ => None,
         }
@@ -971,10 +971,10 @@ impl Parser {
             // Build the appropriate operation
             left = if op_string == "|>" {
                 // Pipe operator creates a Pipe node
-                self.node_counter.mk_node(ExprKind::Pipe(Box::new(left), Box::new(right)))
+                self.node_counter.mk_node_dummy(ExprKind::Pipe(Box::new(left), Box::new(right)))
             } else {
                 // Regular binary operation
-                self.node_counter.mk_node(ExprKind::BinaryOp(
+                self.node_counter.mk_node_dummy(ExprKind::BinaryOp(
                     BinaryOp { op: op_string },
                     Box::new(left),
                     Box::new(right),
@@ -1016,16 +1016,16 @@ impl Parser {
             match expr.kind {
                 ExprKind::Identifier(name) => {
                     // First argument: convert identifier to function call
-                    expr = self.node_counter.mk_node(ExprKind::FunctionCall(name, vec![arg]));
+                    expr = self.node_counter.mk_node_dummy(ExprKind::FunctionCall(name, vec![arg]));
                 }
                 ExprKind::FunctionCall(name, mut args) => {
                     // Additional arguments: extend existing function call
                     args.push(arg);
-                    expr = self.node_counter.mk_node(ExprKind::FunctionCall(name, args));
+                    expr = self.node_counter.mk_node_dummy(ExprKind::FunctionCall(name, args));
                 }
                 _ => {
                     // Higher-order function application: use Application node
-                    expr = self.node_counter.mk_node(ExprKind::Application(Box::new(expr), vec![arg]));
+                    expr = self.node_counter.mk_node_dummy(ExprKind::Application(Box::new(expr), vec![arg]));
                 }
             }
         }
@@ -1059,7 +1059,7 @@ impl Parser {
                     self.advance();
                     let index = self.parse_expression()?;
                     self.expect(Token::RightBracket)?;
-                    expr = self.node_counter.mk_node(ExprKind::ArrayIndex(Box::new(expr), Box::new(index)));
+                    expr = self.node_counter.mk_node_dummy(ExprKind::ArrayIndex(Box::new(expr), Box::new(index)));
                 }
                 Some(Token::LeftBracketSpaced) => {
                     // Space before [ means it's not array indexing, it's a new expression
@@ -1071,7 +1071,7 @@ impl Parser {
                     self.advance();
                     if let Some(Token::Identifier(field_name)) = self.peek().cloned() {
                         self.advance();
-                        expr = self.node_counter.mk_node(ExprKind::FieldAccess(Box::new(expr), field_name));
+                        expr = self.node_counter.mk_node_dummy(ExprKind::FieldAccess(Box::new(expr), field_name));
                     } else {
                         return Err(CompilerError::ParseError(
                             "Expected field name after '.'".to_string(),
@@ -1098,16 +1098,14 @@ impl Parser {
                     // Create FunctionCall for identifiers, Application for higher-order
                     expr = match &expr.kind {
                         ExprKind::Identifier(name) => {
-                            self.node_counter.mk_node(ExprKind::FunctionCall(name.clone(), args))
+                            self.node_counter.mk_node_dummy(ExprKind::FunctionCall(name.clone(), args))
                         }
                         ExprKind::FunctionCall(name, existing_args) => {
                             let mut all_args = existing_args.clone();
                             all_args.extend(args);
-                            self.node_counter.mk_node(ExprKind::FunctionCall(name.clone(), all_args))
+                            self.node_counter.mk_node_dummy(ExprKind::FunctionCall(name.clone(), all_args))
                         }
-                        _ => {
-                            self.node_counter.mk_node(ExprKind::Application(Box::new(expr), args))
-                        }
+                        _ => self.node_counter.mk_node_dummy(ExprKind::Application(Box::new(expr), args)),
                     };
                 }
                 _ => break,
@@ -1124,7 +1122,7 @@ impl Parser {
             Some(Token::BinOp(op)) if op == "-" => {
                 self.advance();
                 let operand = self.parse_unary_expression()?; // Right-associative
-                Ok(self.node_counter.mk_node(ExprKind::UnaryOp(
+                Ok(self.node_counter.mk_node_dummy(ExprKind::UnaryOp(
                     UnaryOp { op: "-".to_string() },
                     Box::new(operand),
                 )))
@@ -1132,7 +1130,7 @@ impl Parser {
             Some(Token::Bang) => {
                 self.advance();
                 let operand = self.parse_unary_expression()?; // Right-associative
-                Ok(self.node_counter.mk_node(ExprKind::UnaryOp(
+                Ok(self.node_counter.mk_node_dummy(ExprKind::UnaryOp(
                     UnaryOp { op: "!".to_string() },
                     Box::new(operand),
                 )))
@@ -1146,30 +1144,30 @@ impl Parser {
         match self.peek() {
             Some(Token::TypeHole) => {
                 self.advance();
-                Ok(self.node_counter.mk_node(ExprKind::TypeHole))
+                Ok(self.node_counter.mk_node_dummy(ExprKind::TypeHole))
             }
             Some(Token::IntLiteral(n)) => {
                 let n = *n;
                 self.advance();
-                Ok(self.node_counter.mk_node(ExprKind::IntLiteral(n)))
+                Ok(self.node_counter.mk_node_dummy(ExprKind::IntLiteral(n)))
             }
             Some(Token::FloatLiteral(f)) => {
                 let f = *f;
                 self.advance();
-                Ok(self.node_counter.mk_node(ExprKind::FloatLiteral(f)))
+                Ok(self.node_counter.mk_node_dummy(ExprKind::FloatLiteral(f)))
             }
             Some(Token::True) => {
                 self.advance();
-                Ok(self.node_counter.mk_node(ExprKind::BoolLiteral(true)))
+                Ok(self.node_counter.mk_node_dummy(ExprKind::BoolLiteral(true)))
             }
             Some(Token::False) => {
                 self.advance();
-                Ok(self.node_counter.mk_node(ExprKind::BoolLiteral(false)))
+                Ok(self.node_counter.mk_node_dummy(ExprKind::BoolLiteral(false)))
             }
             Some(Token::Identifier(name)) => {
                 let name = name.clone();
                 self.advance();
-                Ok(self.node_counter.mk_node(ExprKind::Identifier(name)))
+                Ok(self.node_counter.mk_node_dummy(ExprKind::Identifier(name)))
             }
             Some(Token::LeftBracket) | Some(Token::LeftBracketSpaced) => self.parse_array_literal(),
             Some(Token::LeftParen) => {
@@ -1178,7 +1176,7 @@ impl Parser {
                 // Check for empty tuple
                 if self.check(&Token::RightParen) {
                     self.advance();
-                    return Ok(self.node_counter.mk_node(ExprKind::Tuple(vec![])));
+                    return Ok(self.node_counter.mk_node_dummy(ExprKind::Tuple(vec![])));
                 }
 
                 // Parse first expression
@@ -1196,7 +1194,7 @@ impl Parser {
                         elements.push(self.parse_expression()?);
                     }
                     self.expect(Token::RightParen)?;
-                    Ok(self.node_counter.mk_node(ExprKind::Tuple(elements)))
+                    Ok(self.node_counter.mk_node_dummy(ExprKind::Tuple(elements)))
                 } else {
                     // Just a parenthesized expression
                     self.expect(Token::RightParen)?;
@@ -1236,7 +1234,7 @@ impl Parser {
         }
 
         self.expect(Token::RightBracket)?;
-        Ok(self.node_counter.mk_node(ExprKind::ArrayLiteral(elements)))
+        Ok(self.node_counter.mk_node_dummy(ExprKind::ArrayLiteral(elements)))
     }
 
     fn parse_lambda(&mut self) -> Result<Expression> {
@@ -1283,7 +1281,7 @@ impl Parser {
         // Parse body expression
         let body = Box::new(self.parse_expression()?);
 
-        Ok(self.node_counter.mk_node(ExprKind::Lambda(LambdaExpr {
+        Ok(self.node_counter.mk_node_dummy(ExprKind::Lambda(LambdaExpr {
             params,
             return_type,
             body,
@@ -1310,7 +1308,7 @@ impl Parser {
         self.expect(Token::In)?;
         let body = Box::new(self.parse_expression()?);
 
-        Ok(self.node_counter.mk_node(ExprKind::LetIn(LetInExpr {
+        Ok(self.node_counter.mk_node_dummy(ExprKind::LetIn(LetInExpr {
             name,
             ty,
             value,
@@ -1329,7 +1327,7 @@ impl Parser {
         self.expect(Token::Else)?;
         let else_branch = Box::new(self.parse_expression()?);
 
-        Ok(self.node_counter.mk_node(ExprKind::If(IfExpr {
+        Ok(self.node_counter.mk_node_dummy(ExprKind::If(IfExpr {
             condition,
             then_branch,
             else_branch,
@@ -1373,20 +1371,24 @@ impl Parser {
                     LoopForm::For(name, bound)
                 }
             } else {
-                return Err(CompilerError::ParseError("Expected pattern in for loop".to_string()));
+                return Err(CompilerError::ParseError(
+                    "Expected pattern in for loop".to_string(),
+                ));
             }
         } else if self.check(&Token::While) {
             self.advance();
             let condition = Box::new(self.parse_expression()?);
             LoopForm::While(condition)
         } else {
-            return Err(CompilerError::ParseError("Expected 'for' or 'while' in loop".to_string()));
+            return Err(CompilerError::ParseError(
+                "Expected 'for' or 'while' in loop".to_string(),
+            ));
         };
 
         self.expect(Token::Do)?;
         let body = Box::new(self.parse_expression()?);
 
-        Ok(self.node_counter.mk_node(ExprKind::Loop(LoopExpr {
+        Ok(self.node_counter.mk_node_dummy(ExprKind::Loop(LoopExpr {
             pattern,
             init,
             form,
@@ -1396,7 +1398,7 @@ impl Parser {
 
     fn parse_match(&mut self) -> Result<Expression> {
         trace!("parse_match: next token = {:?}", self.peek());
-        use crate::ast::{MatchExpr, MatchCase};
+        use crate::ast::{MatchCase, MatchExpr};
 
         self.expect(Token::Match)?;
         let scrutinee = Box::new(self.parse_expression()?);
@@ -1412,20 +1414,19 @@ impl Parser {
         }
 
         if cases.is_empty() {
-            return Err(CompilerError::ParseError("Match expression must have at least one case".to_string()));
+            return Err(CompilerError::ParseError(
+                "Match expression must have at least one case".to_string(),
+            ));
         }
 
-        Ok(self.node_counter.mk_node(ExprKind::Match(MatchExpr {
-            scrutinee,
-            cases,
-        })))
+        Ok(self.node_counter.mk_node_dummy(ExprKind::Match(MatchExpr { scrutinee, cases })))
     }
 
     fn parse_unsafe(&mut self) -> Result<Expression> {
         trace!("parse_unsafe: next token = {:?}", self.peek());
         self.expect(Token::Unsafe)?;
         let expr = Box::new(self.parse_expression()?);
-        Ok(self.node_counter.mk_node(ExprKind::Unsafe(expr)))
+        Ok(self.node_counter.mk_node_dummy(ExprKind::Unsafe(expr)))
     }
 
     fn parse_assert(&mut self) -> Result<Expression> {
@@ -1435,7 +1436,7 @@ impl Parser {
         // atom is a primary expression (condition)
         let condition = Box::new(self.parse_primary_expression()?);
         let body = Box::new(self.parse_expression()?);
-        Ok(self.node_counter.mk_node(ExprKind::Assert(condition, body)))
+        Ok(self.node_counter.mk_node_dummy(ExprKind::Assert(condition, body)))
     }
 
     // Helper methods

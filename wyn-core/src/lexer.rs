@@ -53,7 +53,7 @@ pub enum Token {
     Assign,
     BinOp(String), // Binary operators: +, -, *, /
     Arrow,
-    TypeCoercion,  // :> for type coercion
+    TypeCoercion, // :> for type coercion
     Backslash,    // \ for lambda expressions
     Dot,          // . for field access
     DotDot,       // .. for ranges

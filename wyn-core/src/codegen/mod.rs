@@ -1657,7 +1657,10 @@ impl CodeGenerator {
                 if let ExprKind::Identifier(func_name) = &base_func.kind {
                     let owned_args: Vec<Expression> = all_args.iter().map(|&arg| arg.clone()).collect();
                     let temp_expr = Expression {
-                        h: Header { id: NodeId(0) }, // Temporary node ID for codegen
+                        h: Header {
+                            id: NodeId(0),
+                            span: Span::dummy(),
+                        }, // Temporary node ID for codegen
                         kind: ExprKind::FunctionCall(func_name.clone(), owned_args),
                     };
                     return self.generate_expression(&temp_expr);
@@ -1736,11 +1739,9 @@ impl CodeGenerator {
                 unimplemented!("Lambda expressions are not yet supported in code generation")
             }
 
-            ExprKind::Pipe(_, _) => {
-                Err(CompilerError::SpirvError(
-                    "Pipe operator should have been desugared by defunctionalization".to_string()
-                ))
-            }
+            ExprKind::Pipe(_, _) => Err(CompilerError::SpirvError(
+                "Pipe operator should have been desugared by defunctionalization".to_string(),
+            )),
 
             ExprKind::QualifiedName(_, _)
             | ExprKind::UnaryOp(_, _)

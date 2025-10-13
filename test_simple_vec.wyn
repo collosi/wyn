@@ -1,0 +1,1 @@
+def test: vec3 = vec3 1.0f32 0.5f32 0.25f32

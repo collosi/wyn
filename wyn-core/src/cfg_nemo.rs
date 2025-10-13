@@ -153,12 +153,8 @@ impl<W: Write> Visitor for CfgNemoExtractor<W> {
 
         // Dispatch to specific handlers for special cases
         match &expr.kind {
-            ExprKind::Identifier(name) => {
-                self.visit_expr_identifier(name)
-            }
-            ExprKind::Lambda(lambda) => {
-                self.visit_expr_lambda(lambda)
-            }
+            ExprKind::Identifier(name) => self.visit_expr_identifier(name),
+            ExprKind::Lambda(lambda) => self.visit_expr_lambda(lambda),
             _ => {
                 // Use default traversal for other expressions
                 crate::visitor::walk_expression(self, expr)

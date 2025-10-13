@@ -1,0 +1,8 @@
+-- Test functions
+def normalize(x: f32): f32 = x / 255.0f32
+
+def colors: [3]f32 = [255.0f32, 128.0f32, 64.0f32]
+
+#[fragment]
+def fragment_main(): #[location(0)] [4]f32 =
+  [normalize(colors[0]), normalize(colors[1]), normalize(colors[2]), 1.0f32]

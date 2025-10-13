@@ -151,15 +151,15 @@ impl Defunctionalizer {
     ) -> Result<(Expression, StaticValue)> {
         match &expr.kind {
             ExprKind::IntLiteral(n) => Ok((
-                self.node_counter.mk_node(ExprKind::IntLiteral(*n)),
+                self.node_counter.mk_node_dummy(ExprKind::IntLiteral(*n)),
                 StaticValue::Dyn(types::i32()),
             )),
             ExprKind::FloatLiteral(f) => Ok((
-                self.node_counter.mk_node(ExprKind::FloatLiteral(*f)),
+                self.node_counter.mk_node_dummy(ExprKind::FloatLiteral(*f)),
                 StaticValue::Dyn(types::f32()),
             )),
             ExprKind::BoolLiteral(b) => Ok((
-                self.node_counter.mk_node(ExprKind::BoolLiteral(*b)),
+                self.node_counter.mk_node_dummy(ExprKind::BoolLiteral(*b)),
                 StaticValue::Dyn(types::bool_type()),
             )),
             ExprKind::Identifier(name) => {
@@ -168,7 +168,7 @@ impl Defunctionalizer {
                         StaticValue::Dyn(_) => {
                             // Regular variable reference
                             Ok((
-                                self.node_counter.mk_node(ExprKind::Identifier(name.clone())),
+                                self.node_counter.mk_node_dummy(ExprKind::Identifier(name.clone())),
                                 sv.clone(),
                             ))
                         }
@@ -176,26 +176,26 @@ impl Defunctionalizer {
                             // Reference to a function - this would need special handling
                             // For now, keep as identifier
                             Ok((
-                                self.node_counter.mk_node(ExprKind::Identifier(name.clone())),
+                                self.node_counter.mk_node_dummy(ExprKind::Identifier(name.clone())),
                                 sv.clone(),
                             ))
                         }
                         StaticValue::Rcd(_) => {
                             // Reference to a closure record
                             Ok((
-                                self.node_counter.mk_node(ExprKind::Identifier(name.clone())),
+                                self.node_counter.mk_node_dummy(ExprKind::Identifier(name.clone())),
                                 sv.clone(),
                             ))
                         }
                         StaticValue::Arr(_) => Ok((
-                            self.node_counter.mk_node(ExprKind::Identifier(name.clone())),
+                            self.node_counter.mk_node_dummy(ExprKind::Identifier(name.clone())),
                             sv.clone(),
                         )),
                     }
                 } else {
                     // Unknown variable - assume dynamic with type variable
                     Ok((
-                        self.node_counter.mk_node(ExprKind::Identifier(name.clone())),
+                        self.node_counter.mk_node_dummy(ExprKind::Identifier(name.clone())),
                         StaticValue::Dyn(polytype::Type::Variable(0)),
                     ))
                 }
@@ -219,7 +219,7 @@ impl Defunctionalizer {
                 let array_sv =
                     StaticValue::Arr(Box::new(element_sv.unwrap_or(StaticValue::Dyn(types::i32()))));
                 Ok((
-                    self.node_counter.mk_node(ExprKind::ArrayLiteral(transformed_elements)),
+                    self.node_counter.mk_node_dummy(ExprKind::ArrayLiteral(transformed_elements)),
                     array_sv,
                 ))
             }
@@ -229,7 +229,7 @@ impl Defunctionalizer {
 
                 // Result type depends on array element type - for now, assume dynamic
                 Ok((
-                    self.node_counter.mk_node(ExprKind::ArrayIndex(
+                    self.node_counter.mk_node_dummy(ExprKind::ArrayIndex(
                         Box::new(transformed_array),
                         Box::new(transformed_index),
                     )),
@@ -258,7 +258,7 @@ impl Defunctionalizer {
                 };
 
                 Ok((
-                    self.node_counter.mk_node(ExprKind::BinaryOp(
+                    self.node_counter.mk_node_dummy(ExprKind::BinaryOp(
                         op.clone(),
                         Box::new(transformed_left),
                         Box::new(transformed_right),
@@ -275,7 +275,7 @@ impl Defunctionalizer {
                 }
 
                 Ok((
-                    self.node_counter.mk_node(ExprKind::FunctionCall(name.clone(), transformed_args)),
+                    self.node_counter.mk_node_dummy(ExprKind::FunctionCall(name.clone(), transformed_args)),
                     StaticValue::Dyn(polytype::Type::Variable(2)),
                 ))
             }
@@ -296,7 +296,7 @@ impl Defunctionalizer {
                 }
 
                 Ok((
-                    self.node_counter.mk_node(ExprKind::Tuple(transformed_elements)),
+                    self.node_counter.mk_node_dummy(ExprKind::Tuple(transformed_elements)),
                     StaticValue::Dyn(types::tuple(element_types)),
                 ))
             }
@@ -317,7 +317,7 @@ impl Defunctionalizer {
                 scope_stack.pop_scope();
 
                 Ok((
-                    self.node_counter.mk_node(ExprKind::LetIn(crate::ast::LetInExpr {
+                    self.node_counter.mk_node_dummy(ExprKind::LetIn(crate::ast::LetInExpr {
                         name: let_in.name.clone(),
                         ty: let_in.ty.clone(),
                         value: Box::new(transformed_value),
@@ -330,7 +330,7 @@ impl Defunctionalizer {
                 let (transformed_expr, expr_sv) = self.defunctionalize_expression(expr, scope_stack)?;
                 Ok((
                     self.node_counter
-                        .mk_node(ExprKind::FieldAccess(Box::new(transformed_expr), field.clone())),
+                        .mk_node_dummy(ExprKind::FieldAccess(Box::new(transformed_expr), field.clone())),
                     expr_sv, // Field access doesn't change the static value representation
                 ))
             }
@@ -342,7 +342,7 @@ impl Defunctionalizer {
                 let (else_branch, _else_sv) =
                     self.defunctionalize_expression(&if_expr.else_branch, scope_stack)?;
                 Ok((
-                    self.node_counter.mk_node(ExprKind::If(IfExpr {
+                    self.node_counter.mk_node_dummy(ExprKind::If(IfExpr {
                         condition: Box::new(condition),
                         then_branch: Box::new(then_branch),
                         else_branch: Box::new(else_branch),
@@ -352,7 +352,7 @@ impl Defunctionalizer {
             }
 
             ExprKind::TypeHole => Ok((
-                self.node_counter.mk_node(ExprKind::TypeHole),
+                self.node_counter.mk_node_dummy(ExprKind::TypeHole),
                 StaticValue::Dyn(polytype::Type::Variable(0)), // Type to be inferred
             )),
 
@@ -447,7 +447,7 @@ impl Defunctionalizer {
         if free_vars.is_empty() {
             // No free variables - just return function name
             Ok((
-                self.node_counter.mk_node(ExprKind::Identifier(func_name)),
+                self.node_counter.mk_node_dummy(ExprKind::Identifier(func_name)),
                 StaticValue::Lam("__unused".to_string(), (*lambda.body).clone(), HashMap::new()),
             ))
         } else {
@@ -480,7 +480,7 @@ impl Defunctionalizer {
                         // Function call without closure
                         Ok((
                             self.node_counter
-                                .mk_node(ExprKind::FunctionCall(func_name.clone(), transformed_args)),
+                                .mk_node_dummy(ExprKind::FunctionCall(func_name.clone(), transformed_args)),
                             StaticValue::Dyn(polytype::Type::Variable(2)),
                         ))
                     }
@@ -505,12 +505,35 @@ impl Defunctionalizer {
                 match &transformed_func.kind {
                     ExprKind::Identifier(func_name) => Ok((
                         self.node_counter
-                            .mk_node(ExprKind::FunctionCall(func_name.clone(), transformed_args)),
+                            .mk_node_dummy(ExprKind::FunctionCall(func_name.clone(), transformed_args)),
                         StaticValue::Dyn(polytype::Type::Variable(2)),
                     )),
-                    _ => Err(CompilerError::SpirvError(
-                        "Invalid function in application".to_string(),
-                    )),
+                    ExprKind::FunctionCall(func_name, existing_args) => {
+                        // This is a partial application that's already been transformed to FunctionCall
+                        // Append the new args to the existing ones
+                        let mut all_args = existing_args.clone();
+                        all_args.extend(transformed_args);
+                        Ok((
+                            self.node_counter.mk_node_dummy(ExprKind::FunctionCall(func_name.clone(), all_args)),
+                            StaticValue::Dyn(polytype::Type::Variable(2)),
+                        ))
+                    }
+                    ExprKind::Application(nested_func, nested_args) => {
+                        // Recursive application - this shouldn't happen after defunctionalization
+                        // but handle it by recursively processing
+                        self.defunctionalize_application(
+                            &Expression {
+                                h: transformed_func.h.clone(),
+                                kind: ExprKind::Application(nested_func.clone(), nested_args.clone()),
+                            },
+                            args,
+                            scope_stack,
+                        )
+                    }
+                    _ => Err(CompilerError::SpirvError(format!(
+                        "Invalid function in application: {:?}",
+                        transformed_func.kind
+                    ))),
                 }
             }
         }
@@ -584,7 +607,10 @@ impl Defunctionalizer {
                 extended_bound.insert(let_in.name.clone());
                 self.collect_free_variables(&let_in.body, &extended_bound, free_vars)?;
             }
-            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::BoolLiteral(_) | ExprKind::TypeHole => {
+            ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::TypeHole => {
                 // No free variables in literals or type holes
             }
             ExprKind::FieldAccess(expr, _field) => {
@@ -625,12 +651,12 @@ impl Defunctionalizer {
         // For SPIR-V compatibility, we might need to represent this as an array or struct
 
         // Create a tuple with function name and free variables
-        let mut elements = vec![self.node_counter.mk_node(ExprKind::Identifier(func_name.to_string()))];
+        let mut elements = vec![self.node_counter.mk_node_dummy(ExprKind::Identifier(func_name.to_string()))];
         for var in free_vars {
-            elements.push(self.node_counter.mk_node(ExprKind::Identifier(var.clone())));
+            elements.push(self.node_counter.mk_node_dummy(ExprKind::Identifier(var.clone())));
         }
 
-        Ok(self.node_counter.mk_node(ExprKind::Tuple(elements)))
+        Ok(self.node_counter.mk_node_dummy(ExprKind::Tuple(elements)))
     }
 }
 
@@ -655,5 +681,82 @@ mod tests {
 
         // The let declaration should be transformed
         assert_eq!(result.declarations.len(), 2); // original let + generated function
+    }
+
+    #[test]
+    fn test_defunctionalize_nested_application() {
+        // Test that ((f x) y) z becomes f(x, y, z)
+        let input = "def test = vec3 1.0f32 0.5f32 0.25f32";
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut defunc = Defunctionalizer::new();
+        let result = defunc.defunctionalize_program(&program).unwrap();
+
+        // Check that the result doesn't contain any Application nodes
+        let decl = &result.declarations[0];
+        if let Declaration::Decl(d) = decl {
+            // The body should be a FunctionCall, not an Application
+            match &d.body.kind {
+                ExprKind::FunctionCall(name, args) => {
+                    assert_eq!(name, "vec3");
+                    assert_eq!(args.len(), 3);
+                }
+                ExprKind::Application(_, _) => {
+                    panic!(
+                        "Found Application node after defunctionalization - nested applications not flattened"
+                    );
+                }
+                other => panic!("Expected FunctionCall, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn test_defunctionalize_application_with_division() {
+        // Test that constant-folded divisions inside function calls work
+        let input = "def test = vec3 (255.0f32/255.0f32) 0.5f32 0.25f32";
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        // Debug: print the AST before constant folding
+        if let Declaration::Decl(d) = &program.declarations[0] {
+            eprintln!("Before constant folding: {:?}", d.body.kind);
+        }
+
+        // Run constant folding first
+        let mut folder = crate::constant_folding::ConstantFolder::new();
+        let program = folder.fold_program(&program).unwrap();
+
+        // Debug: print the AST after constant folding
+        if let Declaration::Decl(d) = &program.declarations[0] {
+            eprintln!("After constant folding: {:?}", d.body.kind);
+        }
+
+        // Then defunctionalize
+        let mut defunc = Defunctionalizer::new();
+        let result = defunc.defunctionalize_program(&program).unwrap();
+
+        // Check that the result doesn't contain any Application nodes
+        let decl = &result.declarations[0];
+        if let Declaration::Decl(d) = decl {
+            match &d.body.kind {
+                ExprKind::FunctionCall(name, args) => {
+                    assert_eq!(name, "vec3");
+                    assert_eq!(args.len(), 3);
+                    // First arg should be the constant-folded result (1.0)
+                    match &args[0].kind {
+                        ExprKind::FloatLiteral(v) => assert_eq!(*v, 1.0),
+                        other => panic!("Expected FloatLiteral after constant folding, got {:?}", other),
+                    }
+                }
+                ExprKind::Application(_, _) => {
+                    panic!("Found Application node after defunctionalization");
+                }
+                other => panic!("Expected FunctionCall, got {:?}", other),
+            }
+        }
     }
 }

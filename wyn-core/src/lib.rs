@@ -48,6 +48,14 @@ impl Compiler {
         let mut parser = parser::Parser::new(tokens);
         let program = parser.parse()?;
 
+        // Constant folding pass
+        let mut constant_folder = constant_folding::ConstantFolder::new();
+        let program = constant_folder.fold_program(&program)?;
+
+        // Defunctionalization pass
+        let mut defunc = defunctionalization::Defunctionalizer::new();
+        let program = defunc.defunctionalize_program(&program)?;
+
         // Type check
         let mut type_checker = type_checker::TypeChecker::new();
         type_checker.load_builtins()?;
