@@ -48,18 +48,18 @@ impl Pipeline {
 
     pub fn get_vertex_location_outputs(&self) -> Vec<(u32, Type)> {
         match self {
-            Pipeline::VertexFragment { vertex_shader, .. } => {
-                vertex_shader.return_types.iter()
-                    .zip(vertex_shader.return_attributes.iter())
-                    .filter_map(|(ty, attr_opt)| {
-                        if let Some(Attribute::Location(loc)) = attr_opt {
-                            Some((*loc, ty.clone()))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            }
+            Pipeline::VertexFragment { vertex_shader, .. } => vertex_shader
+                .return_types
+                .iter()
+                .zip(vertex_shader.return_attributes.iter())
+                .filter_map(|(ty, attr_opt)| {
+                    if let Some(Attribute::Location(loc)) = attr_opt {
+                        Some((*loc, ty.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
         }
     }
 }
@@ -115,7 +115,11 @@ pub struct CodeGenerator {
 impl CodeGenerator {
     /// Validate that all return types for an entry point are properly attributed
     /// Each element must have @location or @builtin attribute
-    fn validate_entry_point_return_attributes(&self, types: &[Type], attributes: &[Option<Attribute>]) -> Result<()> {
+    fn validate_entry_point_return_attributes(
+        &self,
+        types: &[Type],
+        attributes: &[Option<Attribute>],
+    ) -> Result<()> {
         // Check that types and attributes arrays have the same length
         if types.len() != attributes.len() {
             return Err(CompilerError::SpirvError(
@@ -647,33 +651,6 @@ impl CodeGenerator {
         }
     }
 
-    /// Resolve where an output value should be stored (builtin vs location)
-    fn resolve_output_var(
-        &mut self,
-        attrs: &[Attribute],
-        ty_id: spirv::Word,
-        exec_model: ExecutionModel,
-    ) -> Result<spirv::Word> {
-        if let Some(builtin) = attrs.first_builtin() {
-            self.global_builder
-                .create_or_lookup_builtin(&mut self.builder, builtin, StorageClass::Output, exec_model)?
-                .ok_or_else(|| {
-                    CompilerError::SpirvError(format!(
-                        "Builtin {:?} invalid for {:?} output",
-                        builtin, exec_model
-                    ))
-                })
-        } else {
-            let location = attrs.first_location().unwrap_or(0);
-            self.global_builder.create_or_lookup_location(
-                &mut self.builder,
-                location,
-                StorageClass::Output,
-                ty_id,
-            )
-        }
-    }
-
     /// Resolve where an output value should be stored from a single attribute
     fn resolve_output_var_from_attr(
         &mut self,
@@ -682,24 +659,21 @@ impl CodeGenerator {
         exec_model: ExecutionModel,
     ) -> Result<spirv::Word> {
         match attr {
-            Attribute::BuiltIn(builtin) => {
-                self.global_builder
-                    .create_or_lookup_builtin(&mut self.builder, *builtin, StorageClass::Output, exec_model)?
-                    .ok_or_else(|| {
-                        CompilerError::SpirvError(format!(
-                            "Builtin {:?} invalid for {:?} output",
-                            builtin, exec_model
-                        ))
-                    })
-            }
-            Attribute::Location(location) => {
-                self.global_builder.create_or_lookup_location(
-                    &mut self.builder,
-                    *location,
-                    StorageClass::Output,
-                    ty_id,
-                )
-            }
+            Attribute::BuiltIn(builtin) => self
+                .global_builder
+                .create_or_lookup_builtin(&mut self.builder, *builtin, StorageClass::Output, exec_model)?
+                .ok_or_else(|| {
+                    CompilerError::SpirvError(format!(
+                        "Builtin {:?} invalid for {:?} output",
+                        builtin, exec_model
+                    ))
+                }),
+            Attribute::Location(location) => self.global_builder.create_or_lookup_location(
+                &mut self.builder,
+                *location,
+                StorageClass::Output,
+                ty_id,
+            ),
             _ => Err(CompilerError::SpirvError(format!(
                 "Attribute {:?} is not valid for entry point outputs",
                 attr
@@ -1043,11 +1017,19 @@ impl CodeGenerator {
                 self.create_fragment_inputs()?;
 
                 // Fragment shaders also need their own outputs
-                self.create_outputs_from_parallel_arrays(&entry.return_types, &entry.return_attributes, exec_model)?;
+                self.create_outputs_from_parallel_arrays(
+                    &entry.return_types,
+                    &entry.return_attributes,
+                    exec_model,
+                )?;
             }
             _ => {
                 // Vertex and other shaders just create outputs
-                self.create_outputs_from_parallel_arrays(&entry.return_types, &entry.return_attributes, exec_model)?;
+                self.create_outputs_from_parallel_arrays(
+                    &entry.return_types,
+                    &entry.return_attributes,
+                    exec_model,
+                )?;
             }
         }
 
@@ -1091,7 +1073,12 @@ impl CodeGenerator {
         self.emit_pending_variables_at_entry_block()?;
 
         // Entry point coda: write return values to builtin/location outputs
-        self.generate_entry_point_coda_from_parallel_arrays(&entry.return_types, &entry.return_attributes, &result, exec_model)?;
+        self.generate_entry_point_coda_from_parallel_arrays(
+            &entry.return_types,
+            &entry.return_attributes,
+            &result,
+            exec_model,
+        )?;
         // Entry points return void
         self.builder.ret()?;
 
@@ -2351,8 +2338,7 @@ impl CodeGenerator {
         for (ty, attr_opt) in types.iter().zip(attributes.iter()) {
             let attr = attr_opt.as_ref().unwrap(); // Already validated
             let type_info = self.get_or_create_type(ty)?;
-            let _output_var =
-                self.resolve_output_var_from_attr(attr, type_info.id, exec_model)?;
+            let _output_var = self.resolve_output_var_from_attr(attr, type_info.id, exec_model)?;
         }
         Ok(())
     }

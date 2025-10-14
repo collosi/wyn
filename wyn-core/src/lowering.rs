@@ -714,11 +714,6 @@ impl Lowering {
         matches!(ty, Type::Constructed(TypeName::Str(name), _) if *name == "f32" || name.starts_with("vec"))
     }
 
-    /// Check if a type is a pointer type
-    fn is_pointer_type(&self, ty: &Type<TypeName>) -> bool {
-        matches!(ty, Type::Constructed(TypeName::Str("pointer"), _))
-    }
-
     /// Create global Input/Output variables for entry point interface
     fn create_entry_point_interface(&mut self, func: &mir::Function) -> Result<()> {
         use crate::ast::Attribute;

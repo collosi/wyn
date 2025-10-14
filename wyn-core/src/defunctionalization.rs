@@ -234,10 +234,10 @@ impl Defunctionalizer {
 
                 // Result type depends on array element type - for now, assume dynamic
                 Ok((
-                    self.node_counter.mk_node(ExprKind::ArrayIndex(
-                        Box::new(transformed_array),
-                        Box::new(transformed_index),
-                    ), span),
+                    self.node_counter.mk_node(
+                        ExprKind::ArrayIndex(Box::new(transformed_array), Box::new(transformed_index)),
+                        span,
+                    ),
                     StaticValue::Dyn(polytype::Type::Variable(1)),
                 ))
             }
@@ -263,11 +263,14 @@ impl Defunctionalizer {
                 };
 
                 Ok((
-                    self.node_counter.mk_node(ExprKind::BinaryOp(
-                        op.clone(),
-                        Box::new(transformed_left),
-                        Box::new(transformed_right),
-                    ), span),
+                    self.node_counter.mk_node(
+                        ExprKind::BinaryOp(
+                            op.clone(),
+                            Box::new(transformed_left),
+                            Box::new(transformed_right),
+                        ),
+                        span,
+                    ),
                     StaticValue::Dyn(result_type),
                 ))
             }
@@ -322,20 +325,25 @@ impl Defunctionalizer {
                 scope_stack.pop_scope();
 
                 Ok((
-                    self.node_counter.mk_node(ExprKind::LetIn(crate::ast::LetInExpr {
-                        name: let_in.name.clone(),
-                        ty: let_in.ty.clone(),
-                        value: Box::new(transformed_value),
-                        body: Box::new(transformed_body),
-                    }), span),
+                    self.node_counter.mk_node(
+                        ExprKind::LetIn(crate::ast::LetInExpr {
+                            name: let_in.name.clone(),
+                            ty: let_in.ty.clone(),
+                            value: Box::new(transformed_value),
+                            body: Box::new(transformed_body),
+                        }),
+                        span,
+                    ),
                     body_sv,
                 ))
             }
             ExprKind::FieldAccess(expr, field) => {
                 let (transformed_expr, expr_sv) = self.defunctionalize_expression(expr, scope_stack)?;
                 Ok((
-                    self.node_counter
-                        .mk_node(ExprKind::FieldAccess(Box::new(transformed_expr), field.clone()), span),
+                    self.node_counter.mk_node(
+                        ExprKind::FieldAccess(Box::new(transformed_expr), field.clone()),
+                        span,
+                    ),
                     expr_sv, // Field access doesn't change the static value representation
                 ))
             }
@@ -347,11 +355,14 @@ impl Defunctionalizer {
                 let (else_branch, _else_sv) =
                     self.defunctionalize_expression(&if_expr.else_branch, scope_stack)?;
                 Ok((
-                    self.node_counter.mk_node(ExprKind::If(IfExpr {
-                        condition: Box::new(condition),
-                        then_branch: Box::new(then_branch),
-                        else_branch: Box::new(else_branch),
-                    }), span),
+                    self.node_counter.mk_node(
+                        ExprKind::If(IfExpr {
+                            condition: Box::new(condition),
+                            then_branch: Box::new(then_branch),
+                            else_branch: Box::new(else_branch),
+                        }),
+                        span,
+                    ),
                     StaticValue::Dyn(Type::Constructed(TypeName::Str("unknown"), vec![])), // If expressions are runtime values
                 ))
             }
@@ -499,8 +510,10 @@ impl Defunctionalizer {
                     ExprKind::Identifier(func_name) => {
                         // Function call without closure
                         Ok((
-                            self.node_counter
-                                .mk_node(ExprKind::FunctionCall(func_name.clone(), transformed_args), Span::dummy()),
+                            self.node_counter.mk_node(
+                                ExprKind::FunctionCall(func_name.clone(), transformed_args),
+                                Span::dummy(),
+                            ),
                             StaticValue::Dyn(polytype::Type::Variable(2)),
                         ))
                     }
@@ -524,8 +537,10 @@ impl Defunctionalizer {
                 // Regular function call
                 match &transformed_func.kind {
                     ExprKind::Identifier(func_name) => Ok((
-                        self.node_counter
-                            .mk_node(ExprKind::FunctionCall(func_name.clone(), transformed_args), Span::dummy()),
+                        self.node_counter.mk_node(
+                            ExprKind::FunctionCall(func_name.clone(), transformed_args),
+                            Span::dummy(),
+                        ),
                         StaticValue::Dyn(polytype::Type::Variable(2)),
                     )),
                     ExprKind::FunctionCall(func_name, existing_args) => {
@@ -534,8 +549,10 @@ impl Defunctionalizer {
                         let mut all_args = existing_args.clone();
                         all_args.extend(transformed_args);
                         Ok((
-                            self.node_counter
-                                .mk_node(ExprKind::FunctionCall(func_name.clone(), all_args), Span::dummy()),
+                            self.node_counter.mk_node(
+                                ExprKind::FunctionCall(func_name.clone(), all_args),
+                                Span::dummy(),
+                            ),
                             StaticValue::Dyn(polytype::Type::Variable(2)),
                         ))
                     }

@@ -1,30 +1,6 @@
 use super::*;
 use crate::lexer::tokenize;
 
-/// Helper function that expects parsing to succeed and runs a check function on the declarations.
-/// If the check fails, outputs the parsed AST for debugging.
-fn expect_parse<F>(input: &str, check_fn: F)
-where
-    F: FnOnce(&[Declaration]) -> std::result::Result<(), String>,
-{
-    let tokens = tokenize(input).expect("Failed to tokenize input");
-    let mut parser = Parser::new(tokens.clone());
-    let program = match parser.parse() {
-        Ok(program) => program,
-        Err(e) => {
-            println!("Parse failed with error: {:?}", e);
-            println!("Tokens were: {:#?}", tokens);
-            panic!("Failed to parse input: {:?}", e);
-        }
-    };
-
-    if let Err(msg) = check_fn(&program.declarations) {
-        println!("Check failed: {}", msg);
-        println!("Parsed AST: {:#?}", program);
-        panic!("Test assertion failed: {}", msg);
-    }
-}
-
 /// Helper function that expects parsing to fail with a specific error.
 /// If parsing succeeds when it shouldn't, outputs the parsed AST.
 fn expect_parse_error<F>(input: &str, error_check: F)
@@ -800,8 +776,9 @@ fn test_parse_attributed_return_simple() {
 #[test]
 fn test_array_literal() {
     // Just verify it parses successfully
-    let _entry =
-        single_entry("#[vertex] def test(): #[builtin(position)] [4]f32 = [0.0f32, 0.5f32, 0.0f32, 1.0f32]");
+    let _entry = single_entry(
+        "#[vertex] def test(): #[builtin(position)] [4]f32 = [0.0f32, 0.5f32, 0.0f32, 1.0f32]",
+    );
 }
 
 #[test]

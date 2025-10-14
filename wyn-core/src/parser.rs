@@ -164,14 +164,15 @@ impl Parser {
             self.advance(); // consume ':'
 
             // Parse return type (which may have optional attributes)
-            let (return_types, return_attributes) = if self.check(&Token::AttributeStart) || self.check(&Token::LeftParen) {
-                // Attributed return type(s)
-                self.parse_return_type()?
-            } else {
-                // Simple unattributed return type
-                let ty = self.parse_type()?;
-                (vec![ty], vec![None])
-            };
+            let (return_types, return_attributes) =
+                if self.check(&Token::AttributeStart) || self.check(&Token::LeftParen) {
+                    // Attributed return type(s)
+                    self.parse_return_type()?
+                } else {
+                    // Simple unattributed return type
+                    let ty = self.parse_type()?;
+                    (vec![ty], vec![None])
+                };
 
             self.expect(Token::Assign)?;
             let body = self.parse_expression()?;
@@ -1566,10 +1567,6 @@ impl Parser {
     // Helper methods
     fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.current).map(|lt| &lt.token)
-    }
-
-    fn peek_ahead(&self, n: usize) -> Option<&Token> {
-        self.tokens.get(self.current + n).map(|lt| &lt.token)
     }
 
     fn advance(&mut self) -> Option<&Token> {

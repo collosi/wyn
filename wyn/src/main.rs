@@ -5,8 +5,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use thiserror::Error;
 use wyn_core::{
-    Compiler, borrow_checker::BorrowChecker, cfg_nemo::CfgNemoExtractor, lexer,
-    parser::Parser as WynParser,
+    Compiler, borrow_checker::BorrowChecker, cfg_nemo::CfgNemoExtractor, lexer, parser::Parser as WynParser,
 };
 
 #[derive(Parser)]
