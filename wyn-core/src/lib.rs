@@ -1,4 +1,4 @@
-pub mod annotator;
+// pub mod annotator;
 pub mod ast;
 pub mod borrow_checker;
 pub mod builtin_registry;

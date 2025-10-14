@@ -17,8 +17,8 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub enum Pipeline {
     VertexFragment {
-        vertex_shader: Decl,
-        fragment_shader: Decl,
+        vertex_shader: EntryDecl,
+        fragment_shader: EntryDecl,
     },
 }
 
@@ -28,12 +28,11 @@ impl Pipeline {
         let mut fragment_shader = None;
 
         for decl in &program.declarations {
-            if let Declaration::Decl(decl_node) = decl {
-                if decl_node.attributes.has(Attribute::is_vertex) {
-                    vertex_shader = Some(decl_node.clone());
-                }
-                if decl_node.attributes.has(Attribute::is_fragment) {
-                    fragment_shader = Some(decl_node.clone());
+            if let Declaration::Entry(entry_decl) = decl {
+                match entry_decl.entry_type {
+                    Attribute::Vertex => vertex_shader = Some(entry_decl.clone()),
+                    Attribute::Fragment => fragment_shader = Some(entry_decl.clone()),
+                    _ => {}
                 }
             }
         }
@@ -50,16 +49,16 @@ impl Pipeline {
     pub fn get_vertex_location_outputs(&self) -> Vec<(u32, Type)> {
         match self {
             Pipeline::VertexFragment { vertex_shader, .. } => {
-                if let Some(attributed_types) = &vertex_shader.attributed_return_type {
-                    attributed_types
-                        .iter()
-                        .filter_map(|attr_type| {
-                            attr_type.attributes.first_location().map(|loc| (loc, attr_type.ty.clone()))
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                }
+                vertex_shader.return_types.iter()
+                    .zip(vertex_shader.return_attributes.iter())
+                    .filter_map(|(ty, attr_opt)| {
+                        if let Some(Attribute::Location(loc)) = attr_opt {
+                            Some((*loc, ty.clone()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
             }
         }
     }
@@ -116,11 +115,18 @@ pub struct CodeGenerator {
 impl CodeGenerator {
     /// Validate that all return types for an entry point are properly attributed
     /// Each element must have @location or @builtin attribute
-    fn validate_entry_point_return_types(attributed_types: &[AttributedType]) -> Result<()> {
+    fn validate_entry_point_return_attributes(&self, types: &[Type], attributes: &[Option<Attribute>]) -> Result<()> {
+        // Check that types and attributes arrays have the same length
+        if types.len() != attributes.len() {
+            return Err(CompilerError::SpirvError(
+                "Entry point return types and attributes must have the same length".to_string(),
+            ));
+        }
+
         // Check if any type is missing attributes
-        if attributed_types.iter().any(|at| at.attributes.is_empty()) {
+        if attributes.iter().any(|attr| attr.is_none()) {
             Err(CompilerError::SpirvError(
-                "Entry point return values must all be attributed with @location or @builtin".to_string(),
+                "Entry point return values must all be attributed with location or builtin".to_string(),
             ))
         } else {
             Ok(())
@@ -668,6 +674,39 @@ impl CodeGenerator {
         }
     }
 
+    /// Resolve where an output value should be stored from a single attribute
+    fn resolve_output_var_from_attr(
+        &mut self,
+        attr: &Attribute,
+        ty_id: spirv::Word,
+        exec_model: ExecutionModel,
+    ) -> Result<spirv::Word> {
+        match attr {
+            Attribute::BuiltIn(builtin) => {
+                self.global_builder
+                    .create_or_lookup_builtin(&mut self.builder, *builtin, StorageClass::Output, exec_model)?
+                    .ok_or_else(|| {
+                        CompilerError::SpirvError(format!(
+                            "Builtin {:?} invalid for {:?} output",
+                            builtin, exec_model
+                        ))
+                    })
+            }
+            Attribute::Location(location) => {
+                self.global_builder.create_or_lookup_location(
+                    &mut self.builder,
+                    *location,
+                    StorageClass::Output,
+                    ty_id,
+                )
+            }
+            _ => Err(CompilerError::SpirvError(format!(
+                "Attribute {:?} is not valid for entry point outputs",
+                attr
+            ))),
+        }
+    }
+
     /// Extract a component from a composite (tuple, struct, array, or vector)
     fn extract_component(&mut self, composite: Value, comp_ty: spirv::Word, idx: u32) -> Result<Value> {
         let id = self.builder.composite_extract(comp_ty, None, composite.id, vec![idx])?;
@@ -821,13 +860,7 @@ impl CodeGenerator {
     fn generate_declaration(&mut self, decl: &Declaration) -> Result<()> {
         match decl {
             Declaration::Decl(decl_node) => {
-                // Check if this is an entry point (has Vertex or Fragment attribute)
-                let is_entry_point = decl_node.attributes.has(Attribute::is_vertex)
-                    || decl_node.attributes.has(Attribute::is_fragment);
-
-                if is_entry_point {
-                    self.generate_entry_point(decl_node)
-                } else if decl_node.params.is_empty() {
+                if decl_node.params.is_empty() {
                     // Regular variable declaration: let/def name: type = value or let/def name = value
                     let ty = decl_node.ty.as_ref().ok_or_else(|| {
                         CompilerError::SpirvError(format!(
@@ -841,6 +874,7 @@ impl CodeGenerator {
                     self.generate_user_function(decl_node)
                 }
             }
+            Declaration::Entry(entry_decl) => self.generate_entry_point(entry_decl),
             Declaration::Uniform(uniform_decl) => self.generate_uniform_declaration(uniform_decl),
             Declaration::Val(_val_decl) => {
                 // Type signatures only
@@ -985,29 +1019,22 @@ impl CodeGenerator {
         Ok(())
     }
 
-    fn generate_entry_point(&mut self, decl: &Decl) -> Result<()> {
+    fn generate_entry_point(&mut self, entry: &EntryDecl) -> Result<()> {
         // Determine execution model
-        let exec_model = if decl.attributes.has(Attribute::is_vertex) {
-            spirv::ExecutionModel::Vertex
-        } else if decl.attributes.has(Attribute::is_fragment) {
-            spirv::ExecutionModel::Fragment
-        } else {
-            return Err(CompilerError::SpirvError(
-                "Entry point must have either #[vertex] or #[fragment] attribute".to_string(),
-            ));
+        let exec_model = match entry.entry_type {
+            Attribute::Vertex => spirv::ExecutionModel::Vertex,
+            Attribute::Fragment => spirv::ExecutionModel::Fragment,
+            _ => {
+                return Err(CompilerError::SpirvError(
+                    "Entry point must have either Vertex or Fragment attribute".to_string(),
+                ));
+            }
         };
 
-        self.entry_points.push((decl.name.clone(), exec_model));
+        self.entry_points.push((entry.name.clone(), exec_model));
 
-        // Validate that return type is properly attributed
-        // Entry points must have attributed return types for outputs
-        if let Some(attributed_returns) = &decl.attributed_return_type {
-            Self::validate_entry_point_return_types(attributed_returns)?;
-        } else {
-            return Err(CompilerError::SpirvError(
-                "Entry point must have attributed return type (e.g., (vec4 @location(0)))".to_string(),
-            ));
-        }
+        // Validate that return types have proper attributes
+        self.validate_entry_point_return_attributes(&entry.return_types, &entry.return_attributes)?;
 
         // Handle shader-specific variable creation
         match exec_model {
@@ -1016,20 +1043,16 @@ impl CodeGenerator {
                 self.create_fragment_inputs()?;
 
                 // Fragment shaders also need their own outputs
-                if let Some(attributed_return_type) = &decl.attributed_return_type {
-                    self.create_outputs(attributed_return_type, exec_model)?;
-                }
+                self.create_outputs_from_parallel_arrays(&entry.return_types, &entry.return_attributes, exec_model)?;
             }
             _ => {
                 // Vertex and other shaders just create outputs
-                if let Some(attributed_return_type) = &decl.attributed_return_type {
-                    self.create_outputs(attributed_return_type, exec_model)?;
-                }
+                self.create_outputs_from_parallel_arrays(&entry.return_types, &entry.return_attributes, exec_model)?;
             }
         }
 
         // Prepare parameters (handles both builtins and regular params)
-        let param_type_ids = self.prepare_params(exec_model, &decl.params)?;
+        let param_type_ids = self.prepare_params(exec_model, &entry.params)?;
 
         // Create function type - entry points always return void and use output variables
         let actual_return_type = self.void_type;
@@ -1039,7 +1062,7 @@ impl CodeGenerator {
         let function_id =
             self.builder.begin_function(actual_return_type, None, spirv::FunctionControl::NONE, fn_type)?;
 
-        self.function_cache.insert(decl.name.clone(), function_id);
+        self.function_cache.insert(entry.name.clone(), function_id);
         self.current_function = Some(function_id);
 
         // Clear local scopes for the new function
@@ -1053,7 +1076,7 @@ impl CodeGenerator {
         self.current_block = Some(entry_label);
 
         // Store parameters in local variables AFTER begin_block
-        self.store_fn_params(&decl.params, &param_ids)?;
+        self.store_fn_params(&entry.params, &param_ids)?;
 
         // Save the entry block index for later
         self.function_entry_block_index = self.builder.selected_block();
@@ -1062,20 +1085,15 @@ impl CodeGenerator {
         self.pending_variables.clear();
 
         // Generate function body (this will queue variables)
-        let result = self.generate_expression(&decl.body)?;
+        let result = self.generate_expression(&entry.body)?;
 
         // Now emit all pending variables at the beginning of the entry block
         self.emit_pending_variables_at_entry_block()?;
 
         // Entry point coda: write return values to builtin/location outputs
-        if decl.attributed_return_type.is_some() {
-            self.generate_entry_point_coda(decl, &result, exec_model)?;
-            // Entry points return void
-            self.builder.ret()?;
-        } else {
-            // Regular function - return the result
-            self.builder.ret_value(result.id)?;
-        }
+        self.generate_entry_point_coda_from_parallel_arrays(&entry.return_types, &entry.return_attributes, &result, exec_model)?;
+        // Entry points return void
+        self.builder.ret()?;
 
         self.builder.end_function()?;
         self.current_function = None;
@@ -1122,38 +1140,40 @@ impl CodeGenerator {
     }
 
     /// Generate the entry point coda that writes return values to builtin/location outputs
-    fn generate_entry_point_coda(
+    fn generate_entry_point_coda_from_parallel_arrays(
         &mut self,
-        decl: &Decl,
+        types: &[Type],
+        attributes: &[Option<Attribute>],
         result: &Value,
         exec_model: ExecutionModel,
     ) -> Result<()> {
-        if let Some(attributed_return_type) = &decl.attributed_return_type {
-            if attributed_return_type.len() == 1 {
-                // Single attributed return value
-                let attributed_type = &attributed_return_type[0];
-                self.store_attributed_value(result, attributed_type, exec_model)?;
-            } else {
-                // Multiple attributed return values - extract from tuple
-                for (index, attributed_type) in attributed_return_type.iter().enumerate() {
-                    let component_type_info = self.get_or_create_type(&attributed_type.ty)?;
-                    let component_value =
-                        self.extract_component(*result, component_type_info.id, index as u32)?;
-                    self.store_attributed_value(&component_value, attributed_type, exec_model)?;
-                }
+        if types.len() == 1 {
+            // Single attributed return value
+            let ty = &types[0];
+            let attr = attributes[0].as_ref().unwrap(); // Already validated
+            self.store_attributed_value_from_attr(result, ty, attr, exec_model)?;
+        } else {
+            // Multiple attributed return values - extract from tuple
+            for (index, (ty, attr_opt)) in types.iter().zip(attributes.iter()).enumerate() {
+                let attr = attr_opt.as_ref().unwrap(); // Already validated
+                let component_type_info = self.get_or_create_type(ty)?;
+                let component_value =
+                    self.extract_component(*result, component_type_info.id, index as u32)?;
+                self.store_attributed_value_from_attr(&component_value, ty, attr, exec_model)?;
             }
         }
         Ok(())
     }
 
     /// Store a single attributed value to the appropriate builtin or location output
-    fn store_attributed_value(
+    fn store_attributed_value_from_attr(
         &mut self,
         value: &Value,
-        attributed_type: &AttributedType,
+        _ty: &Type,
+        attribute: &Attribute,
         exec_model: ExecutionModel,
     ) -> Result<()> {
-        let output_var = self.resolve_output_var(&attributed_type.attributes, value.type_id, exec_model)?;
+        let output_var = self.resolve_output_var_from_attr(attribute, value.type_id, exec_model)?;
         self.builder.store(output_var, value.id, None, vec![])?;
         Ok(())
     }
@@ -2320,17 +2340,19 @@ impl CodeGenerator {
         Ok(())
     }
 
-    /// Create output variables for attributed return types
-    fn create_outputs(
+    /// Create output variables for attributed return types (parallel arrays)
+    fn create_outputs_from_parallel_arrays(
         &mut self,
-        attributed_types: &[AttributedType],
+        types: &[Type],
+        attributes: &[Option<Attribute>],
         exec_model: ExecutionModel,
     ) -> Result<()> {
         // Simply resolve each output - GlobalBuilder handles idempotency
-        for attributed_type in attributed_types {
-            let type_info = self.get_or_create_type(&attributed_type.ty)?;
+        for (ty, attr_opt) in types.iter().zip(attributes.iter()) {
+            let attr = attr_opt.as_ref().unwrap(); // Already validated
+            let type_info = self.get_or_create_type(ty)?;
             let _output_var =
-                self.resolve_output_var(&attributed_type.attributes, type_info.id, exec_model)?;
+                self.resolve_output_var_from_attr(attr, type_info.id, exec_model)?;
         }
         Ok(())
     }

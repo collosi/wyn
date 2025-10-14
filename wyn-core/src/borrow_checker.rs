@@ -133,6 +133,10 @@ impl BorrowChecker {
                     }
                 }
             }
+            Declaration::Entry(_) => {
+                // Entry point declarations - treat like def declarations
+                // For now, we don't do borrow checking on entry points
+            }
             Declaration::Uniform(_) => {
                 // Uniform declarations don't create runtime lifetimes
             }

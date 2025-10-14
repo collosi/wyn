@@ -304,11 +304,68 @@ impl TypeChecker {
         Ok(self.type_table.clone())
     }
 
+    /// Helper to type check a function body with parameters in scope
+    /// Returns (param_types, body_type)
+    fn check_function_with_params(
+        &mut self,
+        params: &[Pattern],
+        body: &Expression,
+    ) -> Result<(Vec<Type>, Type)> {
+        // Create type variables or use explicit types for parameters
+        let param_types: Vec<Type> = params
+            .iter()
+            .map(|p| {
+                p.pattern_type().cloned().unwrap_or_else(|| self.context.new_variable())
+            })
+            .collect();
+
+        // Push new scope for function parameters
+        self.scope_stack.push_scope();
+
+        // Add parameters to scope
+        for (param, param_type) in params.iter().zip(param_types.iter()) {
+            // Skip unit patterns (no parameters)
+            if matches!(param.kind, PatternKind::Unit) {
+                continue;
+            }
+
+            let param_name = param
+                .simple_name()
+                .ok_or_else(|| {
+                    CompilerError::TypeError(format!(
+                        "Complex patterns in function parameters not yet supported"
+                    ))
+                })?
+                .to_string();
+            let type_scheme = TypeScheme::Monotype(param_type.clone());
+            debug!(
+                "Adding parameter '{}' to scope with type: {:?}",
+                param_name, param_type
+            );
+            self.scope_stack.insert(param_name, type_scheme);
+        }
+
+        // Infer body type
+        let body_type = self.infer_expression(body)?;
+
+        // Pop parameter scope
+        self.scope_stack.pop_scope();
+
+        Ok((param_types, body_type))
+    }
+
     fn check_declaration(&mut self, decl: &Declaration) -> Result<()> {
         match decl {
             Declaration::Decl(decl_node) => {
                 debug!("Checking {} declaration: {}", decl_node.keyword, decl_node.name);
                 self.check_decl(decl_node)
+            }
+            Declaration::Entry(entry) => {
+                debug!("Checking entry point: {}", entry.name);
+                let (_param_types, body_type) = self.check_function_with_params(&entry.params, &entry.body)?;
+                debug!("Entry point '{}' body type: {:?}", entry.name, body_type);
+                // TODO: Validate body_type against entry.return_types and entry.return_attributes
+                Ok(())
             }
             Declaration::Uniform(uniform_decl) => {
                 debug!("Checking Uniform declaration: {}", uniform_decl.name);
@@ -353,16 +410,7 @@ impl TypeChecker {
             let expr_type = self.infer_expression(&decl.body)?;
 
             if let Some(declared_type) = &decl.ty {
-                // Check if this is an entry point with attributed return type
-                let is_entry_point = decl
-                    .attributes
-                    .iter()
-                    .any(|attr| matches!(attr, Attribute::Vertex | Attribute::Fragment));
-
-                if is_entry_point && decl.attributed_return_type.is_some() {
-                    // For entry points with attributed return types, check against the inner types
-                    self.check_attributed_return_type(&expr_type, decl)?;
-                } else if !self.types_match(&expr_type, declared_type) {
+                if !self.types_match(&expr_type, declared_type) {
                     return Err(CompilerError::TypeError(format!(
                         "Type mismatch: expected {}, got {}",
                         self.format_type(declared_type),
@@ -379,48 +427,11 @@ impl TypeChecker {
             debug!("Inferred type for {}: {}", decl.name, stored_type);
         } else {
             // Function declaration: let/def name param1 param2 = body
-            // Create type variables or use explicit types for parameters
-            let param_types: Vec<Type> = decl
-                .params
-                .iter()
-                .map(|p| {
-                    // If pattern has a type annotation, use it; otherwise create a type variable
-                    p.pattern_type().cloned().unwrap_or_else(|| self.context.new_variable())
-                })
-                .collect();
-
-            // Push new scope for function parameters
-            self.scope_stack.push_scope();
-
-            // Add parameters to scope
-            for (param, param_type) in decl.params.iter().zip(param_types.iter()) {
-                let param_name = param
-                    .simple_name()
-                    .ok_or_else(|| {
-                        CompilerError::TypeError(format!(
-                            "Complex patterns in function parameters not yet supported"
-                        ))
-                    })?
-                    .to_string();
-                let type_scheme = TypeScheme::Monotype(param_type.clone());
-                debug!(
-                    "Adding parameter '{}' to scope with type: {:?}",
-                    param_name, param_type
-                );
-                self.scope_stack.insert(param_name, type_scheme);
-            }
-
-            // Infer body type
-            debug!("About to infer body type for function '{}'", decl.name);
-            debug!("Scope depth before body inference: {}", self.scope_stack.depth());
-            let body_type = self.infer_expression(&decl.body)?;
+            let (param_types, body_type) = self.check_function_with_params(&decl.params, &decl.body)?;
             debug!(
                 "Successfully inferred body type for '{}': {:?}",
                 decl.name, body_type
             );
-
-            // Pop parameter scope
-            self.scope_stack.pop_scope();
 
             // Build function type: param1 -> param2 -> ... -> body_type
             let func_type = param_types
@@ -460,10 +471,8 @@ impl TypeChecker {
                 }
             }
 
-            // For entry points, check attributed return types
-            if is_entry_point && decl.attributed_return_type.is_some() {
-                self.check_attributed_return_type(&body_type, decl)?;
-            }
+            // Entry points are now handled separately via Declaration::Entry
+            // Regular Decl no longer has attributed return types
 
             // Update scope with inferred type
             let type_scheme = TypeScheme::Monotype(func_type.clone());
@@ -996,7 +1005,12 @@ impl TypeChecker {
         }
     }
 
-    fn check_attributed_return_type(&mut self, expr_type: &Type, decl: &Decl) -> Result<()> {
+    #[allow(dead_code)]
+    fn check_attributed_return_type(&mut self, _expr_type: &Type, _decl: &Decl) -> Result<()> {
+        // This function is no longer used since attributed return types moved to EntryDecl
+        // Keeping for potential future use
+        Ok(())
+        /*
         if let Some(attributed_return_type) = &decl.attributed_return_type {
             if attributed_return_type.len() == 1 {
                 // Single attributed return type - expression should match the inner type
@@ -1059,6 +1073,7 @@ impl TypeChecker {
             }
         }
         Ok(())
+        */
     }
 }
 

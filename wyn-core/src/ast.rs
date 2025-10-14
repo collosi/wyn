@@ -114,8 +114,11 @@ impl NodeCounter {
             kind,
         }
     }
+}
 
-    /// Create a node with a dummy span (for testing/migration)
+#[cfg(test)]
+impl NodeCounter {
+    /// Create a node with a dummy span (for testing only)
     pub fn mk_node_dummy<T>(&mut self, kind: T) -> Node<T> {
         self.mk_node(kind, Span::dummy())
     }
@@ -229,6 +232,7 @@ pub struct Program {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Declaration {
     Decl(Decl),           // Unified let/def declarations
+    Entry(EntryDecl),     // Entry point declarations (vertex/fragment shaders)
     Uniform(UniformDecl), // Uniform declarations (no initializer)
     Val(ValDecl),
     TypeBind(TypeBind),             // Type declarations
@@ -288,9 +292,18 @@ pub struct Decl {
     pub name: String,
     pub params: Vec<Pattern>, // Parameters as patterns (name, name:type, tuples, etc.)
     pub ty: Option<Type>,     // Return type for functions or type annotation for variables
-    pub return_attributes: Vec<Attribute>, // Attributes on the return type (for entry points)
-    pub attributed_return_type: Option<Vec<AttributedType>>, // For multiple outputs with per-component attributes
-    pub body: Expression, // The value/expression for let/def declarations
+    pub body: Expression,     // The value/expression for let/def declarations
+}
+
+/// Entry point declaration (vertex/fragment shader)
+#[derive(Debug, Clone, PartialEq)]
+pub struct EntryDecl {
+    pub entry_type: Attribute, // Attribute::Vertex or Attribute::Fragment
+    pub name: String,
+    pub params: Vec<Pattern>,                      // Input parameters as patterns
+    pub return_types: Vec<Type>,                   // Return tuple field types (parallel array)
+    pub return_attributes: Vec<Option<Attribute>>, // Attributes per return field (parallel array)
+    pub body: Expression,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -692,13 +705,6 @@ pub mod types {
 
     pub fn tuple(types: Vec<Type>) -> Type {
         Type::Constructed(TypeName::Str("tuple"), types)
-    }
-
-    pub fn attributed_tuple(attributed_types: Vec<crate::ast::AttributedType>) -> Type {
-        // For now, extract just the types for the type system
-        // The attributes will be handled separately during codegen
-        let types = attributed_types.into_iter().map(|at| at.ty).collect();
-        Type::Constructed(TypeName::Str("attributed_tuple"), types)
     }
 
     pub fn function(arg: Type, ret: Type) -> Type {

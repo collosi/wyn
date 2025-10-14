@@ -123,47 +123,120 @@ impl Parser {
 
     fn parse_decl(&mut self, keyword: &'static str, attributes: Vec<Attribute>) -> Result<Declaration> {
         trace!("parse_decl({}): next token = {:?}", keyword, self.peek());
-        // Expect the keyword token (let or def)
-        match keyword {
-            "let" => self.expect(Token::Let)?,
-            "def" => self.expect(Token::Def)?,
-            _ => return Err(CompilerError::ParseError(format!("Invalid keyword: {}", keyword))),
-        }
 
-        let name = self.expect_identifier()?;
+        // Check for special attributes that require specific declaration types
+        let entry_type =
+            attributes.iter().find(|attr| matches!(attr, Attribute::Vertex | Attribute::Fragment));
+        let is_uniform = attributes.iter().any(|attr| matches!(attr, Attribute::Uniform));
 
-        // Parse patterns until we hit : (return type) or = (body)
-        let mut params = Vec::new();
-        while !self.check(&Token::Colon) && !self.check(&Token::Assign) && !self.is_at_end() {
-            params.push(self.parse_pattern()?);
-        }
+        if is_uniform {
+            // Uniform declaration - delegate to helper
+            if keyword != "def" {
+                return Err(CompilerError::ParseError(
+                    "Uniform declarations must use 'def', not 'let'".to_string(),
+                ));
+            }
+            return self.parse_uniform_decl();
+        } else if let Some(entry_attr) = entry_type {
+            // Entry point: must be 'def', not 'let'
+            if keyword != "def" {
+                return Err(CompilerError::ParseError(
+                    "Entry point declarations must use 'def', not 'let'".to_string(),
+                ));
+            }
+            self.expect(Token::Def)?;
 
-        // Check for optional return type annotation
-        let (ty, attributed_return_type) = if self.check(&Token::Colon) {
-            self.advance();
-            // Check if it's an attributed return type
-            if self.check(&Token::AttributeStart) {
+            let name = self.expect_identifier()?;
+
+            // Parse parameters
+            let mut params = Vec::new();
+            while !self.check(&Token::Colon) && !self.check(&Token::Assign) && !self.is_at_end() {
+                params.push(self.parse_function_parameter()?);
+            }
+
+            // Entry points must have an explicit return type
+            if !self.check(&Token::Colon) {
+                return Err(CompilerError::ParseError(
+                    "Entry point declarations must have an explicit return type".to_string(),
+                ));
+            }
+
+            self.advance(); // consume ':'
+
+            // Parse return type (which may have optional attributes)
+            let (return_types, return_attributes) = if self.check(&Token::AttributeStart) || self.check(&Token::LeftParen) {
+                // Attributed return type(s)
                 self.parse_return_type()?
             } else {
-                (Some(self.parse_type()?), None)
-            }
+                // Simple unattributed return type
+                let ty = self.parse_type()?;
+                (vec![ty], vec![None])
+            };
+
+            self.expect(Token::Assign)?;
+            let body = self.parse_expression()?;
+
+            Ok(Declaration::Entry(EntryDecl {
+                entry_type: entry_attr.clone(),
+                name,
+                params,
+                return_types,
+                return_attributes,
+                body,
+            }))
         } else {
-            (None, None)
-        };
+            // Regular declaration (let or def)
+            match keyword {
+                "let" => self.expect(Token::Let)?,
+                "def" => self.expect(Token::Def)?,
+                _ => return Err(CompilerError::ParseError(format!("Invalid keyword: {}", keyword))),
+            }
 
-        self.expect(Token::Assign)?;
-        let body = self.parse_expression()?;
+            let name = self.expect_identifier()?;
 
-        Ok(Declaration::Decl(Decl {
-            keyword,
-            attributes,
-            name,
-            params,
-            ty,
-            return_attributes: vec![],
-            attributed_return_type,
-            body,
-        }))
+            // Parse patterns until we hit : (return type) or = (body)
+            let mut params = Vec::new();
+            while !self.check(&Token::Colon) && !self.check(&Token::Assign) && !self.is_at_end() {
+                params.push(self.parse_function_parameter()?);
+            }
+
+            // Determine function return type
+            let (params, ty) = if self.check(&Token::Colon) {
+                // Explicit function return type: def f x : type = ...
+                self.advance();
+                let return_ty = Some(self.parse_type()?);
+                (params, return_ty)
+            } else if let Some(last_param) = params.last() {
+                // Check if last parameter is typed: def f x:type = ...
+                // If so, extract the type as function return type
+                if let PatternKind::Typed(inner_pattern, return_ty) = &last_param.kind {
+                    let inner_pattern_clone = (**inner_pattern).clone();
+                    let return_ty_clone = return_ty.clone();
+                    let mut actual_params = params;
+                    actual_params.pop();
+                    actual_params.push(inner_pattern_clone);
+                    (actual_params, Some(return_ty_clone))
+                } else {
+                    // No return type specified
+                    (params, None)
+                }
+            } else {
+                // No parameters and no return type
+                (params, None)
+            };
+
+            self.expect(Token::Assign)?;
+            let body = self.parse_expression()?;
+
+            Ok(Declaration::Decl(Decl {
+                keyword,
+                attributes,
+                name,
+                params,
+                ty,
+                body,
+            }))
+        }
     }
 
     fn parse_val_decl(&mut self) -> Result<ValDecl> {
@@ -200,34 +273,33 @@ impl Parser {
         })
     }
 
-    fn parse_attributed_type(&mut self) -> Result<AttributedType> {
-        trace!("parse_attributed_type: next token = {:?}", self.peek());
-        // Parse optional #[attribute] syntax
-        let attributes = if self.check(&Token::AttributeStart) {
-            self.advance(); // consume '#['
-            let attribute = self.parse_attribute()?;
-            vec![attribute]
-        } else {
-            vec![]
-        };
-
-        // Parse the type
-        let ty = self.parse_type()?;
-
-        Ok(AttributedType { attributes, ty })
-    }
-
-    fn parse_return_type(&mut self) -> Result<(Option<Type>, Option<Vec<AttributedType>>)> {
+    /// Parse return type with optional attributes, returning parallel arrays
+    /// Returns (return_types, return_attributes)
+    fn parse_return_type(&mut self) -> Result<(Vec<Type>, Vec<Option<Attribute>>)> {
         trace!("parse_return_type: next token = {:?}", self.peek());
-        // Check if it's an attributed tuple: ([attr1] type1, [attr2] type2, ...)
+
+        // Check if it's a tuple: ([attr1] type1, [attr2] type2, ...)
         if self.check(&Token::LeftParen) {
             self.advance(); // consume '('
-            let mut attributed_types = Vec::new();
+            let mut types = Vec::new();
+            let mut attributes = Vec::new();
 
             if !self.check(&Token::RightParen) {
                 loop {
-                    let attributed_type = self.parse_attributed_type()?;
-                    attributed_types.push(attributed_type);
+                    // Parse optional #[attribute]
+                    let attr = if self.check(&Token::AttributeStart) {
+                        self.advance(); // consume '#['
+                        let attribute = self.parse_attribute()?;
+                        Some(attribute)
+                    } else {
+                        None
+                    };
+
+                    // Parse the type
+                    let ty = self.parse_type()?;
+
+                    types.push(ty);
+                    attributes.push(attr);
 
                     if !self.check(&Token::Comma) {
                         break;
@@ -237,23 +309,39 @@ impl Parser {
             }
 
             self.expect(Token::RightParen)?;
-
-            // Create a tuple type from the attributed types for the type system
-            let tuple_type = types::attributed_tuple(attributed_types.clone());
-            Ok((Some(tuple_type), Some(attributed_types)))
+            Ok((types, attributes))
         } else if self.check(&Token::AttributeStart) {
             // Single attributed type: #[attribute] type
-            let attributed_type = self.parse_attributed_type()?;
+            self.advance(); // consume '#['
+            let attribute = self.parse_attribute()?;
+            let ty = self.parse_type()?;
 
-            // Return as a single-element attributed tuple
-            let attributed_types = vec![attributed_type];
-            let tuple_type = types::attributed_tuple(attributed_types.clone());
-            Ok((Some(tuple_type), Some(attributed_types)))
+            Ok((vec![ty], vec![Some(attribute)]))
         } else {
             // Regular single return type without attributes
             let ty = self.parse_type()?;
-            Ok((Some(ty), None))
+            Ok((vec![ty], vec![None]))
         }
+    }
+
+    fn parse_uniform_decl(&mut self) -> Result<Declaration> {
+        // Consume 'def' keyword
+        self.expect(Token::Def)?;
+
+        let name = self.expect_identifier()?;
+
+        // Uniforms must have an explicit type annotation
+        self.expect(Token::Colon)?;
+        let ty = self.parse_type()?;
+
+        // Uniforms must NOT have initializers
+        if self.check(&Token::Assign) {
+            return Err(CompilerError::ParseError(
+                "Uniform declarations cannot have initializer values".to_string(),
+            ));
+        }
+
+        Ok(Declaration::Uniform(UniformDecl { name, ty }))
     }
 
     fn parse_attribute(&mut self) -> Result<Attribute> {
@@ -1478,6 +1566,10 @@ impl Parser {
     // Helper methods
     fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.current).map(|lt| &lt.token)
+    }
+
+    fn peek_ahead(&self, n: usize) -> Option<&Token> {
+        self.tokens.get(self.current + n).map(|lt| &lt.token)
     }
 
     fn advance(&mut self) -> Option<&Token> {

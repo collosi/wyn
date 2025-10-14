@@ -5,6 +5,30 @@ use crate::parser::Parser;
 use log::trace;
 
 impl Parser {
+    /// Parse a pattern in function parameter position.
+    /// In this context, type annotations must be inside parentheses: (x : i32)
+    /// This avoids ambiguity with function return types.
+    pub fn parse_function_parameter(&mut self) -> Result<Pattern> {
+        trace!("parse_function_parameter: next token = {:?}", self.peek());
+        let start_span = self.current_span();
+
+        // Parse optional attributes
+        let attributes = self.parse_attributes()?;
+
+        let pattern = if !attributes.is_empty() {
+            // #[attr] pat
+            let inner = self.parse_pattern_without_attributes()?;
+            let span = start_span.merge(&inner.h.span);
+            self.node_counter.mk_node(PatternKind::Attributed(attributes, Box::new(inner)), span)
+        } else {
+            self.parse_pattern_without_attributes()?
+        };
+
+        // In function parameter context, don't allow bare `: type` syntax
+        // Type annotations must be inside parentheses: (x : i32)
+        Ok(pattern)
+    }
+
     /// Parse a pattern according to the grammar:
     /// ```text
     /// pat ::= name
@@ -21,23 +45,30 @@ impl Parser {
     /// ```
     pub fn parse_pattern(&mut self) -> Result<Pattern> {
         trace!("parse_pattern: next token = {:?}", self.peek());
+        let start_span = self.current_span();
 
         // Parse optional attributes
         let attributes = self.parse_attributes()?;
 
+        trace!("done parsing attributes: next token = {:?}", self.peek());
         let pattern = if !attributes.is_empty() {
             // #[attr] pat
             let inner = self.parse_pattern_without_attributes()?;
-            self.node_counter.mk_node_dummy(PatternKind::Attributed(attributes, Box::new(inner)))
+            let span = start_span.merge(&inner.h.span);
+            self.node_counter.mk_node(PatternKind::Attributed(attributes, Box::new(inner)), span)
         } else {
             self.parse_pattern_without_attributes()?
         };
+        trace!("done parsing primary pattern: next token = {:?}", self.peek());
 
         // Check for type annotation (pat : type)
         if self.check(&Token::Colon) {
             self.advance();
+            trace!("parsing pattern type suffix: next token = {:?}", self.peek());
             let ty = self.parse_type()?;
-            return Ok(self.node_counter.mk_node_dummy(PatternKind::Typed(Box::new(pattern), ty)));
+            // Use the pattern's span since Type doesn't have a span field
+            let span = pattern.h.span;
+            return Ok(self.node_counter.mk_node(PatternKind::Typed(Box::new(pattern), ty), span));
         }
 
         Ok(pattern)
@@ -46,8 +77,9 @@ impl Parser {
     fn parse_pattern_without_attributes(&mut self) -> Result<Pattern> {
         match self.peek() {
             Some(Token::Underscore) => {
+                let span = self.current_span();
                 self.advance();
-                Ok(self.node_counter.mk_node_dummy(PatternKind::Wildcard))
+                Ok(self.node_counter.mk_node(PatternKind::Wildcard, span))
             }
 
             Some(Token::LeftParen) => self.parse_paren_pattern(),
@@ -60,8 +92,9 @@ impl Parser {
                     self.parse_constructor_pattern()
                 } else {
                     // Simple name binding
+                    let span = self.current_span();
                     let name = self.expect_identifier()?;
-                    Ok(self.node_counter.mk_node_dummy(PatternKind::Name(name)))
+                    Ok(self.node_counter.mk_node(PatternKind::Name(name), span))
                 }
             }
 
@@ -84,12 +117,15 @@ impl Parser {
     }
 
     fn parse_paren_pattern(&mut self) -> Result<Pattern> {
+        let start_span = self.current_span();
         self.expect(Token::LeftParen)?;
 
         if self.check(&Token::RightParen) {
             // () unit pattern
+            let end_span = self.current_span();
             self.advance();
-            return Ok(self.node_counter.mk_node_dummy(PatternKind::Unit));
+            let span = start_span.merge(&end_span);
+            return Ok(self.node_counter.mk_node(PatternKind::Unit, span));
         }
 
         let first = self.parse_pattern()?;
@@ -107,8 +143,10 @@ impl Parser {
                 patterns.push(self.parse_pattern()?);
             }
 
+            let end_span = self.current_span();
             self.expect(Token::RightParen)?;
-            Ok(self.node_counter.mk_node_dummy(PatternKind::Tuple(patterns)))
+            let span = start_span.merge(&end_span);
+            Ok(self.node_counter.mk_node(PatternKind::Tuple(patterns), span))
         } else {
             // Single pattern in parens: (pat)
             self.expect(Token::RightParen)?;
@@ -117,12 +155,15 @@ impl Parser {
     }
 
     fn parse_record_pattern(&mut self) -> Result<Pattern> {
+        let start_span = self.current_span();
         self.expect(Token::LeftBrace)?;
 
         if self.check(&Token::RightBrace) {
             // {} empty record
+            let end_span = self.current_span();
             self.advance();
-            return Ok(self.node_counter.mk_node_dummy(PatternKind::Record(vec![])));
+            let span = start_span.merge(&end_span);
+            return Ok(self.node_counter.mk_node(PatternKind::Record(vec![]), span));
         }
 
         let mut fields = Vec::new();
@@ -155,23 +196,30 @@ impl Parser {
             }
         }
 
+        let end_span = self.current_span();
         self.expect(Token::RightBrace)?;
-        Ok(self.node_counter.mk_node_dummy(PatternKind::Record(fields)))
+        let span = start_span.merge(&end_span);
+        Ok(self.node_counter.mk_node(PatternKind::Record(fields), span))
     }
 
     fn parse_constructor_pattern(&mut self) -> Result<Pattern> {
+        let start_span = self.current_span();
         let constructor = self.expect_identifier()?;
 
         // Parse constructor arguments (zero or more patterns)
         let mut args = Vec::new();
+        let mut end_span = start_span;
 
         // Keep parsing patterns as long as the next token can start a pattern
         // but stop if we see tokens that indicate the end of the constructor pattern
         while self.can_start_pattern() && !self.is_pattern_terminator() {
-            args.push(self.parse_pattern_without_attributes()?);
+            let arg = self.parse_pattern_without_attributes()?;
+            end_span = arg.h.span;
+            args.push(arg);
         }
 
-        Ok(self.node_counter.mk_node_dummy(PatternKind::Constructor(constructor, args)))
+        let span = start_span.merge(&end_span);
+        Ok(self.node_counter.mk_node(PatternKind::Constructor(constructor, args), span))
     }
 
     fn can_start_pattern(&self) -> bool {
@@ -213,6 +261,7 @@ impl Parser {
     /// ```
     fn parse_pattern_literal(&mut self) -> Result<Pattern> {
         trace!("parse_pattern_literal: next token = {:?}", self.peek());
+        let start_span = self.current_span();
 
         // Check for negative sign
         let is_negative = if self.check(&Token::Minus) {
@@ -274,6 +323,8 @@ impl Parser {
             }
         };
 
-        Ok(self.node_counter.mk_node_dummy(PatternKind::Literal(literal)))
+        let end_span = self.current_span();
+        let span = start_span.merge(&end_span);
+        Ok(self.node_counter.mk_node(PatternKind::Literal(literal), span))
     }
 }

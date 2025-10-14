@@ -49,8 +49,17 @@ impl ConstantFolder {
                     ty: d.ty.clone(),
                     body: folded_body,
                     attributes: d.attributes.clone(),
-                    return_attributes: d.return_attributes.clone(),
-                    attributed_return_type: d.attributed_return_type.clone(),
+                }))
+            }
+            Declaration::Entry(e) => {
+                let folded_body = self.fold_expression(&e.body)?;
+                Ok(Declaration::Entry(EntryDecl {
+                    entry_type: e.entry_type.clone(),
+                    name: e.name.clone(),
+                    params: e.params.clone(),
+                    return_types: e.return_types.clone(),
+                    return_attributes: e.return_attributes.clone(),
+                    body: folded_body,
                 }))
             }
             Declaration::Uniform(u) => {

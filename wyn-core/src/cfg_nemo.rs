@@ -74,6 +74,15 @@ impl<W: Write> CfgNemoExtractor<W> {
                     }
                 }
             }
+            Declaration::Entry(entry) => {
+                // Entry point - treat like a function
+                self.start_new_block()?;
+                match self.visit_expression(&entry.body) {
+                    ControlFlow::Continue(_) => {}
+                    ControlFlow::Break(e) => return Err(e),
+                }
+                // Block finalization happens automatically
+            }
             Declaration::Uniform(_) => {
                 // Uniform declarations have no body to process
             }

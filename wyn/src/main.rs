@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use thiserror::Error;
 use wyn_core::{
-    Compiler, annotator::CodeAnnotator, borrow_checker::BorrowChecker, cfg_nemo::CfgNemoExtractor, lexer,
+    Compiler, borrow_checker::BorrowChecker, cfg_nemo::CfgNemoExtractor, lexer,
     parser::Parser as WynParser,
 };
 
@@ -221,12 +221,15 @@ fn generate_annotated_source(
     let mut parser = WynParser::new(tokens);
     let program = parser.parse()?;
 
-    // Generate annotated code
-    let mut annotator = CodeAnnotator::new();
-    let annotated = annotator.annotate_program(&program);
+    // Generate annotated code - temporarily disabled
+    // let mut annotator = CodeAnnotator::new();
+    // let annotated = annotator.annotate_program(&program);
 
     // Write annotated source
-    fs::write(output_path, annotated)?;
+    // fs::write(output_path, annotated)?;
+
+    // Temporary placeholder
+    fs::write(output_path, "// Annotated code generation temporarily disabled\n")?;
 
     if verbose {
         info!("Generated annotated source: {}", output_path.display());

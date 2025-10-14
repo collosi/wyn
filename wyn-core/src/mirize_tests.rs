@@ -7,7 +7,7 @@ mod tests {
 
     #[test]
     fn test_simple_function() {
-        let source = "def add(x: i32, y: i32): i32 = x + y";
+        let source = "def add (x: i32) (y: i32): i32 = x + y";
         let tokens = lexer::tokenize(source).unwrap();
         let mut parser = Parser::new(tokens);
         let program = parser.parse().unwrap();

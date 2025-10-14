@@ -71,6 +71,16 @@ fn single_decl(input: &str) -> Decl {
     }
 }
 
+/// Parse input and return the single EntryDecl, panicking if not exactly one or not an Entry
+fn single_entry(input: &str) -> EntryDecl {
+    let program = parse_ok(input);
+    assert_eq!(program.declarations.len(), 1, "expected exactly one declaration");
+    match program.declarations.into_iter().next().unwrap() {
+        Declaration::Entry(e) => e,
+        other => panic!("expected Declaration::Entry, got {:?}", other),
+    }
+}
+
 /// Assert that a Pattern has given name and type
 macro_rules! assert_typed_param {
     ($param:expr, $name:expr, $ty:expr) => {
@@ -108,23 +118,23 @@ macro_rules! assert_typed_param_with_attrs {
             $ty,
             $param.pattern_type()
         );
-        // Pattern structure is Typed(Attributed(attrs, Name), type)
-        // We need to check inside the Typed pattern for attributes
-        if let PatternKind::Typed(inner, _) = &$param.kind {
-            if let PatternKind::Attributed(attrs, _) = &inner.kind {
-                assert_eq!(
-                    attrs, &$attrs,
-                    "Expected attrs {:?}, got {:?}",
-                    $attrs, attrs
-                );
-            } else {
+        // Pattern structure is Attributed(attrs, Typed(Name, type))
+        // The attribute is on the outside, wrapping the typed pattern
+        if let PatternKind::Attributed(attrs, inner) = &$param.kind {
+            assert_eq!(
+                attrs, &$attrs,
+                "Expected attrs {:?}, got {:?}",
+                $attrs, attrs
+            );
+            // Verify the inner pattern is Typed
+            if !matches!(inner.kind, PatternKind::Typed(_, _)) {
                 panic!(
-                    "Expected attributed pattern inside typed pattern, got {:?}",
+                    "Expected typed pattern inside attributed pattern, got {:?}",
                     inner
                 );
             }
         } else {
-            panic!("Expected typed pattern, got {:?}", $param);
+            panic!("Expected attributed pattern, got {:?}", $param);
         }
     };
 }
@@ -146,20 +156,21 @@ fn test_parse_array_type() {
 
 #[test]
 fn test_parse_entry_point_decl() {
-    let decl = single_decl("#[vertex] def main x:i32 y:f32 : [4]f32 = result");
+    let entry = single_entry("#[vertex] def main (x:i32) (y:f32) : [4]f32 = result");
 
-    assert_eq!(decl.name, "main");
-    assert_eq!(decl.attributes, vec![Attribute::Vertex]);
-    assert_eq!(decl.params.len(), 2);
+    assert_eq!(entry.name, "main");
+    assert_eq!(entry.entry_type, Attribute::Vertex);
+    assert_eq!(entry.params.len(), 2);
 
-    assert_typed_param!(&decl.params[0], "x", crate::ast::types::i32());
-    assert_typed_param!(&decl.params[1], "y", crate::ast::types::f32());
+    assert_typed_param!(&entry.params[0], "x", crate::ast::types::i32());
+    assert_typed_param!(&entry.params[1], "y", crate::ast::types::f32());
 
+    assert_eq!(entry.return_types.len(), 1);
     assert_eq!(
-        decl.ty,
-        Some(crate::ast::types::sized_array(4, crate::ast::types::f32()))
+        entry.return_types[0],
+        crate::ast::types::sized_array(4, crate::ast::types::f32())
     );
-    assert!(decl.return_attributes.is_empty());
+    // return_attributes removed - only on EntryDecl now
 }
 
 #[test]
@@ -187,16 +198,16 @@ fn test_parse_division() {
 
 #[test]
 fn test_parse_vertex_attribute() {
-    let decl = single_decl("#[vertex] def main(): [4]f32 = result");
-    assert_eq!(decl.attributes, vec![Attribute::Vertex]);
-    assert_eq!(decl.name, "main");
+    let entry = single_entry("#[vertex] def main(): [4]f32 = result");
+    assert_eq!(entry.entry_type, Attribute::Vertex);
+    assert_eq!(entry.name, "main");
 }
 
 #[test]
 fn test_parse_fragment_attribute() {
-    let decl = single_decl("#[fragment] def frag(): [4]f32 = result");
-    assert_eq!(decl.attributes, vec![Attribute::Fragment]);
-    assert_eq!(decl.name, "frag");
+    let entry = single_entry("#[fragment] def frag(): [4]f32 = result");
+    assert_eq!(entry.entry_type, Attribute::Fragment);
+    assert_eq!(entry.name, "frag");
 }
 
 #[test]
@@ -247,63 +258,64 @@ fn test_operator_precedence_and_associativity() {
 
 #[test]
 fn test_parse_builtin_attribute_on_return_type() {
-    let decl = single_decl("#[vertex] def main(): #[builtin(position)] [4]f32 = result");
+    let entry = single_entry("#[vertex] def main(): #[builtin(position)] [4]f32 = result");
 
-    assert_eq!(decl.attributes, vec![Attribute::Vertex]);
-
-    let attributed_types = decl.attributed_return_type.as_ref().expect("Expected attributed return type");
-    assert_eq!(attributed_types.len(), 1);
+    assert_eq!(entry.entry_type, Attribute::Vertex);
+    assert_eq!(entry.return_types.len(), 1);
+    assert_eq!(entry.return_attributes.len(), 1);
     assert_eq!(
-        attributed_types[0].attributes,
-        vec![Attribute::BuiltIn(spirv::BuiltIn::Position)]
+        entry.return_attributes[0],
+        Some(Attribute::BuiltIn(spirv::BuiltIn::Position))
     );
     assert_eq!(
-        attributed_types[0].ty,
+        entry.return_types[0],
         crate::ast::types::sized_array(4, crate::ast::types::f32())
     );
 }
 
 #[test]
 fn test_parse_single_attributed_return_type() {
-    let decl = single_decl(
+    let entry = single_entry(
         "#[vertex] def vertex_main(): #[builtin(position)] vec4 = vec4 0.0f32 0.0f32 0.0f32 1.0f32",
     );
 
-    assert!(decl.attributes.contains(&Attribute::Vertex));
-
-    let attributed_types = decl.attributed_return_type.as_ref().expect("Missing attributed return type");
-    assert_eq!(attributed_types.len(), 1);
-
-    let attr_type = &attributed_types[0];
-    assert!(attr_type.attributes.contains(&Attribute::BuiltIn(spirv::BuiltIn::Position)));
+    assert_eq!(entry.entry_type, Attribute::Vertex);
+    assert_eq!(entry.return_types.len(), 1);
+    assert_eq!(entry.return_attributes.len(), 1);
+    assert_eq!(
+        entry.return_attributes[0],
+        Some(Attribute::BuiltIn(spirv::BuiltIn::Position))
+    );
     assert!(matches!(
-        &attr_type.ty,
+        &entry.return_types[0],
         Type::Constructed(TypeName::Str("vec4"), _)
     ));
 }
 
 #[test]
 fn test_parse_tuple_attributed_return_type() {
-    let decl = single_decl(
+    let entry = single_entry(
         "#[vertex] def vertex_main(): (#[builtin(position)] vec4, #[location(0)] vec3) = result",
     );
 
-    let attributed_types = decl.attributed_return_type.as_ref().expect("Missing attributed return type");
-    assert_eq!(attributed_types.len(), 2);
+    assert_eq!(entry.return_types.len(), 2);
+    assert_eq!(entry.return_attributes.len(), 2);
 
     // Check first element: [builtin(position)] vec4
-    assert!(attributed_types[0].attributes.contains(&Attribute::BuiltIn(spirv::BuiltIn::Position)));
+    assert_eq!(
+        entry.return_attributes[0],
+        Some(Attribute::BuiltIn(spirv::BuiltIn::Position))
+    );
 
     // Check second element: [location(0)] vec3
-    assert!(attributed_types[1].attributes.contains(&Attribute::Location(0)));
+    assert_eq!(entry.return_attributes[1], Some(Attribute::Location(0)));
 }
 
 #[test]
 fn test_parse_unattributed_return_type() {
     let decl = single_decl("def helper(): vec4 = vec4 1.0f32 0.0f32 0.0f32 1.0f32");
 
-    // Should have no attributed_return_type
-    assert!(decl.attributed_return_type.is_none());
+    // Regular decl no longer has attributed_return_type field
 
     // Should have a regular type
     let ty = decl.ty.as_ref().expect("Missing return type");
@@ -312,26 +324,25 @@ fn test_parse_unattributed_return_type() {
 
 #[test]
 fn test_parse_location_attribute_on_return_type() {
-    let decl = single_decl("#[fragment] def frag(): #[location(0)] [4]f32 = result");
+    let entry = single_entry("#[fragment] def frag(): #[location(0)] [4]f32 = result");
 
-    assert_eq!(decl.attributes, vec![Attribute::Fragment]);
-
-    let attributed_types = decl.attributed_return_type.as_ref().expect("Expected attributed return type");
-    assert_eq!(attributed_types.len(), 1);
-    assert_eq!(attributed_types[0].attributes, vec![Attribute::Location(0)]);
+    assert_eq!(entry.entry_type, Attribute::Fragment);
+    assert_eq!(entry.return_types.len(), 1);
+    assert_eq!(entry.return_attributes.len(), 1);
+    assert_eq!(entry.return_attributes[0], Some(Attribute::Location(0)));
     assert_eq!(
-        attributed_types[0].ty,
+        entry.return_types[0],
         crate::ast::types::sized_array(4, crate::ast::types::f32())
     );
 }
 
 #[test]
 fn test_parse_parameter_with_builtin_attribute() {
-    let decl = single_decl("#[vertex] def main #[builtin(vertex_index)] vid:i32 : [4]f32 = result");
+    let entry = single_entry("#[vertex] def main #[builtin(vertex_index)] (vid:i32) : [4]f32 = result");
 
-    assert_eq!(decl.params.len(), 1);
+    assert_eq!(entry.params.len(), 1);
     assert_typed_param_with_attrs!(
-        &decl.params[0],
+        &entry.params[0],
         "vid",
         crate::ast::types::i32(),
         vec![Attribute::BuiltIn(spirv::BuiltIn::VertexIndex)]
@@ -340,11 +351,11 @@ fn test_parse_parameter_with_builtin_attribute() {
 
 #[test]
 fn test_parse_parameter_with_location_attribute() {
-    let decl = single_decl("#[fragment] def frag #[location(1)] color:[3]f32 : [4]f32 = result");
+    let entry = single_entry("#[fragment] def frag #[location(1)] (color:[3]f32) : [4]f32 = result");
 
-    assert_eq!(decl.params.len(), 1);
+    assert_eq!(entry.params.len(), 1);
     assert_typed_param_with_attrs!(
-        &decl.params[0],
+        &entry.params[0],
         "color",
         crate::ast::types::sized_array(3, crate::ast::types::f32()),
         vec![Attribute::Location(1)]
@@ -353,15 +364,15 @@ fn test_parse_parameter_with_location_attribute() {
 
 #[test]
 fn test_parse_multiple_builtin_types() {
-    let decl = single_decl(
-        "#[vertex] def main #[builtin(vertex_index)] vid:i32 #[builtin(instance_index)] iid:i32 : #[builtin(position)] [4]f32 = result",
+    let entry = single_entry(
+        "#[vertex] def main #[builtin(vertex_index)] (vid:i32) #[builtin(instance_index)] (iid:i32) : #[builtin(position)] [4]f32 = result",
     );
 
-    assert_eq!(decl.params.len(), 2);
+    assert_eq!(entry.params.len(), 2);
 
     // First parameter
     assert_typed_param_with_attrs!(
-        &decl.params[0],
+        &entry.params[0],
         "vid",
         crate::ast::types::i32(),
         vec![Attribute::BuiltIn(spirv::BuiltIn::VertexIndex)]
@@ -369,18 +380,18 @@ fn test_parse_multiple_builtin_types() {
 
     // Second parameter
     assert_typed_param_with_attrs!(
-        &decl.params[1],
+        &entry.params[1],
         "iid",
         crate::ast::types::i32(),
         vec![Attribute::BuiltIn(spirv::BuiltIn::InstanceIndex)]
     );
 
     // Return type
-    let attributed_types = decl.attributed_return_type.as_ref().expect("Expected attributed return type");
-    assert_eq!(attributed_types.len(), 1);
+    assert_eq!(entry.return_types.len(), 1);
+    assert_eq!(entry.return_attributes.len(), 1);
     assert_eq!(
-        attributed_types[0].attributes,
-        vec![Attribute::BuiltIn(spirv::BuiltIn::Position)]
+        entry.return_attributes[0],
+        Some(Attribute::BuiltIn(spirv::BuiltIn::Position))
     );
 }
 
@@ -503,7 +514,7 @@ fn test_parse_function_application() {
 #[test]
 fn test_parse_simple_let_in() {
     // Just verify it parses successfully - the structure is complex to validate in detail
-    let _decl = single_decl("#[vertex] def main x:i32 : i32 = let y = 5 in y + x");
+    let _entry = single_entry("#[vertex] def main (x:i32) : i32 = let y = 5 in y + x");
 }
 
 #[test]
@@ -518,7 +529,7 @@ fn test_parse_let_in_expression_only() {
 #[test]
 fn test_parse_let_in_with_lambda() {
     // Just verify it parses successfully - the lambda let..in structure is complex
-    let _decl = single_decl(r#"#[vertex] def main x:i32 : i32 = let f = \y -> y + x in f 10"#);
+    let _entry = single_entry(r#"#[vertex] def main (x:i32) : i32 = let f = \y -> y + x in f 10"#);
 }
 
 #[test]
@@ -550,7 +561,7 @@ def fragment_main(): [4]f32 = SKY_RGBA
 
     // Second: vertex entry point
     assert!(
-        matches!(&program.declarations[1], Declaration::Decl(decl) if decl.name == "vertex_main" && decl.attributes.contains(&Attribute::Vertex))
+        matches!(&program.declarations[1], Declaration::Entry(entry) if entry.name == "vertex_main" && entry.entry_type == Attribute::Vertex)
     );
 
     // Third: def SKY_RGBA
@@ -560,7 +571,7 @@ def fragment_main(): [4]f32 = SKY_RGBA
 
     // Fourth: fragment entry point
     assert!(
-        matches!(&program.declarations[3], Declaration::Decl(decl) if decl.name == "fragment_main" && decl.attributes.contains(&Attribute::Fragment))
+        matches!(&program.declarations[3], Declaration::Entry(entry) if entry.name == "fragment_main" && entry.entry_type == Attribute::Fragment)
     );
 }
 
@@ -681,7 +692,7 @@ fn test_uniform_with_initializer_error() {
 
 #[test]
 fn test_parse_multiple_shader_outputs() {
-    let decl = single_decl(
+    let entry = single_entry(
         r#"
             #[fragment] def fragment_main(): (#[location(0)] vec4, #[location(1)] vec3) =
               let color = vec4 1.0f32 0.5f32 0.2f32 1.0f32 in
@@ -690,17 +701,17 @@ fn test_parse_multiple_shader_outputs() {
             "#,
     );
 
-    assert_eq!(decl.name, "fragment_main");
-    assert!(decl.attributes.contains(&Attribute::Fragment));
+    assert_eq!(entry.name, "fragment_main");
+    assert_eq!(entry.entry_type, Attribute::Fragment);
 
-    let attributed_types = decl.attributed_return_type.as_ref().expect("Expected attributed return type");
-    assert_eq!(attributed_types.len(), 2);
+    assert_eq!(entry.return_types.len(), 2);
+    assert_eq!(entry.return_attributes.len(), 2);
 
     // Check first output: [location(0)] vec4
-    assert_eq!(attributed_types[0].attributes, vec![Attribute::Location(0)]);
+    assert_eq!(entry.return_attributes[0], Some(Attribute::Location(0)));
 
     // Check second output: [location(1)] vec3
-    assert_eq!(attributed_types[1].attributes, vec![Attribute::Location(1)]);
+    assert_eq!(entry.return_attributes[1], Some(Attribute::Location(1)));
 }
 
 #[test]
@@ -734,12 +745,12 @@ fn test_parse_complete_shader_example() {
 
     // Check vertex shader with multiple outputs
     assert!(
-        matches!(&program.declarations[2], Declaration::Decl(decl) if decl.name == "vertex_main" && decl.attributes.contains(&Attribute::Vertex) && decl.attributed_return_type.is_some())
+        matches!(&program.declarations[2], Declaration::Entry(entry) if entry.name == "vertex_main" && entry.entry_type == Attribute::Vertex)
     );
 
     // Check fragment shader with multiple outputs
     assert!(
-        matches!(&program.declarations[3], Declaration::Decl(decl) if decl.name == "fragment_main" && decl.attributes.contains(&Attribute::Fragment) && decl.attributed_return_type.is_some())
+        matches!(&program.declarations[3], Declaration::Entry(entry) if entry.name == "fragment_main" && entry.entry_type == Attribute::Fragment)
     );
 }
 
@@ -763,10 +774,34 @@ fn test_if_then_else_parsing() {
     ));
 }
 #[test]
+fn test_parse_unit_pattern_simple() {
+    // Test parsing () as a unit pattern parameter
+    let decl = single_decl("def test () : i32 = 42");
+    println!("params: {:?}", decl.params);
+    assert_eq!(decl.params.len(), 1);
+    println!("param[0] kind: {:?}", decl.params[0].kind);
+    assert!(matches!(decl.params[0].kind, PatternKind::Unit));
+}
+
+#[test]
+fn test_parse_attributed_return_simple() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    // Test parsing a single attributed return type - must be an entry point
+    let entry = single_entry(
+        "#[vertex] def test () : #[builtin(position)] vec4 = vec4 0.0f32 0.0f32 0.0f32 1.0f32",
+    );
+    println!("entry: {:?}", entry);
+    assert_eq!(entry.params.len(), 1);
+    assert!(matches!(entry.params[0].kind, PatternKind::Unit));
+    assert_eq!(entry.return_types.len(), 1);
+    assert_eq!(entry.return_attributes.len(), 1);
+}
+
+#[test]
 fn test_array_literal() {
     // Just verify it parses successfully
-    let _decl =
-        single_decl("#[vertex] def test(): #[builtin(position)] [4]f32 = [0.0f32, 0.5f32, 0.0f32, 1.0f32]");
+    let _entry =
+        single_entry("#[vertex] def test(): #[builtin(position)] [4]f32 = [0.0f32, 0.5f32, 0.0f32, 1.0f32]");
 }
 
 #[test]
@@ -786,7 +821,7 @@ fn test_parse_array_literal() {
 
 #[test]
 fn test_parse_attributed_return_type() {
-    let decl = single_decl(
+    let entry = single_entry(
         r#"#[vertex]
 def test_vertex : #[builtin(position)] vec4 =
   let angle = 1.0f32 in
@@ -794,13 +829,14 @@ def test_vertex : #[builtin(position)] vec4 =
   vec4 s s 0.0f32 1.0f32"#,
     );
 
-    assert_eq!(decl.name, "test_vertex");
-    assert!(decl.attributed_return_type.is_some());
+    assert_eq!(entry.name, "test_vertex");
+    assert_eq!(entry.return_types.len(), 1);
+    assert_eq!(entry.return_attributes.len(), 1);
 }
 
 #[test]
 fn test_parse_unique_type() {
-    let decl = single_decl("def foo x:*i32 : i32 = x");
+    let decl = single_decl("def foo (x:*i32) : i32 = x");
 
     assert_eq!(decl.params.len(), 1);
     let param_ty = decl.params[0].pattern_type().expect("Expected typed parameter");
@@ -810,7 +846,7 @@ fn test_parse_unique_type() {
 
 #[test]
 fn test_parse_unique_array_type() {
-    let decl = single_decl("def bar arr:*[3]f32 : f32 = arr[0]");
+    let decl = single_decl("def bar (arr:*[3]f32) : f32 = arr[0]");
 
     assert_eq!(decl.params.len(), 1);
     let param_ty = decl.params[0].pattern_type().expect("Expected typed parameter");
@@ -821,7 +857,7 @@ fn test_parse_unique_array_type() {
 #[test]
 fn test_parse_nested_unique() {
     // Nested arrays with unique at different levels
-    let decl = single_decl("def baz x:*[2][3]i32 : i32 = x[0][0]");
+    let decl = single_decl("def baz (x:*[2][3]i32) : i32 = x[0][0]");
 
     assert_eq!(decl.params.len(), 1);
     let param_ty = decl.params[0].pattern_type().expect("Expected typed parameter");
@@ -1683,7 +1719,7 @@ fn test_parse_loop_with_nested_lets() {
 
 #[test]
 fn test_parse_function_with_typed_patterns() {
-    let decl = single_decl("def add x:i32 y:i32 : i32 = x + y");
+    let decl = single_decl("def add (x:i32) (y:i32) : i32 = x + y");
     assert_eq!(decl.name, "add");
     assert_eq!(decl.params.len(), 2);
 

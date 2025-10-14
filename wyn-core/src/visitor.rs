@@ -32,6 +32,10 @@ pub trait Visitor: Sized {
         walk_decl(self, d)
     }
 
+    fn visit_entry_decl(&mut self, e: &EntryDecl) -> ControlFlow<Self::Break> {
+        walk_entry_decl(self, e)
+    }
+
     fn visit_uniform_decl(&mut self, u: &UniformDecl) -> ControlFlow<Self::Break> {
         walk_uniform_decl(self, u)
     }
@@ -140,6 +144,7 @@ pub fn walk_program<V: Visitor>(v: &mut V, p: &Program) -> ControlFlow<V::Break>
 pub fn walk_declaration<V: Visitor>(v: &mut V, d: &Declaration) -> ControlFlow<V::Break> {
     match d {
         Declaration::Decl(decl) => v.visit_decl(decl),
+        Declaration::Entry(entry) => v.visit_entry_decl(entry),
         Declaration::Uniform(uniform) => v.visit_uniform_decl(uniform),
         Declaration::Val(val) => v.visit_val_decl(val),
         Declaration::TypeBind(_) => {
@@ -174,15 +179,23 @@ pub fn walk_decl<V: Visitor>(v: &mut V, d: &Decl) -> ControlFlow<V::Break> {
         v.visit_type(ty)?;
     }
 
-    // Visit attributed return type if present
-    if let Some(attr_types) = &d.attributed_return_type {
-        for attr_type in attr_types {
-            v.visit_type(&attr_type.ty)?;
-        }
+    // Visit body
+    v.visit_expression(&d.body)
+}
+
+pub fn walk_entry_decl<V: Visitor>(v: &mut V, e: &EntryDecl) -> ControlFlow<V::Break> {
+    // Visit parameters
+    for param in &e.params {
+        v.visit_pattern(param)?;
+    }
+
+    // Visit return types
+    for ty in &e.return_types {
+        v.visit_type(ty)?;
     }
 
     // Visit body
-    v.visit_expression(&d.body)
+    v.visit_expression(&e.body)
 }
 
 pub fn walk_uniform_decl<V: Visitor>(v: &mut V, u: &UniformDecl) -> ControlFlow<V::Break> {

@@ -103,6 +103,7 @@ impl Mirize {
     fn mirize_declaration(&mut self, decl: &Declaration) -> Result<()> {
         match decl {
             Declaration::Decl(d) => self.mirize_decl(d),
+            Declaration::Entry(e) => self.mirize_entry_decl(e),
             Declaration::Uniform(_) => {
                 // Uniforms will be handled separately in SPIR-V codegen
                 Ok(())
@@ -124,10 +125,11 @@ impl Mirize {
     }
 
     fn mirize_decl(&mut self, decl: &Decl) -> Result<()> {
-        // Extract parameter types and return type
+        // Extract parameter types (skip Unit patterns)
         let param_types: Vec<(String, Type)> = decl
             .params
             .iter()
+            .filter(|p| !matches!(p.kind, PatternKind::Unit))
             .map(|p| {
                 let name = p.simple_name().ok_or_else(|| {
                     CompilerError::MirError("Complex patterns not supported in MIR".to_string())
@@ -142,20 +144,9 @@ impl Mirize {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // Get return type - either from ty or from attributed_return_type
+        // Get return type from ty
         let return_type = if let Some(ty) = &decl.ty {
             ty.clone()
-        } else if let Some(attr_types) = &decl.attributed_return_type {
-            // Build a tuple type from the attributed types
-            if attr_types.len() == 1 {
-                attr_types[0].ty.clone()
-            } else {
-                use crate::ast::TypeName;
-                Type::Constructed(
-                    TypeName::Str("tuple"),
-                    attr_types.iter().map(|at| at.ty.clone()).collect(),
-                )
-            }
         } else {
             return Err(CompilerError::MirError(
                 "Function missing return type annotation".to_string(),
@@ -183,11 +174,8 @@ impl Mirize {
                 .collect();
 
         // Set function attributes before building body
-        self.builder.set_function_attributes(
-            param_attrs,
-            decl.return_attributes.clone(),
-            decl.attributed_return_type.clone(),
-        );
+        // Regular decl has no attributed return types (those are only in EntryDecl)
+        self.builder.set_function_attributes(param_attrs, vec![], None);
 
         // Bind parameters in environment
         for (idx, (name, _)) in param_types.iter().enumerate() {
@@ -200,6 +188,96 @@ impl Mirize {
 
         // Convert body expression to MIR
         let result_reg = self.mirize_expression(&decl.body)?;
+
+        // Return the result
+        self.builder.build_return(result_reg);
+
+        // Finalize function
+        self.builder.end_function();
+
+        // Clear environment for next function
+        self.env.clear();
+
+        Ok(())
+    }
+
+    fn mirize_entry_decl(&mut self, entry: &EntryDecl) -> Result<()> {
+        // Extract parameter types (skip Unit patterns)
+        let param_types: Vec<(String, Type)> = entry
+            .params
+            .iter()
+            .filter(|p| !matches!(p.kind, PatternKind::Unit))
+            .map(|p| {
+                let name = p.simple_name().ok_or_else(|| {
+                    CompilerError::MirError("Complex patterns not supported in MIR".to_string())
+                })?;
+                let ty = p.pattern_type().ok_or_else(|| {
+                    CompilerError::MirError(format!(
+                        "Entry point parameter '{}' missing type annotation",
+                        name
+                    ))
+                })?;
+                Ok((name.to_string(), ty.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Build return type from parallel arrays
+        let return_type = if entry.return_types.len() == 1 {
+            entry.return_types[0].clone()
+        } else {
+            use crate::ast::TypeName;
+            Type::Constructed(TypeName::Str("tuple"), entry.return_types.clone())
+        };
+
+        // Start building the function
+        let func_id = self.builder.begin_function(entry.name.clone(), param_types.clone(), return_type);
+
+        // Entry points are always entry points
+        self.entry_points.push(func_id);
+
+        // Extract parameter attributes (skip Unit patterns)
+        let param_attrs: Vec<Vec<Attribute>> =
+            entry
+                .params
+                .iter()
+                .filter(|p| !matches!(p.kind, PatternKind::Unit))
+                .map(|p| {
+                    if let PatternKind::Attributed(attrs, _) = &p.kind { attrs.clone() } else { Vec::new() }
+                })
+                .collect();
+
+        // Convert return_attributes to AttributedType format for MIR
+        let attributed_return_types: Vec<AttributedType> = entry
+            .return_types
+            .iter()
+            .zip(entry.return_attributes.iter())
+            .map(|(ty, attr_opt)| {
+                let attributes = if let Some(attr) = attr_opt { vec![attr.clone()] } else { vec![] };
+                AttributedType {
+                    attributes,
+                    ty: ty.clone(),
+                }
+            })
+            .collect();
+
+        // Set function attributes before building body
+        // Convert Option<Attribute> to Vec<Attribute> by filtering out Nones
+        let return_attrs: Vec<Attribute> =
+            entry.return_attributes.iter().filter_map(|opt| opt.clone()).collect();
+
+        self.builder.set_function_attributes(param_attrs, return_attrs, Some(attributed_return_types));
+
+        // Bind parameters in environment
+        for (idx, (name, _)) in param_types.iter().enumerate() {
+            let param_reg = self
+                .builder
+                .get_param(idx)
+                .ok_or_else(|| CompilerError::MirError(format!("Parameter {} not found", idx)))?;
+            self.env.insert(name.clone(), param_reg);
+        }
+
+        // Convert body expression to MIR
+        let result_reg = self.mirize_expression(&entry.body)?;
 
         // Return the result
         self.builder.build_return(result_reg);
@@ -430,7 +508,7 @@ mod tests {
 
     #[test]
     fn test_simple_function() {
-        let source = "def add(#[location(0)] x: i32, #[location(1)] y: i32): i32 = x + y";
+        let source = "def add(#[location(0)] x: i32) (#[location(1)] y: i32): i32 = x + y";
         let tokens = lexer::tokenize(source).unwrap();
         let mut parser = Parser::new(tokens);
         let program = parser.parse().unwrap();
