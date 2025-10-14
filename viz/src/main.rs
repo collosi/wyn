@@ -5,13 +5,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use wgpu::{
     Color, ColorTargetState, CommandEncoderDescriptor, DeviceDescriptor, FragmentState, Instance,
-    InstanceDescriptor, LoadOp, MultisampleState, Operations, PipelineLayoutDescriptor,
-    PowerPreference, PresentMode, PrimitiveState, RenderPipeline, RequestAdapterOptions,
-    ShaderModuleDescriptor, ShaderModuleDescriptorPassthrough, StoreOp, SurfaceConfiguration, TextureUsages, Trace, VertexState,
+    InstanceDescriptor, LoadOp, MultisampleState, Operations, PipelineLayoutDescriptor, PowerPreference,
+    PresentMode, PrimitiveState, RenderPipeline, RequestAdapterOptions, ShaderModuleDescriptor,
+    ShaderModuleDescriptorPassthrough, StoreOp, SurfaceConfiguration, TextureUsages, Trace, VertexState,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -22,11 +22,7 @@ use winit::window::{Window, WindowAttributes};
 // --- CLI ---------------------------------------------------------------------
 
 #[derive(Parser, Debug)]
-#[command(
-    name = "wgpu-spv",
-    about = "Tiny wgpu demo that builds a pipeline from SPIR-V",
-    version
-)]
+#[command(name = "wgpu-spv", about = "Tiny wgpu demo that builds a pipeline from SPIR-V", version)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -76,9 +72,7 @@ impl State {
     async fn new(window: Arc<Window>, spec: &PipelineSpec) -> Result<Self> {
         let instance = Instance::new(&InstanceDescriptor::default());
 
-        let surface = instance
-            .create_surface(window.clone())
-            .context("failed to create wgpu surface")?;
+        let surface = instance.create_surface(window.clone()).context("failed to create wgpu surface")?;
 
         // v26: returns Result<Adapter, RequestAdapterError>
         let adapter = instance
@@ -92,10 +86,14 @@ impl State {
 
         // Check if SPIRV_SHADER_PASSTHROUGH is supported
         let adapter_features = adapter.features();
-        let spirv_passthrough_supported = adapter_features.contains(wgpu::Features::SPIRV_SHADER_PASSTHROUGH);
-        
-        println!("SPIRV_SHADER_PASSTHROUGH supported: {}", spirv_passthrough_supported);
-        
+        let spirv_passthrough_supported =
+            adapter_features.contains(wgpu::Features::SPIRV_SHADER_PASSTHROUGH);
+
+        println!(
+            "SPIRV_SHADER_PASSTHROUGH supported: {}",
+            spirv_passthrough_supported
+        );
+
         // v26: request_device takes a single descriptor; trace is in the descriptor
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor {
@@ -113,11 +111,8 @@ impl State {
             .context("failed to create logical device")?;
 
         let caps = surface.get_capabilities(&adapter);
-        let format = caps
-            .formats
-            .get(0)
-            .copied()
-            .ok_or_else(|| anyhow!("surface reports no supported formats"))?;
+        let format =
+            caps.formats.get(0).copied().ok_or_else(|| anyhow!("surface reports no supported formats"))?;
         let size = window.inner_size();
 
         let config = SurfaceConfiguration {
@@ -138,7 +133,11 @@ impl State {
 
         // === Build pipeline from the chosen mode ==============================
         let pipeline = match spec {
-            PipelineSpec::VertexFragment { path, vertex, fragment } => {
+            PipelineSpec::VertexFragment {
+                path,
+                vertex,
+                fragment,
+            } => {
                 let module = load_spirv_module(&device, path)
                     .with_context(|| format!("load SPIR-V module {:?}", path))?;
 
@@ -197,15 +196,11 @@ impl State {
     fn render(&mut self) {
         match self.surface.get_current_texture() {
             Ok(frame) => {
-                let view = frame
-                    .texture
-                    .create_view(&wgpu::TextureViewDescriptor::default());
+                let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-                let mut encoder = self
-                    .device
-                    .create_command_encoder(&CommandEncoderDescriptor {
-                        label: Some("encoder"),
-                    });
+                let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                    label: Some("encoder"),
+                });
 
                 {
                     let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -262,7 +257,7 @@ impl State {
 // Load a .spv file and create a ShaderModule using the SPIR-V helper
 fn load_spirv_module(device: &wgpu::Device, path: &Path) -> Result<wgpu::ShaderModule> {
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    
+
     // Check if SPIRV_SHADER_PASSTHROUGH is supported
     if device.features().contains(wgpu::Features::SPIRV_SHADER_PASSTHROUGH) {
         // Convert bytes to u32 words for SPIR-V passthrough
@@ -271,45 +266,48 @@ fn load_spirv_module(device: &wgpu::Device, path: &Path) -> Result<wgpu::ShaderM
             let word = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
             spirv_data.push(word);
         }
-        
+
         // Use create_shader_module_passthrough to bypass wgpu's SPIR-V validation
         // This allows loading SPIR-V with unsupported capabilities like Linkage
         device.push_error_scope(wgpu::ErrorFilter::Validation);
-        
+
         let shader_module = unsafe {
             device.create_shader_module_passthrough(ShaderModuleDescriptorPassthrough::SpirV(
                 wgpu::ShaderModuleDescriptorSpirV {
                     label: Some(&format!("{}", path.display())),
                     source: std::borrow::Cow::Borrowed(&spirv_data),
-                }
+                },
             ))
         };
-        
+
         // Check for validation errors even with passthrough
         let error_option = pollster::block_on(device.pop_error_scope());
         if let Some(error) = error_option {
-            return Err(anyhow::Error::msg(format!("Shader validation failed (passthrough): {}", error)));
+            return Err(anyhow::Error::msg(format!(
+                "Shader validation failed (passthrough): {}",
+                error
+            )));
         }
-        
+
         Ok(shader_module)
     } else {
         // Fall back to regular shader module creation with validation
         let source = wgpu::util::make_spirv(&bytes);
-        
+
         // Push an error scope to catch shader validation errors
         device.push_error_scope(wgpu::ErrorFilter::Validation);
-        
+
         let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(&format!("{}", path.display())),
             source,
         });
-        
+
         // Check for validation errors
         let error_option = pollster::block_on(device.pop_error_scope());
         if let Some(error) = error_option {
             return Err(anyhow::Error::msg(format!("Shader validation failed: {}", error)));
         }
-        
+
         Ok(shader_module)
     }
 }
@@ -323,8 +321,7 @@ struct App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let window = match event_loop
-            .create_window(WindowAttributes::default().with_title("wgpu + SPIR-V"))
+        let window = match event_loop.create_window(WindowAttributes::default().with_title("wgpu + SPIR-V"))
         {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -376,7 +373,7 @@ impl ApplicationHandler for App {
 
 async fn show_device_info() -> Result<()> {
     let instance = Instance::new(&InstanceDescriptor::default());
-    
+
     // Try to get an adapter
     let adapter = instance
         .request_adapter(&RequestAdapterOptions {
@@ -386,11 +383,11 @@ async fn show_device_info() -> Result<()> {
         })
         .await
         .context("No suitable adapter found")?;
-    
+
     let info = adapter.get_info();
     let features = adapter.features();
     let limits = adapter.limits();
-    
+
     println!("GPU Device Information:");
     println!("  Name: {}", info.name);
     println!("  Vendor: {:?}", info.vendor);
@@ -399,31 +396,41 @@ async fn show_device_info() -> Result<()> {
     println!("  Driver: {}", info.driver);
     println!("  Driver Info: {}", info.driver_info);
     println!("  Backend: {:?}", info.backend);
-    
+
     println!("\nSupported Features:");
     println!("  {:#?}", features);
-    
+
     println!("\nDevice Limits:");
     println!("  Max Texture Dimension 1D: {}", limits.max_texture_dimension_1d);
     println!("  Max Texture Dimension 2D: {}", limits.max_texture_dimension_2d);
     println!("  Max Texture Dimension 3D: {}", limits.max_texture_dimension_3d);
     println!("  Max Bind Groups: {}", limits.max_bind_groups);
-    println!("  Max Uniform Buffer Binding Size: {}", limits.max_uniform_buffer_binding_size);
-    println!("  Max Storage Buffer Binding Size: {}", limits.max_storage_buffer_binding_size);
-    
+    println!(
+        "  Max Uniform Buffer Binding Size: {}",
+        limits.max_uniform_buffer_binding_size
+    );
+    println!(
+        "  Max Storage Buffer Binding Size: {}",
+        limits.max_storage_buffer_binding_size
+    );
+
     Ok(())
 }
 
 fn main() -> Result<()> {
     // Parse CLI and map to our pipeline spec
     let cli = Cli::parse();
-    
+
     match cli.command {
         Command::Info => {
             pollster::block_on(show_device_info())?;
             return Ok(());
         }
-        Command::VertexFragment { path, vertex, fragment } => {
+        Command::VertexFragment {
+            path,
+            vertex,
+            fragment,
+        } => {
             let spec = PipelineSpec::VertexFragment {
                 path,
                 vertex,
