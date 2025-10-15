@@ -96,149 +96,30 @@ impl TypeChecker {
         let zip_scheme = TypeScheme::Monotype(zip_body);
         self.scope_stack.insert("zip".to_string(), zip_scheme);
 
-        // Vector constructors
-        // vec2: f32 -> f32 -> vec2
-        let vec2_type = types::vec2();
-        let vec2_body = Type::arrow(types::f32(), Type::arrow(types::f32(), vec2_type));
-        self.scope_stack.insert("vec2".to_string(), TypeScheme::Monotype(vec2_body));
+        // Array to vector conversion: to_vec
+        // to_vec: ∀n a. [n]a -> Vec(n, a)
+        let var_n = self.context.new_variable();
+        let var_a = self.context.new_variable();
+        let array_input = Type::Constructed(TypeName::Array, vec![var_n.clone(), var_a.clone()]);
+        let vec_output = Type::Constructed(TypeName::Vec, vec![var_n, var_a]);
+        let to_vec_body = Type::arrow(array_input, vec_output);
+        self.scope_stack.insert("to_vec".to_string(), TypeScheme::Monotype(to_vec_body));
 
-        // vec3: f32 -> f32 -> f32 -> vec3
-        let vec3_type = types::vec3();
-        let vec3_body = Type::arrow(
-            types::f32(),
-            Type::arrow(types::f32(), Type::arrow(types::f32(), vec3_type)),
-        );
-        self.scope_stack.insert("vec3".to_string(), TypeScheme::Monotype(vec3_body));
+        // Vector operations
+        // dot: ∀a b. a -> a -> b
+        // Polymorphic: takes two values of same type, returns a value (likely scalar)
+        // The SPIR-V validator will ensure the types are actually compatible
+        let var_a = self.context.new_variable();
+        let var_b = self.context.new_variable();
+        let dot_body = Type::arrow(var_a.clone(), Type::arrow(var_a, var_b));
+        self.scope_stack.insert("dot".to_string(), TypeScheme::Monotype(dot_body));
 
-        // vec4: f32 -> f32 -> f32 -> f32 -> vec4
-        let vec4_type = types::vec4();
-        let vec4_body = Type::arrow(
-            types::f32(),
-            Type::arrow(
-                types::f32(),
-                Type::arrow(types::f32(), Type::arrow(types::f32(), vec4_type)),
-            ),
-        );
-        self.scope_stack.insert("vec4".to_string(), TypeScheme::Monotype(vec4_body));
-
-        // Array to vector conversions: to_vec2, to_vec3, to_vec4
-        // to_vec2: [2]f32 -> vec2
-        let to_vec2_input = types::sized_array(2, types::f32());
-        let to_vec2_body = Type::arrow(to_vec2_input, types::vec2());
-        self.scope_stack.insert("to_vec2".to_string(), TypeScheme::Monotype(to_vec2_body));
-
-        // to_vec3: [3]f32 -> vec3
-        let to_vec3_input = types::sized_array(3, types::f32());
-        let to_vec3_body = Type::arrow(to_vec3_input, types::vec3());
-        self.scope_stack.insert("to_vec3".to_string(), TypeScheme::Monotype(to_vec3_body));
-
-        // to_vec4: [4]f32 -> vec4
-        let to_vec4_input = types::sized_array(4, types::f32());
-        let to_vec4_body = Type::arrow(to_vec4_input, types::vec4());
-        self.scope_stack.insert("to_vec4".to_string(), TypeScheme::Monotype(to_vec4_body));
-
-        // Similarly for ivec2, ivec3, ivec4
-        let ivec2_type = types::ivec2();
-        let ivec2_body = Type::arrow(types::i32(), Type::arrow(types::i32(), ivec2_type));
-        self.scope_stack.insert("ivec2".to_string(), TypeScheme::Monotype(ivec2_body));
-
-        let ivec3_type = types::ivec3();
-        let ivec3_body = Type::arrow(
-            types::i32(),
-            Type::arrow(types::i32(), Type::arrow(types::i32(), ivec3_type)),
-        );
-        self.scope_stack.insert("ivec3".to_string(), TypeScheme::Monotype(ivec3_body));
-
-        let ivec4_type = types::ivec4();
-        let ivec4_body = Type::arrow(
-            types::i32(),
-            Type::arrow(
-                types::i32(),
-                Type::arrow(types::i32(), Type::arrow(types::i32(), ivec4_type)),
-            ),
-        );
-        self.scope_stack.insert("ivec4".to_string(), TypeScheme::Monotype(ivec4_body));
-
-        // Operator functions for arithmetic operations
-        // f32 operations: op_add_f32, op_subtract_f32, op_multiply_f32, op_divide_f32
-        let f32_binary_op = Type::arrow(types::f32(), Type::arrow(types::f32(), types::f32()));
-        self.scope_stack.insert(
-            "op_add_f32".to_string(),
-            TypeScheme::Monotype(f32_binary_op.clone()),
-        );
-        self.scope_stack.insert(
-            "op_subtract_f32".to_string(),
-            TypeScheme::Monotype(f32_binary_op.clone()),
-        );
-        self.scope_stack.insert(
-            "op_multiply_f32".to_string(),
-            TypeScheme::Monotype(f32_binary_op.clone()),
-        );
-        self.scope_stack.insert("op_divide_f32".to_string(), TypeScheme::Monotype(f32_binary_op));
-
-        // i32 operations: op_add_i32, op_subtract_i32, op_multiply_i32, op_divide_i32
-        let i32_binary_op = Type::arrow(types::i32(), Type::arrow(types::i32(), types::i32()));
-        self.scope_stack.insert(
-            "op_add_i32".to_string(),
-            TypeScheme::Monotype(i32_binary_op.clone()),
-        );
-        self.scope_stack.insert(
-            "op_subtract_i32".to_string(),
-            TypeScheme::Monotype(i32_binary_op.clone()),
-        );
-        self.scope_stack.insert(
-            "op_multiply_i32".to_string(),
-            TypeScheme::Monotype(i32_binary_op.clone()),
-        );
-        self.scope_stack.insert("op_divide_i32".to_string(), TypeScheme::Monotype(i32_binary_op));
-
-        // vec2 operations
-        let vec2_binary_op = Type::arrow(types::vec2(), Type::arrow(types::vec2(), types::vec2()));
-        self.scope_stack.insert(
-            "op_add_vec2".to_string(),
-            TypeScheme::Monotype(vec2_binary_op.clone()),
-        );
-        self.scope_stack.insert(
-            "op_subtract_vec2".to_string(),
-            TypeScheme::Monotype(vec2_binary_op.clone()),
-        );
-        self.scope_stack.insert(
-            "op_multiply_vec2".to_string(),
-            TypeScheme::Monotype(vec2_binary_op.clone()),
-        );
-        self.scope_stack.insert("op_divide_vec2".to_string(), TypeScheme::Monotype(vec2_binary_op));
-
-        // vec3 operations
-        let vec3_binary_op = Type::arrow(types::vec3(), Type::arrow(types::vec3(), types::vec3()));
-        self.scope_stack.insert(
-            "op_add_vec3".to_string(),
-            TypeScheme::Monotype(vec3_binary_op.clone()),
-        );
-        self.scope_stack.insert(
-            "op_subtract_vec3".to_string(),
-            TypeScheme::Monotype(vec3_binary_op.clone()),
-        );
-        self.scope_stack.insert(
-            "op_multiply_vec3".to_string(),
-            TypeScheme::Monotype(vec3_binary_op.clone()),
-        );
-        self.scope_stack.insert("op_divide_vec3".to_string(), TypeScheme::Monotype(vec3_binary_op));
-
-        // vec4 operations
-        let vec4_binary_op = Type::arrow(types::vec4(), Type::arrow(types::vec4(), types::vec4()));
-        self.scope_stack.insert(
-            "op_add_vec4".to_string(),
-            TypeScheme::Monotype(vec4_binary_op.clone()),
-        );
-        self.scope_stack.insert(
-            "op_subtract_vec4".to_string(),
-            TypeScheme::Monotype(vec4_binary_op.clone()),
-        );
-        self.scope_stack.insert(
-            "op_multiply_vec4".to_string(),
-            TypeScheme::Monotype(vec4_binary_op.clone()),
-        );
-        self.scope_stack.insert("op_divide_vec4".to_string(), TypeScheme::Monotype(vec4_binary_op));
+        // length: ∀a b. a -> b
+        // Polymorphic: takes a vector, returns a scalar
+        let var_a = self.context.new_variable();
+        let var_b = self.context.new_variable();
+        let length_body = Type::arrow(var_a, var_b);
+        self.scope_stack.insert("length".to_string(), TypeScheme::Monotype(length_body));
 
         // Trigonometric functions: f32 -> f32
         let trig_type = Type::arrow(types::f32(), types::f32());
@@ -253,39 +134,8 @@ impl TypeChecker {
     }
 
     fn register_vector_fields(&mut self) {
-        // f32 vector fields
-        // vec2 fields
-        self.record_field_map.insert(("vec2".to_string(), "x".to_string()), types::f32());
-        self.record_field_map.insert(("vec2".to_string(), "y".to_string()), types::f32());
-
-        // vec3 fields
-        self.record_field_map.insert(("vec3".to_string(), "x".to_string()), types::f32());
-        self.record_field_map.insert(("vec3".to_string(), "y".to_string()), types::f32());
-        self.record_field_map.insert(("vec3".to_string(), "z".to_string()), types::f32());
-
-        // vec4 fields
-        self.record_field_map.insert(("vec4".to_string(), "x".to_string()), types::f32());
-        self.record_field_map.insert(("vec4".to_string(), "y".to_string()), types::f32());
-        self.record_field_map.insert(("vec4".to_string(), "z".to_string()), types::f32());
-        self.record_field_map.insert(("vec4".to_string(), "w".to_string()), types::f32());
-
-        // i32 vector fields
-        // ivec2 fields
-        self.record_field_map.insert(("ivec2".to_string(), "x".to_string()), types::i32());
-        self.record_field_map.insert(("ivec2".to_string(), "y".to_string()), types::i32());
-
-        // ivec3 fields
-        self.record_field_map.insert(("ivec3".to_string(), "x".to_string()), types::i32());
-        self.record_field_map.insert(("ivec3".to_string(), "y".to_string()), types::i32());
-        self.record_field_map.insert(("ivec3".to_string(), "z".to_string()), types::i32());
-
-        // ivec4 fields
-        self.record_field_map.insert(("ivec4".to_string(), "x".to_string()), types::i32());
-        self.record_field_map.insert(("ivec4".to_string(), "y".to_string()), types::i32());
-        self.record_field_map.insert(("ivec4".to_string(), "z".to_string()), types::i32());
-        self.record_field_map.insert(("ivec4".to_string(), "w".to_string()), types::i32());
-
-        // TODO: Add other vector types (uvec, bvec, dvec, f16vec) when we have proper types for them
+        // Vector field access is now handled directly in the FieldAccess case
+        // Vec(size, element_type) fields (x, y, z, w) return element_type
     }
 
     /// Register a record type with its field mappings
@@ -814,34 +664,56 @@ impl TypeChecker {
 
                     // Extract the type name from the expression type
                     match expr_type {
-                        Type::Constructed(type_name, _) => {
-                            // Get the type name as a string
-                            let type_name_str = match &type_name {
-                                TypeName::Str(s) => s.to_string(),
-                                TypeName::Array => "array".to_string(),
-                                TypeName::Size(n) => n.to_string(),
-                                TypeName::SizeVar(name) => name.clone(),
-                                TypeName::Unique => "unique".to_string(),
-                                TypeName::Record(_) => "record".to_string(),
-                                TypeName::Sum(_) => "sum".to_string(),
-                                TypeName::Existential(_, _) => "existential".to_string(),
-                                TypeName::NamedParam(_, _) => "named_param".to_string(),
-                            };
-
-                            // Look up field in builtin registry (for vector types)
-                            if let Some(field_type) =
-                                self.builtin_registry.get_field_type(&type_name_str, field)
-                            {
-                                Ok(field_type)
-                            } else if let Some(field_type) =
-                                self.record_field_map.get(&(type_name_str.clone(), field.clone()))
-                            {
-                                Ok(field_type.clone())
+                        Type::Constructed(type_name, ref args) => {
+                            // Handle Vec type specially for field access
+                            if matches!(type_name, TypeName::Vec) {
+                                // Vec(size, element_type)
+                                // Fields x, y, z, w return the element type
+                                if let Some(element_type) = args.get(1) {
+                                    // Check if field is valid (x, y, z, w)
+                                    if matches!(field.as_str(), "x" | "y" | "z" | "w") {
+                                        Ok(element_type.clone())
+                                    } else {
+                                        Err(CompilerError::TypeError(format!(
+                                            "Vector type has no field '{}'",
+                                            field
+                                        )))
+                                    }
+                                } else {
+                                    Err(CompilerError::TypeError(
+                                        "Malformed Vec type - missing element type".to_string(),
+                                    ))
+                                }
                             } else {
-                                Err(CompilerError::TypeError(format!(
-                                    "Type '{}' has no field '{}'",
-                                    type_name_str, field
-                                )))
+                                // Get the type name as a string for other types
+                                let type_name_str = match &type_name {
+                                    TypeName::Str(s) => s.to_string(),
+                                    TypeName::Array => "array".to_string(),
+                                    TypeName::Vec => "vec".to_string(),
+                                    TypeName::Size(n) => n.to_string(),
+                                    TypeName::SizeVar(name) => name.clone(),
+                                    TypeName::Unique => "unique".to_string(),
+                                    TypeName::Record(_) => "record".to_string(),
+                                    TypeName::Sum(_) => "sum".to_string(),
+                                    TypeName::Existential(_, _) => "existential".to_string(),
+                                    TypeName::NamedParam(_, _) => "named_param".to_string(),
+                                };
+
+                                // Look up field in builtin registry (for vector types)
+                                if let Some(field_type) =
+                                    self.builtin_registry.get_field_type(&type_name_str, field)
+                                {
+                                    Ok(field_type)
+                                } else if let Some(field_type) =
+                                    self.record_field_map.get(&(type_name_str.clone(), field.clone()))
+                                {
+                                    Ok(field_type.clone())
+                                } else {
+                                    Err(CompilerError::TypeError(format!(
+                                        "Type '{}' has no field '{}'",
+                                        type_name_str, field
+                                    )))
+                                }
                             }
                         }
                         _ => Err(CompilerError::TypeError(format!(

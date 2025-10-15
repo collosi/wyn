@@ -674,30 +674,6 @@ impl Parser {
                 Ok(types::f32())
             }
             // Vector types
-            Some(Token::Identifier(name)) if name == "vec2" => {
-                self.advance();
-                Ok(types::vec2())
-            }
-            Some(Token::Identifier(name)) if name == "vec3" => {
-                self.advance();
-                Ok(types::vec3())
-            }
-            Some(Token::Identifier(name)) if name == "vec4" => {
-                self.advance();
-                Ok(types::vec4())
-            }
-            Some(Token::Identifier(name)) if name == "ivec2" => {
-                self.advance();
-                Ok(types::ivec2())
-            }
-            Some(Token::Identifier(name)) if name == "ivec3" => {
-                self.advance();
-                Ok(types::ivec3())
-            }
-            Some(Token::Identifier(name)) if name == "ivec4" => {
-                self.advance();
-                Ok(types::ivec4())
-            }
             // Matrix types
             Some(Token::Identifier(name)) if name == "mat2" => {
                 self.advance();

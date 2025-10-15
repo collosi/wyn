@@ -1447,44 +1447,13 @@ impl CodeGenerator {
                         }
                     }
                 }
-                // Handle array to vector conversions: to_vec2, to_vec3, to_vec4
-                else if func_name == "to_vec2" || func_name == "to_vec3" || func_name == "to_vec4" {
-                    if args.len() != 1 {
-                        return Err(CompilerError::SpirvError(format!(
-                            "{} requires exactly one argument",
-                            func_name
-                        )));
-                    }
-
-                    let array_value = self.generate_expression(&args[0])?;
-
-                    // Determine the target vector type and size
-                    let (vec_type, size) = match func_name.as_str() {
-                        "to_vec2" => (self.get_or_create_type(&types::vec2())?.id, 2),
-                        "to_vec3" => (self.get_or_create_type(&types::vec3())?.id, 3),
-                        "to_vec4" => (self.get_or_create_type(&types::vec4())?.id, 4),
-                        _ => unreachable!(),
-                    };
-
-                    // Extract each array element and construct the vector using OpCompositeConstruct
-                    // OpCopyLogical doesn't work for array->vector conversion (different structures)
-                    let mut components = Vec::new();
-                    for i in 0..size {
-                        let component = self.builder.composite_extract(
-                            self.f32_type,
-                            None,
-                            array_value.id,
-                            vec![i as u32],
-                        )?;
-                        components.push(component);
-                    }
-
-                    let vec_value = self.builder.composite_construct(vec_type, None, components)?;
-
-                    Ok(Value {
-                        id: vec_value,
-                        type_id: vec_type,
-                    })
+                // Handle array to vector conversion: to_vec
+                // TODO: This needs type information from type checker to determine result type
+                // For now, not implemented in codegen
+                else if func_name == "to_vec" {
+                    return Err(CompilerError::SpirvError(
+                        "to_vec not yet implemented in codegen - needs type info from type checker".to_string(),
+                    ));
                 }
                 // Check if it's a builtin function
                 else if self.builtin_registry.is_builtin(func_name) {

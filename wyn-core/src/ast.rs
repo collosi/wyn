@@ -157,6 +157,7 @@ pub type Expression = Node<ExprKind>;
 pub enum TypeName {
     Str(&'static str),                   // Basic types: "int", "float", "tuple", "->", etc.
     Array,                               // Array type constructor (takes size and element type)
+    Vec,                                 // Vector type constructor (takes size and element type)
     Size(usize),                         // Array size literal
     SizeVar(String),                     // Size variable: [n]
     Unique,                              // Uniqueness/consuming type marker (corresponds to "*" prefix)
@@ -171,6 +172,7 @@ impl std::fmt::Display for TypeName {
         match self {
             TypeName::Str(s) => write!(f, "{}", s),
             TypeName::Array => write!(f, "Array"),
+            TypeName::Vec => write!(f, "Vec"),
             TypeName::Size(n) => write!(f, "{}", n),
             TypeName::SizeVar(name) => write!(f, "{}", name),
             TypeName::Unique => write!(f, "*"),
@@ -213,6 +215,41 @@ impl std::fmt::Display for TypeName {
 impl polytype::Name for TypeName {
     fn arrow() -> Self {
         TypeName::Str("->")
+    }
+
+    fn show(&self) -> String {
+        match self {
+            TypeName::Str(s) => s.to_string(),
+            TypeName::Array => "Array".to_string(),
+            TypeName::Vec => "Vec".to_string(),
+            TypeName::Size(n) => format!("Size({})", n),
+            TypeName::SizeVar(v) => format!("[{}]", v),
+            TypeName::Unique => "*".to_string(),
+            TypeName::Record(fields) => {
+                let field_strs: Vec<String> =
+                    fields.iter().map(|(name, ty)| format!("{}: {}", name, ty)).collect();
+                format!("{{{}}}", field_strs.join(", "))
+            }
+            TypeName::Sum(variants) => {
+                let variant_strs: Vec<String> = variants
+                    .iter()
+                    .map(|(name, types)| {
+                        if types.is_empty() {
+                            name.clone()
+                        } else {
+                            format!(
+                                "{} {}",
+                                name,
+                                types.iter().map(|t| format!("{}", t)).collect::<Vec<_>>().join(" ")
+                            )
+                        }
+                    })
+                    .collect();
+                variant_strs.join(" | ")
+            }
+            TypeName::Existential(vars, ty) => format!("?{}. {}", vars.join(""), ty),
+            TypeName::NamedParam(name, ty) => format!("{}: {}", name, ty),
+        }
     }
 }
 
@@ -581,82 +618,11 @@ pub mod types {
         Type::Constructed(TypeName::Str("bool"), vec![])
     }
 
-    // f32 vector types
-    pub fn vec2() -> Type {
-        Type::Constructed(TypeName::Str("vec2"), vec![])
-    }
-
-    pub fn vec3() -> Type {
-        Type::Constructed(TypeName::Str("vec3"), vec![])
-    }
-
-    pub fn vec4() -> Type {
-        Type::Constructed(TypeName::Str("vec4"), vec![])
-    }
-
-    // i32 vector types
-    pub fn ivec2() -> Type {
-        Type::Constructed(TypeName::Str("ivec2"), vec![])
-    }
-
-    pub fn ivec3() -> Type {
-        Type::Constructed(TypeName::Str("ivec3"), vec![])
-    }
-
-    pub fn ivec4() -> Type {
-        Type::Constructed(TypeName::Str("ivec4"), vec![])
-    }
-
-    // u32 vector types
-    pub fn uvec2() -> Type {
-        Type::Constructed(TypeName::Str("uvec2"), vec![])
-    }
-
-    pub fn uvec3() -> Type {
-        Type::Constructed(TypeName::Str("uvec3"), vec![])
-    }
-
-    pub fn uvec4() -> Type {
-        Type::Constructed(TypeName::Str("uvec4"), vec![])
-    }
-
-    // bool vector types
-    pub fn bvec2() -> Type {
-        Type::Constructed(TypeName::Str("bvec2"), vec![])
-    }
-
-    pub fn bvec3() -> Type {
-        Type::Constructed(TypeName::Str("bvec3"), vec![])
-    }
-
-    pub fn bvec4() -> Type {
-        Type::Constructed(TypeName::Str("bvec4"), vec![])
-    }
-
-    // f64 vector types
-    pub fn dvec2() -> Type {
-        Type::Constructed(TypeName::Str("dvec2"), vec![])
-    }
-
-    pub fn dvec3() -> Type {
-        Type::Constructed(TypeName::Str("dvec3"), vec![])
-    }
-
-    pub fn dvec4() -> Type {
-        Type::Constructed(TypeName::Str("dvec4"), vec![])
-    }
-
-    // f16 vector types
-    pub fn f16vec2() -> Type {
-        Type::Constructed(TypeName::Str("f16vec2"), vec![])
-    }
-
-    pub fn f16vec3() -> Type {
-        Type::Constructed(TypeName::Str("f16vec3"), vec![])
-    }
-
-    pub fn f16vec4() -> Type {
-        Type::Constructed(TypeName::Str("f16vec4"), vec![])
+    // Vector types
+    /// Create a vector type: Vec(size, element_type)
+    /// Example: vec(2, f32()) creates Vec(Size(2), f32) for vec2
+    pub fn vec(size: usize, element_type: Type) -> Type {
+        Type::Constructed(TypeName::Vec, vec![Type::Constructed(TypeName::Size(size), vec![]), element_type])
     }
 
     // Matrix types (f32) - column-major, CxR naming
