@@ -20,6 +20,9 @@ pub enum CompilerError {
     #[error("MIR generation error: {0}")]
     MirError(String),
 
+    #[error("Module system error: {0}")]
+    ModuleError(String),
+
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 

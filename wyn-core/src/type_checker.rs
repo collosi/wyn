@@ -692,6 +692,7 @@ impl TypeChecker {
                                     TypeName::Vec => "vec".to_string(),
                                     TypeName::Size(n) => n.to_string(),
                                     TypeName::SizeVar(name) => name.clone(),
+                                    TypeName::Named(name) => name.clone(),
                                     TypeName::Unique => "unique".to_string(),
                                     TypeName::Record(_) => "record".to_string(),
                                     TypeName::Sum(_) => "sum".to_string(),

@@ -581,15 +581,11 @@ impl Parser {
             Some(Token::LeftBracket) | Some(Token::LeftBracketSpaced) => true, // Array type
             Some(Token::BinOp(op)) if op == "*" => true, // Unique type
             Some(Token::Identifier(name)) => {
-                // Uppercase = constructor/sum type, lowercase = base type like i32/f32
+                // Grammar allows qualname which includes any lowercase identifier
+                // Uppercase = constructor/sum type
+                // Lowercase = base types (i32/f32), vector/matrix types, or user-defined type aliases
                 name.chars().next().map_or(false, |c| {
-                    c.is_uppercase()
-                        || name == "i32"
-                        || name == "f32"
-                        || name.starts_with("vec")
-                        || name.starts_with("ivec")
-                        || name.starts_with("mat")
-                        || name.starts_with('\'')
+                    c.is_uppercase() || c.is_lowercase() || c == '\''
                 })
             }
             _ => false,
@@ -673,7 +669,37 @@ impl Parser {
                 self.advance();
                 Ok(types::f32())
             }
-            // Vector types
+            // Vector types - polymorphic over element type
+            Some(Token::Identifier(name)) if name == "vec2" => {
+                self.advance();
+                // TODO: Variable(0) is a placeholder - need proper type variable generation
+                // vec2 is Vec(2, 'a) - polymorphic 2-vector
+                Ok(types::vec(2, polytype::Type::Variable(0)))
+            }
+            Some(Token::Identifier(name)) if name == "vec3" => {
+                self.advance();
+                // TODO: Variable(0) is a placeholder - need proper type variable generation
+                // vec3 is Vec(3, 'a) - polymorphic 3-vector
+                Ok(types::vec(3, polytype::Type::Variable(0)))
+            }
+            Some(Token::Identifier(name)) if name == "vec4" => {
+                self.advance();
+                // TODO: Variable(0) is a placeholder - need proper type variable generation
+                // vec4 is Vec(4, 'a) - polymorphic 4-vector
+                Ok(types::vec(4, polytype::Type::Variable(0)))
+            }
+            Some(Token::Identifier(name)) if name == "ivec2" => {
+                self.advance();
+                Ok(types::vec(2, types::i32()))
+            }
+            Some(Token::Identifier(name)) if name == "ivec3" => {
+                self.advance();
+                Ok(types::vec(3, types::i32()))
+            }
+            Some(Token::Identifier(name)) if name == "ivec4" => {
+                self.advance();
+                Ok(types::vec(4, types::i32()))
+            }
             // Matrix types
             Some(Token::Identifier(name)) if name == "mat2" => {
                 self.advance();
@@ -717,6 +743,13 @@ impl Parser {
                 // For now, create a simple variable ID from the hash of the variable name
                 let var_id = type_var.chars().map(|c| c as usize).sum::<usize>();
                 Ok(polytype::Type::Variable(var_id))
+            }
+            Some(Token::Identifier(name)) if name.chars().next().unwrap().is_lowercase() => {
+                // User-defined type alias (e.g., 't' from 'type t = i32')
+                // Grammar says: type ::= qualname, where qualname includes lowercase names
+                let type_name = name.clone();
+                self.advance();
+                Ok(Type::Constructed(TypeName::Named(type_name), vec![]))
             }
             Some(Token::LeftParen) => {
                 // Tuple type (T1, T2, T3) or empty tuple ()

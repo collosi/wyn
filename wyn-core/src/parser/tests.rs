@@ -631,7 +631,7 @@ fn test_parse_uniform_attribute() {
         _ => panic!("Expected Uniform declaration"),
     };
     assert_eq!(uniform_decl.name, "material_color");
-    assert_eq!(uniform_decl.ty, crate::ast::types::vec3());
+    assert_eq!(uniform_decl.ty, crate::ast::types::vec(3, crate::ast::types::f32()));
 }
 
 #[test]
@@ -644,7 +644,7 @@ fn test_parse_uniform_without_initializer() {
         _ => panic!("Expected Uniform declaration"),
     };
     assert_eq!(uniform_decl.name, "material_color");
-    assert_eq!(uniform_decl.ty, crate::ast::types::vec3());
+    assert_eq!(uniform_decl.ty, crate::ast::types::vec(3, crate::ast::types::f32()));
     // Check that there's no initializer (uniforms don't have bodies)
 }
 

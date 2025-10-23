@@ -13,6 +13,7 @@ pub mod lexer;
 pub mod lowering;
 pub mod mir;
 pub mod mirize;
+pub mod module;
 pub mod nemo_facts;
 pub mod parser;
 pub mod scope;

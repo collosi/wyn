@@ -160,6 +160,7 @@ pub enum TypeName {
     Vec,                                 // Vector type constructor (takes size and element type)
     Size(usize),                         // Array size literal
     SizeVar(String),                     // Size variable: [n]
+    Named(String),                       // User-defined type name (e.g., type alias)
     Unique,                              // Uniqueness/consuming type marker (corresponds to "*" prefix)
     Record(Vec<(String, Type)>),         // Record type: {field1: type1, field2: type2}
     Sum(Vec<(String, Vec<Type>)>),       // Sum type: Constructor1 type* | Constructor2 type*
@@ -175,6 +176,7 @@ impl std::fmt::Display for TypeName {
             TypeName::Vec => write!(f, "Vec"),
             TypeName::Size(n) => write!(f, "{}", n),
             TypeName::SizeVar(name) => write!(f, "{}", name),
+            TypeName::Named(name) => write!(f, "{}", name),
             TypeName::Unique => write!(f, "*"),
             TypeName::Record(fields) => {
                 write!(f, "{{")?;
@@ -224,6 +226,7 @@ impl polytype::Name for TypeName {
             TypeName::Vec => "Vec".to_string(),
             TypeName::Size(n) => format!("Size({})", n),
             TypeName::SizeVar(v) => format!("[{}]", v),
+            TypeName::Named(name) => name.clone(),
             TypeName::Unique => "*".to_string(),
             TypeName::Record(fields) => {
                 let field_strs: Vec<String> =
@@ -622,7 +625,10 @@ pub mod types {
     /// Create a vector type: Vec(size, element_type)
     /// Example: vec(2, f32()) creates Vec(Size(2), f32) for vec2
     pub fn vec(size: usize, element_type: Type) -> Type {
-        Type::Constructed(TypeName::Vec, vec![Type::Constructed(TypeName::Size(size), vec![]), element_type])
+        Type::Constructed(
+            TypeName::Vec,
+            vec![Type::Constructed(TypeName::Size(size), vec![]), element_type],
+        )
     }
 
     // Matrix types (f32) - column-major, CxR naming
