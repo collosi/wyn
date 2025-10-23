@@ -142,6 +142,5 @@ pub enum TypeInfo {
 
     /// Type alias
     Alias(Type),
-
     // Future: Datatype definitions
 }

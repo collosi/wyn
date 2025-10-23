@@ -631,7 +631,10 @@ fn test_parse_uniform_attribute() {
         _ => panic!("Expected Uniform declaration"),
     };
     assert_eq!(uniform_decl.name, "material_color");
-    assert_eq!(uniform_decl.ty, crate::ast::types::vec(3, crate::ast::types::f32()));
+    assert_eq!(
+        uniform_decl.ty,
+        crate::ast::types::vec(3, crate::ast::types::f32())
+    );
 }
 
 #[test]
@@ -644,7 +647,10 @@ fn test_parse_uniform_without_initializer() {
         _ => panic!("Expected Uniform declaration"),
     };
     assert_eq!(uniform_decl.name, "material_color");
-    assert_eq!(uniform_decl.ty, crate::ast::types::vec(3, crate::ast::types::f32()));
+    assert_eq!(
+        uniform_decl.ty,
+        crate::ast::types::vec(3, crate::ast::types::f32())
+    );
     // Check that there's no initializer (uniforms don't have bodies)
 }
 
@@ -1292,6 +1298,96 @@ fn test_parse_module_bind_simple() {
     assert_eq!(bind.params.len(), 0);
     assert!(bind.signature.is_none());
     assert!(matches!(&bind.body, ModuleExpression::Struct(decls) if decls.len() == 1));
+}
+
+#[test]
+fn test_parse_module_with_signature() {
+    let program = parse_ok("module M : { val x : i32 } = { def x : i32 = 42 }");
+    assert_eq!(program.declarations.len(), 1);
+
+    let bind = match &program.declarations[0] {
+        Declaration::ModuleBind(b) => b,
+        _ => panic!("Expected ModuleBind declaration"),
+    };
+    assert_eq!(bind.name, "M");
+    assert!(bind.signature.is_some());
+    assert!(matches!(&bind.signature, Some(ModuleTypeExpression::Signature(specs)) if specs.len() == 1));
+}
+
+#[test]
+fn test_parse_module_type_bind() {
+    let program = parse_ok("module type numeric = { type t val add : t -> t -> t }");
+    assert_eq!(program.declarations.len(), 1);
+
+    match &program.declarations[0] {
+        Declaration::ModuleTypeBind(mtb) => {
+            assert_eq!(mtb.name, "numeric");
+            assert!(matches!(&mtb.definition, ModuleTypeExpression::Signature(specs) if specs.len() == 2));
+        }
+        _ => panic!("Expected ModuleTypeBind declaration"),
+    };
+}
+
+#[test]
+fn test_parse_module_signature_with_abstract_type() {
+    let program = parse_ok("module type S = { type t }");
+    assert_eq!(program.declarations.len(), 1);
+
+    match &program.declarations[0] {
+        Declaration::ModuleTypeBind(mtb) => {
+            assert_eq!(mtb.name, "S");
+            match &mtb.definition {
+                ModuleTypeExpression::Signature(specs) => {
+                    assert_eq!(specs.len(), 1);
+                    assert!(matches!(&specs[0], Spec::Type(_, name, _, None) if name == "t"));
+                }
+                _ => panic!("Expected Signature"),
+            }
+        }
+        _ => panic!("Expected ModuleTypeBind declaration"),
+    };
+}
+
+#[test]
+fn test_parse_module_signature_with_concrete_type() {
+    let program = parse_ok("module type S = { type t = i32 }");
+    assert_eq!(program.declarations.len(), 1);
+
+    match &program.declarations[0] {
+        Declaration::ModuleTypeBind(mtb) => match &mtb.definition {
+            ModuleTypeExpression::Signature(specs) => {
+                assert_eq!(specs.len(), 1);
+                assert!(matches!(&specs[0], Spec::Type(_, name, _, Some(_)) if name == "t"));
+            }
+            _ => panic!("Expected Signature"),
+        },
+        _ => panic!("Expected ModuleTypeBind declaration"),
+    };
+}
+
+#[test]
+fn test_parse_empty_module() {
+    let program = parse_ok("module M = {}");
+    assert_eq!(program.declarations.len(), 1);
+
+    let bind = match &program.declarations[0] {
+        Declaration::ModuleBind(b) => b,
+        _ => panic!("Expected ModuleBind declaration"),
+    };
+    assert_eq!(bind.name, "M");
+    assert!(matches!(&bind.body, ModuleExpression::Struct(decls) if decls.is_empty()));
+}
+
+#[test]
+fn test_parse_module_multiple_declarations() {
+    let program = parse_ok("module M = { type t = i32 def x : t = 42 def y : t = 99 }");
+    assert_eq!(program.declarations.len(), 1);
+
+    let bind = match &program.declarations[0] {
+        Declaration::ModuleBind(b) => b,
+        _ => panic!("Expected ModuleBind declaration"),
+    };
+    assert!(matches!(&bind.body, ModuleExpression::Struct(decls) if decls.len() == 3));
 }
 
 #[test]

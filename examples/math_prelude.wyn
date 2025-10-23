@@ -1,0 +1,20 @@
+module type numeric = {
+    type t
+    val add: t -> t -> t
+    val sub: t -> t -> t
+    val mul: t -> t -> t
+    val neg: t -> t
+}
+
+module i32_math : numeric = {
+    type t = i32
+
+    def add (x: i32) (y: i32): i32 = x + y
+    def sub (x: i32) (y: i32): i32 = x - y
+    def mul (x: i32) (y: i32): i32 = x * y
+    def neg (x: i32): i32 = 0 - x
+}
+
+def test_math: i32 =
+    let x = i32_math.add 5 3 in
+    i32_math.mul x 2

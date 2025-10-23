@@ -584,9 +584,7 @@ impl Parser {
                 // Grammar allows qualname which includes any lowercase identifier
                 // Uppercase = constructor/sum type
                 // Lowercase = base types (i32/f32), vector/matrix types, or user-defined type aliases
-                name.chars().next().map_or(false, |c| {
-                    c.is_uppercase() || c.is_lowercase() || c == '\''
-                })
+                name.chars().next().map_or(false, |c| c.is_uppercase() || c.is_lowercase() || c == '\'')
             }
             _ => false,
         }
