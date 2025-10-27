@@ -992,8 +992,157 @@ impl TypeChecker {
                 }
             }
 
-            ExprKind::Loop(_) => {
-                todo!("Loop not yet implemented in type checker")
+            ExprKind::Loop(loop_expr) => {
+                // Type check the initial value
+                let init_type = if let Some(init) = &loop_expr.init {
+                    self.infer_expression(init)?
+                } else {
+                    // If no init provided, infer from pattern variables in scope
+                    // For now, just create a fresh type variable
+                    self.context.new_variable()
+                };
+
+                // Extract pattern type if annotated, otherwise use init type
+                let pattern_type = loop_expr.pattern.pattern_type().cloned().unwrap_or(init_type.clone());
+
+                // Unify init with pattern type
+                self.context.unify(&init_type, &pattern_type).map_err(|e| {
+                    CompilerError::TypeError(
+                        format!("Loop initial value type mismatch: {:?}", e),
+                        loop_expr.init.as_ref().map(|e| e.h.span).unwrap_or(expr.h.span)
+                    )
+                })?;
+
+                // Push new scope for loop variables
+                self.scope_stack.push_scope();
+
+                // Bind pattern variables - for now only support simple patterns
+                match &loop_expr.pattern.kind {
+                    PatternKind::Name(name) => {
+                        let type_scheme = TypeScheme::Monotype(pattern_type.clone());
+                        self.scope_stack.insert(name.clone(), type_scheme);
+                    }
+                    PatternKind::Tuple(patterns) => {
+                        // For tuple patterns, unpack the tuple type
+                        if let Type::Constructed(TypeName::Str("tuple"), args) = &pattern_type {
+                            if args.len() == patterns.len() {
+                                for (pat, ty) in patterns.iter().zip(args.iter()) {
+                                    if let Some(name) = pat.simple_name() {
+                                        let type_scheme = TypeScheme::Monotype(ty.clone());
+                                        self.scope_stack.insert(name.to_string(), type_scheme);
+                                    } else {
+                                        return Err(CompilerError::TypeError(
+                                            "Complex patterns in loop not yet supported".to_string(),
+                                            pat.h.span
+                                        ));
+                                    }
+                                }
+                            } else {
+                                return Err(CompilerError::TypeError(
+                                    format!("Loop pattern tuple size mismatch: expected {} elements", patterns.len()),
+                                    loop_expr.pattern.h.span
+                                ));
+                            }
+                        } else {
+                            // Create fresh variables for each tuple element
+                            for pat in patterns {
+                                if let Some(name) = pat.simple_name() {
+                                    let var_type = pat.pattern_type().cloned().unwrap_or_else(|| self.context.new_variable());
+                                    let type_scheme = TypeScheme::Monotype(var_type);
+                                    self.scope_stack.insert(name.to_string(), type_scheme);
+                                } else {
+                                    return Err(CompilerError::TypeError(
+                                        "Complex patterns in loop not yet supported".to_string(),
+                                        pat.h.span
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(CompilerError::TypeError(
+                            "Complex patterns in loop not yet supported".to_string(),
+                            loop_expr.pattern.h.span
+                        ));
+                    }
+                }
+
+                // Type check loop form
+                match &loop_expr.form {
+                    LoopForm::While(cond) => {
+                        let cond_type = self.infer_expression(cond)?;
+                        // Condition must be boolean
+                        self.context.unify(&cond_type, &types::bool_type()).map_err(|e| {
+                            CompilerError::TypeError(
+                                format!("Loop while condition must be bool: {:?}", e),
+                                cond.h.span
+                            )
+                        })?;
+                    }
+                    LoopForm::For(name, bound) => {
+                        // For x < n form: name is the loop variable, bound is n
+                        // Bind name as i32
+                        let type_scheme = TypeScheme::Monotype(types::i32());
+                        self.scope_stack.insert(name.clone(), type_scheme);
+
+                        // Check that bound is i32
+                        let bound_type = self.infer_expression(bound)?;
+                        self.context.unify(&bound_type, &types::i32()).map_err(|e| {
+                            CompilerError::TypeError(
+                                format!("Loop for bound must be i32: {:?}", e),
+                                bound.h.span
+                            )
+                        })?;
+                    }
+                    LoopForm::ForIn(iter_pat, iter_expr) => {
+                        // Type check the iterator expression
+                        let iter_type = self.infer_expression(iter_expr)?;
+
+                        // Iterator must be an array type
+                        if let Type::Constructed(TypeName::Str("array"), args) = &iter_type {
+                            if args.len() >= 1 {
+                                let elem_type = &args[0];
+                                // Bind iterator pattern variable
+                                if let Some(name) = iter_pat.simple_name() {
+                                    let type_scheme = TypeScheme::Monotype(elem_type.clone());
+                                    self.scope_stack.insert(name.to_string(), type_scheme);
+                                } else {
+                                    return Err(CompilerError::TypeError(
+                                        "Complex patterns in loop for-in not yet supported".to_string(),
+                                        iter_pat.h.span
+                                    ));
+                                }
+                            } else {
+                                return Err(CompilerError::TypeError(
+                                    "Loop for-in expression must be an array".to_string(),
+                                    iter_expr.h.span
+                                ));
+                            }
+                        } else {
+                            return Err(CompilerError::TypeError(
+                                "Loop for-in expression must be an array".to_string(),
+                                iter_expr.h.span
+                            ));
+                        }
+                    }
+                }
+
+                // Type check loop body
+                let body_type = self.infer_expression(&loop_expr.body)?;
+
+                // Body type must match pattern type (loop accumulator)
+                self.context.unify(&body_type, &pattern_type).map_err(|e| {
+                    CompilerError::TypeError(
+                        format!("Loop body type must match pattern type: {:?}", e),
+                        loop_expr.body.h.span
+                    )
+                })?;
+
+                // Pop loop scope
+                self.scope_stack.pop_scope();
+
+                // Loop result type is the pattern/body type
+                Ok(pattern_type)
             }
 
             ExprKind::Match(_) => {

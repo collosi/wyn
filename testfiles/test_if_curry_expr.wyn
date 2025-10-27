@@ -1,0 +1,11 @@
+-- Test curried function in if expression with arithmetic
+
+def myfunc (a:vec3f32) (b:vec3f32) (t:f32) : vec3f32 = a
+
+def red : vec3f32 = vec3 1.0f32 0.0f32 0.0f32
+def green : vec3f32 = vec3 0.0f32 1.0f32 0.0f32
+
+def test (t:f32) : vec3f32 =
+  if t > 0.5f32
+  then myfunc red green (t*2.0f32 - 1.0f32)
+  else myfunc red green (t*2.0f32)

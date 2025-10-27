@@ -1,0 +1,13 @@
+-- Test Futhark-style type parameters
+
+-- Simple: length [n] 't: [n]t -> i64
+val length [n] 't: [n]t -> i64
+
+-- With implementation
+def mylen [n] 't (xs:[n]t) : i64 =
+  -- placeholder for now
+  0
+
+-- Multiple dimensions: [n] [m] 't
+def transpose [n] [m] 't (xs:[[n][m]]t) : [[m][n]]t =
+  ???

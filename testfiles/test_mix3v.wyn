@@ -1,0 +1,9 @@
+-- Minimal test case for mix3v error
+
+def mix3v (a:vec3f32) (b:vec3f32) (t:f32) : vec3f32 =
+  vec3 (a.x + (b.x - a.x) * t) (a.y + (b.y - a.y) * t) (a.z + (b.z - a.z) * t)
+
+def mix3 (a:vec3f32) (b:vec3f32) (c:vec3f32) (t:f32) : vec3f32 =
+  if t > 0.5f32
+  then mix3v b c (t*2.0f32 - 1.0f32)
+  else mix3v a b (t*2.0f32)

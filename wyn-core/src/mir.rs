@@ -66,10 +66,45 @@ pub enum Instruction {
 
     // Control flow
     Branch(BlockId),                                 // unconditional jump
-    BranchCond(Register, BlockId, BlockId, BlockId), // cond, true_block, false_block, merge_block
+    BranchCond(Register, BlockId, BlockId, BlockId), // cond, true_block, false_block, merge_block (for if/then/else)
+    BranchLoop(Register, BlockId, BlockId, BlockId, BlockId), // cond, body_block, exit_block, merge_block, continue_block (for loops)
+    Loop(LoopInfo),                                  // High-level loop construct with all metadata
     Phi(Register, Vec<(Register, BlockId)>),         // dest, vec of (value, predecessor_block)
     Return(Register),                                // return value
     ReturnVoid,                                      // return from void function
+}
+
+/// High-level loop metadata for MIR
+/// This captures all information needed to lower a loop properly,
+/// including which registers are back-edges (forward references in SSA)
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoopInfo {
+    /// The phi register (loop accumulator variable)
+    pub phi_reg: Register,
+
+    /// The destination register for the loop result
+    pub result_reg: Register,
+
+    /// Initial value register (defined before loop)
+    pub init_reg: Register,
+
+    /// Register that will hold the updated value from loop body (back-edge)
+    pub body_result_reg: Register,
+
+    /// Register holding the loop condition (bool)
+    pub cond_reg: Register,
+
+    /// Pre-header block (where we jump from to enter the loop)
+    pub pre_header_block: BlockId,
+
+    /// Loop header block (contains phi and condition check)
+    pub header_block: BlockId,
+
+    /// Loop body block
+    pub body_block: BlockId,
+
+    /// Merge/exit block (where we go when loop exits)
+    pub merge_block: BlockId,
 }
 
 /// Basic block in control flow graph
@@ -272,6 +307,20 @@ impl Builder {
             let block = func.blocks.iter_mut().find(|b| b.id == block_id).expect("Current block not found");
             block.instructions.push(inst);
         }
+    }
+
+    /// Insert an instruction at the start of the current block
+    pub fn insert_instruction_at_start(&mut self, inst: Instruction) {
+        if let (Some(func_id), Some(block_id)) = (self.current_function, self.current_block) {
+            let func = &mut self.functions[func_id as usize];
+            let block = func.blocks.iter_mut().find(|b| b.id == block_id).expect("Current block not found");
+            block.instructions.insert(0, inst);
+        }
+    }
+
+    /// Emit a raw instruction to the current block (public version of emit)
+    pub fn emit_instruction(&mut self, inst: Instruction) {
+        self.emit(inst);
     }
 
     /// Create a new block in the current function

@@ -6,7 +6,7 @@
 
 use crate::ast::*;
 use crate::error::{CompilerError, Result};
-use crate::mir::{self, FunctionId, Register};
+use crate::mir::{self, FunctionId, Instruction, LoopInfo, Register};
 use std::collections::HashMap;
 
 pub struct Mirize {
@@ -438,8 +438,105 @@ impl Mirize {
                 todo!("UnaryOp not yet implemented in MIR")
             }
 
-            ExprKind::Loop(_) => {
-                todo!("Loop not yet implemented in MIR")
+            ExprKind::Loop(loop_expr) => {
+                // Only support while loops for now
+                let cond_expr = match &loop_expr.form {
+                    LoopForm::While(cond) => cond,
+                    LoopForm::For(_, _) => {
+                        return Err(CompilerError::MirError(
+                            "Loop for form not yet supported in MIR".to_string(),
+                        ));
+                    }
+                    LoopForm::ForIn(_, _) => {
+                        return Err(CompilerError::MirError(
+                            "Loop for-in form not yet supported in MIR".to_string(),
+                        ));
+                    }
+                };
+
+                // Only support simple name patterns
+                let loop_var_name = match &loop_expr.pattern.kind {
+                    PatternKind::Name(name) => name.clone(),
+                    _ => {
+                        return Err(CompilerError::MirError(
+                            "Only simple name patterns in loops supported for now".to_string(),
+                        ));
+                    }
+                };
+
+                // Evaluate initial value
+                let init_reg = if let Some(init) = &loop_expr.init {
+                    self.mirize_expression(init)?
+                } else {
+                    return Err(CompilerError::MirError(
+                        "Loop without explicit init not yet supported in MIR".to_string(),
+                    ));
+                };
+
+                // Create blocks
+                let header_block = self.builder.create_block();
+                let body_block = self.builder.create_block();
+                let merge_block = self.builder.create_block();
+                let pre_header_block = self.builder.current_block().unwrap();
+
+                // Create registers
+                let phi_reg = self.builder.new_register(expr_type.clone());
+                let result_reg = self.builder.new_register(expr_type.clone());
+
+                // Save environment and bind loop variable
+                let saved_env = self.env.clone();
+                self.env.insert(loop_var_name, phi_reg.clone());
+
+                // Generate body expression first to get body_result_reg
+                self.builder.select_block(body_block);
+                let body_result_reg = self.mirize_expression(&loop_expr.body)?;
+                self.builder.build_branch(header_block);
+
+                // Now generate header block with proper Phi
+                self.builder.select_block(header_block);
+                let phi_inst = Instruction::Phi(
+                    phi_reg.clone(),
+                    vec![(init_reg.clone(), pre_header_block), (body_result_reg.clone(), body_block)],
+                );
+                self.builder.insert_instruction_at_start(phi_inst);
+                let cond_reg = self.mirize_expression(cond_expr)?;
+                self.builder.emit_instruction(Instruction::BranchLoop(
+                    cond_reg.clone(),
+                    body_block,
+                    merge_block,
+                    merge_block,
+                    body_block,
+                ));
+
+                // Generate merge block: result Phi
+                self.builder.select_block(merge_block);
+                let result_phi = Instruction::Phi(
+                    result_reg.clone(),
+                    vec![(phi_reg.clone(), header_block)],
+                );
+                self.builder.emit_instruction(result_phi);
+
+                // Build LoopInfo with all the metadata
+                let loop_info = LoopInfo {
+                    phi_reg: phi_reg.clone(),
+                    result_reg: result_reg.clone(),
+                    init_reg,
+                    body_result_reg,
+                    cond_reg,
+                    pre_header_block,
+                    header_block,
+                    body_block,
+                    merge_block,
+                };
+
+                // Emit the Loop instruction (lowering will expand this)
+                self.builder.select_block(pre_header_block);
+                self.builder.emit_instruction(Instruction::Loop(loop_info));
+
+                // Restore environment
+                self.env = saved_env;
+
+                Ok(result_reg)
             }
 
             ExprKind::Match(_) => {

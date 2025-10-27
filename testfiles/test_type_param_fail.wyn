@@ -1,0 +1,7 @@
+-- Test that type parameters unify - this should FAIL
+
+-- Identity function with type parameter
+def identity 'a (x:'a) : 'a = x
+
+-- This should fail: trying to return i32 when we declared 'a
+def bad_identity 'a (x:'a) : 'a = 42

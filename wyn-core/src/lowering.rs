@@ -368,6 +368,7 @@ impl Lowering {
 
     /// Lower a MIR basic block to SPIR-V
     fn lower_block(&mut self, block: &mir::Block, is_first_block: bool) -> Result<()> {
+        eprintln!("DEBUG: Lowering block {} with {} instructions", block.id, block.instructions.len());
         let spirv_block_id = *self
             .current_block_map
             .get(&block.id)
@@ -386,7 +387,8 @@ impl Lowering {
             self.current_input_vars.clear();
         }
 
-        for instruction in &block.instructions {
+        for (idx, instruction) in block.instructions.iter().enumerate() {
+            eprintln!("DEBUG:   Instruction {}: {:?}", idx, instruction);
             self.lower_instruction(instruction)?;
         }
 
@@ -578,6 +580,48 @@ impl Lowering {
                 self.builder.branch_conditional(cond_id, true_id, false_id, [])?;
             }
 
+            Instruction::BranchLoop(cond, body_block, exit_block, merge_block, continue_block) => {
+                let cond_id = self.get_register(cond)?;
+                let body_id = *self.current_block_map.get(body_block).ok_or_else(|| {
+                    CompilerError::SpirvError(format!("Body block {} not found in map", body_block))
+                })?;
+                let exit_id = *self.current_block_map.get(exit_block).ok_or_else(|| {
+                    CompilerError::SpirvError(format!("Exit block {} not found in map", exit_block))
+                })?;
+                let merge_spirv_id = *self.current_block_map.get(merge_block).ok_or_else(|| {
+                    CompilerError::SpirvError(format!("Merge block {} not found in map", merge_block))
+                })?;
+                let continue_id = *self.current_block_map.get(continue_block).ok_or_else(|| {
+                    CompilerError::SpirvError(format!("Continue block {} not found in map", continue_block))
+                })?;
+
+                // Add OpLoopMerge before the conditional branch
+                self.builder.loop_merge(merge_spirv_id, continue_id, spirv::LoopControl::NONE, [])?;
+                self.builder.branch_conditional(cond_id, body_id, exit_id, [])?;
+            }
+
+            Instruction::Loop(loop_info) => {
+                eprintln!("DEBUG: Loop metadata - pre-allocating SPIR-V IDs for forward references");
+                // Pre-allocate SPIR-V IDs for registers with forward references (Phi operands)
+                let phi_spirv_id = self.builder.id();
+                let result_spirv_id = self.builder.id();
+                let body_result_spirv_id = self.builder.id();
+
+                self.current_register_map.insert(loop_info.phi_reg.id, phi_spirv_id);
+                self.current_register_map.insert(loop_info.result_reg.id, result_spirv_id);
+                self.current_register_map.insert(loop_info.body_result_reg.id, body_result_spirv_id);
+
+                // Store loop info for later use when we see special loop instructions
+                // For now, just branch to header
+                let header_id = *self.current_block_map.get(&loop_info.header_block).ok_or_else(|| {
+                    CompilerError::SpirvError(format!("Header block {} not found", loop_info.header_block))
+                })?;
+                self.builder.branch(header_id)?;
+
+                // The header, body, and merge blocks will be lowered separately
+                // when we process them in the MIR block list
+            }
+
             Instruction::Phi(dest, incoming) => {
                 let type_id = self.get_or_create_type(&dest.ty)?;
                 let mut operands = Vec::new();
@@ -616,10 +660,14 @@ impl Lowering {
                             if let Type::Constructed(TypeName::Size(n), _) = &type_args[0] {
                                 *n
                             } else {
-                                return Err(CompilerError::SpirvError("replicate: array size must be known at compile time".to_string()));
+                                return Err(CompilerError::SpirvError(
+                                    "replicate: array size must be known at compile time".to_string(),
+                                ));
                             }
                         } else {
-                            return Err(CompilerError::SpirvError("replicate: result must be an array type".to_string()));
+                            return Err(CompilerError::SpirvError(
+                                "replicate: result must be an array type".to_string(),
+                            ));
                         };
 
                         // Create array by replicating value
@@ -635,7 +683,13 @@ impl Lowering {
                         let new_value_id = self.get_register(&args[2])?;
 
                         // Use OpCompositeInsert to create new composite with updated element
-                        let result_id = self.builder.composite_insert(type_id, None, new_value_id, array_id, [index_id])?;
+                        let result_id = self.builder.composite_insert(
+                            type_id,
+                            None,
+                            new_value_id,
+                            array_id,
+                            [index_id],
+                        )?;
                         self.current_register_map.insert(dest.id, result_id);
                     }
                     // Look up in builtin registry
@@ -795,7 +849,10 @@ impl Lowering {
         self.current_register_map
             .get(&reg.id)
             .copied()
-            .ok_or_else(|| CompilerError::SpirvError(format!("Register {} not found", reg.id)))
+            .ok_or_else(|| {
+                eprintln!("DEBUG: Register {} not found. Current map: {:?}", reg.id, self.current_register_map);
+                CompilerError::SpirvError(format!("Register {} not found", reg.id))
+            })
     }
 
     /// Check if a type is a floating point type

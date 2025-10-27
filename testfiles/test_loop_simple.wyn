@@ -1,0 +1,5 @@
+-- Simple loop test
+
+def test_loop : i32 =
+  loop (acc) = (0i32) while acc < 10i32 do
+    acc + 1i32
