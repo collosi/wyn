@@ -208,6 +208,7 @@ pub enum TypeName {
     Vec,                                 // Vector type constructor (takes size and element type)
     Size(usize),                         // Array size literal
     SizeVar(String),                     // Size variable: [n]
+    UserVar(String),                     // Type variable from user code: 'a, 'b (not yet bound to TypeVar)
     Named(String),                       // User-defined type name (e.g., type alias)
     Unique,                              // Uniqueness/consuming type marker (corresponds to "*" prefix)
     Record(Vec<(String, Type)>),         // Record type: {field1: type1, field2: type2}
@@ -224,6 +225,7 @@ impl std::fmt::Display for TypeName {
             TypeName::Vec => write!(f, "Vec"),
             TypeName::Size(n) => write!(f, "{}", n),
             TypeName::SizeVar(name) => write!(f, "{}", name),
+            TypeName::UserVar(name) => write!(f, "'{}", name),
             TypeName::Named(name) => write!(f, "{}", name),
             TypeName::Unique => write!(f, "*"),
             TypeName::Record(fields) => {
@@ -274,6 +276,7 @@ impl polytype::Name for TypeName {
             TypeName::Vec => "Vec".to_string(),
             TypeName::Size(n) => format!("Size({})", n),
             TypeName::SizeVar(v) => format!("[{}]", v),
+            TypeName::UserVar(v) => format!("'{}", v),
             TypeName::Named(name) => name.clone(),
             TypeName::Unique => "*".to_string(),
             TypeName::Record(fields) => {
@@ -378,9 +381,11 @@ pub struct Decl {
     pub keyword: &'static str, // Either "let" or "def"
     pub attributes: Vec<Attribute>,
     pub name: String,
-    pub params: Vec<Pattern>, // Parameters as patterns (name, name:type, tuples, etc.)
-    pub ty: Option<Type>,     // Return type for functions or type annotation for variables
-    pub body: Expression,     // The value/expression for let/def declarations
+    pub size_params: Vec<String>, // Size parameters: [n], [m]
+    pub type_params: Vec<String>, // Type parameters: 'a, 'b
+    pub params: Vec<Pattern>,     // Parameters as patterns (name, name:type, tuples, etc.)
+    pub ty: Option<Type>,         // Return type for functions or type annotation for variables
+    pub body: Expression,         // The value/expression for let/def declarations
 }
 
 /// Entry point declaration (vertex/fragment shader)

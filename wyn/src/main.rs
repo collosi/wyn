@@ -199,9 +199,9 @@ fn check_file(
         run_borrow_checking(&source, verbose)?;
     }
 
-    // Compile but don't write output
+    // Type check only, don't generate code
     let compiler = Compiler::new();
-    let _spirv = compiler.compile(&source)?;
+    compiler.check_only(&source)?;
 
     if verbose {
         info!("✓ {} is valid", input.display());

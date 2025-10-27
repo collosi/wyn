@@ -1,0 +1,7 @@
+-- Test that size and type parameters are parsed
+
+-- With size parameter
+def mylen [n] (xs:[3]i32) : i32 = 0
+
+-- With type parameter
+def identity 't (x:i32) : i32 = x

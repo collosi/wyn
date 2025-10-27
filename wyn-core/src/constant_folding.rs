@@ -45,6 +45,8 @@ impl ConstantFolder {
                 Ok(Declaration::Decl(Decl {
                     keyword: d.keyword,
                     name: d.name.clone(),
+                    size_params: d.size_params.clone(),
+                    type_params: d.type_params.clone(),
                     params: d.params.clone(), // Parameters don't need folding
                     ty: d.ty.clone(),
                     body: folded_body,

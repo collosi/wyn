@@ -41,6 +41,36 @@ impl Compiler {
         Compiler
     }
 
+    /// Type check source code without generating SPIR-V
+    pub fn check_only(&self, source: &str) -> Result<()> {
+        // Tokenize
+        let tokens = lexer::tokenize(source).map_err(error::CompilerError::ParseError)?;
+
+        // Parse
+        let mut parser = parser::Parser::new(tokens);
+        let program = parser.parse()?;
+
+        // Constant folding pass
+        let mut constant_folder = constant_folding::ConstantFolder::new();
+        let program = constant_folder.fold_program(&program)?;
+
+        // Defunctionalization pass
+        let mut defunc = defunctionalization::Defunctionalizer::new();
+        let program = defunc.defunctionalize_program(&program)?;
+
+        // Type check
+        let mut type_checker = type_checker::TypeChecker::new();
+        type_checker.load_builtins()?;
+        let _type_table = type_checker.check_program(&program)?;
+
+        // Print warnings to stderr
+        for warning in type_checker.warnings() {
+            eprintln!("Warning: {}", warning.message);
+        }
+
+        Ok(())
+    }
+
     pub fn compile(&self, source: &str) -> Result<Vec<u32>> {
         // Tokenize
         let tokens = lexer::tokenize(source).map_err(error::CompilerError::ParseError)?;

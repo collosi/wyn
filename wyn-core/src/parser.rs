@@ -195,6 +195,22 @@ impl Parser {
 
             let name = self.expect_identifier()?;
 
+            // Parse size parameters: [n] [m] ...
+            let mut size_params = Vec::new();
+            while self.check(&Token::LeftBracket) || self.check(&Token::LeftBracketSpaced) {
+                self.advance(); // consume '[' or '[ '
+                let size_param = self.expect_identifier()?;
+                size_params.push(size_param);
+                self.expect(Token::RightBracket)?;
+            }
+
+            // Parse type parameters: 'a 'b ...
+            let mut type_params = Vec::new();
+            while self.check_type_variable() {
+                let type_param = self.parse_type_variable()?;
+                type_params.push(type_param);
+            }
+
             // Parse patterns until we hit : (return type) or = (body)
             let mut params = Vec::new();
             while !self.check(&Token::Colon) && !self.check(&Token::Assign) && !self.is_at_end() {
@@ -233,6 +249,8 @@ impl Parser {
                 keyword,
                 attributes,
                 name,
+                size_params,
+                type_params,
                 params,
                 ty,
                 body,
@@ -247,8 +265,8 @@ impl Parser {
 
         // Parse size parameters: [n] [m] ...
         let mut size_params = Vec::new();
-        while self.check(&Token::LeftBracket) {
-            self.advance(); // consume '['
+        while self.check(&Token::LeftBracket) || self.check(&Token::LeftBracketSpaced) {
+            self.advance(); // consume '[' or '[ '
             let size_param = self.expect_identifier()?;
             size_params.push(size_param);
             self.expect(Token::RightBracket)?;
@@ -730,11 +748,10 @@ impl Parser {
                 Ok(types::mat4x3())
             }
             Some(Token::Identifier(name)) if name.starts_with('\'') => {
-                // Type variable like 't1, 't2
+                // Type variable like 't, 'a, 'b
                 let type_var = self.parse_type_variable()?;
-                // For now, create a simple variable ID from the hash of the variable name
-                let var_id = type_var.chars().map(|c| c as usize).sum::<usize>();
-                Ok(polytype::Type::Variable(var_id))
+                // Store as UserVar - type checker will bind to actual TypeVariables
+                Ok(Type::Constructed(TypeName::UserVar(type_var), vec![]))
             }
             Some(Token::Identifier(name)) if name.chars().next().unwrap().is_lowercase() => {
                 // User-defined type alias (e.g., 't' from 'type t = i32')

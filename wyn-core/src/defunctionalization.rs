@@ -115,6 +115,8 @@ impl Defunctionalizer {
                 keyword: "def",
                 attributes: vec![],
                 name: func.name.clone(),
+                size_params: vec![],
+                type_params: vec![],
                 params: func
                     .params
                     .iter()
@@ -144,6 +146,8 @@ impl Defunctionalizer {
             keyword: decl.keyword,
             attributes: decl.attributes.clone(),
             name: decl.name.clone(),
+            size_params: decl.size_params.clone(),
+            type_params: decl.type_params.clone(),
             params: decl.params.clone(),
             ty: decl.ty.clone(),
             body: transformed_expr,
@@ -544,7 +548,11 @@ impl Defunctionalizer {
                         // Special handling for higher-order builtins like map
                         if func_name == "map" && transformed_args.len() == 2 {
                             // map f xs -> loop-based implementation
-                            return self.defunctionalize_map(&transformed_args[0], &transformed_args[1], scope_stack);
+                            return self.defunctionalize_map(
+                                &transformed_args[0],
+                                &transformed_args[1],
+                                scope_stack,
+                            );
                         }
 
                         Ok((
@@ -758,9 +766,11 @@ impl Defunctionalizer {
         // Extract function name (assuming it's a simple identifier for now)
         let func_name = match &func.kind {
             ExprKind::Identifier(name) => name.clone(),
-            _ => return Err(CompilerError::SpirvError(
-                "map currently only supports simple function identifiers".to_string()
-            )),
+            _ => {
+                return Err(CompilerError::SpirvError(
+                    "map currently only supports simple function identifiers".to_string(),
+                ));
+            }
         };
 
         // Generate unique variable names
@@ -772,15 +782,13 @@ impl Defunctionalizer {
 
         // Build ALL leaf nodes first to avoid borrow checker issues
         let xs_ident_for_len = self.node_counter.mk_node(ExprKind::Identifier(xs_var.clone()), span);
-        let len_ident_for_replicate = self.node_counter.mk_node(ExprKind::Identifier(len_var.clone()), span);
+        let len_ident_for_replicate =
+            self.node_counter.mk_node(ExprKind::Identifier(len_var.clone()), span);
         let zero_for_replicate = self.node_counter.mk_node(ExprKind::IntLiteral(0), span);
 
         // length xs
         let len_call = self.node_counter.mk_node(
-            ExprKind::FunctionCall(
-                "length".to_string(),
-                vec![xs_ident_for_len],
-            ),
+            ExprKind::FunctionCall("length".to_string(), vec![xs_ident_for_len]),
             span,
         );
 
@@ -817,26 +825,16 @@ impl Defunctionalizer {
         );
 
         // xs[i]
-        let array_index = self.node_counter.mk_node(
-            ExprKind::ArrayIndex(
-                Box::new(xs_ident),
-                Box::new(i_ident2),
-            ),
-            span,
-        );
+        let array_index =
+            self.node_counter.mk_node(ExprKind::ArrayIndex(Box::new(xs_ident), Box::new(i_ident2)), span);
 
         // f xs[i]
-        let func_app = self.node_counter.mk_node(
-            ExprKind::FunctionCall(func_name, vec![array_index]),
-            span,
-        );
+        let func_app =
+            self.node_counter.mk_node(ExprKind::FunctionCall(func_name, vec![array_index]), span);
 
         // __array_update(out, i, f xs[i])
         let updated_out = self.node_counter.mk_node(
-            ExprKind::FunctionCall(
-                "__array_update".to_string(),
-                vec![out_ident, i_ident3, func_app],
-            ),
+            ExprKind::FunctionCall("__array_update".to_string(), vec![out_ident, i_ident3, func_app]),
             span,
         );
 
@@ -851,24 +849,16 @@ impl Defunctionalizer {
         );
 
         // (i + 1, updated_out)
-        let loop_body = self.node_counter.mk_node(
-            ExprKind::Tuple(vec![i_inc, updated_out]),
-            span,
-        );
+        let loop_body = self.node_counter.mk_node(ExprKind::Tuple(vec![i_inc, updated_out]), span);
 
         // (0, out)
-        let initial_value = self.node_counter.mk_node(
-            ExprKind::Tuple(vec![zero_lit, out_ident2]),
-            span,
-        );
+        let initial_value = self.node_counter.mk_node(ExprKind::Tuple(vec![zero_lit, out_ident2]), span);
 
         // loop (i, out) = (0, out) while i < len do (i + 1, updated_out)
         let i_pattern = self.node_counter.mk_node(PatternKind::Name(i_var), span);
         let out_pattern = self.node_counter.mk_node(PatternKind::Name(out_var.clone()), span);
-        let loop_pattern = self.node_counter.mk_node(
-            PatternKind::Tuple(vec![i_pattern, out_pattern]),
-            span,
-        );
+        let loop_pattern =
+            self.node_counter.mk_node(PatternKind::Tuple(vec![i_pattern, out_pattern]), span);
         let loop_expr = self.node_counter.mk_node(
             ExprKind::Loop(LoopExpr {
                 pattern: loop_pattern,

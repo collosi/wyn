@@ -118,6 +118,22 @@ impl TypeChecker {
         self.warnings.push(TypeWarning { message, span });
     }
 
+    /// Substitute UserVars with bound type variables (recursive helper)
+    fn substitute_type_params_static(ty: &Type, bindings: &HashMap<String, Type>) -> Type {
+        match ty {
+            Type::Constructed(TypeName::UserVar(name), _) => {
+                // Replace UserVar with the bound type variable
+                bindings.get(name).cloned().unwrap_or_else(|| ty.clone())
+            }
+            Type::Constructed(name, args) => {
+                let new_args: Vec<Type> =
+                    args.iter().map(|arg| Self::substitute_type_params_static(arg, bindings)).collect();
+                Type::Constructed(name.clone(), new_args)
+            }
+            Type::Variable(_) => ty.clone(),
+        }
+    }
+
     /// Instantiate a builtin function type with fresh type variables
     fn instantiate_builtin_type(&mut self, desc: &BuiltinDescriptor) -> Type {
         use std::collections::HashMap;
@@ -140,7 +156,6 @@ impl TypeChecker {
                         args.iter().map(|arg| instantiate_with_map(arg, var_map, context)).collect();
                     Type::Constructed(name.clone(), new_args)
                 }
-                _ => ty.clone(),
             }
         }
 
@@ -213,7 +228,7 @@ impl TypeChecker {
         // Creates an array of length n filled with the given value
         // Note: The size is determined by type inference from context
         let var_a = self.context.new_variable();
-        let var_size = self.context.new_variable();  // Size will be inferred
+        let var_size = self.context.new_variable(); // Size will be inferred
         let output_array = Type::Constructed(TypeName::Array, vec![var_size.clone(), var_a.clone()]);
         let i32_type = Type::Constructed(TypeName::Str("i32"), vec![]);
         let replicate_body = Type::arrow(i32_type, Type::arrow(var_a, output_array));
@@ -286,15 +301,21 @@ impl TypeChecker {
 
     /// Helper to type check a function body with parameters in scope
     /// Returns (param_types, body_type)
+    /// If type_param_bindings is provided, UserVars in parameter types will be substituted
     fn check_function_with_params(
         &mut self,
         params: &[Pattern],
         body: &Expression,
+        type_param_bindings: &HashMap<String, Type>,
     ) -> Result<(Vec<Type>, Type)> {
         // Create type variables or use explicit types for parameters
         let param_types: Vec<Type> = params
             .iter()
-            .map(|p| p.pattern_type().cloned().unwrap_or_else(|| self.context.new_variable()))
+            .map(|p| {
+                let ty = p.pattern_type().cloned().unwrap_or_else(|| self.context.new_variable());
+                // Substitute UserVars with bound type variables
+                Self::substitute_type_params_static(&ty, type_param_bindings)
+            })
             .collect();
 
         // Push new scope for function parameters
@@ -341,7 +362,7 @@ impl TypeChecker {
             Declaration::Entry(entry) => {
                 debug!("Checking entry point: {}", entry.name);
                 let (_param_types, body_type) =
-                    self.check_function_with_params(&entry.params, &entry.body)?;
+                    self.check_function_with_params(&entry.params, &entry.body, &HashMap::new())?;
                 debug!("Entry point '{}' body type: {:?}", entry.name, body_type);
                 // TODO: Validate body_type against entry.return_types and entry.return_attributes
                 Ok(())
@@ -384,6 +405,16 @@ impl TypeChecker {
     }
 
     fn check_decl(&mut self, decl: &Decl) -> Result<()> {
+        // Bind type parameters to fresh type variables
+        // This ensures all occurrences of 'a in the function signature refer to the same variable
+        let mut type_param_bindings: HashMap<String, Type> = HashMap::new();
+        for type_param in &decl.type_params {
+            let fresh_var = self.context.new_variable();
+            type_param_bindings.insert(type_param.clone(), fresh_var);
+        }
+
+        // Note: substitution function defined as static method below
+
         if decl.params.is_empty() {
             // Variable or entry point declaration: let/def name: type = value or let/def name = value
             let expr_type = self.infer_expression(&decl.body)?;
@@ -406,7 +437,9 @@ impl TypeChecker {
             debug!("Inferred type for {}: {}", decl.name, stored_type);
         } else {
             // Function declaration: let/def name param1 param2 = body
-            let (param_types, body_type) = self.check_function_with_params(&decl.params, &decl.body)?;
+
+            let (param_types, body_type) =
+                self.check_function_with_params(&decl.params, &decl.body, &type_param_bindings)?;
             debug!(
                 "Successfully inferred body type for '{}': {:?}",
                 decl.name, body_type
@@ -420,10 +453,14 @@ impl TypeChecker {
 
             // Check against declared type if provided
             if let Some(declared_type) = &decl.ty {
+                // Substitute UserVars in the declared return type
+                let substituted_return_type =
+                    Self::substitute_type_params_static(declared_type, &type_param_bindings);
+
                 // When a function has parameters, decl.ty is just the return type annotation
                 // Unify the body type with the declared return type
                 if !decl.params.is_empty() {
-                    self.context.unify(&body_type, declared_type).map_err(|e| {
+                    self.context.unify(&body_type, &substituted_return_type).map_err(|e| {
                         CompilerError::TypeError(format!(
                             "Function return type mismatch for '{}': {}",
                             decl.name, e
@@ -433,8 +470,8 @@ impl TypeChecker {
                     // For functions without parameters, ty should be the full type
                     // But currently we're storing just the value type
                     // Since func_type for parameterless functions is just the body type,
-                    // we can just check body_type against declared_type
-                    self.context.unify(&body_type, declared_type).map_err(|_| {
+                    // we can just check body_type against substituted declared_type
+                    self.context.unify(&body_type, &substituted_return_type).map_err(|_| {
                         CompilerError::TypeError(format!(
                             "Type mismatch for '{}': declared {}, inferred {}",
                             decl.name,
@@ -804,6 +841,7 @@ impl TypeChecker {
                                     TypeName::Vec => "vec".to_string(),
                                     TypeName::Size(n) => n.to_string(),
                                     TypeName::SizeVar(name) => name.clone(),
+                                    TypeName::UserVar(name) => format!("'{}", name),
                                     TypeName::Named(name) => name.clone(),
                                     TypeName::Unique => "unique".to_string(),
                                     TypeName::Record(_) => "record".to_string(),
