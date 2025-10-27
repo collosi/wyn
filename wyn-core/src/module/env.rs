@@ -82,6 +82,21 @@ impl ModuleEnv {
     pub fn close_opened(&mut self) {
         self.opened.pop();
     }
+
+    /// Register a module type (e.g., numeric, integral, real, float)
+    pub fn register_module_type(&mut self, name: String, sig: ModuleTypeExpression) {
+        self.insert_module_type(vec![name], sig);
+    }
+
+    /// Register a builtin module (e.g., f32, i32) with its signature
+    pub fn register_builtin_module(&mut self, name: String, signature: Option<ModuleTypeExpression>) {
+        if let Some(_sig) = signature {
+            // For now, we don't need to do much with the signature
+            // The builtins are handled via the builtin registry
+            // But we mark them as known modules
+            self.modules.insert(vec![name], ModuleSignature::new());
+        }
+    }
 }
 
 impl Default for ModuleEnv {

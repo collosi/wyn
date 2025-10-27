@@ -1,7 +1,7 @@
 // Centralized builtin function registry
 // Provides type signatures and code generation implementations for all builtin functions
 
-use crate::ast::{Type, TypeName};
+use crate::ast::{Type, TypeName, TypeScheme};
 use std::collections::HashMap;
 
 /// Implementation strategy for a builtin function
@@ -75,7 +75,47 @@ pub enum CustomImpl {
     Placeholder,
 }
 
-/// Builtin function descriptor
+/// Polymorphic implementation dispatcher
+/// Dispatches to concrete implementations based on resolved types
+#[derive(Debug, Clone, PartialEq)]
+pub enum PolyImpl {
+    /// Dispatch based on whether type is float or integer
+    NumericDispatch {
+        float_impl: BuiltinImpl,
+        int_impl: BuiltinImpl,
+    },
+
+    /// Dispatch based on whether integer is signed or unsigned
+    IntegralDispatch {
+        signed_impl: BuiltinImpl,
+        unsigned_impl: BuiltinImpl,
+    },
+
+    /// Real number operations (floats only)
+    RealOp(BuiltinImpl),
+}
+
+impl PolyImpl {
+    fn type_name(ty: &Type) -> Option<&str> {
+        match ty {
+            Type::Constructed(TypeName::Str(name), _) => Some(name),
+            _ => None,
+        }
+    }
+
+    fn is_real(ty: &Type) -> bool {
+        matches!(Self::type_name(ty), Some("f16" | "f32" | "f64"))
+    }
+
+    fn is_integral(ty: &Type) -> bool {
+        matches!(
+            Self::type_name(ty),
+            Some("i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64")
+        )
+    }
+}
+
+/// Builtin function descriptor (monomorphic)
 #[derive(Debug, Clone)]
 pub struct BuiltinDescriptor {
     /// Fully qualified name (e.g., "f32.sin", "i32.+")
@@ -91,15 +131,73 @@ pub struct BuiltinDescriptor {
     pub implementation: BuiltinImpl,
 }
 
+/// Polymorphic builtin descriptor
+/// Represents a family of related functions across multiple types
+#[derive(Debug, Clone)]
+pub struct PolyBuiltinDescriptor {
+    /// Base name without module qualifier (e.g., "abs", "cos", "+")
+    pub name: String,
+
+    /// Type scheme (e.g., "forall a. a -> a")
+    pub type_scheme: TypeScheme,
+
+    /// Implementation dispatcher
+    pub implementation: PolyImpl,
+}
+
+impl PolyImpl {
+    /// Resolve to concrete implementation for a given type
+    pub fn resolve(&self, ty: &Type) -> Option<BuiltinImpl> {
+        match self {
+            PolyImpl::NumericDispatch { float_impl, int_impl } => {
+                if Self::is_real(ty) {
+                    Some(float_impl.clone())
+                } else if Self::is_integral(ty) {
+                    Some(int_impl.clone())
+                } else {
+                    None
+                }
+            }
+            PolyImpl::IntegralDispatch {
+                signed_impl,
+                unsigned_impl,
+            } => {
+                let is_signed = matches!(Self::type_name(ty), Some("i8" | "i16" | "i32" | "i64"));
+                let is_unsigned = matches!(Self::type_name(ty), Some("u8" | "u16" | "u32" | "u64"));
+
+                if is_signed {
+                    Some(signed_impl.clone())
+                } else if is_unsigned {
+                    Some(unsigned_impl.clone())
+                } else {
+                    None
+                }
+            }
+            PolyImpl::RealOp(impl_) => {
+                if Self::is_real(ty) {
+                    Some(impl_.clone())
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
 /// Central registry for all builtin functions
 pub struct BuiltinRegistry {
+    /// Monomorphic builtins (fully qualified names like "f32.sin")
     builtins: HashMap<String, BuiltinDescriptor>,
+
+    /// Polymorphic builtins (base names like "abs", indexed by module.name)
+    poly_builtins: HashMap<String, PolyBuiltinDescriptor>,
 }
 
 impl BuiltinRegistry {
     pub fn new() -> Self {
         let mut registry = BuiltinRegistry {
             builtins: HashMap::new(),
+            poly_builtins: HashMap::new(),
         };
 
         registry.register_from_prim_module();
@@ -115,14 +213,24 @@ impl BuiltinRegistry {
         registry
     }
 
-    /// Check if a name is a registered builtin
+    /// Check if a name is a registered builtin (monomorphic or polymorphic)
     pub fn is_builtin(&self, name: &str) -> bool {
-        self.builtins.contains_key(name)
+        self.builtins.contains_key(name) || self.poly_builtins.contains_key(name)
     }
 
-    /// Get builtin descriptor
+    /// Get monomorphic builtin descriptor
     pub fn get(&self, name: &str) -> Option<&BuiltinDescriptor> {
         self.builtins.get(name)
+    }
+
+    /// Get polymorphic builtin descriptor
+    pub fn get_poly(&self, name: &str) -> Option<&PolyBuiltinDescriptor> {
+        self.poly_builtins.get(name)
+    }
+
+    /// Register a polymorphic builtin
+    fn register_poly(&mut self, desc: PolyBuiltinDescriptor) {
+        self.poly_builtins.insert(desc.name.clone(), desc);
     }
 
     /// Get the type of a field on a given type (e.g., vec3.x returns f32)

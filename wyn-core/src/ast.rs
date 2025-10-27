@@ -1,6 +1,54 @@
 pub use polytype::TypeScheme;
 pub use spirv;
 
+/// Qualified name representing a path through modules to a name
+/// E.g., M.N.x is represented as QualName { qualifiers: ["M", "N"], name: "x" }
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct QualName {
+    pub qualifiers: Vec<String>,
+    pub name: String,
+}
+
+impl QualName {
+    /// Create a new qualified name
+    pub fn new(qualifiers: Vec<String>, name: String) -> Self {
+        QualName { qualifiers, name }
+    }
+
+    /// Create an unqualified name (no qualifiers)
+    pub fn unqualified(name: String) -> Self {
+        QualName {
+            qualifiers: vec![],
+            name,
+        }
+    }
+
+    /// Mangle into the format used by module elaboration
+    /// E.g., M.N.x -> "M_$_N_x", f32.cos -> "f32_cos"
+    pub fn mangle(&self) -> String {
+        if self.qualifiers.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{}_{}", self.qualifiers.join("_$_"), self.name)
+        }
+    }
+
+    /// Get the dotted notation (for display/debugging)
+    /// E.g., "M.N.x"
+    pub fn to_dotted(&self) -> String {
+        if self.qualifiers.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{}.{}", self.qualifiers.join("."), self.name)
+        }
+    }
+
+    /// Check if this is an unqualified name
+    pub fn is_unqualified(&self) -> bool {
+        self.qualifiers.is_empty()
+    }
+}
+
 /// Source location span tracking (line, column) start and end positions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {

@@ -1391,6 +1391,68 @@ fn test_parse_module_multiple_declarations() {
 }
 
 #[test]
+fn test_parse_simple_field_access() {
+    // First test that basic field access works
+    let decl = single_decl("def x: f32 = f32.cos");
+
+    match &decl.body.kind {
+        ExprKind::FieldAccess(base, field) => {
+            assert!(matches!(&base.kind, ExprKind::Identifier(name) if name == "f32"));
+            assert_eq!(field, "cos");
+        }
+        _ => panic!("Expected FieldAccess, got {:?}", decl.body.kind),
+    }
+}
+
+#[test]
+fn test_parse_qualified_name() {
+    // At parse time, f32.cos is parsed as field access
+    // The type checker will resolve it to a module member
+    let decl = single_decl("def x: f32 = f32.cos 0.5f32");
+
+    match &decl.body.kind {
+        ExprKind::Application(func, args) => {
+            match &func.kind {
+                ExprKind::FieldAccess(base, field) => {
+                    assert!(matches!(&base.kind, ExprKind::Identifier(name) if name == "f32"));
+                    assert_eq!(field, "cos");
+                }
+                _ => panic!("Expected FieldAccess, got {:?}", func.kind),
+            }
+            assert_eq!(args.len(), 1);
+        }
+        _ => panic!("Expected Application expression"),
+    }
+}
+
+#[test]
+fn test_parse_nested_qualified_name() {
+    // At parse time, M.N.foo is parsed as nested field access
+    let decl = single_decl("def x: i32 = M.N.foo 42");
+
+    match &decl.body.kind {
+        ExprKind::Application(func, args) => {
+            match &func.kind {
+                ExprKind::FieldAccess(base, field) => {
+                    assert_eq!(field, "foo");
+                    // base should be M.N
+                    match &base.kind {
+                        ExprKind::FieldAccess(inner_base, inner_field) => {
+                            assert!(matches!(&inner_base.kind, ExprKind::Identifier(name) if name == "M"));
+                            assert_eq!(inner_field, "N");
+                        }
+                        _ => panic!("Expected nested FieldAccess"),
+                    }
+                }
+                _ => panic!("Expected FieldAccess"),
+            }
+            assert_eq!(args.len(), 1);
+        }
+        _ => panic!("Expected Application expression"),
+    }
+}
+
+#[test]
 fn test_parse_local_declaration() {
     let program = parse_ok("local def x : i32 = 42");
     assert_eq!(program.declarations.len(), 1);

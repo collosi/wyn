@@ -1,0 +1,140 @@
+module type from_prim = {
+type t
+val i8	: 	i8 -> t
+val i16	: 	i16 -> t
+val i32	: 	i32 -> t
+val i64	: 	i64 -> t
+val u8	: 	u8 -> t
+val u16	: 	u16 -> t
+val u32	: 	u32 -> t
+val u64	: 	u64 -> t
+val f16	: 	f16 -> t
+val f32	: 	f32 -> t
+val f64	: 	f64 -> t
+val bool	: 	bool -> t
+}
+module type numeric = {
+include from_prim
+val (+)	: 	t -> t -> t
+val (-)	: 	t -> t -> t
+val (*)	: 	t -> t -> t
+val (/)	: 	t -> t -> t
+val (%)	: 	t -> t -> t
+val (**)	: 	t -> t -> t
+val to_i64	: 	t -> i64
+val (==)	: 	t -> t -> bool
+val (<)	: 	t -> t -> bool
+val (>)	: 	t -> t -> bool
+val (<=)	: 	t -> t -> bool
+val (>=)	: 	t -> t -> bool
+val (!=)	: 	t -> t -> bool
+val neg	: 	t -> t
+val max	: 	t -> t -> t
+val min	: 	t -> t -> t
+val abs	: 	t -> t
+val sgn	: 	t -> t
+val highest	: 	t
+val lowest	: 	t
+val sum	 [n]: 	[n]t -> t
+val product	 [n]: 	[n]t -> t
+val maximum	 [n]: 	[n]t -> t
+val minimum	 [n]: 	[n]t -> t
+}
+module type integral = {
+include numeric
+val (//)	: 	t -> t -> t
+val (%%)	: 	t -> t -> t
+val (&)	: 	t -> t -> t
+val (|)	: 	t -> t -> t
+val (^)	: 	t -> t -> t
+val not	: 	t -> t
+val (<<)	: 	t -> t -> t
+val (>>)	: 	t -> t -> t
+val (>>>)	: 	t -> t -> t
+val num_bits	: 	i32
+val get_bit	: 	i32 -> t -> i32
+val set_bit	: 	i32 -> t -> i32 -> t
+val popc	: 	t -> i32
+val mul_hi	: 	(x: t) -> (y: t) -> t
+val mad_hi	: 	(a: t) -> (b: t) -> (c: t) -> t
+val clz	: 	t -> i32
+val ctz	: 	t -> i32
+}
+module type real = {
+include numeric
+val recip	: 	t -> t
+val from_fraction	: 	i64 -> i64 -> t
+val to_i64	: 	t -> i64
+val to_f64	: 	t -> f64
+val sqrt	: 	t -> t
+val rsqrt	: 	t -> t
+val cbrt	: 	t -> t
+val exp	: 	t -> t
+val sin	: 	t -> t
+val cos	: 	t -> t
+val tan	: 	t -> t
+val sinpi	: 	t -> t
+val cospi	: 	t -> t
+val tanpi	: 	t -> t
+val asin	: 	t -> t
+val acos	: 	t -> t
+val atan	: 	t -> t
+val asinpi	: 	t -> t
+val acospi	: 	t -> t
+val atanpi	: 	t -> t
+val sinh	: 	t -> t
+val cosh	: 	t -> t
+val tanh	: 	t -> t
+val asinh	: 	t -> t
+val acosh	: 	t -> t
+val atanh	: 	t -> t
+val atan2	: 	t -> t -> t
+val atan2pi	: 	t -> t -> t
+val hypot	: 	t -> t -> t
+val gamma	: 	t -> t
+val lgamma	: 	t -> t
+val erf	: 	t -> t
+val erfc	: 	t -> t
+val lerp	: 	t -> t -> t -> t
+val log	: 	t -> t
+val log2	: 	t -> t
+val log10	: 	t -> t
+val log1p	: 	t -> t
+val ceil	: 	t -> t
+val floor	: 	t -> t
+val trunc	: 	t -> t
+val round	: 	t -> t
+val mad	: 	(a: t) -> (b: t) -> (c: t) -> t
+val fma	: 	(a: t) -> (b: t) -> (c: t) -> t
+val isinf	: 	t -> bool
+val isnan	: 	t -> bool
+val inf	: 	t
+val nan	: 	t
+val pi	: 	t
+val e	: 	t
+}
+module type float = {
+include real
+type int_t
+val from_bits	: 	int_t -> t
+val to_bits	: 	t -> int_t
+val num_bits	: 	i32
+val get_bit	: 	i32 -> t -> i32
+val set_bit	: 	i32 -> t -> i32 -> t
+val epsilon	: 	t
+val nextafter	: 	(x: t) -> (y: t) -> t
+val ldexp	: 	t -> i32 -> t
+val copysign	: 	(x: t) -> (y: t) -> t
+}
+module bool	: 	from_prim with t = bool
+module i8	: 	(integral with t = i8)
+module i16	: 	(integral with t = i16)
+module i32	: 	(integral with t = i32)
+module i64	: 	(integral with t = i64)
+module u8	: 	(integral with t = u8)
+module u16	: 	(integral with t = u16)
+module u32	: 	(integral with t = u32)
+module u64	: 	(integral with t = u64)
+module f64	: 	(float with t = f64 with int_t = u64)
+module f32	: 	(float with t = f32 with int_t = u32)
+module f16	: 	(float with t = f16 with int_t = u16)

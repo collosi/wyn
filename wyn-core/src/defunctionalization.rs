@@ -73,8 +73,12 @@ impl Defunctionalizer {
                     }
                 }
                 Declaration::Entry(entry) => {
-                    // Entry points are already first-order
-                    new_declarations.push(Declaration::Entry(entry.clone()));
+                    // Entry points need defunctionalization too
+                    let (transformed_body, _sv) =
+                        self.defunctionalize_expression(&entry.body, &mut scope_stack)?;
+                    let mut transformed_entry = entry.clone();
+                    transformed_entry.body = transformed_body;
+                    new_declarations.push(Declaration::Entry(transformed_entry));
                 }
                 Declaration::Uniform(uniform_decl) => {
                     // Uniform declarations have no body
@@ -543,6 +547,19 @@ impl Defunctionalizer {
                         ),
                         StaticValue::Dyn(polytype::Type::Variable(2)),
                     )),
+                    ExprKind::FieldAccess(base, field) => {
+                        // Qualified name like f32.cos - convert to dotted name for builtin lookup
+                        let qual_name =
+                            crate::ast::QualName::new(vec![Self::extract_base_name(base)?], field.clone());
+                        let dotted_name = qual_name.to_dotted();
+                        Ok((
+                            self.node_counter.mk_node(
+                                ExprKind::FunctionCall(dotted_name, transformed_args),
+                                Span::dummy(),
+                            ),
+                            StaticValue::Dyn(polytype::Type::Variable(2)),
+                        ))
+                    }
                     ExprKind::FunctionCall(func_name, existing_args) => {
                         // This is a partial application that's already been transformed to FunctionCall
                         // Append the new args to the existing ones
@@ -574,6 +591,18 @@ impl Defunctionalizer {
                     ))),
                 }
             }
+        }
+    }
+
+    /// Extract the base identifier name from an expression
+    /// E.g., for `f32` in `f32.cos`, returns "f32"
+    fn extract_base_name(expr: &Expression) -> Result<String> {
+        match &expr.kind {
+            ExprKind::Identifier(name) => Ok(name.clone()),
+            _ => Err(CompilerError::SpirvError(format!(
+                "Expected identifier as base of qualified name, got {:?}",
+                expr.kind
+            ))),
         }
     }
 

@@ -15,26 +15,67 @@ mod env;
 #[cfg(test)]
 mod tests;
 
-use crate::ast::{Declaration, ModuleBind, ModuleExpression, ModuleTypeExpression, Program, Spec};
+use crate::ast::{
+    Declaration, ExprKind, Expression, ModuleBind, ModuleExpression, ModuleTypeExpression, Program, Span,
+    Spec,
+};
+use crate::builtin_registry::BuiltinRegistry;
 use crate::error::{CompilerError, Result};
 use env::{ModuleEnv, ModuleSignature};
 
 /// Main entry point for module elaboration
 pub struct ModuleElaborator {
     env: ModuleEnv,
+    builtin_registry: BuiltinRegistry,
 }
 
 impl ModuleElaborator {
     pub fn new() -> Self {
-        ModuleElaborator {
+        let mut elaborator = ModuleElaborator {
             env: ModuleEnv::new(),
+            builtin_registry: BuiltinRegistry::new(),
+        };
+        elaborator.load_prelude().ok(); // Ignore errors for now
+        elaborator
+    }
+
+    /// Load the math prelude to define builtin module types and modules
+    fn load_prelude(&mut self) -> Result<()> {
+        // Parse the prelude file
+        let prelude_source = include_str!("../../../prelude/math.wyn");
+        let tokens =
+            crate::lexer::tokenize(prelude_source).map_err(crate::error::CompilerError::ParseError)?;
+        let mut parser = crate::parser::Parser::new(tokens);
+        let prelude_program = parser.parse()?;
+
+        // Process declarations to populate module environment
+        for decl in prelude_program.declarations {
+            match decl {
+                Declaration::ModuleTypeBind(mtb) => {
+                    // Register module type in environment
+                    self.env.register_module_type(mtb.name.clone(), mtb.definition);
+                }
+                Declaration::ModuleBind(mb) => {
+                    // Register module in environment
+                    // The module signature tells us what operations are available
+                    self.env.register_builtin_module(mb.name.clone(), mb.signature);
+                }
+                _ => {}
+            }
         }
+
+        Ok(())
     }
 
     /// Elaborate a program, resolving all modules and producing a flattened AST
     pub fn elaborate(&mut self, program: Program) -> Result<Program> {
         let mut flat_decls = Vec::new();
 
+        // First, add builtin module members (e.g., f32_cos, f32_sin, etc.)
+        // These come from the builtin registry and are automatically available
+        flat_decls.extend(self.create_builtin_module_declarations());
+
+        // Then elaborate user-defined declarations
         for decl in program.declarations {
             flat_decls.extend(self.elaborate_declaration(decl)?);
         }
@@ -42,6 +83,15 @@ impl ModuleElaborator {
         Ok(Program {
             declarations: flat_decls,
         })
+    }
+
+    /// Create synthetic declarations for builtin module members
+    /// E.g., f32.cos becomes a Val declaration with mangled name f32_cos
+    fn create_builtin_module_declarations(&self) -> Vec<Declaration> {
+        // For now, return empty - builtins are handled in the type checker
+        // In the future, we could generate proper Val declarations here
+        // that would allow builtin modules to be treated as first-class modules
+        vec![]
     }
 
     /// Elaborate a single declaration

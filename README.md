@@ -121,4 +121,4 @@ This is a minimal implementation focused on the specific example. Current limita
 - No control flow structures
 - Function calls and tuples supported in type checking but not SPIR-V generation
 - No modules or imports
-- Type inference implemented using polytype for `def` declarations
+- Type inference implemented using polytype for `def` declarations# wyn

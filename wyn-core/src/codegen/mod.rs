@@ -1452,7 +1452,8 @@ impl CodeGenerator {
                 // For now, not implemented in codegen
                 else if func_name == "to_vec" {
                     return Err(CompilerError::SpirvError(
-                        "to_vec not yet implemented in codegen - needs type info from type checker".to_string(),
+                        "to_vec not yet implemented in codegen - needs type info from type checker"
+                            .to_string(),
                     ));
                 }
                 // Check if it's a builtin function

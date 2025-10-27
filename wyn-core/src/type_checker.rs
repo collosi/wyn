@@ -46,6 +46,36 @@ impl TypeChecker {
         }
     }
 
+    /// Try to extract a qualified name from a FieldAccess expression chain
+    /// Returns Some(QualName) if the expression is a chain of Identifier + FieldAccess
+    /// E.g., M.N.x -> QualName { qualifiers: ["M", "N"], name: "x" }
+    ///       f32.cos -> QualName { qualifiers: ["f32"], name: "cos" }
+    fn try_extract_qual_name(expr: &Expression, final_field: &str) -> Option<crate::ast::QualName> {
+        let mut qualifiers = Vec::new();
+        let mut current = expr;
+
+        // Walk up the FieldAccess chain collecting qualifiers
+        loop {
+            match &current.kind {
+                ExprKind::Identifier(name) => {
+                    // Base case: found the root identifier
+                    qualifiers.push(name.clone());
+                    qualifiers.reverse();
+                    return Some(crate::ast::QualName::new(qualifiers, final_field.to_string()));
+                }
+                ExprKind::FieldAccess(base, field) => {
+                    // Intermediate field access - this is a qualifier
+                    qualifiers.push(field.clone());
+                    current = base;
+                }
+                _ => {
+                    // Not a simple qualified name chain (e.g., function call, literal, etc.)
+                    return None;
+                }
+            }
+        }
+    }
+
     pub fn new() -> Self {
         TypeChecker {
             scope_stack: ScopeStack::new(),
@@ -628,19 +658,21 @@ impl TypeChecker {
                 Ok(func_type.apply(&self.context))
             }
             ExprKind::FieldAccess(expr, field) => {
-                // Check if this is a qualified name (namespace.function)
-                // e.g., f32.sin where f32 is a namespace, not a variable
-                let mut handled_as_qualified = false;
-                let mut qualified_result = None;
+                // Try to extract a qualified name (e.g., f32.cos, M.N.x)
+                if let Some(qual_name) = Self::try_extract_qual_name(expr, field) {
+                    let dotted = qual_name.to_dotted();
+                    let mangled = qual_name.mangle();
 
-                if let ExprKind::Identifier(name) = &expr.kind {
-                    // Check if this looks like a namespace (currently just "f32")
-                    let qualified_name = format!("{}.{}", name, field);
+                    // Check if this is a module-qualified name (mangled name exists in scope)
+                    if let Ok(scheme) = self.scope_stack.lookup(&mangled) {
+                        // Instantiate the type scheme
+                        let ty = scheme.instantiate(&mut self.context);
+                        return Ok(ty);
+                    }
 
-                    // Check if this is a known builtin function
-                    if self.builtin_registry.is_builtin(&qualified_name) {
-                        // Get the builtin descriptor with type signature
-                        if let Some(desc) = self.builtin_registry.get(&qualified_name) {
+                    // Check if this is a builtin function (e.g., f32.sin)
+                    if self.builtin_registry.is_builtin(&dotted) {
+                        if let Some(desc) = self.builtin_registry.get(&dotted) {
                             // Build function type: arg1 -> arg2 -> ... -> ret
                             let func_type = desc
                                 .param_types
@@ -649,16 +681,16 @@ impl TypeChecker {
                                 .fold(desc.return_type.clone(), |acc, arg_ty| {
                                     Type::arrow(arg_ty.clone(), acc)
                                 });
-
-                            handled_as_qualified = true;
-                            qualified_result = Some(Ok(func_type));
+                            return Ok(func_type);
                         }
                     }
+
+                    // Qualified name not found
+                    return Err(CompilerError::UndefinedVariable(dotted));
                 }
 
-                if handled_as_qualified {
-                    qualified_result.unwrap()
-                } else {
+                // Not a qualified name, treat as normal field access
+                {
                     // Not a qualified name, proceed with normal field access
                     let expr_type = self.infer_expression(expr)?;
 
