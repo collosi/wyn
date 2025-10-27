@@ -1,0 +1,1 @@
+def test : f32 = length (vec2 3.0f32 4.0f32)

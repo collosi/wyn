@@ -14,12 +14,21 @@ impl TypeVarGenerator for Context<TypeName> {
     }
 }
 
+/// A warning message produced during type checking
+#[derive(Debug, Clone)]
+pub struct TypeWarning {
+    pub message: String,
+    pub span: Span,
+}
+
 pub struct TypeChecker {
     scope_stack: ScopeStack<TypeScheme<TypeName>>, // Store polymorphic types
     context: Context<TypeName>,                    // Polytype unification context
     record_field_map: HashMap<(String, String), Type>, // Map (type_name, field_name) -> field_type
     builtin_registry: crate::builtin_registry::BuiltinRegistry, // Centralized builtin registry
     type_table: HashMap<crate::ast::NodeId, Type>, // Maps expression NodeId to inferred type
+    warnings: Vec<TypeWarning>,                    // Collected warnings
+    type_holes: Vec<(NodeId, Span)>,               // Track type hole locations for warning emission
 }
 
 impl Default for TypeChecker {
@@ -94,7 +103,19 @@ impl TypeChecker {
             record_field_map: HashMap::new(),
             builtin_registry,
             type_table: HashMap::new(),
+            warnings: Vec::new(),
+            type_holes: Vec::new(),
         }
+    }
+
+    /// Get all warnings collected during type checking
+    pub fn warnings(&self) -> &[TypeWarning] {
+        &self.warnings
+    }
+
+    /// Add a warning
+    fn add_warning(&mut self, message: String, span: Span) {
+        self.warnings.push(TypeWarning { message, span });
     }
 
     /// Instantiate a builtin function type with fresh type variables
@@ -244,7 +265,23 @@ impl TypeChecker {
             self.check_declaration(decl)?;
         }
 
+        // Emit warnings for all type holes now that types are fully inferred
+        self.emit_hole_warnings();
+
         Ok(self.type_table.clone())
+    }
+
+    /// Emit warnings for all type holes showing their inferred types
+    fn emit_hole_warnings(&mut self) {
+        // Clone the holes list to avoid borrow checker issues
+        let holes = self.type_holes.clone();
+        for (node_id, span) in holes {
+            if let Some(hole_type) = self.type_table.get(&node_id) {
+                let resolved_type = hole_type.apply(&self.context);
+                let type_str = self.format_type(&resolved_type);
+                self.add_warning(format!("Hole of type {}", type_str), span);
+            }
+        }
     }
 
     /// Helper to type check a function body with parameters in scope
@@ -384,16 +421,14 @@ impl TypeChecker {
             // Check against declared type if provided
             if let Some(declared_type) = &decl.ty {
                 // When a function has parameters, decl.ty is just the return type annotation
-                // Check the body type matches the declared return type
+                // Unify the body type with the declared return type
                 if !decl.params.is_empty() {
-                    if !self.types_match(&body_type, declared_type) {
-                        return Err(CompilerError::TypeError(format!(
-                            "Function return type mismatch for '{}': expected {}, got {}",
-                            decl.name,
-                            self.format_type(declared_type),
-                            self.format_type(&body_type)
-                        )));
-                    }
+                    self.context.unify(&body_type, declared_type).map_err(|e| {
+                        CompilerError::TypeError(format!(
+                            "Function return type mismatch for '{}': {}",
+                            decl.name, e
+                        ))
+                    })?;
                 } else {
                     // For functions without parameters, ty should be the full type
                     // But currently we're storing just the value type
@@ -433,6 +468,8 @@ impl TypeChecker {
     fn infer_expression(&mut self, expr: &Expression) -> Result<Type> {
         let ty = match &expr.kind {
             ExprKind::TypeHole => {
+                // Record this hole for warning emission after type inference completes
+                self.type_holes.push((expr.h.id, expr.h.span.clone()));
                 Ok(self.context.new_variable())
             }
             ExprKind::IntLiteral(_) => Ok(types::i32()),

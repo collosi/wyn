@@ -1,0 +1,4 @@
+-- Test type holes
+def foo (x:[3]f32) : i64 = ???
+
+def bar (x:[5]f32) : i64 = ??? x

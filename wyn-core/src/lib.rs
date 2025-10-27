@@ -62,6 +62,11 @@ impl Compiler {
         type_checker.load_builtins()?;
         let type_table = type_checker.check_program(&program)?;
 
+        // Print warnings to stderr
+        for warning in type_checker.warnings() {
+            eprintln!("Warning: {}", warning.message);
+        }
+
         // Convert AST to MIR (Mid-level Intermediate Representation)
         let mirize = mirize::Mirize::new(type_table);
         let mir_module = mirize.mirize_program(&program)?;

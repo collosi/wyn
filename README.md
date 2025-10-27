@@ -110,6 +110,7 @@ cargo test
 - Division operator: `/`
 - Function calls: `zip xs ys`
 - Tuples: `(a, b)`
+- Type holes: `???` - placeholder expressions for development
 - Comments: `-- comment`
 
 ## Limitations
