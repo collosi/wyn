@@ -571,10 +571,15 @@ impl BuiltinRegistry {
     /// Helper to register a vector constructor
     fn register_vec_constructor(&mut self, vec_name: &'static str, elem_type: &'static str, arity: usize) {
         let elem_t = Self::ty(elem_type);
+        // Return type is Vec[arity, elem_type], not just the name "vec4"
+        let return_type = Type::Constructed(
+            TypeName::Vec,
+            vec![Type::Constructed(TypeName::Size(arity), vec![]), elem_t.clone()],
+        );
         self.register(BuiltinDescriptor {
             name: vec_name.to_string(),
             param_types: vec![elem_t; arity],
-            return_type: Self::ty(vec_name),
+            return_type,
             implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
         });
     }

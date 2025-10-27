@@ -1,21 +1,21 @@
 -- Vertex shader: full-screen triangle
-def verts: [3]vec4f32 =
+def verts: [3]vec4 =
   [vec4 -1.0f32 -1.0f32 0.0f32 1.0f32,
    vec4 3.0f32 -1.0f32 0.0f32 1.0f32,
    vec4 -1.0f32 3.0f32 0.0f32 1.0f32]
 
 #[vertex]
-def vertex_main (vertex_id:i32) : #[builtin(position)] vec4f32 = verts[vertex_id]
+def vertex_main (vertex_id:i32) : #[builtin(position)] vec4 = verts[vertex_id]
 
 -- Constants (changed to def for top-level, using vec3 constructors)
-def red : vec3f32 = vec3 1.0f32 0.0f32 0.0f32
-def green : vec3f32 = vec3 0.0f32 1.0f32 0.0f32
-def blue : vec3f32 = vec3 0.0f32 0.8f32 1.0f32
-def white : vec3f32 = vec3 1.0f32 1.0f32 0.97f32
-def yellow : vec3f32 = vec3 1.0f32 1.0f32 0.0f32
+def red : vec3 = vec3 1.0f32 0.0f32 0.0f32
+def green : vec3 = vec3 0.0f32 1.0f32 0.0f32
+def blue : vec3 = vec3 0.0f32 0.8f32 1.0f32
+def white : vec3 = vec3 1.0f32 1.0f32 0.97f32
+def yellow : vec3 = vec3 1.0f32 1.0f32 0.0f32
 
 -- Rasterize helpers
-def line (weight:f32) (p:vec2f32) (p0:vec2f32) (p1:vec2f32) (w:f32) : f32 =
+def line (weight:f32) (p:vec2) (p0:vec2) (p1:vec2) (w:f32) : f32 =
   let d = vec2 (p1.x-p0.x) (p1.y-p0.y) in
   let denom = dot d d in
   let dp = vec2 (p.x-p0.x) (p.y-p0.y) in
@@ -27,37 +27,37 @@ def line (weight:f32) (p:vec2f32) (p0:vec2f32) (p1:vec2f32) (w:f32) : f32 =
   let s = (if dist == 0.0f32 then 0.0f32 else (1.0f32 / dist)) * weight * w in
   f32.min (s*s) 1.0f32
 
-def circle (weight:f32) (p:vec2f32) (c:vec2f32) (r:f32) (w:f32) : f32 =
+def circle (weight:f32) (p:vec2) (c:vec2) (r:f32) (w:f32) : f32 =
   let diff = vec2 (p.x-c.x) (p.y-c.y) in
   let dist = f32.abs (length diff) + r in
   let s = (if dist == 0.0f32 then 0.0f32 else (1.0f32 / dist)) * weight * w in
   f32.min (s*s) 1.0f32
 
 -- Matrices
-def getRotMatrix (a:vec3f32) : mat4 =
+def getRotMatrix (a:vec3) : mat4 =
   let s = [ f32.sin a.x, f32.sin a.y, f32.sin a.z ] in
   let c = [ f32.cos a.x, f32.cos a.y, f32.cos a.z ] in
   -- Columns ret[0..3], matching GLSL code:
-  let c0 : vec4f32 = [ c[1]*c[2],           c[1]*s[2],           -s[1],     0.0f32 ] in
-  let c1 : vec4f32 = [ s[0]*s[1]*c[2]-c[0]*s[2],  s[0]*s[1]*s[2]+c[0]*c[2],  s[0]*c[1], 0.0f32 ] in
-  let c2 : vec4f32 = [ c[0]*s[1]*c[2]+s[0]*s[2],  c[0]*s[1]*s[2]-s[0]*c[2],  c[0]*c[1], 0.0f32 ] in
-  let c3 : vec4f32 = [ 0.0f32, 0.0f32, 0.0f32, 1.0f32 ] in
+  let c0 : vec4 = [ c[1]*c[2],           c[1]*s[2],           -s[1],     0.0f32 ] in
+  let c1 : vec4 = [ s[0]*s[1]*c[2]-c[0]*s[2],  s[0]*s[1]*s[2]+c[0]*c[2],  s[0]*c[1], 0.0f32 ] in
+  let c2 : vec4 = [ c[0]*s[1]*c[2]+s[0]*s[2],  c[0]*s[1]*s[2]-s[0]*c[2],  c[0]*c[1], 0.0f32 ] in
+  let c3 : vec4 = [ 0.0f32, 0.0f32, 0.0f32, 1.0f32 ] in
   [c0,c1,c2,c3]
 
-def getPosMatrix (p:vec3f32) : mat4 =
-  let c0 : vec4f32 = [1.0f32, 0.0f32, 0.0f32, p.x] in
-  let c1 : vec4f32 = [0.0f32, 1.0f32, 0.0f32, p.y] in
-  let c2 : vec4f32 = [0.0f32, 0.0f32, 1.0f32, p.z] in
-  let c3 : vec4f32 = [0.0f32, 0.0f32, 0.0f32, 1.0f32] in
+def getPosMatrix (p:vec3) : mat4 =
+  let c0 : vec4 = [1.0f32, 0.0f32, 0.0f32, p.x] in
+  let c1 : vec4 = [0.0f32, 1.0f32, 0.0f32, p.y] in
+  let c2 : vec4 = [0.0f32, 0.0f32, 1.0f32, p.z] in
+  let c3 : vec4 = [0.0f32, 0.0f32, 0.0f32, 1.0f32] in
   [c0,c1,c2,c3]
 
 -- utils
-def mix3 (a:vec3f32) (b:vec3f32) (c:vec3) (t:f32) : vec3f32 =
+def mix3 (a:vec3) (b:vec3) (c:vec3) (t:f32) : vec3 =
   if t > 0.5f32
   then mix3v b c (t*2.0f32 - 1.0f32)
   else mix3v a b (t*2.0f32)
 
-def fragment (p:vec3f32) (iTime:f32) : vec3f32 =
+def fragment (p:vec3) (iTime:f32) : vec3 =
   let t = f32.sin(p.x*0.8f32 + iTime*0.5f32)*0.5f32 + 0.5f32 in
   let fog = f32.min (p.z*p.z*p.z*400.0f32) 1.0f32 in
   map (\x -> x * fog) (mix3 red green blue t)
@@ -67,14 +67,14 @@ def fragment (p:vec3f32) (iTime:f32) : vec3f32 =
 --   iResolution : [w, h]
 --   iTime       : time in seconds
 --   fragCoord   : pixel coordinate [x, y]
--- Output: vec4f32 color
-def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
+-- Output: vec4 color
+def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2) : vec4 =
   let weight = 3.0f32 / iResolution[0] in
 
   -- Normalized, centered UV with aspect correction
-  let uv0 : vec2f32 = [ fragCoord.x / iResolution[0], fragCoord.y / iResolution[1] ] in
-  let uv1 : vec2f32 = [ uv0.x*2.0f32 - 1.0f32, uv0.y*2.0f32 - 1.0f32 ] in
-  let uv  : vec2f32 = [ uv1.x * (iResolution[0]/iResolution[1]), uv1.y ] in
+  let uv0 : vec2 = [ fragCoord.x / iResolution[0], fragCoord.y / iResolution[1] ] in
+  let uv1 : vec2 = [ uv0.x*2.0f32 - 1.0f32, uv0.y*2.0f32 - 1.0f32 ] in
+  let uv  : vec2 = [ uv1.x * (iResolution[0]/iResolution[1]), uv1.y ] in
 
   let line_width = 0.4f32 in
   let time = iTime * 0.31415f32 in
@@ -108,7 +108,7 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
       [ 0.0f32,-1.0f32, 1.0f32] ] in
 
   -- Accumulate color
-  let c_box : vec3f32 =
+  let c_box : vec3 =
     loop (idx, acc) = (0i32, base_col) while idx < 18 do
       let pos  = getPosMatrix (map (\x -> x * 4.0f32) instA[idx]) in
       let mat  : mat4 = mul_mat4 (mul_mat4 pos rot) cam in
@@ -161,13 +161,13 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
       [-1.0f32,-1.0f32, 1.0f32],
       [ 1.0f32,-1.0f32, 1.0f32] ] in
 
-  let c_final : vec3f32 =
+  let c_final : vec3 =
     loop (idx, acc) = (0i32, c_box) while idx < 8 do
       let pos = getPosMatrix (map (\x -> x * 4.0f32) instB[idx]) in
       let mat : mat4 = mul_mat4 (mul_mat4 pos rot) cam in
-      let v4  : vec4f32 = mul_rowvec_mat4 [0.0f32,0.0f32,0.0f32,1.0f32] mat in
+      let v4  : vec4 = mul_rowvec_mat4 [0.0f32,0.0f32,0.0f32,1.0f32] mat in
       let zinv = 1.0f32 / v4.z in
-      let vert : vec3f32 = [ v4.x*zinv, v4.y*zinv, zinv ] in
+      let vert : vec3 = [ v4.x*zinv, v4.y*zinv, zinv ] in
       let sh  = fragment vert iTime in
       let cov = circle weight uv [vert.x, vert.y] (-vert.z) line_width in
       let acc' = map2 (\x y -> x + y) acc (map (\x -> x * cov) sh) in
@@ -183,5 +183,5 @@ def fragment_main : #[location(0)] vec4 =
   let width = 800.0f32 in
   let height = 600.0f32 in
   let time = 1.0f32 in
-  let fragCoord : vec2f32 = [400.0f32, 300.0f32] in -- center of screen for now
+  let fragCoord : vec2 = [400.0f32, 300.0f32] in -- center of screen for now
   main_image [width, height] time fragCoord

@@ -667,34 +667,28 @@ impl Parser {
                 self.advance();
                 Ok(types::f32())
             }
-            // Vector types - polymorphic over element type
-            Some(Token::Identifier(name)) if name == "vec2" => {
+            // Concrete vector types with element type suffix
+            Some(Token::Identifier(name)) if name == "vec2f32" => {
                 self.advance();
-                // TODO: Variable(0) is a placeholder - need proper type variable generation
-                // vec2 is Vec(2, 'a) - polymorphic 2-vector
-                Ok(types::vec(2, polytype::Type::Variable(0)))
+                Ok(types::vec(2, types::f32()))
             }
-            Some(Token::Identifier(name)) if name == "vec3" => {
+            Some(Token::Identifier(name)) if name == "vec3f32" => {
                 self.advance();
-                // TODO: Variable(0) is a placeholder - need proper type variable generation
-                // vec3 is Vec(3, 'a) - polymorphic 3-vector
-                Ok(types::vec(3, polytype::Type::Variable(0)))
+                Ok(types::vec(3, types::f32()))
             }
-            Some(Token::Identifier(name)) if name == "vec4" => {
+            Some(Token::Identifier(name)) if name == "vec4f32" => {
                 self.advance();
-                // TODO: Variable(0) is a placeholder - need proper type variable generation
-                // vec4 is Vec(4, 'a) - polymorphic 4-vector
-                Ok(types::vec(4, polytype::Type::Variable(0)))
+                Ok(types::vec(4, types::f32()))
             }
-            Some(Token::Identifier(name)) if name == "ivec2" => {
+            Some(Token::Identifier(name)) if name == "vec2i32" => {
                 self.advance();
                 Ok(types::vec(2, types::i32()))
             }
-            Some(Token::Identifier(name)) if name == "ivec3" => {
+            Some(Token::Identifier(name)) if name == "vec3i32" => {
                 self.advance();
                 Ok(types::vec(3, types::i32()))
             }
-            Some(Token::Identifier(name)) if name == "ivec4" => {
+            Some(Token::Identifier(name)) if name == "vec4i32" => {
                 self.advance();
                 Ok(types::vec(4, types::i32()))
             }
