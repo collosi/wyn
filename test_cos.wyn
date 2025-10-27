@@ -1,2 +1,2 @@
-#[vertex] def vertex_main(): #[builtin(position)] vec4 =
+#[vertex] def vertex_main(): #[builtin(position)] vec4f32 =
   vec4 (f32.cos 0.5f32) (f32.cos 0.5f32) (f32.cos 0.5f32) 1.0f32

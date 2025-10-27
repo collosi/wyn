@@ -3,11 +3,12 @@
 //! This module converts MIR (Mid-level Intermediate Representation) to SPIR-V.
 
 use crate::ast::TypeName;
+use crate::builtin_registry::{BuiltinImpl, BuiltinRegistry, SpirvOp};
 use crate::error::{CompilerError, Result};
 use crate::mir::{self, BlockId, FunctionId, Instruction, Module as MirModule, Register};
 use polytype::Type;
 use rspirv::binary::Assemble;
-use rspirv::dr::Builder;
+use rspirv::dr::{Builder, Operand};
 use rspirv::spirv::{self, AddressingModel, Capability, ExecutionModel, MemoryModel, StorageClass};
 use std::collections::HashMap;
 
@@ -20,6 +21,7 @@ type FunctionMap = HashMap<FunctionId, spirv::Word>;
 /// Lowers MIR to SPIR-V
 pub struct Lowering {
     builder: Builder,
+    builtin_registry: BuiltinRegistry,
 
     // Type caching
     type_cache: HashMap<Type<TypeName>, spirv::Word>,
@@ -35,6 +37,9 @@ pub struct Lowering {
     bool_type: spirv::Word,
     i32_type: spirv::Word,
     f32_type: spirv::Word,
+
+    // GLSL extended instruction set
+    glsl_ext_inst_id: spirv::Word,
 
     // Function mapping
     function_map: FunctionMap,
@@ -64,6 +69,7 @@ impl Lowering {
 
         let mut lowering = Lowering {
             builder,
+            builtin_registry: BuiltinRegistry::new(),
             type_cache: HashMap::new(),
             ptr_cache: HashMap::new(),
             int_const_cache: HashMap::new(),
@@ -73,6 +79,7 @@ impl Lowering {
             bool_type: 0,
             i32_type: 0,
             f32_type: 0,
+            glsl_ext_inst_id: 0,
             function_map: HashMap::new(),
             current_register_map: HashMap::new(),
             current_block_map: HashMap::new(),
@@ -88,6 +95,9 @@ impl Lowering {
         lowering.bool_type = lowering.builder.type_bool();
         lowering.i32_type = lowering.builder.type_int(32, 1);
         lowering.f32_type = lowering.builder.type_float(32);
+
+        // Import GLSL.std.450 extended instruction set
+        lowering.glsl_ext_inst_id = lowering.builder.ext_inst_import("GLSL.std.450");
 
         lowering
     }
@@ -149,23 +159,45 @@ impl Lowering {
         }
 
         let type_id = match ty {
-            Type::Constructed(TypeName::Str(name), args) => {
-                match *name {
+            Type::Constructed(type_name, args) => {
+                let name_str = match type_name {
+                    TypeName::Str(s) => *s,
+                    TypeName::Named(s) => s.as_str(),
+                    _ => {
+                        return Err(CompilerError::SpirvError(format!(
+                            "Unsupported type name: {:?}",
+                            type_name
+                        )));
+                    }
+                };
+                match name_str {
                     "i32" => self.i32_type,
                     "f32" => self.f32_type,
                     "bool" => self.bool_type,
                     "void" => self.void_type,
-                    "vec2" => {
+                    "vec2" | "vec2f32" => {
                         let f32_id = self.f32_type;
                         self.builder.type_vector(f32_id, 2)
                     }
-                    "vec3" => {
+                    "vec3" | "vec3f32" => {
                         let f32_id = self.f32_type;
                         self.builder.type_vector(f32_id, 3)
                     }
-                    "vec4" => {
+                    "vec4" | "vec4f32" => {
                         let f32_id = self.f32_type;
                         self.builder.type_vector(f32_id, 4)
+                    }
+                    "vec2i32" => {
+                        let i32_id = self.i32_type;
+                        self.builder.type_vector(i32_id, 2)
+                    }
+                    "vec3i32" => {
+                        let i32_id = self.i32_type;
+                        self.builder.type_vector(i32_id, 3)
+                    }
+                    "vec4i32" => {
+                        let i32_id = self.i32_type;
+                        self.builder.type_vector(i32_id, 4)
                     }
                     "tuple" => {
                         // Get component types
@@ -545,9 +577,10 @@ impl Lowering {
             }
 
             Instruction::CallBuiltin(dest, name, args) => {
-                // Handle builtin functions like vec4, vec3, etc.
+                // Handle builtin functions
                 match name.as_str() {
-                    "vec2" | "vec3" | "vec4" => {
+                    // Vector constructors
+                    "vec2" | "vec3" | "vec4" | "vec2i32" | "vec3i32" | "vec4i32" => {
                         let type_id = self.get_or_create_type(&dest.ty)?;
                         let mut arg_ids = Vec::new();
                         for arg in args {
@@ -556,11 +589,18 @@ impl Lowering {
                         let result_id = self.builder.composite_construct(type_id, None, arg_ids)?;
                         self.current_register_map.insert(dest.id, result_id);
                     }
+                    // Look up in builtin registry
                     _ => {
-                        return Err(CompilerError::SpirvError(format!(
-                            "Builtin function not yet implemented: {}",
-                            name
-                        )));
+                        if let Some(builtin_desc) = self.builtin_registry.get(name) {
+                            let impl_clone = builtin_desc.implementation.clone();
+                            let result_id = self.lower_builtin_call(&impl_clone, dest, args)?;
+                            self.current_register_map.insert(dest.id, result_id);
+                        } else {
+                            return Err(CompilerError::SpirvError(format!(
+                                "Builtin function not found in registry: {}",
+                                name
+                            )));
+                        }
                     }
                 }
             }
@@ -834,6 +874,151 @@ impl Lowering {
         self.entry_point_interfaces.insert(func.id, (input_vars, output_vars));
 
         Ok(())
+    }
+
+    /// Lower a builtin function call to SPIR-V
+    fn lower_builtin_call(
+        &mut self,
+        impl_: &BuiltinImpl,
+        dest: &Register,
+        args: &[Register],
+    ) -> Result<spirv::Word> {
+        let result_type_id = self.get_or_create_type(&dest.ty)?;
+        let mut arg_ids = Vec::new();
+        for arg in args {
+            arg_ids.push(self.get_register(arg)?);
+        }
+
+        match impl_ {
+            BuiltinImpl::GlslExt(inst_num) => {
+                // GLSL.std.450 extended instruction
+                let operands: Vec<_> = arg_ids.into_iter().map(Operand::IdRef).collect();
+                let result_id = self.builder.ext_inst(
+                    result_type_id,
+                    None,
+                    self.glsl_ext_inst_id,
+                    *inst_num,
+                    operands,
+                )?;
+                Ok(result_id)
+            }
+            BuiltinImpl::SpirvOp(op) => {
+                // Core SPIR-V operation
+                self.lower_spirv_op(op, result_type_id, &arg_ids)
+            }
+            BuiltinImpl::Custom(_) => Err(CompilerError::SpirvError(
+                "Custom builtin implementations not yet supported".to_string(),
+            )),
+        }
+    }
+
+    /// Lower a SPIR-V core operation
+    fn lower_spirv_op(
+        &mut self,
+        op: &SpirvOp,
+        result_type_id: spirv::Word,
+        arg_ids: &[spirv::Word],
+    ) -> Result<spirv::Word> {
+        use spirv::Op;
+
+        let result_id = match op {
+            // Arithmetic
+            SpirvOp::FAdd => self.builder.f_add(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::FSub => self.builder.f_sub(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::FMul => self.builder.f_mul(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::FDiv => self.builder.f_div(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::FRem => self.builder.f_rem(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::FMod => self.builder.f_mod(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::IAdd => self.builder.i_add(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::ISub => self.builder.i_sub(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::IMul => self.builder.i_mul(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::SDiv => self.builder.s_div(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::UDiv => self.builder.u_div(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::SRem => self.builder.s_rem(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::SMod => self.builder.s_mod(result_type_id, None, arg_ids[0], arg_ids[1])?,
+
+            // Comparisons
+            SpirvOp::FOrdEqual => self.builder.f_ord_equal(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::FOrdNotEqual => {
+                self.builder.f_ord_not_equal(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::FOrdLessThan => {
+                self.builder.f_ord_less_than(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::FOrdGreaterThan => {
+                self.builder.f_ord_greater_than(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::FOrdLessThanEqual => {
+                self.builder.f_ord_less_than_equal(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::FOrdGreaterThanEqual => {
+                self.builder.f_ord_greater_than_equal(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::IEqual => self.builder.i_equal(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::INotEqual => self.builder.i_not_equal(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::SLessThan => self.builder.s_less_than(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::ULessThan => self.builder.u_less_than(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::SGreaterThan => {
+                self.builder.s_greater_than(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::UGreaterThan => {
+                self.builder.u_greater_than(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::SLessThanEqual => {
+                self.builder.s_less_than_equal(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::ULessThanEqual => {
+                self.builder.u_less_than_equal(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::SGreaterThanEqual => {
+                self.builder.s_greater_than_equal(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::UGreaterThanEqual => {
+                self.builder.u_greater_than_equal(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+
+            // Bitwise
+            SpirvOp::BitwiseAnd => {
+                self.builder.bitwise_and(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::BitwiseOr => self.builder.bitwise_or(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::BitwiseXor => {
+                self.builder.bitwise_xor(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::Not => self.builder.not(result_type_id, None, arg_ids[0])?,
+            SpirvOp::ShiftLeftLogical => {
+                self.builder.shift_left_logical(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::ShiftRightArithmetic => {
+                self.builder.shift_right_arithmetic(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::ShiftRightLogical => {
+                self.builder.shift_right_logical(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+
+            // Vector/Matrix operations
+            SpirvOp::Dot => self.builder.dot(result_type_id, None, arg_ids[0], arg_ids[1])?,
+            SpirvOp::OuterProduct => {
+                self.builder.outer_product(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::MatrixTimesMatrix => {
+                self.builder.matrix_times_matrix(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::MatrixTimesVector => {
+                self.builder.matrix_times_vector(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::VectorTimesMatrix => {
+                self.builder.vector_times_matrix(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::VectorTimesScalar => {
+                self.builder.vector_times_scalar(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+            SpirvOp::MatrixTimesScalar => {
+                self.builder.matrix_times_scalar(result_type_id, None, arg_ids[0], arg_ids[1])?
+            }
+        };
+
+        Ok(result_id)
     }
 }
 
