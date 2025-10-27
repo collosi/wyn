@@ -67,9 +67,13 @@ impl Lowering {
         let mut builder = Builder::new();
         builder.set_version(1, 0);
 
+        // Create a temporary context just for builtin registry initialization
+        let mut temp_ctx = polytype::Context::<crate::ast::TypeName>::default();
+        let builtin_registry = BuiltinRegistry::new(&mut temp_ctx);
+
         let mut lowering = Lowering {
             builder,
-            builtin_registry: BuiltinRegistry::new(),
+            builtin_registry,
             type_cache: HashMap::new(),
             ptr_cache: HashMap::new(),
             int_const_cache: HashMap::new(),

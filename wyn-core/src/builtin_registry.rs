@@ -4,6 +4,11 @@
 use crate::ast::{Type, TypeName, TypeScheme};
 use std::collections::HashMap;
 
+/// Trait for generating fresh type variables
+pub trait TypeVarGenerator {
+    fn new_variable(&mut self) -> Type;
+}
+
 /// Implementation strategy for a builtin function
 #[derive(Debug, Clone, PartialEq)]
 pub enum BuiltinImpl {
@@ -194,7 +199,7 @@ pub struct BuiltinRegistry {
 }
 
 impl BuiltinRegistry {
-    pub fn new() -> Self {
+    pub fn new(ctx: &mut impl TypeVarGenerator) -> Self {
         let mut registry = BuiltinRegistry {
             builtins: HashMap::new(),
             poly_builtins: HashMap::new(),
@@ -205,10 +210,10 @@ impl BuiltinRegistry {
         registry.register_integral_modules();
         registry.register_real_modules();
         registry.register_float_modules();
-        registry.register_vector_operations();
+        registry.register_vector_operations(ctx);
         registry.register_matrix_operations();
         registry.register_vector_constructors();
-        registry.register_higher_order_functions();
+        registry.register_higher_order_functions(ctx);
 
         registry
     }
@@ -487,42 +492,56 @@ impl BuiltinRegistry {
     }
 
     /// Register vector operations (length, normalize, dot, cross, etc.)
-    fn register_vector_operations(&mut self) {
-        let vec_t = Self::ty("vec"); // Placeholder - should be polymorphic
-        let float_t = Self::ty("f32");
+    fn register_vector_operations(&mut self, ctx: &mut impl TypeVarGenerator) {
+        // Use type variables for polymorphism: Vec[?n, ?T]
+        let size_var = ctx.new_variable(); // ?n - the size
+        let elem_var = ctx.new_variable(); // ?T - the element type
+        let vec_t = Type::Constructed(TypeName::Vec, vec![size_var.clone(), elem_var.clone()]);
 
+        // Skip vector length (magnitude) for now - define in user code as it needs special handling
+        // self.register(BuiltinDescriptor {
+        //     name: "length".to_string(),
+        //     param_types: vec![vec_t.clone()],
+        //     return_type: elem_var.clone(),  // returns T
+        //     implementation: BuiltinImpl::GlslExt(66),
+        // });
+
+        // Array length: returns the size as i32
+        let arr_size_var = ctx.new_variable();
+        let arr_elem_var = ctx.new_variable();
+        let arr_t = Type::Constructed(TypeName::Array, vec![arr_size_var, arr_elem_var]);
         self.register(BuiltinDescriptor {
             name: "length".to_string(),
-            param_types: vec![vec_t.clone()],
-            return_type: float_t.clone(),
-            implementation: BuiltinImpl::GlslExt(66),
+            param_types: vec![arr_t],
+            return_type: Self::ty("i32"), // TODO: Should this return the size type instead?
+            implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
         });
 
         self.register(BuiltinDescriptor {
             name: "normalize".to_string(),
             param_types: vec![vec_t.clone()],
-            return_type: vec_t.clone(),
+            return_type: vec_t.clone(), // returns Vec[n, T]
             implementation: BuiltinImpl::GlslExt(69),
         });
 
         self.register(BuiltinDescriptor {
             name: "dot".to_string(),
             param_types: vec![vec_t.clone(), vec_t.clone()],
-            return_type: float_t,
+            return_type: elem_var.clone(), // returns T
             implementation: BuiltinImpl::SpirvOp(SpirvOp::Dot),
         });
 
         self.register(BuiltinDescriptor {
             name: "cross".to_string(),
             param_types: vec![vec_t.clone(), vec_t.clone()],
-            return_type: vec_t.clone(),
+            return_type: vec_t.clone(), // returns Vec[n, T] (only works for Vec[3, T])
             implementation: BuiltinImpl::GlslExt(68),
         });
 
         self.register(BuiltinDescriptor {
             name: "distance".to_string(),
             param_types: vec![vec_t.clone(), vec_t.clone()],
-            return_type: Self::ty("f32"),
+            return_type: elem_var.clone(), // returns T
             implementation: BuiltinImpl::GlslExt(67),
         });
 
@@ -535,8 +554,8 @@ impl BuiltinRegistry {
 
         self.register(BuiltinDescriptor {
             name: "refract".to_string(),
-            param_types: vec![vec_t.clone(), vec_t.clone(), Self::ty("f32")],
-            return_type: vec_t,
+            param_types: vec![vec_t.clone(), vec_t.clone(), elem_var.clone()],
+            return_type: vec_t.clone(),
             implementation: BuiltinImpl::GlslExt(72),
         });
     }
@@ -565,6 +584,32 @@ impl BuiltinRegistry {
             param_types: vec![vec_t.clone(), vec_t],
             return_type: mat_t,
             implementation: BuiltinImpl::SpirvOp(SpirvOp::OuterProduct),
+        });
+
+        // Matrix operations for [4]vec4f32 representation
+        let vec4f32 = Type::Constructed(
+            TypeName::Vec,
+            vec![Type::Constructed(TypeName::Size(4), vec![]), Self::ty("f32")],
+        );
+        let mat4 = Type::Constructed(
+            TypeName::Array,
+            vec![Type::Constructed(TypeName::Size(4), vec![]), vec4f32.clone()],
+        );
+
+        // mul_mat4: [4]vec4f32 -> [4]vec4f32 -> [4]vec4f32
+        self.register(BuiltinDescriptor {
+            name: "mul_mat4".to_string(),
+            param_types: vec![mat4.clone(), mat4.clone()],
+            return_type: mat4.clone(),
+            implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
+        });
+
+        // mul_rowvec_mat4: vec4f32 -> [4]vec4f32 -> vec4f32
+        self.register(BuiltinDescriptor {
+            name: "mul_rowvec_mat4".to_string(),
+            param_types: vec![vec4f32.clone(), mat4],
+            return_type: vec4f32,
+            implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
         });
     }
 
@@ -598,7 +643,18 @@ impl BuiltinRegistry {
     }
 
     /// Register higher-order functions and array operations
-    fn register_higher_order_functions(&mut self) {
+    fn register_higher_order_functions(&mut self, ctx: &mut impl TypeVarGenerator) {
+        // f32.sum: [n]f32 -> f32 (sum of array elements)
+        // For now, we just support fixed f32 arrays, not polymorphic
+        let size_var = ctx.new_variable();
+        let arr_t = Type::Constructed(TypeName::Array, vec![size_var, Self::ty("f32")]);
+        self.register(BuiltinDescriptor {
+            name: "f32.sum".to_string(),
+            param_types: vec![arr_t],
+            return_type: Self::ty("f32"),
+            implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
+        });
+
         // TODO: Implement polymorphic function registration
         // These functions need special type handling with type variables:
         // - length: ∀a. [a] -> int
@@ -614,6 +670,7 @@ impl BuiltinRegistry {
 
 impl Default for BuiltinRegistry {
     fn default() -> Self {
-        Self::new()
+        let mut ctx = polytype::Context::<crate::ast::TypeName>::default();
+        Self::new(&mut ctx)
     }
 }

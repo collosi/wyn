@@ -1,10 +1,18 @@
 use crate::ast::TypeName;
 use crate::ast::*;
+use crate::builtin_registry::{BuiltinDescriptor, TypeVarGenerator};
 use crate::error::{CompilerError, Result};
 use crate::scope::ScopeStack;
 use log::debug;
 use polytype::{Context, TypeScheme};
 use std::collections::HashMap;
+
+// Implement TypeVarGenerator for Context
+impl TypeVarGenerator for Context<TypeName> {
+    fn new_variable(&mut self) -> Type {
+        Context::new_variable(self)
+    }
+}
 
 pub struct TypeChecker {
     scope_stack: ScopeStack<TypeScheme<TypeName>>, // Store polymorphic types
@@ -77,13 +85,58 @@ impl TypeChecker {
     }
 
     pub fn new() -> Self {
+        let mut context = Context::default();
+        let builtin_registry = crate::builtin_registry::BuiltinRegistry::new(&mut context);
+
         TypeChecker {
             scope_stack: ScopeStack::new(),
-            context: Context::default(),
+            context,
             record_field_map: HashMap::new(),
-            builtin_registry: crate::builtin_registry::BuiltinRegistry::new(),
+            builtin_registry,
             type_table: HashMap::new(),
         }
+    }
+
+    /// Instantiate a builtin function type with fresh type variables
+    fn instantiate_builtin_type(&mut self, desc: &BuiltinDescriptor) -> Type {
+        use std::collections::HashMap;
+
+        // Collect all type variables used in the builtin signature
+        let mut var_map: HashMap<usize, Type> = HashMap::new();
+
+        fn instantiate_with_map(
+            ty: &Type,
+            var_map: &mut HashMap<usize, Type>,
+            context: &mut Context<TypeName>,
+        ) -> Type {
+            match ty {
+                Type::Variable(n) => {
+                    // Get or create a fresh variable for this type variable
+                    var_map.entry(*n).or_insert_with(|| context.new_variable()).clone()
+                }
+                Type::Constructed(name, args) => {
+                    let new_args =
+                        args.iter().map(|arg| instantiate_with_map(arg, var_map, context)).collect();
+                    Type::Constructed(name.clone(), new_args)
+                }
+                _ => ty.clone(),
+            }
+        }
+
+        // Instantiate the return type and all parameter types
+        let return_type = instantiate_with_map(&desc.return_type, &mut var_map, &mut self.context);
+        let param_types: Vec<Type> = desc
+            .param_types
+            .iter()
+            .map(|pt| instantiate_with_map(pt, &mut var_map, &mut self.context))
+            .collect();
+
+        // Build the function type: param1 -> param2 -> ... -> return
+        let func_type =
+            param_types.iter().rev().fold(return_type, |acc, param_ty| Type::arrow(param_ty.clone(), acc));
+
+        // Apply the context to resolve any constraints
+        func_type.apply(&self.context)
     }
 
     // TODO: Polymorphic builtins (map, zip, length) need special handling
@@ -388,14 +441,8 @@ impl TypeChecker {
                     // Then check builtin registry for builtin functions/constructors
                     debug!("'{}' is a builtin", name);
                     if let Some(desc) = self.builtin_registry.get(name) {
-                        // Build function type from param types and return type
-                        let func_type = desc
-                            .param_types
-                            .iter()
-                            .rev()
-                            .fold(desc.return_type.clone(), |acc, param_ty| {
-                                Type::arrow(param_ty.clone(), acc)
-                            });
+                        // Instantiate with fresh type variables
+                        let func_type = self.instantiate_builtin_type(&desc.clone());
                         debug!("Built function type for builtin '{}': {:?}", name, func_type);
                         Ok(func_type)
                     } else {
@@ -490,13 +537,7 @@ impl TypeChecker {
                     } else if self.builtin_registry.is_builtin(func_name) {
                         // Get type from builtin registry
                         if let Some(desc) = self.builtin_registry.get(func_name) {
-                            Ok(desc
-                                .param_types
-                                .iter()
-                                .rev()
-                                .fold(desc.return_type.clone(), |acc, param_ty| {
-                                    Type::arrow(param_ty.clone(), acc)
-                                }))
+                            Ok(self.instantiate_builtin_type(&desc.clone()))
                         } else {
                             Err(CompilerError::UndefinedVariable(func_name.clone()))
                         }
@@ -673,23 +714,15 @@ impl TypeChecker {
                     // Check if this is a builtin function (e.g., f32.sin)
                     if self.builtin_registry.is_builtin(&dotted) {
                         if let Some(desc) = self.builtin_registry.get(&dotted) {
-                            // Build function type: arg1 -> arg2 -> ... -> ret
-                            let func_type = desc
-                                .param_types
-                                .iter()
-                                .rev()
-                                .fold(desc.return_type.clone(), |acc, arg_ty| {
-                                    Type::arrow(arg_ty.clone(), acc)
-                                });
-                            return Ok(func_type);
+                            // Instantiate with fresh type variables
+                            return Ok(self.instantiate_builtin_type(&desc.clone()));
                         }
                     }
 
-                    // Qualified name not found
-                    return Err(CompilerError::UndefinedVariable(dotted));
+                    // Qualified name not found as module or builtin - fall through to field access
                 }
 
-                // Not a qualified name, treat as normal field access
+                // Not a qualified name (or wasn't found), treat as normal field access
                 {
                     // Not a qualified name, proceed with normal field access
                     let expr_type = self.infer_expression(expr)?;
@@ -786,8 +819,29 @@ impl TypeChecker {
                 todo!("QualifiedName not yet implemented in type checker")
             }
 
-            ExprKind::UnaryOp(_, _) => {
-                todo!("UnaryOp not yet implemented in type checker")
+            ExprKind::UnaryOp(op, operand) => {
+                let operand_type = self.infer_expression(operand)?;
+                let bool_ty = Type::Constructed(TypeName::Str("bool"), vec![]);
+                match op.op.as_str() {
+                    "-" => {
+                        // Numeric negation - operand must be numeric, returns same type
+                        Ok(operand_type)
+                    }
+                    "!" => {
+                        // Logical not - operand must be bool, returns bool
+                        self.context.unify(&operand_type, &bool_ty).map_err(|_| {
+                            CompilerError::TypeError(format!(
+                                "Logical not (!) requires bool operand, got {:?}",
+                                operand_type
+                            ))
+                        })?;
+                        Ok(bool_ty)
+                    }
+                    _ => Err(CompilerError::TypeError(format!(
+                        "Unknown unary operator: {}",
+                        op.op
+                    ))),
+                }
             }
 
             ExprKind::Loop(_) => {
