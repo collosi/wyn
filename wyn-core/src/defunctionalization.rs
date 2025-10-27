@@ -540,13 +540,21 @@ impl Defunctionalizer {
             _ => {
                 // Regular function call
                 match &transformed_func.kind {
-                    ExprKind::Identifier(func_name) => Ok((
-                        self.node_counter.mk_node(
-                            ExprKind::FunctionCall(func_name.clone(), transformed_args),
-                            Span::dummy(),
-                        ),
-                        StaticValue::Dyn(polytype::Type::Variable(2)),
-                    )),
+                    ExprKind::Identifier(func_name) => {
+                        // Special handling for higher-order builtins like map
+                        if func_name == "map" && transformed_args.len() == 2 {
+                            // map f xs -> loop-based implementation
+                            return self.defunctionalize_map(&transformed_args[0], &transformed_args[1], scope_stack);
+                        }
+
+                        Ok((
+                            self.node_counter.mk_node(
+                                ExprKind::FunctionCall(func_name.clone(), transformed_args),
+                                Span::dummy(),
+                            ),
+                            StaticValue::Dyn(polytype::Type::Variable(2)),
+                        ))
+                    }
                     ExprKind::FieldAccess(base, field) => {
                         // Qualified name like f32.cos - convert to dotted name for builtin lookup
                         let qual_name =
@@ -727,6 +735,184 @@ impl Defunctionalizer {
         }
 
         Ok(self.node_counter.mk_node(ExprKind::Tuple(elements), Span::dummy()))
+    }
+
+    /// Transform map f xs into a loop that allocates output array and fills it
+    /// map f xs  =>
+    ///   let xs = <array> in
+    ///   let len = length xs in
+    ///   let out = replicate len 0 in  // Allocate array with default values
+    ///   loop (i, out) = (0, out) while i < len do
+    ///     let updated_out = __array_update(out, i, f xs[i]) in
+    ///     (i + 1, updated_out)
+    ///
+    /// TODO: Eventually handle in-place updates to avoid copying output array each iteration
+    fn defunctionalize_map(
+        &mut self,
+        func: &Expression,
+        array: &Expression,
+        _scope_stack: &mut ScopeStack<StaticValue>,
+    ) -> Result<(Expression, StaticValue)> {
+        let span = Span::dummy();
+
+        // Extract function name (assuming it's a simple identifier for now)
+        let func_name = match &func.kind {
+            ExprKind::Identifier(name) => name.clone(),
+            _ => return Err(CompilerError::SpirvError(
+                "map currently only supports simple function identifiers".to_string()
+            )),
+        };
+
+        // Generate unique variable names
+        let i_var = format!("__map_i_{}", self.next_function_id);
+        let out_var = format!("__map_out_{}", self.next_function_id);
+        let xs_var = format!("__map_xs_{}", self.next_function_id);
+        let len_var = format!("__map_len_{}", self.next_function_id);
+        self.next_function_id += 1;
+
+        // Build ALL leaf nodes first to avoid borrow checker issues
+        let xs_ident_for_len = self.node_counter.mk_node(ExprKind::Identifier(xs_var.clone()), span);
+        let len_ident_for_replicate = self.node_counter.mk_node(ExprKind::Identifier(len_var.clone()), span);
+        let zero_for_replicate = self.node_counter.mk_node(ExprKind::IntLiteral(0), span);
+
+        // length xs
+        let len_call = self.node_counter.mk_node(
+            ExprKind::FunctionCall(
+                "length".to_string(),
+                vec![xs_ident_for_len],
+            ),
+            span,
+        );
+
+        // Initialize output array using replicate: replicate len default_value
+        // The default value doesn't matter since we'll write to every element
+        let init_out = self.node_counter.mk_node(
+            ExprKind::FunctionCall(
+                "replicate".to_string(),
+                vec![len_ident_for_replicate, zero_for_replicate],
+            ),
+            span,
+        );
+
+        // Build more leaf nodes for loop body
+        let i_ident = self.node_counter.mk_node(ExprKind::Identifier(i_var.clone()), span);
+        let len_ident = self.node_counter.mk_node(ExprKind::Identifier(len_var.clone()), span);
+        let xs_ident = self.node_counter.mk_node(ExprKind::Identifier(xs_var.clone()), span);
+        let i_ident2 = self.node_counter.mk_node(ExprKind::Identifier(i_var.clone()), span);
+        let out_ident = self.node_counter.mk_node(ExprKind::Identifier(out_var.clone()), span);
+        let i_ident3 = self.node_counter.mk_node(ExprKind::Identifier(i_var.clone()), span);
+        let i_ident4 = self.node_counter.mk_node(ExprKind::Identifier(i_var.clone()), span);
+        let one_lit = self.node_counter.mk_node(ExprKind::IntLiteral(1), span);
+        let zero_lit = self.node_counter.mk_node(ExprKind::IntLiteral(0), span);
+        let out_ident2 = self.node_counter.mk_node(ExprKind::Identifier(out_var.clone()), span);
+
+        // i < len
+        let condition = self.node_counter.mk_node(
+            ExprKind::BinaryOp(
+                BinaryOp { op: "<".to_string() },
+                Box::new(i_ident),
+                Box::new(len_ident),
+            ),
+            span,
+        );
+
+        // xs[i]
+        let array_index = self.node_counter.mk_node(
+            ExprKind::ArrayIndex(
+                Box::new(xs_ident),
+                Box::new(i_ident2),
+            ),
+            span,
+        );
+
+        // f xs[i]
+        let func_app = self.node_counter.mk_node(
+            ExprKind::FunctionCall(func_name, vec![array_index]),
+            span,
+        );
+
+        // __array_update(out, i, f xs[i])
+        let updated_out = self.node_counter.mk_node(
+            ExprKind::FunctionCall(
+                "__array_update".to_string(),
+                vec![out_ident, i_ident3, func_app],
+            ),
+            span,
+        );
+
+        // i + 1
+        let i_inc = self.node_counter.mk_node(
+            ExprKind::BinaryOp(
+                BinaryOp { op: "+".to_string() },
+                Box::new(i_ident4),
+                Box::new(one_lit),
+            ),
+            span,
+        );
+
+        // (i + 1, updated_out)
+        let loop_body = self.node_counter.mk_node(
+            ExprKind::Tuple(vec![i_inc, updated_out]),
+            span,
+        );
+
+        // (0, out)
+        let initial_value = self.node_counter.mk_node(
+            ExprKind::Tuple(vec![zero_lit, out_ident2]),
+            span,
+        );
+
+        // loop (i, out) = (0, out) while i < len do (i + 1, updated_out)
+        let i_pattern = self.node_counter.mk_node(PatternKind::Name(i_var), span);
+        let out_pattern = self.node_counter.mk_node(PatternKind::Name(out_var.clone()), span);
+        let loop_pattern = self.node_counter.mk_node(
+            PatternKind::Tuple(vec![i_pattern, out_pattern]),
+            span,
+        );
+        let loop_expr = self.node_counter.mk_node(
+            ExprKind::Loop(LoopExpr {
+                pattern: loop_pattern,
+                init: Some(Box::new(initial_value)),
+                form: LoopForm::While(Box::new(condition)),
+                body: Box::new(loop_body),
+            }),
+            span,
+        );
+
+        // let out = replicate len 0 in <loop>
+        let with_out = self.node_counter.mk_node(
+            ExprKind::LetIn(LetInExpr {
+                name: out_var,
+                ty: None,
+                value: Box::new(init_out),
+                body: Box::new(loop_expr),
+            }),
+            span,
+        );
+
+        // let len = length xs in <with_out>
+        let with_len = self.node_counter.mk_node(
+            ExprKind::LetIn(LetInExpr {
+                name: len_var,
+                ty: None,
+                value: Box::new(len_call),
+                body: Box::new(with_out),
+            }),
+            span,
+        );
+
+        // let xs = <array> in <with_len>
+        let result = self.node_counter.mk_node(
+            ExprKind::LetIn(LetInExpr {
+                name: xs_var,
+                ty: None,
+                value: Box::new(array.clone()),
+                body: Box::new(with_len),
+            }),
+            span,
+        );
+
+        Ok((result, StaticValue::Dyn(polytype::Type::Variable(0))))
     }
 }
 

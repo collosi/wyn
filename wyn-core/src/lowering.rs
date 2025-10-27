@@ -163,6 +163,31 @@ impl Lowering {
         }
 
         let type_id = match ty {
+            Type::Constructed(TypeName::Array, args) if args.len() == 2 => {
+                // Array[Size(n), element_type]
+                if let Type::Constructed(TypeName::Size(n), _) = &args[0] {
+                    let elem_type_id = self.get_or_create_type(&args[1])?;
+                    let length_id = self.get_or_create_int_const(*n as i32, self.i32_type);
+                    self.builder.type_array(elem_type_id, length_id)
+                } else {
+                    return Err(CompilerError::SpirvError(format!(
+                        "Array size must be a Size literal, got: {:?}",
+                        args[0]
+                    )));
+                }
+            }
+            Type::Constructed(TypeName::Vec, args) if args.len() == 2 => {
+                // Vec[Size(n), element_type]
+                if let Type::Constructed(TypeName::Size(n), _) = &args[0] {
+                    let elem_type_id = self.get_or_create_type(&args[1])?;
+                    self.builder.type_vector(elem_type_id, *n as u32)
+                } else {
+                    return Err(CompilerError::SpirvError(format!(
+                        "Vector size must be a Size literal, got: {:?}",
+                        args[0]
+                    )));
+                }
+            }
             Type::Constructed(type_name, args) => {
                 let name_str = match type_name {
                     TypeName::Str(s) => *s,
@@ -217,19 +242,6 @@ impl Lowering {
                         self.get_or_create_ptr_type(StorageClass::Function, pointee_id)
                     }
                     _ => return Err(CompilerError::SpirvError(format!("Unsupported type: {:?}", ty))),
-                }
-            }
-            Type::Constructed(TypeName::Array, args) if args.len() == 2 => {
-                // Array(Size(n), element_type)
-                if let Type::Constructed(TypeName::Size(n), _) = &args[0] {
-                    let elem_type_id = self.get_or_create_type(&args[1])?;
-                    let len_const = self.get_or_create_int_const(*n as i32, self.i32_type);
-                    self.builder.type_array(elem_type_id, len_const)
-                } else {
-                    return Err(CompilerError::SpirvError(format!(
-                        "Invalid array size type: {:?}",
-                        args[0]
-                    )));
                 }
             }
             _ => return Err(CompilerError::SpirvError(format!("Unsupported type: {:?}", ty))),
@@ -591,6 +603,39 @@ impl Lowering {
                             arg_ids.push(self.get_register(arg)?);
                         }
                         let result_id = self.builder.composite_construct(type_id, None, arg_ids)?;
+                        self.current_register_map.insert(dest.id, result_id);
+                    }
+                    // Array builtins
+                    "replicate" => {
+                        // replicate length value creates an array filled with value
+                        let type_id = self.get_or_create_type(&dest.ty)?;
+                        let value_id = self.get_register(&args[1])?;
+
+                        // Get array length from type
+                        let length = if let Type::Constructed(TypeName::Array, type_args) = &dest.ty {
+                            if let Type::Constructed(TypeName::Size(n), _) = &type_args[0] {
+                                *n
+                            } else {
+                                return Err(CompilerError::SpirvError("replicate: array size must be known at compile time".to_string()));
+                            }
+                        } else {
+                            return Err(CompilerError::SpirvError("replicate: result must be an array type".to_string()));
+                        };
+
+                        // Create array by replicating value
+                        let element_ids = vec![value_id; length];
+                        let result_id = self.builder.composite_construct(type_id, None, element_ids)?;
+                        self.current_register_map.insert(dest.id, result_id);
+                    }
+                    "__array_update" => {
+                        // __array_update array index new_value creates a new array with element at index replaced
+                        let type_id = self.get_or_create_type(&dest.ty)?;
+                        let array_id = self.get_register(&args[0])?;
+                        let index_id = self.get_register(&args[1])?;
+                        let new_value_id = self.get_register(&args[2])?;
+
+                        // Use OpCompositeInsert to create new composite with updated element
+                        let result_id = self.builder.composite_insert(type_id, None, new_value_id, array_id, [index_id])?;
                         self.current_register_map.insert(dest.id, result_id);
                     }
                     // Look up in builtin registry

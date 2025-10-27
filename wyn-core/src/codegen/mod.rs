@@ -178,7 +178,9 @@ impl CodeGenerator {
         let mut generator = CodeGenerator {
             module: SpirvModule::new(),
             builder,
-            builtin_registry: BuiltinRegistry::new(),
+            builtin_registry: BuiltinRegistry::new(
+                &mut polytype::Context::<crate::ast::TypeName>::default(),
+            ),
             glsl_ext_inst_id: None,
             global_builder: GlobalBuilder::new(),
             pipeline: None,

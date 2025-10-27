@@ -188,6 +188,16 @@ impl TypeChecker {
         let to_vec_body = Type::arrow(array_input, vec_output);
         self.scope_stack.insert("to_vec".to_string(), TypeScheme::Monotype(to_vec_body));
 
+        // replicate: ∀a. i32 -> a -> [?]a
+        // Creates an array of length n filled with the given value
+        // Note: The size is determined by type inference from context
+        let var_a = self.context.new_variable();
+        let var_size = self.context.new_variable();  // Size will be inferred
+        let output_array = Type::Constructed(TypeName::Array, vec![var_size.clone(), var_a.clone()]);
+        let i32_type = Type::Constructed(TypeName::Str("i32"), vec![]);
+        let replicate_body = Type::arrow(i32_type, Type::arrow(var_a, output_array));
+        self.scope_stack.insert("replicate".to_string(), TypeScheme::Monotype(replicate_body));
+
         // Vector operations
         // dot: ∀a b. a -> a -> b
         // Polymorphic: takes two values of same type, returns a value (likely scalar)

@@ -33,7 +33,9 @@ impl ModuleElaborator {
     pub fn new() -> Self {
         let mut elaborator = ModuleElaborator {
             env: ModuleEnv::new(),
-            builtin_registry: BuiltinRegistry::new(),
+            builtin_registry: BuiltinRegistry::new(
+                &mut polytype::Context::<crate::ast::TypeName>::default(),
+            ),
         };
         elaborator.load_prelude().ok(); // Ignore errors for now
         elaborator

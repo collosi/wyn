@@ -33,35 +33,9 @@ impl Mirize {
     }
 
     pub fn mirize_program(mut self, program: &Program) -> Result<mir::Module> {
-        // First pass: identify top-level constants
-        let mut constant_decls = Vec::new();
-        let mut function_decls = Vec::new();
-
+        // Process declarations in order
+        // Functions must be defined before they are used
         for decl in &program.declarations {
-            if let Declaration::Decl(d) = decl {
-                // Check if this is a top-level constant (def with no params, no entry point attributes)
-                let is_entry_point =
-                    d.attributes.iter().any(|attr| matches!(attr, Attribute::Vertex | Attribute::Fragment));
-
-                if d.keyword == "def" && d.params.is_empty() && !is_entry_point {
-                    // This is a top-level constant
-                    constant_decls.push(d);
-                } else {
-                    // This is a function
-                    function_decls.push(decl);
-                }
-            } else {
-                function_decls.push(decl);
-            }
-        }
-
-        // First pass continued: Convert constants to zero-argument functions
-        for decl in &constant_decls {
-            self.mirize_constant_as_function(decl)?;
-        }
-
-        // Second pass: process functions
-        for decl in &function_decls {
             self.mirize_declaration(decl)?;
         }
 

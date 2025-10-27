@@ -1,16 +1,3 @@
--- Triangle using vertex_index to generate different positions
-
-#[vertex] def vertex_main(vertex_index: i32): ([builtin(position)] vec4, [location(0)] vec3) =
-  let position: vec4 = if vertex_index == 0 then
-      vec4 -0.5f32 -0.5f32 0.0f32 1.0f32
-    else if vertex_index == 1 then
-      vec4 0.5f32 -0.5f32 0.0f32 1.0f32
-    else
-      vec4 0.0f32 0.5f32 0.0f32 1.0f32 in
-  let color: vec3 = vec3 1.0f32 0.0f32 0.0f32 in
-  (position, color)
-
-#[fragment] def fragment_main(): ([location(0)] vec4, [location(1)] vec3) = 
-  let red: vec4 = vec4 1.0f32 0.0f32 0.0f32 1.0f32 in
-  let dummy: vec3 = vec3 0.0f32 1.0f32 0.0f32 in
-  (red, dummy)
+def test_length : f32 =
+  let v : vec2f32 = vec2 3.0f32 4.0f32 in
+  length v
