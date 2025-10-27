@@ -331,9 +331,10 @@ impl TypeChecker {
             let param_name = param
                 .simple_name()
                 .ok_or_else(|| {
-                    CompilerError::TypeError(format!(
-                        "Complex patterns in function parameters not yet supported"
-                    ))
+                    CompilerError::TypeError(
+                        "Complex patterns in function parameters not yet supported".to_string(),
+                        param.h.span,
+                    )
                 })?
                 .to_string();
             let type_scheme = TypeScheme::Monotype(param_type.clone());
@@ -421,11 +422,14 @@ impl TypeChecker {
 
             if let Some(declared_type) = &decl.ty {
                 if !self.types_match(&expr_type, declared_type) {
-                    return Err(CompilerError::TypeError(format!(
-                        "Type mismatch: expected {}, got {}",
-                        self.format_type(declared_type),
-                        self.format_type(&expr_type)
-                    )));
+                    return Err(CompilerError::TypeError(
+                        format!(
+                            "Type mismatch: expected {}, got {}",
+                            self.format_type(declared_type),
+                            self.format_type(&expr_type)
+                        ),
+                        decl.body.h.span,
+                    ));
                 }
             }
 
@@ -461,10 +465,10 @@ impl TypeChecker {
                 // Unify the body type with the declared return type
                 if !decl.params.is_empty() {
                     self.context.unify(&body_type, &substituted_return_type).map_err(|e| {
-                        CompilerError::TypeError(format!(
-                            "Function return type mismatch for '{}': {}",
-                            decl.name, e
-                        ))
+                        CompilerError::TypeError(
+                            format!("Function return type mismatch for '{}': {}", decl.name, e),
+                            decl.body.h.span,
+                        )
                     })?;
                 } else {
                     // For functions without parameters, ty should be the full type
@@ -472,12 +476,15 @@ impl TypeChecker {
                     // Since func_type for parameterless functions is just the body type,
                     // we can just check body_type against substituted declared_type
                     self.context.unify(&body_type, &substituted_return_type).map_err(|_| {
-                        CompilerError::TypeError(format!(
-                            "Type mismatch for '{}': declared {}, inferred {}",
-                            decl.name,
-                            self.format_type(declared_type),
-                            self.format_type(&body_type)
-                        ))
+                        CompilerError::TypeError(
+                            format!(
+                                "Type mismatch for '{}': declared {}, inferred {}",
+                                decl.name,
+                                self.format_type(declared_type),
+                                self.format_type(&body_type)
+                            ),
+                            decl.body.h.span,
+                        )
                     })?;
                 }
             }
@@ -530,29 +537,33 @@ impl TypeChecker {
                         debug!("Built function type for builtin '{}': {:?}", name, func_type);
                         Ok(func_type)
                     } else {
-                        Err(CompilerError::UndefinedVariable(name.clone()))
+                        Err(CompilerError::UndefinedVariable(name.clone(), expr.h.span))
                     }
                 } else {
                     // Not found anywhere
                     debug!("Variable lookup failed for '{}' - not in scope or builtins", name);
                     debug!("Scope stack contents: {:?}", self.scope_stack);
-                    Err(CompilerError::UndefinedVariable(name.clone()))
+                    Err(CompilerError::UndefinedVariable(name.clone(), expr.h.span))
                 }
             }
             ExprKind::ArrayLiteral(elements) => {
                 if elements.is_empty() {
                     Err(CompilerError::TypeError(
                         "Cannot infer type of empty array".to_string(),
+                        expr.h.span,
                     ))
                 } else {
                     let first_type = self.infer_expression(&elements[0])?;
                     for elem in &elements[1..] {
                         let elem_type = self.infer_expression(elem)?;
                         self.context.unify(&elem_type, &first_type).map_err(|_| {
-                            CompilerError::TypeError(format!(
-                                "Array elements must have the same type, expected {}, got {}",
-                                first_type, elem_type
-                            ))
+                            CompilerError::TypeError(
+                                format!(
+                                    "Array elements must have the same type, expected {}, got {}",
+                                    first_type, elem_type
+                                ),
+                                elem.h.span
+                            )
                         })?;
                     }
 
@@ -565,7 +576,10 @@ impl TypeChecker {
 
                 // Check index type is i32
                 self.context.unify(&index_type, &types::i32()).map_err(|_| {
-                    CompilerError::TypeError(format!("Array index must be i32, got {}", index_type))
+                    CompilerError::TypeError(
+                        format!("Array index must be i32, got {}", index_type),
+                        index_expr.h.span
+                    )
                 })?;
 
                 match &array_type {
@@ -573,16 +587,22 @@ impl TypeChecker {
                         // Array type is: Array(Size(n), elem_type)
                         // So element type is at index 1
                         args.get(1).cloned().ok_or_else(|| {
-                            CompilerError::TypeError(format!(
-                                "Array type has no element type: {}",
-                                array_type
-                            ))
+                            CompilerError::TypeError(
+                                format!(
+                                    "Array type has no element type: {}",
+                                    array_type
+                                ),
+                                array_expr.h.span
+                            )
                         })
                     }
-                    _ => Err(CompilerError::TypeError(format!(
-                        "Cannot index non-array type: got {}",
-                        array_type
-                    ))),
+                    _ => Err(CompilerError::TypeError(
+                        format!(
+                            "Cannot index non-array type: got {}",
+                            array_type
+                        ),
+                        array_expr.h.span
+                    )),
                 }
             }
             ExprKind::BinaryOp(op, left, right) => {
@@ -591,10 +611,13 @@ impl TypeChecker {
 
                 // Check that both operands have compatible types
                 self.context.unify(&left_type, &right_type).map_err(|_| {
-                    CompilerError::TypeError(format!(
-                        "Binary operator '{}' requires operands of the same type, got {} and {}",
-                        op.op, left_type, right_type
-                    ))
+                    CompilerError::TypeError(
+                        format!(
+                            "Binary operator '{}' requires operands of the same type, got {} and {}",
+                            op.op, left_type, right_type
+                        ),
+                        expr.h.span
+                    )
                 })?;
 
                 // Determine return type based on operator
@@ -607,10 +630,13 @@ impl TypeChecker {
                         // Arithmetic operators return the same type as operands
                         Ok(left_type.apply(&self.context))
                     }
-                    _ => Err(CompilerError::TypeError(format!(
-                        "Unknown binary operator: {}",
-                        op.op
-                    ))),
+                    _ => Err(CompilerError::TypeError(
+                        format!(
+                            "Unknown binary operator: {}",
+                            op.op
+                        ),
+                        expr.h.span
+                    )),
                 }
             }
             ExprKind::FunctionCall(func_name, args) => {
@@ -623,10 +649,10 @@ impl TypeChecker {
                         if let Some(desc) = self.builtin_registry.get(func_name) {
                             Ok(self.instantiate_builtin_type(&desc.clone()))
                         } else {
-                            Err(CompilerError::UndefinedVariable(func_name.clone()))
+                            Err(CompilerError::UndefinedVariable(func_name.clone(), expr.h.span))
                         }
                     } else {
-                        Err(CompilerError::UndefinedVariable(func_name.clone()))
+                        Err(CompilerError::UndefinedVariable(func_name.clone(), expr.h.span))
                     };
 
                 let mut func_type = func_type_result?;
@@ -668,17 +694,23 @@ impl TypeChecker {
 
                     // Unify the function type with expected (with uniqueness stripped)
                     self.context.unify(&func_type_for_unify, &expected_func_type).map_err(|e| {
-                        CompilerError::TypeError(format!("Function call type error: {:?}", e))
+                        CompilerError::TypeError(
+                            format!("Function call type error: {:?}", e),
+                            arg.h.span
+                        )
                     })?;
 
                     // If the parameter expects unique ownership, mark the variable as consumed
                     if expects_unique {
                         if let ExprKind::Identifier(var_name) = &arg.kind {
                             self.scope_stack.mark_consumed(var_name).map_err(|e| {
-                                CompilerError::TypeError(format!(
-                                    "Cannot consume variable '{}': {}",
-                                    var_name, e
-                                ))
+                                CompilerError::TypeError(
+                                    format!(
+                                        "Cannot consume variable '{}': {}",
+                                        var_name, e
+                                    ),
+                                    arg.h.span
+                                )
                             })?;
                         }
                         // Note: literals and other expressions can be consumed without tracking
@@ -709,7 +741,10 @@ impl TypeChecker {
 
                     // For now, only support simple name patterns in lambda parameters
                     let param_name = param.simple_name().ok_or_else(|| {
-                        CompilerError::TypeError("Complex patterns in lambda parameters not yet supported".to_string())
+                        CompilerError::TypeError(
+                            "Complex patterns in lambda parameters not yet supported".to_string(),
+                            param.h.span
+                        )
                     })?;
                     self.scope_stack.insert(param_name.to_string(), type_scheme);
                 }
@@ -737,10 +772,13 @@ impl TypeChecker {
                 // Check type annotation if present
                 if let Some(declared_type) = &let_in.ty {
                     self.context.unify(&value_type, declared_type).map_err(|_| {
-                        CompilerError::TypeError(format!(
-                            "Type mismatch in let binding: expected {}, got {}",
-                            declared_type, value_type
-                        ))
+                        CompilerError::TypeError(
+                            format!(
+                                "Type mismatch in let binding: expected {}, got {}",
+                                declared_type, value_type
+                            ),
+                            let_in.value.h.span
+                        )
                     })?;
                 }
 
@@ -773,7 +811,10 @@ impl TypeChecker {
 
                     // Unify the function type with expected
                     self.context.unify(&func_type, &expected_func_type).map_err(|e| {
-                        CompilerError::TypeError(format!("Function application type error: {:?}", e))
+                        CompilerError::TypeError(
+                            format!("Function application type error: {:?}", e),
+                            arg.h.span
+                        )
                     })?;
 
                     // Update func_type to result_type for the next argument (currying)
@@ -823,14 +864,18 @@ impl TypeChecker {
                                     if matches!(field.as_str(), "x" | "y" | "z" | "w") {
                                         Ok(element_type.clone())
                                     } else {
-                                        Err(CompilerError::TypeError(format!(
-                                            "Vector type has no field '{}'",
-                                            field
-                                        )))
+                                        Err(CompilerError::TypeError(
+                                            format!(
+                                                "Vector type has no field '{}'",
+                                                field
+                                            ),
+                                            expr.h.span
+                                        ))
                                     }
                                 } else {
                                     Err(CompilerError::TypeError(
                                         "Malformed Vec type - missing element type".to_string(),
+                                        expr.h.span,
                                     ))
                                 }
                             } else {
@@ -860,17 +905,23 @@ impl TypeChecker {
                                 {
                                     Ok(field_type.clone())
                                 } else {
-                                    Err(CompilerError::TypeError(format!(
-                                        "Type '{}' has no field '{}'",
-                                        type_name_str, field
-                                    )))
+                                    Err(CompilerError::TypeError(
+                                        format!(
+                                            "Type '{}' has no field '{}'",
+                                            type_name_str, field
+                                        ),
+                                        expr.h.span
+                                    ))
                                 }
                             }
                         }
-                        _ => Err(CompilerError::TypeError(format!(
-                            "Field access '{}' not supported on type {}",
-                            field, expr_type
-                        ))),
+                        _ => Err(CompilerError::TypeError(
+                            format!(
+                                "Field access '{}' not supported on type {}",
+                                field, expr_type
+                            ),
+                            expr.h.span
+                        )),
                     }
                 }
             }
@@ -881,7 +932,10 @@ impl TypeChecker {
 
                 // Unify condition with bool type
                 self.context.unify(&condition_ty, &bool_ty).map_err(|_| {
-                    CompilerError::TypeError(format!("If condition must be boolean, got: {}", condition_ty))
+                    CompilerError::TypeError(
+                        format!("If condition must be boolean, got: {}", condition_ty),
+                        if_expr.condition.h.span
+                    )
                 })?;
 
                 // Infer then and else branch types - they must be the same
@@ -890,10 +944,13 @@ impl TypeChecker {
 
                 // Unify then and else types
                 self.context.unify(&then_ty, &else_ty).map_err(|_| {
-                    CompilerError::TypeError(format!(
-                        "If branches have incompatible types: then={}, else={}",
-                        then_ty, else_ty
-                    ))
+                    CompilerError::TypeError(
+                        format!(
+                            "If branches have incompatible types: then={}, else={}",
+                            then_ty, else_ty
+                        ),
+                        if_expr.else_branch.h.span
+                    )
                 })?;
 
                 Ok(then_ty)
@@ -915,17 +972,23 @@ impl TypeChecker {
                     "!" => {
                         // Logical not - operand must be bool, returns bool
                         self.context.unify(&operand_type, &bool_ty).map_err(|_| {
-                            CompilerError::TypeError(format!(
-                                "Logical not (!) requires bool operand, got {:?}",
-                                operand_type
-                            ))
+                            CompilerError::TypeError(
+                                format!(
+                                    "Logical not (!) requires bool operand, got {:?}",
+                                    operand_type
+                                ),
+                                operand.h.span
+                            )
                         })?;
                         Ok(bool_ty)
                     }
-                    _ => Err(CompilerError::TypeError(format!(
-                        "Unknown unary operator: {}",
-                        op.op
-                    ))),
+                    _ => Err(CompilerError::TypeError(
+                        format!(
+                            "Unknown unary operator: {}",
+                            op.op
+                        ),
+                        expr.h.span
+                    )),
                 }
             }
 
@@ -955,7 +1018,10 @@ impl TypeChecker {
                 // Unify func_type with (arg_type -> result_type)
                 let expected_func_type = types::function(arg_type, result_type.clone());
                 self.context.unify(&func_type, &expected_func_type).map_err(|e| {
-                    CompilerError::TypeError(format!("Pipe operator type error: {:?}", e))
+                    CompilerError::TypeError(
+                        format!("Pipe operator type error: {:?}", e),
+                        expr.h.span
+                    )
                 })?;
 
                 Ok(result_type)

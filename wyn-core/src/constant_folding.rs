@@ -113,6 +113,7 @@ impl ConstantFolder {
                                 if *r == 0.0 {
                                     Err(CompilerError::TypeError(
                                         "Division by zero in constant expression".to_string(),
+                                        span,
                                     ))
                                 } else {
                                     Ok(self.node_counter.mk_node(ExprKind::FloatLiteral(l / r), span))
@@ -140,6 +141,7 @@ impl ConstantFolder {
                                 if *r == 0 {
                                     Err(CompilerError::TypeError(
                                         "Division by zero in constant expression".to_string(),
+                                        span,
                                     ))
                                 } else {
                                     Ok(self.node_counter.mk_node(ExprKind::IntLiteral(l / r), span))

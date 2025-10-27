@@ -1,3 +1,4 @@
+use crate::ast::Span;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -5,11 +6,11 @@ pub enum CompilerError {
     #[error("Parse error: {0}")]
     ParseError(String),
 
-    #[error("Type error: {0}")]
-    TypeError(String),
+    #[error("Type error at {1}: {0}")]
+    TypeError(String, Span),
 
-    #[error("Undefined variable: {0}")]
-    UndefinedVariable(String),
+    #[error("Undefined variable '{0}' at {1}")]
+    UndefinedVariable(String, Span),
 
     #[error("Invalid array index")]
     InvalidArrayIndex,

@@ -1200,6 +1200,7 @@ impl CodeGenerator {
         match &expr.kind {
             ExprKind::TypeHole => Err(CompilerError::TypeError(
                 "Type holes (???) must be replaced before code generation".to_string(),
+                expr.h.span,
             )),
             ExprKind::IntLiteral(n) => {
                 let const_id = self.builder.constant_bit32(self.i32_type, *n as u32);
@@ -1277,7 +1278,7 @@ impl CodeGenerator {
                         }
                     }
                 } else {
-                    Err(CompilerError::UndefinedVariable(name.clone()))
+                    Err(CompilerError::UndefinedVariable(name.clone(), expr.h.span))
                 }
             }
             ExprKind::BinaryOp(op, left, right) => {
@@ -1400,10 +1401,9 @@ impl CodeGenerator {
 
                     // If it's an array identifier, get its type and return the size
                     if let ExprKind::Identifier(array_name) = &array_expr.kind {
-                        let binding = self
-                            .environment
-                            .lookup(array_name)
-                            .ok_or_else(|| CompilerError::UndefinedVariable(array_name.clone()))?;
+                        let binding = self.environment.lookup(array_name).ok_or_else(|| {
+                            CompilerError::UndefinedVariable(array_name.clone(), expr.h.span)
+                        })?;
                         let array_type = binding.ty.as_ref().ok_or_else(|| {
                             CompilerError::SpirvError(format!("No type info for: {}", array_name))
                         })?;
@@ -1681,7 +1681,7 @@ impl CodeGenerator {
                 let binding = self
                     .environment
                     .lookup(array_name)
-                    .ok_or_else(|| CompilerError::UndefinedVariable(array_name.clone()))?;
+                    .ok_or_else(|| CompilerError::UndefinedVariable(array_name.clone(), expr.h.span))?;
 
                 let array_value = binding.value;
 
@@ -1789,7 +1789,7 @@ impl CodeGenerator {
         let array_binding = self
             .environment
             .lookup(array_var_name)
-            .ok_or_else(|| CompilerError::UndefinedVariable(array_var_name.clone()))?;
+            .ok_or_else(|| CompilerError::UndefinedVariable(array_var_name.clone(), array_expr.h.span))?;
 
         let array_val = array_binding.value;
 
