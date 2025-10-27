@@ -1869,3 +1869,67 @@ fn test_parse_function_with_typed_patterns() {
     // Check return type
     assert!(decl.ty.is_some());
 }
+
+#[test]
+fn test_parse_curried_function_call_with_paren_expr() {
+    // Test parsing: myfunc a b (x + y)
+    // This should parse as a function call with 3 arguments: a, b, and (x + y)
+    let input = r#"
+def test : f32 = myfunc arg1 arg2 (x + y)
+"#;
+
+    let decl = single_decl(input);
+
+    // The body should be a function call
+    match &decl.body.kind {
+        ExprKind::FunctionCall(func_name, args) => {
+            assert_eq!(func_name, "myfunc");
+            assert_eq!(args.len(), 3, "Expected 3 arguments to myfunc");
+
+            // First arg: arg1 (identifier)
+            assert!(matches!(args[0].kind, ExprKind::Identifier(ref name) if name == "arg1"));
+
+            // Second arg: arg2 (identifier)
+            assert!(matches!(args[1].kind, ExprKind::Identifier(ref name) if name == "arg2"));
+
+            // Third arg: (x + y) (binary operation)
+            assert!(matches!(args[2].kind, ExprKind::BinaryOp(_, _, _)));
+        }
+        other => panic!("Expected FunctionCall, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_curried_vec3_call_with_paren_expr() {
+    // Test the actual failing case from de_rasterizer
+    let input = r#"
+def mix3v (a:vec3f32) (b:vec3f32) (t:f32) : vec3f32 = a
+
+def test (t:f32) : vec3f32 = mix3v a b (t*2.0f32 - 1.0f32)
+"#;
+
+    let program = parse_ok(input);
+    assert_eq!(program.declarations.len(), 2);
+
+    // Get the second declaration (test function)
+    let test_decl = match &program.declarations[1] {
+        Declaration::Decl(d) => d,
+        _ => panic!("Expected Decl"),
+    };
+
+    // The body should be: mix3v a b (t*2.0f32 - 1.0f32)
+    match &test_decl.body.kind {
+        ExprKind::FunctionCall(func_name, args) => {
+            assert_eq!(func_name, "mix3v");
+            assert_eq!(args.len(), 3, "Expected 3 arguments to mix3v");
+
+            // Third argument should be a binary op expression
+            assert!(
+                matches!(args[2].kind, ExprKind::BinaryOp(_, _, _)),
+                "Third argument should be BinaryOp, got {:?}",
+                args[2].kind
+            );
+        }
+        other => panic!("Expected FunctionCall, got {:?}", other),
+    }
+}

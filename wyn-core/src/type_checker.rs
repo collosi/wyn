@@ -1122,7 +1122,10 @@ mod tests {
         let mut checker = TypeChecker::new();
         let result = checker.check_program(&program);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), CompilerError::UndefinedVariable(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            CompilerError::UndefinedVariable(_, _)
+        ));
     }
 
     #[test]

@@ -1176,38 +1176,6 @@ impl Parser {
                         ));
                     }
                 }
-                Some(Token::LeftParen) => {
-                    // Function application with parentheses: f(arg1, arg2)
-                    self.advance();
-                    let mut args = Vec::new();
-
-                    if !self.check(&Token::RightParen) {
-                        loop {
-                            args.push(self.parse_expression()?);
-                            if !self.check(&Token::Comma) {
-                                break;
-                            }
-                            self.advance();
-                        }
-                    }
-
-                    self.expect(Token::RightParen)?;
-                    let end_span = self.previous_span();
-                    let span = expr.h.span.merge(&end_span);
-
-                    // Create FunctionCall for identifiers, Application for higher-order
-                    expr = match &expr.kind {
-                        ExprKind::Identifier(name) => {
-                            self.node_counter.mk_node(ExprKind::FunctionCall(name.clone(), args), span)
-                        }
-                        ExprKind::FunctionCall(name, existing_args) => {
-                            let mut all_args = existing_args.clone();
-                            all_args.extend(args);
-                            self.node_counter.mk_node(ExprKind::FunctionCall(name.clone(), all_args), span)
-                        }
-                        _ => self.node_counter.mk_node(ExprKind::Application(Box::new(expr), args), span),
-                    };
-                }
                 _ => break,
             }
         }
