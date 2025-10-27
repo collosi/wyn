@@ -14,6 +14,7 @@ pub mod lowering;
 pub mod mir;
 pub mod mirize;
 pub mod module;
+pub mod monomorphize;
 pub mod nemo_facts;
 pub mod parser;
 pub mod scope;
@@ -96,6 +97,10 @@ impl Compiler {
         for warning in type_checker.warnings() {
             eprintln!("Warning: {}", warning.message);
         }
+
+        // Monomorphization pass
+        let monomorphizer = monomorphize::Monomorphizer::new(type_table.clone());
+        let program = monomorphizer.monomorphize_program(&program)?;
 
         // Convert AST to MIR (Mid-level Intermediate Representation)
         let mirize = mirize::Mirize::new(type_table);
