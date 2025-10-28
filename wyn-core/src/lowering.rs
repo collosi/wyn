@@ -421,10 +421,13 @@ impl Lowering {
                 let left_id = self.get_register(left)?;
                 let right_id = self.get_register(right)?;
 
+                // Check if dest already has a pre-allocated ID (for forward references)
+                let dest_id = self.current_register_map.get(&dest.id).copied();
+
                 let result_id = if self.is_float_type(&dest.ty) {
-                    self.builder.f_add(type_id, None, left_id, right_id)?
+                    self.builder.f_add(type_id, dest_id, left_id, right_id)?
                 } else {
-                    self.builder.i_add(type_id, None, left_id, right_id)?
+                    self.builder.i_add(type_id, dest_id, left_id, right_id)?
                 };
 
                 self.current_register_map.insert(dest.id, result_id);

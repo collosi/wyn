@@ -529,9 +529,12 @@ impl Mirize {
                     merge_block,
                 };
 
-                // Emit the Loop instruction (lowering will expand this)
+                // Emit the Loop instruction in pre-header for metadata
                 self.builder.select_block(pre_header_block);
                 self.builder.emit_instruction(Instruction::Loop(loop_info));
+
+                // Continue in merge block (where result is available)
+                self.builder.select_block(merge_block);
 
                 // Restore environment
                 self.env = saved_env;
