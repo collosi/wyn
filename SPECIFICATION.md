@@ -1304,16 +1304,16 @@ In addition to arrays, Wyn provides vector types that directly correspond to SPI
 
 ### Vector Types
 
-Wyn supports the following vector types:
+Wyn supports vector types using the naming convention `vecNT` where:
+- `N` is the number of components (2, 3, or 4)
+- `T` is the element type (i32, f32, etc.)
+
+Common vector types:
 
 | Component Type | 2-component | 3-component | 4-component |
 |----------------|-------------|-------------|-------------|
-| `bool`         | `bvec2`     | `bvec3`     | `bvec4`     |
-| `i32` (signed) | `ivec2`     | `ivec3`     | `ivec4`     |
-| `u32` (unsigned) | `uvec2`   | `uvec3`     | `uvec4`     |
-| `f32` (32-bit float) | `vec2` | `vec3`     | `vec4`      |
-| `f64` (64-bit float) | `dvec2` | `dvec3`    | `dvec4`     |
-| `f16` (16-bit float) | `f16vec2` | `f16vec3` | `f16vec4`  |
+| `i32` (signed) | `vec2i32`   | `vec3i32`   | `vec4i32`   |
+| `f32` (32-bit float) | `vec2f32` | `vec3f32` | `vec4f32`  |
 
 Vector types are distinct from array types and have different semantics:
 - **Vectors** are fixed-size, optimized for SIMD operations
@@ -1322,27 +1322,28 @@ Vector types are distinct from array types and have different semantics:
 Example usage:
 ```wyn
 -- Vector types for graphics operations
-let position: vec3 = vec3(1.0f32, 2.0f32, 3.0f32)
-let color: vec4 = vec4(1.0f32, 0.0f32, 0.0f32, 1.0f32)
+let position: vec3f32 = vec3 1.0f32 2.0f32 3.0f32
+let color: vec4f32 = vec4 1.0f32 0.0f32 0.0f32 1.0f32
 
 -- Built-in variables often require vector types
 #[vertex]
-def vertex_main(): #[builtin(position)] vec4 = 
-  vec4(0.0f32, 0.0f32, 0.0f32, 1.0f32)
+def vertex_main(): #[builtin(position)] vec4f32 =
+  vec4 0.0f32 0.0f32 0.0f32 1.0f32
 ```
 
 ### Vector Constructors
 
-Vectors can be constructed using their type names as constructor functions:
+Vectors are constructed using the `vecN` constructor functions (where N is 2, 3, or 4).
+The element type is inferred from the arguments or the context:
 ```wyn
 -- Scalar expansion
-let v1: vec3 = vec3(1.0f32)  -- Creates vec3(1.0, 1.0, 1.0)
+let v1: vec3f32 = vec3 1.0f32  -- Creates vec3(1.0, 1.0, 1.0)
 
 -- Component-wise construction
-let v2: vec4 = vec4(1.0f32, 2.0f32, 3.0f32, 4.0f32)
+let v2: vec4f32 = vec4 1.0f32 2.0f32 3.0f32 4.0f32
 
 -- Mixed construction (swizzling)
-let v3: vec4 = vec4(v2.xyz, 1.0f32)  -- Uses first 3 components of v2
+let v3: vec4f32 = vec4 v2.x v2.y v2.z 1.0f32
 ```
 
 ### Implementation Details

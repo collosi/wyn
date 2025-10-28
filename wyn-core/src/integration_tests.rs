@@ -6,22 +6,22 @@ mod tests {
     fn test_full_example_program() {
         let source = r#"
 -- Full-screen triangle in NDC (like classic shader demos).
-def verts: [3]vec4 =
+def verts: [3]vec4f32 =
   [vec4 -1.0f32 -1.0f32 0.0f32 1.0f32,
    vec4 3.0f32 -1.0f32 0.0f32 1.0f32,
    vec4 -1.0f32 3.0f32 0.0f32 1.0f32]
 
 -- Vertex stage: return clip-space position for a given vertex index.
 #[vertex]
-def vertex_main (vertex_id: i32) : #[builtin(position)] vec4 =
+def vertex_main (vertex_id: i32) : #[builtin(position)] vec4f32 =
   verts[vertex_id]
 
 -- Fragment stage: constant sky blue (#87CEEB).
-def SKY_RGBA : vec4 =
+def SKY_RGBA : vec4f32 =
   vec4 (135f32/255f32) (206f32/255f32) (235f32/255f32) 1.0f32
 
 #[fragment]
-def fragment_main () : #[location(0)] vec4 =
+def fragment_main () : #[location(0)] vec4f32 =
   SKY_RGBA
 "#;
 
@@ -42,13 +42,13 @@ def fragment_main () : #[location(0)] vec4 =
     #[test]
     fn test_vertex_shader_only() {
         let source = r#"
-def positions: [3]vec4 =
+def positions: [3]vec4f32 =
   [vec4 0.0f32 0.5f32 0.0f32 1.0f32,
    vec4 -0.5f32 -0.5f32 0.0f32 1.0f32,
    vec4 0.5f32 -0.5f32 0.0f32 1.0f32]
 
 #[vertex]
-def vertex_main(vertex_id: i32): #[builtin(position)] vec4 = positions[vertex_id]
+def vertex_main(vertex_id: i32): #[builtin(position)] vec4f32 = positions[vertex_id]
 "#;
 
         let compiler = Compiler::new();
@@ -59,9 +59,9 @@ def vertex_main(vertex_id: i32): #[builtin(position)] vec4 = positions[vertex_id
     #[test]
     fn test_fragment_shader_only() {
         let source = r#"
-def red: vec4 = vec4 1.0f32 0.0f32 0.0f32 1.0f32
+def red: vec4f32 = vec4 1.0f32 0.0f32 0.0f32 1.0f32
 #[fragment]
-def fragment_main(): #[location(0)] vec4 = red
+def fragment_main(): #[location(0)] vec4f32 = red
 "#;
 
         let compiler = Compiler::new();
