@@ -368,7 +368,11 @@ impl Lowering {
 
     /// Lower a MIR basic block to SPIR-V
     fn lower_block(&mut self, block: &mir::Block, is_first_block: bool) -> Result<()> {
-        eprintln!("DEBUG: Lowering block {} with {} instructions", block.id, block.instructions.len());
+        eprintln!(
+            "DEBUG: Lowering block {} with {} instructions",
+            block.id,
+            block.instructions.len()
+        );
         let spirv_block_id = *self
             .current_block_map
             .get(&block.id)
@@ -849,13 +853,13 @@ impl Lowering {
 
     /// Get the SPIR-V value ID for a MIR register
     fn get_register(&self, reg: &Register) -> Result<spirv::Word> {
-        self.current_register_map
-            .get(&reg.id)
-            .copied()
-            .ok_or_else(|| {
-                eprintln!("DEBUG: Register {} not found. Current map: {:?}", reg.id, self.current_register_map);
-                CompilerError::SpirvError(format!("Register {} not found", reg.id))
-            })
+        self.current_register_map.get(&reg.id).copied().ok_or_else(|| {
+            eprintln!(
+                "DEBUG: Register {} not found. Current map: {:?}",
+                reg.id, self.current_register_map
+            );
+            CompilerError::SpirvError(format!("Register {} not found", reg.id))
+        })
     }
 
     /// Check if a type is a floating point type

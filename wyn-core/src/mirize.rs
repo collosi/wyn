@@ -496,7 +496,10 @@ impl Mirize {
                 self.builder.select_block(header_block);
                 let phi_inst = Instruction::Phi(
                     phi_reg.clone(),
-                    vec![(init_reg.clone(), pre_header_block), (body_result_reg.clone(), body_block)],
+                    vec![
+                        (init_reg.clone(), pre_header_block),
+                        (body_result_reg.clone(), body_block),
+                    ],
                 );
                 self.builder.insert_instruction_at_start(phi_inst);
                 let cond_reg = self.mirize_expression(cond_expr)?;
@@ -510,10 +513,8 @@ impl Mirize {
 
                 // Generate merge block: result Phi
                 self.builder.select_block(merge_block);
-                let result_phi = Instruction::Phi(
-                    result_reg.clone(),
-                    vec![(phi_reg.clone(), header_block)],
-                );
+                let result_phi =
+                    Instruction::Phi(result_reg.clone(), vec![(phi_reg.clone(), header_block)]);
                 self.builder.emit_instruction(result_phi);
 
                 // Build LoopInfo with all the metadata

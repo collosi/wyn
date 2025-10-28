@@ -14,11 +14,32 @@ impl TypeVarGenerator for Context<TypeName> {
     }
 }
 
-/// A warning message produced during type checking
+/// A warning produced during type checking
 #[derive(Debug, Clone)]
-pub struct TypeWarning {
-    pub message: String,
-    pub span: Span,
+pub enum TypeWarning {
+    /// A type hole was filled with an inferred type
+    TypeHoleFilled {
+        inferred_type: Type,
+        span: Span,
+    },
+}
+
+impl TypeWarning {
+    /// Get the span for this warning
+    pub fn span(&self) -> &Span {
+        match self {
+            TypeWarning::TypeHoleFilled { span, .. } => span,
+        }
+    }
+
+    /// Format the warning as a display message
+    pub fn message(&self, formatter: &dyn Fn(&Type) -> String) -> String {
+        match self {
+            TypeWarning::TypeHoleFilled { inferred_type, .. } => {
+                format!("Hole of type {}", formatter(inferred_type))
+            }
+        }
+    }
 }
 
 pub struct TypeChecker {
@@ -51,7 +72,7 @@ impl TypeChecker {
     }
 
     /// Format a type for error messages by applying current substitution
-    fn format_type(&self, ty: &Type) -> String {
+    pub fn format_type(&self, ty: &Type) -> String {
         let applied = ty.apply(&self.context);
         match applied {
             Type::Constructed(name, args) if args.is_empty() => format!("{}", name),
@@ -111,11 +132,6 @@ impl TypeChecker {
     /// Get all warnings collected during type checking
     pub fn warnings(&self) -> &[TypeWarning] {
         &self.warnings
-    }
-
-    /// Add a warning
-    fn add_warning(&mut self, message: String, span: Span) {
-        self.warnings.push(TypeWarning { message, span });
     }
 
     /// Substitute UserVars with bound type variables (recursive helper)
@@ -293,8 +309,10 @@ impl TypeChecker {
         for (node_id, span) in holes {
             if let Some(hole_type) = self.type_table.get(&node_id) {
                 let resolved_type = hole_type.apply(&self.context);
-                let type_str = self.format_type(&resolved_type);
-                self.add_warning(format!("Hole of type {}", type_str), span);
+                self.warnings.push(TypeWarning::TypeHoleFilled {
+                    inferred_type: resolved_type,
+                    span,
+                });
             }
         }
     }
@@ -1314,5 +1332,56 @@ mod tests {
                 panic!("Type checking failed");
             }
         }
+    }
+
+    /// Helper function to check a program with a type hole and return the inferred type
+    fn check_type_hole(source: &str) -> Type {
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        // Parse
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        // Type check
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+        let _type_table = checker.check_program(&program).unwrap();
+
+        // Check warnings
+        let warnings = checker.warnings();
+        assert_eq!(warnings.len(), 1, "Expected exactly one type hole warning");
+
+        match &warnings[0] {
+            TypeWarning::TypeHoleFilled { inferred_type, .. } => inferred_type.clone(),
+        }
+    }
+
+    #[test]
+    fn test_type_hole_in_array() {
+        let inferred = check_type_hole("def arr = [1i32, ???, 3i32]");
+
+        // ??? should be inferred as i32 (to match array elements)
+        let expected = Type::Constructed(TypeName::Str("i32"), vec![]);
+        assert_eq!(inferred, expected);
+    }
+
+    #[test]
+    fn test_type_hole_in_binop() {
+        let inferred = check_type_hole("def result = 5i32 + ???");
+
+        // ??? should be inferred as i32 (to match addition operand)
+        let expected = Type::Constructed(TypeName::Str("i32"), vec![]);
+        assert_eq!(inferred, expected);
+    }
+
+    #[test]
+    fn test_type_hole_function_arg() {
+        let inferred = check_type_hole("def apply = (\\x:i32 -> x + 1i32) ???");
+
+        // ??? should be inferred as i32 (the function argument type)
+        let expected = Type::Constructed(TypeName::Str("i32"), vec![]);
+        assert_eq!(inferred, expected);
     }
 }

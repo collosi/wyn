@@ -65,13 +65,13 @@ pub enum Instruction {
     ArrayIndex(Register, Register, Register), // dest, array, index
 
     // Control flow
-    Branch(BlockId),                                 // unconditional jump
+    Branch(BlockId),                                          // unconditional jump
     BranchCond(Register, BlockId, BlockId, BlockId), // cond, true_block, false_block, merge_block (for if/then/else)
     BranchLoop(Register, BlockId, BlockId, BlockId, BlockId), // cond, body_block, exit_block, merge_block, continue_block (for loops)
-    Loop(LoopInfo),                                  // High-level loop construct with all metadata
-    Phi(Register, Vec<(Register, BlockId)>),         // dest, vec of (value, predecessor_block)
-    Return(Register),                                // return value
-    ReturnVoid,                                      // return from void function
+    Loop(LoopInfo),                                           // High-level loop construct with all metadata
+    Phi(Register, Vec<(Register, BlockId)>),                  // dest, vec of (value, predecessor_block)
+    Return(Register),                                         // return value
+    ReturnVoid,                                               // return from void function
 }
 
 /// High-level loop metadata for MIR

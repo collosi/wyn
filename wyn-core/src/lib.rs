@@ -66,7 +66,11 @@ impl Compiler {
 
         // Print warnings to stderr
         for warning in type_checker.warnings() {
-            eprintln!("Warning: {}", warning.message);
+            eprintln!(
+                "Warning: {} at {:?}",
+                warning.message(&|t| type_checker.format_type(t)),
+                warning.span()
+            );
         }
 
         Ok(())
@@ -95,7 +99,11 @@ impl Compiler {
 
         // Print warnings to stderr
         for warning in type_checker.warnings() {
-            eprintln!("Warning: {}", warning.message);
+            eprintln!(
+                "Warning: {} at {:?}",
+                warning.message(&|t| type_checker.format_type(t)),
+                warning.span()
+            );
         }
 
         // Monomorphization pass

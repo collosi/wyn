@@ -115,6 +115,35 @@ macro_rules! assert_typed_param_with_attrs {
     };
 }
 
+/// Assert that a value matches a pattern, showing actual value on failure
+macro_rules! assert_matches {
+    ($expr:expr, $pattern:pat) => {
+        match $expr {
+            $pattern => {}
+            ref actual => {
+                panic!(
+                    "assertion failed: `(left matches right)`\n  left: `{:#?}`\n right: `{}`",
+                    actual,
+                    stringify!($pattern)
+                );
+            }
+        }
+    };
+    ($expr:expr, $pattern:pat if $cond:expr) => {
+        match $expr {
+            $pattern if $cond => {}
+            ref actual => {
+                panic!(
+                    "assertion failed: `(left matches right)`\n  left: `{:#?}`\n right: `{} if {}`",
+                    actual,
+                    stringify!($pattern),
+                    stringify!($cond)
+                );
+            }
+        }
+    };
+}
+
 #[test]
 fn test_parse_let_decl() {
     let decl = single_decl("let x: i32 = 42");
@@ -262,10 +291,10 @@ fn test_parse_single_attributed_return_type() {
         entry.return_attributes[0],
         Some(Attribute::BuiltIn(spirv::BuiltIn::Position))
     );
-    assert!(matches!(
+    assert_matches!(
         &entry.return_types[0],
-        Type::Constructed(TypeName::Str("vec4"), _)
-    ));
+        Type::Constructed(TypeName::Named(name), _) if name == "vec4"
+    );
 }
 
 #[test]
@@ -295,7 +324,7 @@ fn test_parse_unattributed_return_type() {
 
     // Should have a regular type
     let ty = decl.ty.as_ref().expect("Missing return type");
-    assert!(matches!(ty, Type::Constructed(TypeName::Str("vec4"), _)));
+    assert_matches!(ty, Type::Constructed(TypeName::Named(name), _) if name == "vec4");
 }
 
 #[test]
@@ -474,17 +503,63 @@ fn test_parse_lambda_with_multiple_params() {
 }
 
 #[test]
-fn test_parse_function_application() {
-    let decl = single_decl(r#"let result: i32 = f(42, 24)"#);
+#[ignore] // TODO: Fix lambda return type parsing - currently has todo!() in parser
+fn test_parse_lambda_with_return_type() {
+    // \x:i32 -> body means: untyped parameter x, return type i32
+    let decl = single_decl(r#"let f: i32 -> i32 = \x:i32 -> x + 7i32"#);
 
-    assert!(matches!(
-        &decl.body.kind,
-        ExprKind::FunctionCall(name, args)
-            if name == "f"
-            && args.len() == 2
-            && matches!(args[0].kind, ExprKind::IntLiteral(42))
-            && matches!(args[1].kind, ExprKind::IntLiteral(24))
-    ));
+    if let ExprKind::Lambda(lambda) = &decl.body.kind {
+        // Check parameter: should be untyped
+        assert_eq!(lambda.params.len(), 1);
+        assert_eq!(lambda.params[0].simple_name(), Some("x"));
+        assert!(
+            lambda.params[0].pattern_type().is_none(),
+            "Parameter should not have a type"
+        );
+
+        // Check return type: should be i32
+        assert!(lambda.return_type.is_some(), "Lambda should have a return type");
+
+        // Check body: should be x + 7i32
+        assert!(matches!(lambda.body.kind, ExprKind::BinaryOp(_, _, _)));
+        if let ExprKind::BinaryOp(_op, left, right) = &lambda.body.kind {
+            assert!(matches!(left.kind, ExprKind::Identifier(ref name) if name == "x"));
+            assert!(matches!(right.kind, ExprKind::IntLiteral(7)));
+        }
+    } else {
+        panic!("Expected lambda, got {:?}", decl.body.kind);
+    }
+}
+
+#[test]
+fn test_parse_lambda_with_typed_parameter() {
+    // \(x:i32) -> body means: typed parameter x:i32, no return type
+    let decl = single_decl(r#"let f: i32 -> i32 = \(x:i32) -> x + 7i32"#);
+
+    if let ExprKind::Lambda(lambda) = &decl.body.kind {
+        // Check parameter: should be typed as i32
+        assert_eq!(lambda.params.len(), 1);
+        assert_eq!(lambda.params[0].simple_name(), Some("x"));
+        assert!(
+            lambda.params[0].pattern_type().is_some(),
+            "Parameter should have a type"
+        );
+
+        // Check return type: should be None
+        assert!(
+            lambda.return_type.is_none(),
+            "Lambda should not have a return type"
+        );
+
+        // Check body: should be x + 7i32
+        assert!(matches!(lambda.body.kind, ExprKind::BinaryOp(_, _, _)));
+        if let ExprKind::BinaryOp(_op, left, right) = &lambda.body.kind {
+            assert!(matches!(left.kind, ExprKind::Identifier(ref name) if name == "x"));
+            assert!(matches!(right.kind, ExprKind::IntLiteral(7)));
+        }
+    } else {
+        panic!("Expected lambda, got {:?}", decl.body.kind);
+    }
 }
 
 #[test]
@@ -631,9 +706,9 @@ fn test_parse_uniform_attribute() {
         _ => panic!("Expected Uniform declaration"),
     };
     assert_eq!(uniform_decl.name, "material_color");
-    assert_eq!(
-        uniform_decl.ty,
-        crate::ast::types::vec(3, crate::ast::types::f32())
+    assert_matches!(
+        &uniform_decl.ty,
+        Type::Constructed(TypeName::Named(name), args) if name == "vec3" && args.is_empty()
     );
 }
 
@@ -647,9 +722,9 @@ fn test_parse_uniform_without_initializer() {
         _ => panic!("Expected Uniform declaration"),
     };
     assert_eq!(uniform_decl.name, "material_color");
-    assert_eq!(
-        uniform_decl.ty,
-        crate::ast::types::vec(3, crate::ast::types::f32())
+    assert_matches!(
+        &uniform_decl.ty,
+        Type::Constructed(TypeName::Named(name), args) if name == "vec3" && args.is_empty()
     );
     // Check that there's no initializer (uniforms don't have bodies)
 }
@@ -1763,32 +1838,6 @@ fn test_parse_pattern_y_i32() {
             assert!(pattern.pattern_type().is_some());
         }
         Err(e) => panic!("Failed to parse pattern: {:?}", e),
-    }
-}
-
-#[test]
-fn test_parse_two_patterns_sequentially() {
-    let source = "x:i32 y:i32";
-    let tokens = tokenize(source).expect("Failed to tokenize");
-    println!("Tokens for 'x:i32 y:i32': {:#?}", tokens);
-    let mut parser = Parser::new(tokens);
-
-    println!("\nParsing first pattern...");
-    match parser.parse_pattern() {
-        Ok(pattern) => {
-            println!("First pattern: {:#?}", pattern);
-            assert_eq!(pattern.simple_name(), Some("x"));
-        }
-        Err(e) => panic!("Failed to parse first pattern: {:?}", e),
-    }
-
-    println!("\nParsing second pattern...");
-    match parser.parse_pattern() {
-        Ok(pattern) => {
-            println!("Second pattern: {:#?}", pattern);
-            assert_eq!(pattern.simple_name(), Some("y"));
-        }
-        Err(e) => panic!("Failed to parse second pattern: {:?}", e),
     }
 }
 

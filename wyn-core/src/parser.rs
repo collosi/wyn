@@ -1336,11 +1336,13 @@ impl Parser {
         self.expect(Token::Backslash)?;
 
         // Parse parameter patterns: \pat1 pat2 ... [: type] -> exp
+        // Use parse_function_parameter() to avoid consuming ':' as pattern type annotation
+        // The ':' after all parameters is the lambda's return type, not a parameter type
         let mut params = Vec::new();
 
         // Parse patterns until we hit : or ->
         while !self.check(&Token::Colon) && !self.check(&Token::Arrow) && !self.is_at_end() {
-            params.push(self.parse_pattern()?);
+            params.push(self.parse_function_parameter()?);
         }
 
         if params.is_empty() {
@@ -1354,7 +1356,9 @@ impl Parser {
         // Parse optional return type annotation: \pat1 pat2: t ->
         let return_type = if self.check(&Token::Colon) {
             self.advance(); // consume ':'
-            Some(self.parse_type()?)
+            // TODO: Figure out how to parse return type without consuming lambda's ->
+            // The issue is parse_type() -> parse_function_type() sees -> and thinks it's a function type
+            todo!("Fix lambda return type parsing")
         } else {
             None
         };

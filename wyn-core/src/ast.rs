@@ -201,20 +201,40 @@ where
 }
 pub type Expression = Node<ExprKind>;
 
+/// Type name constructors for the Wyn type system.
+///
+/// Note on Str vs Named:
+/// - `Str`: Primitive type names hardcoded in the compiler (e.g., "i32", "f32", "->", "tuple")
+///          Uses static strings for efficiency
+/// - `Named`: Type names parsed from user source code (e.g., "vec3", "MyType")
+///            Could refer to built-in types, type aliases, or user-defined types
+///            Uses owned String since the name comes from parsed input
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeName {
-    Str(&'static str),                   // Basic types: "int", "float", "tuple", "->", etc.
-    Array,                               // Array type constructor (takes size and element type)
-    Vec,                                 // Vector type constructor (takes size and element type)
-    Size(usize),                         // Array size literal
-    SizeVar(String),                     // Size variable: [n]
-    UserVar(String),                     // Type variable from user code: 'a, 'b (not yet bound to TypeVar)
-    Named(String),                       // User-defined type name (e.g., type alias)
-    Unique,                              // Uniqueness/consuming type marker (corresponds to "*" prefix)
-    Record(Vec<(String, Type)>),         // Record type: {field1: type1, field2: type2}
-    Sum(Vec<(String, Vec<Type>)>),       // Sum type: Constructor1 type* | Constructor2 type*
-    Existential(Vec<String>, Box<Type>), // Existential size: ?[n][m]. type
-    NamedParam(String, Box<Type>),       // Named parameter: (name: type)
+    /// Primitive type names hardcoded in compiler: "i32", "f32", "tuple", "->", etc.
+    Str(&'static str),
+    /// Array type constructor (takes size and element type)
+    Array,
+    /// Vector type constructor (takes size and element type)
+    Vec,
+    /// Array size literal
+    Size(usize),
+    /// Size variable: [n]
+    SizeVar(String),
+    /// Type variable from user code: 'a, 'b (not yet bound to TypeVar)
+    UserVar(String),
+    /// Type names parsed from source code (user-defined types, type aliases, or references to built-in types like "vec3")
+    Named(String),
+    /// Uniqueness/consuming type marker (corresponds to "*" prefix)
+    Unique,
+    /// Record type: {field1: type1, field2: type2}
+    Record(Vec<(String, Type)>),
+    /// Sum type: Constructor1 type* | Constructor2 type*
+    Sum(Vec<(String, Vec<Type>)>),
+    /// Existential size: ?[n][m]. type
+    Existential(Vec<String>, Box<Type>),
+    /// Named parameter: (name: type)
+    NamedParam(String, Box<Type>),
 }
 
 impl std::fmt::Display for TypeName {
