@@ -293,14 +293,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Hexadecimal float parsing not fully implemented
-    fn test_hexadecimal_floats() {
-        // These should parse but currently return 0.0
-        assert!(parse_float_literal("0x1.8p3f32").is_ok());
-        assert!(parse_float_literal("0X1.0p-2f32").is_ok());
-    }
-
-    #[test]
     fn test_string_literals() {
         assert_eq!(
             parse_string_literal("\"hello\""),

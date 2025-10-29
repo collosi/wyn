@@ -108,14 +108,11 @@ decimal     ::= decdigit (decdigit |"_")*
 hexadecimal ::= 0 ("x" | "X") hexdigit (hexdigit |"_")*
 binary      ::= 0 ("b" | "B") bindigit (bindigit | "_")*
 
-floatnumber      ::= (pointfloat | exponentfloat | hexadecimalfloat) [float_type]
+floatnumber      ::= (pointfloat | exponentfloat) [float_type]
 pointfloat       ::= [intpart] fraction
 exponentfloat    ::= (intpart | pointfloat) exponent
-hexadecimalfloat ::= 0 ("x" | "X") hexintpart hexfraction ("p"|"P") ["+" | "-"] decdigit+
 intpart          ::= decdigit (decdigit |"_")*
 fraction         ::= "." decdigit (decdigit |"_")*
-hexintpart       ::= hexdigit (hexdigit | "_")*
-hexfraction      ::= "." hexdigit (hexdigit |"_")*
 exponent         ::= ("e" | "E") ["+" | "-"] decdigit+
 
 decdigit ::= "0"..."9"
@@ -142,7 +139,6 @@ Numeric literals can be suffixed with their intended type. For example `42i8` is
 
 **Float formats:**
 - **Decimal**: `3.14`, `1.5e-10`, `2.0f32`
-- **Hexadecimal**: `0x1.fp3` (evaluates to 1 15/16 × 2³ = 15.75)
 
 Underscores may be used as digit separators in numeric literals for readability (e.g., `1_000_000`, `0xFF_FF_FF`).
 
