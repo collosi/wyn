@@ -134,6 +134,114 @@ impl TypeChecker {
         &self.warnings
     }
 
+    /// Check an expression against an expected type (bidirectional checking mode)
+    /// Returns the actual type (which should unify with expected_type)
+    fn check_expression(&mut self, expr: &Expression, expected_type: &Type) -> Result<Type> {
+        match &expr.kind {
+            ExprKind::Lambda(lambda) => {
+                // Special handling for lambdas in check mode
+                // Extract parameter types from the expected function type
+                let mut expected_type = expected_type.clone();
+                let mut expected_param_types = Vec::new();
+
+                // Unwrap nested function types to get parameter types
+                for _ in 0..lambda.params.len() {
+                    let applied = expected_type.apply(&self.context);
+                    match applied {
+                        Type::Constructed(TypeName::Str("->"), ref args) if args.len() == 2 => {
+                            expected_param_types.push(args[0].clone());
+                            expected_type = args[1].clone();
+                        }
+                        _ => {
+                            // Expected type doesn't match lambda structure, fall back to inference
+                            return self.infer_expression(expr);
+                        }
+                    }
+                }
+
+                // Now check the lambda with known parameter types
+                self.scope_stack.push_scope();
+
+                let mut param_types = Vec::new();
+                for (param, expected_param_type) in lambda.params.iter().zip(expected_param_types.iter()) {
+                    // If parameter has a type annotation, unify it with expected
+                    let param_type = if let Some(annotated_type) = param.pattern_type() {
+                        self.context.unify(annotated_type, expected_param_type).map_err(|_| {
+                            CompilerError::TypeError(
+                                format!(
+                                    "Parameter type annotation {} doesn't match expected type {}",
+                                    self.format_type(annotated_type),
+                                    self.format_type(expected_param_type)
+                                ),
+                                param.h.span,
+                            )
+                        })?;
+                        annotated_type.clone()
+                    } else {
+                        // Use the expected type for the parameter
+                        expected_param_type.clone()
+                    };
+
+                    param_types.push(param_type.clone());
+                    let type_scheme = TypeScheme::Monotype(param_type);
+
+                    let param_name = param.simple_name().ok_or_else(|| {
+                        CompilerError::TypeError(
+                            "Complex patterns in lambda parameters not yet supported".to_string(),
+                            param.h.span,
+                        )
+                    })?;
+                    self.scope_stack.insert(param_name.to_string(), type_scheme);
+                }
+
+                // Check the body
+                let body_type = self.infer_expression(&lambda.body)?;
+
+                // If return type annotation exists, unify it with the body type
+                let return_type = if let Some(annotated_return_type) = &lambda.return_type {
+                    self.context.unify(&body_type, annotated_return_type).map_err(|_| {
+                        CompilerError::TypeError(
+                            format!(
+                                "Lambda body type {} does not match return type annotation {}",
+                                self.format_type(&body_type),
+                                self.format_type(annotated_return_type)
+                            ),
+                            lambda.body.h.span,
+                        )
+                    })?;
+                    annotated_return_type.clone()
+                } else {
+                    body_type
+                };
+
+                self.scope_stack.pop_scope();
+
+                // Build the function type
+                let mut func_type = return_type;
+                for param_type in param_types.iter().rev() {
+                    func_type = types::function(param_type.clone(), func_type);
+                }
+
+                Ok(func_type)
+            }
+            _ => {
+                // For non-lambdas, infer and unify with expected
+                let actual_type = self.infer_expression(expr)?;
+                self.context.unify(&actual_type, expected_type).map_err(|_| {
+                    CompilerError::TypeError(
+                        format!(
+                            "Type mismatch: expected {}, got {}",
+                            self.format_type(expected_type),
+                            self.format_type(&actual_type)
+                        ),
+                        expr.h.span,
+                    )
+                })?;
+                Ok(actual_type)
+            }
+        }
+    }
+
     /// Substitute UserVars with bound type variables (recursive helper)
     fn substitute_type_params_static(ty: &Type, bindings: &HashMap<String, Type>) -> Type {
         match ty {
@@ -677,11 +785,30 @@ impl TypeChecker {
 
                 // Apply function to each argument using unification
                 for (i, arg) in args.iter().enumerate() {
-                    let arg_type = self.infer_expression(arg)?;
-
-                    // Extract parameter type from function type (apply arrow destructor)
-                    // The function type should be: param_type -> rest_type
+                    // Apply context to resolve type variables in function type
                     let func_type_applied = func_type.apply(&self.context);
+
+                    // Extract expected parameter type from function type
+                    let expected_param_type = match &func_type_applied {
+                        Type::Constructed(TypeName::Str("->"), args) if args.len() == 2 => {
+                            Some(args[0].clone())
+                        }
+                        _ => None,
+                    };
+
+                    // Use bidirectional checking for lambdas when we know the expected type
+                    let arg_type = if matches!(&arg.kind, ExprKind::Lambda(_)) {
+                        if let Some(ref expected) = expected_param_type {
+                            // Check lambda against expected type (bidirectional)
+                            self.check_expression(arg, expected)?
+                        } else {
+                            // No expected type available, fall back to inference
+                            self.infer_expression(arg)?
+                        }
+                    } else {
+                        // Non-lambda argument: use regular inference
+                        self.infer_expression(arg)?
+                    };
 
                     // Check if the expected parameter is unique (for consumption tracking)
                     // We need to peek into the arrow type structure
@@ -755,7 +882,7 @@ impl TypeChecker {
                 let mut param_types = Vec::new();
                 for param in &lambda.params {
                     let param_type = param.pattern_type().cloned().unwrap_or_else(|| {
-                        self.context.new_variable() // Use polytype's context to create fresh variables
+                        self.context.new_variable()
                     });
                     param_types.push(param_type.clone());
                     let type_scheme = TypeScheme::Monotype(param_type.clone());
@@ -888,6 +1015,9 @@ impl TypeChecker {
                 {
                     // Not a qualified name, proceed with normal field access
                     let expr_type = self.infer_expression(expr)?;
+
+                    // Apply context to resolve any type variables that have been unified
+                    let expr_type = expr_type.apply(&self.context);
 
                     // Extract the type name from the expression type
                     match expr_type {
@@ -1405,5 +1535,104 @@ mod tests {
         // ??? should be inferred as i32 (the function argument type)
         let expected = Type::Constructed(TypeName::Str("i32"), vec![]);
         assert_eq!(inferred, expected);
+    }
+
+    #[test]
+    fn test_lambda_param_with_annotation() {
+        // Test that lambda parameter works with type annotation (Futhark-style)
+        // Field projection requires the parameter type to be known
+        let source = "def test : [2]f32 = let arr : [2]vec3f32 = [vec3 1.0f32 2.0f32 3.0f32, vec3 4.0f32 5.0f32 6.0f32] in map (\\(v:vec3f32) -> v.x) arr";
+
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        // Parse
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        // Type check
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&program) {
+            Ok(_) => {
+                // Should succeed with type annotation
+            }
+            Err(e) => {
+                panic!("Type checking failed: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_bidirectional_with_concrete_type() {
+        // Test bidirectional checking with a CONCRETE expected type
+        // This demonstrates where bidirectional checking actually helps
+        let source = r#"
+            def apply_to_vec (f : vec3f32 -> f32) : f32 =
+              f (vec3 1.0f32 2.0f32 3.0f32)
+
+            def test : f32 = apply_to_vec (\v -> v.x)
+        "#;
+
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        // Parse
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        // Type check
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&program) {
+            Ok(_) => {
+                // Should succeed! apply_to_vec expects vec3f32 -> f32 (concrete)
+                // so bidirectional checking gives parameter v the type vec3f32
+            }
+            Err(e) => {
+                panic!("Type checking failed: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore] // Futhark behavior: field projection on lambda params requires annotation
+    fn test_lambda_param_inference_with_map() {
+        // This test demonstrates Futhark's design decision:
+        // "Record field projection cannot in isolation be fully inferred"
+        //
+        // The issue: map's type is (a -> b) -> [n]a -> [n]b
+        // When checking \v -> v.x, parameter v gets type variable 'a'
+        // Field access v.x happens before 'a' is unified with vec3f32 (from the array arg)
+        //
+        // Solution: Annotate the parameter: \(v:vec3f32) -> v.x
+        // Or use a projection function (future): map (.x) arr
+        let source = "def test : [2]f32 = let arr : [2]vec3f32 = [vec3 1.0f32 2.0f32 3.0f32, vec3 4.0f32 5.0f32 6.0f32] in map (\\v -> v.x) arr";
+
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        // Parse
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        // Type check
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&program) {
+            Ok(_) => {
+                // Would succeed if we had full constraint solving
+            }
+            Err(e) => {
+                // Expected: field access on unresolved type variable
+                assert!(e.to_string().contains("Field access"));
+            }
+        }
     }
 }
