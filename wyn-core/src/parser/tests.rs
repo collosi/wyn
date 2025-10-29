@@ -503,7 +503,6 @@ fn test_parse_lambda_with_multiple_params() {
 }
 
 #[test]
-#[ignore] // TODO: Fix lambda return type parsing - currently has todo!() in parser
 fn test_parse_lambda_with_return_type() {
     // \x:i32 -> body means: untyped parameter x, return type i32
     let decl = single_decl(r#"let f: i32 -> i32 = \x:i32 -> x + 7i32"#);
@@ -559,6 +558,67 @@ fn test_parse_lambda_with_typed_parameter() {
         }
     } else {
         panic!("Expected lambda, got {:?}", decl.body.kind);
+    }
+}
+
+#[test]
+fn test_parse_lambda_return_type_simple() {
+    // Test just the lambda with return type parses correctly
+    let decl = single_decl(r#"def f = \x:i32 -> x"#);
+
+    if let ExprKind::Lambda(lambda) = &decl.body.kind {
+        assert_eq!(lambda.params.len(), 1);
+        assert_eq!(lambda.params[0].simple_name(), Some("x"));
+        assert!(lambda.return_type.is_some(), "Lambda should have return type");
+    } else {
+        panic!("Expected lambda, got {:?}", decl.body.kind);
+    }
+}
+
+#[test]
+fn test_parse_lambda_in_parens() {
+    // Test lambda in parentheses
+    let decl = single_decl(r#"def f = (\x:i32 -> x)"#);
+
+    if let ExprKind::Lambda(lambda) = &decl.body.kind {
+        assert_eq!(lambda.params.len(), 1);
+        assert!(lambda.return_type.is_some(), "Lambda should have return type");
+    } else {
+        panic!("Expected lambda, got {:?}", decl.body.kind);
+    }
+}
+
+#[test]
+fn test_parse_lambda_application_with_literal() {
+    // Test function application: (lambda) arg with literal
+    let decl = single_decl(r#"def apply = (\x:i32 -> x + 1i32) 5i32"#);
+
+    // Should be a function application (either FunctionCall or Application)
+    match &decl.body.kind {
+        ExprKind::Application(func, args) => {
+            assert!(!args.is_empty(), "Should have at least one argument");
+        }
+        ExprKind::FunctionCall(_name, args) => {
+            assert!(!args.is_empty(), "Should have at least one argument");
+        }
+        _ => panic!("Expected function application, got {:?}", decl.body.kind),
+    }
+}
+
+#[test]
+fn test_parse_lambda_application_with_type_hole() {
+    // Test function application: (lambda) arg
+    let decl = single_decl(r#"def apply = (\x:i32 -> x + 1i32) ???"#);
+
+    // Should be a function application (either FunctionCall or Application)
+    match &decl.body.kind {
+        ExprKind::Application(_func, args) => {
+            assert!(!args.is_empty(), "Should have at least one argument");
+        }
+        ExprKind::FunctionCall(_name, args) => {
+            assert!(!args.is_empty(), "Should have at least one argument");
+        }
+        _ => panic!("Expected function application, got {:?}", decl.body.kind),
     }
 }
 

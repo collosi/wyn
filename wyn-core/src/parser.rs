@@ -1131,12 +1131,15 @@ impl Parser {
             self.peek(),
             Some(Token::IntLiteral(_)) |
             Some(Token::FloatLiteral(_)) |
+            Some(Token::True) |
+            Some(Token::False) |
             Some(Token::Identifier(_)) |
             Some(Token::LeftBracket) |  // array literal (no space) or array indexing context
             Some(Token::LeftBracketSpaced) |  // array literal (with space)
             Some(Token::LeftParen) |    // parenthesized expression
             Some(Token::Backslash) |    // lambda
-            Some(Token::Let) // let..in
+            Some(Token::Let) |          // let..in
+            Some(Token::TypeHole)       // type hole
         )
     }
 
@@ -1360,9 +1363,9 @@ impl Parser {
         // Parse optional return type annotation: \pat1 pat2: t ->
         let return_type = if self.check(&Token::Colon) {
             self.advance(); // consume ':'
-            // TODO: Figure out how to parse return type without consuming lambda's ->
-            // The issue is parse_type() -> parse_function_type() sees -> and thinks it's a function type
-            todo!("Fix lambda return type parsing")
+            // Use parse_type_application() instead of parse_type() to avoid consuming the lambda's ->
+            // parse_type() would try to parse "i32 -> ..." as a function type
+            Some(self.parse_type_application()?)
         } else {
             None
         };
