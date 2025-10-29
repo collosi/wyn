@@ -676,7 +676,7 @@ impl TypeChecker {
                 let mut func_type = func_type_result?;
 
                 // Apply function to each argument using unification
-                for arg in args {
+                for (i, arg) in args.iter().enumerate() {
                     let arg_type = self.infer_expression(arg)?;
 
                     // Extract parameter type from function type (apply arrow destructor)

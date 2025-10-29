@@ -368,11 +368,6 @@ impl Lowering {
 
     /// Lower a MIR basic block to SPIR-V
     fn lower_block(&mut self, block: &mir::Block, is_first_block: bool) -> Result<()> {
-        eprintln!(
-            "DEBUG: Lowering block {} with {} instructions",
-            block.id,
-            block.instructions.len()
-        );
         let spirv_block_id = *self
             .current_block_map
             .get(&block.id)
@@ -392,7 +387,6 @@ impl Lowering {
         }
 
         for (idx, instruction) in block.instructions.iter().enumerate() {
-            eprintln!("DEBUG:   Instruction {}: {:?}", idx, instruction);
             self.lower_instruction(instruction)?;
         }
 
@@ -608,7 +602,6 @@ impl Lowering {
             }
 
             Instruction::Loop(loop_info) => {
-                eprintln!("DEBUG: Loop metadata - pre-allocating SPIR-V IDs for forward references");
                 // Pre-allocate SPIR-V IDs for registers with forward references (Phi operands)
                 let phi_spirv_id = self.builder.id();
                 let result_spirv_id = self.builder.id();

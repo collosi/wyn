@@ -31,6 +31,10 @@ impl Parser {
         }
     }
 
+    pub fn take_node_counter(self) -> NodeCounter {
+        self.node_counter
+    }
+
     /// Get the span of the current token
     fn current_span(&self) -> Span {
         self.tokens.get(self.current).map(|t| t.span).unwrap_or_else(Span::dummy)

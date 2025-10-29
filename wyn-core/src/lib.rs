@@ -50,13 +50,15 @@ impl Compiler {
         // Parse
         let mut parser = parser::Parser::new(tokens);
         let program = parser.parse()?;
+        let node_counter = parser.take_node_counter();
 
         // Constant folding pass
-        let mut constant_folder = constant_folding::ConstantFolder::new();
+        let mut constant_folder = constant_folding::ConstantFolder::new_with_counter(node_counter);
         let program = constant_folder.fold_program(&program)?;
+        let node_counter = constant_folder.take_node_counter();
 
         // Defunctionalization pass
-        let mut defunc = defunctionalization::Defunctionalizer::new();
+        let mut defunc = defunctionalization::Defunctionalizer::new_with_counter(node_counter);
         let program = defunc.defunctionalize_program(&program)?;
 
         // Type check
@@ -83,13 +85,15 @@ impl Compiler {
         // Parse
         let mut parser = parser::Parser::new(tokens);
         let program = parser.parse()?;
+        let node_counter = parser.take_node_counter();
 
         // Constant folding pass
-        let mut constant_folder = constant_folding::ConstantFolder::new();
+        let mut constant_folder = constant_folding::ConstantFolder::new_with_counter(node_counter);
         let program = constant_folder.fold_program(&program)?;
+        let node_counter = constant_folder.take_node_counter();
 
         // Defunctionalization pass
-        let mut defunc = defunctionalization::Defunctionalizer::new();
+        let mut defunc = defunctionalization::Defunctionalizer::new_with_counter(node_counter);
         let program = defunc.defunctionalize_program(&program)?;
 
         // Type check

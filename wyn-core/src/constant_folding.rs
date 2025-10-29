@@ -23,6 +23,10 @@ impl ConstantFolder {
         ConstantFolder { node_counter }
     }
 
+    pub fn take_node_counter(self) -> NodeCounter {
+        self.node_counter
+    }
+
     /// Fold constants in an entire program
     pub fn fold_program(&mut self, program: &Program) -> Result<Program> {
         let mut folded_declarations = Vec::new();
