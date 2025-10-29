@@ -766,12 +766,27 @@ impl Lowering {
                         self.builder.composite_extract(type_id, None, array_id, [index_value])?;
                     self.current_register_map.insert(dest.id, result_id);
                 } else {
-                    // Dynamic index - use OpAccessChain (requires array to be in memory)
-                    // For now, this is not supported without proper variable allocation
-                    return Err(CompilerError::SpirvError(
-                        "Dynamic array indexing not yet supported (requires proper variable allocation)"
-                            .to_string(),
-                    ));
+                    // Dynamic index - use OpAccessChain
+                    // 1. Get array type and create pointer type for Function storage
+                    let array_type_id = self.get_or_create_type(&array.ty)?;
+                    let ptr_type_id = self.get_or_create_ptr_type(StorageClass::Function, array_type_id);
+
+                    // 2. Create a local variable to hold the array
+                    let var_id = self.builder.variable(ptr_type_id, None, StorageClass::Function, None);
+
+                    // 3. Store the array value into the variable
+                    self.builder.store(var_id, array_id, None, [])?;
+
+                    // 4. Get element type and create pointer type for it
+                    let element_ptr_type_id = self.get_or_create_ptr_type(StorageClass::Function, type_id);
+
+                    // 5. Use OpAccessChain to get pointer to the indexed element
+                    let element_ptr_id =
+                        self.builder.access_chain(element_ptr_type_id, None, var_id, [index_id])?;
+
+                    // 6. Load the element value
+                    let result_id = self.builder.load(type_id, None, element_ptr_id, None, [])?;
+                    self.current_register_map.insert(dest.id, result_id);
                 }
             }
 
