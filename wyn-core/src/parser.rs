@@ -1139,7 +1139,7 @@ impl Parser {
             Some(Token::LeftParen) |    // parenthesized expression
             Some(Token::Backslash) |    // lambda
             Some(Token::Let) |          // let..in
-            Some(Token::TypeHole)       // type hole
+            Some(Token::TypeHole) // type hole
         )
     }
 

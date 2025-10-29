@@ -751,10 +751,13 @@ impl TypeChecker {
                 self.scope_stack.push_scope();
 
                 // Add parameters to scope with their types (or fresh type variables)
+                // Save the parameter types so we can reuse them when building the function type
+                let mut param_types = Vec::new();
                 for param in &lambda.params {
                     let param_type = param.pattern_type().cloned().unwrap_or_else(|| {
                         self.context.new_variable() // Use polytype's context to create fresh variables
                     });
+                    param_types.push(param_type.clone());
                     let type_scheme = TypeScheme::Monotype(param_type.clone());
 
                     // For now, only support simple name patterns in lambda parameters
@@ -769,16 +772,32 @@ impl TypeChecker {
 
                 // Type check the lambda body with parameters in scope
                 let body_type = self.infer_expression(&lambda.body)?;
-                let return_type = lambda.return_type.clone().unwrap_or(body_type);
+
+                // If return type annotation exists, unify it with the body type
+                let return_type = if let Some(annotated_return_type) = &lambda.return_type {
+                    self.context.unify(&body_type, annotated_return_type).map_err(|_| {
+                        CompilerError::TypeError(
+                            format!(
+                                "Lambda body type {} does not match return type annotation {}",
+                                self.format_type(&body_type),
+                                self.format_type(annotated_return_type)
+                            ),
+                            lambda.body.h.span
+                        )
+                    })?;
+                    annotated_return_type.clone()
+                } else {
+                    body_type
+                };
 
                 // Pop parameter scope
                 self.scope_stack.pop_scope();
 
-                // For multiple parameters, create nested function types
+                // For multiple parameters, create nested function types using the SAME type variables
+                // we used when adding parameters to scope
                 let mut func_type = return_type;
-                for param in lambda.params.iter().rev() {
-                    let param_type = param.pattern_type().cloned().unwrap_or_else(|| self.context.new_variable());
-                    func_type = types::function(param_type, func_type);
+                for param_type in param_types.iter().rev() {
+                    func_type = types::function(param_type.clone(), func_type);
                 }
 
                 Ok(func_type)
@@ -1380,7 +1399,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Type hole inference with lambda return types needs investigation
     fn test_type_hole_function_arg() {
         let inferred = check_type_hole("def apply = (\\x:i32 -> x + 1i32) ???");
 
