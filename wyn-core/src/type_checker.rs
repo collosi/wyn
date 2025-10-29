@@ -1599,40 +1599,4 @@ mod tests {
         }
     }
 
-    #[test]
-    #[ignore] // Futhark behavior: field projection on lambda params requires annotation
-    fn test_lambda_param_inference_with_map() {
-        // This test demonstrates Futhark's design decision:
-        // "Record field projection cannot in isolation be fully inferred"
-        //
-        // The issue: map's type is (a -> b) -> [n]a -> [n]b
-        // When checking \v -> v.x, parameter v gets type variable 'a'
-        // Field access v.x happens before 'a' is unified with vec3f32 (from the array arg)
-        //
-        // Solution: Annotate the parameter: \(v:vec3f32) -> v.x
-        // Or use a projection function (future): map (.x) arr
-        let source = "def test : [2]f32 = let arr : [2]vec3f32 = [vec3 1.0f32 2.0f32 3.0f32, vec3 4.0f32 5.0f32 6.0f32] in map (\\v -> v.x) arr";
-
-        use crate::lexer;
-        use crate::parser::Parser;
-
-        // Parse
-        let tokens = lexer::tokenize(source).unwrap();
-        let mut parser = Parser::new(tokens);
-        let program = parser.parse().unwrap();
-
-        // Type check
-        let mut checker = TypeChecker::new();
-        checker.load_builtins().unwrap();
-
-        match checker.check_program(&program) {
-            Ok(_) => {
-                // Would succeed if we had full constraint solving
-            }
-            Err(e) => {
-                // Expected: field access on unresolved type variable
-                assert!(e.to_string().contains("Field access"));
-            }
-        }
-    }
 }
