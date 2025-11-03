@@ -141,9 +141,9 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
           vec3 1.0f32 (-1.0f32) (-1.0f32) ] in
 
       -- Transform & perspective
+      let v4s : [8]vec4f32 = map (\(v:vec3f32) -> mul_rowvec_mat4 (vec4 v.x v.y v.z 1.0f32) mat) verts0 in
       let verts1 : [8]vec3f32 =
-        let v4s = map (\v -> mul_rowvec_mat4 (vec4 v.x v.y v.z 1.0f32) mat) verts0 in
-        map (\q ->
+        map (\(q:vec4f32) ->
                   let zinv = 1.0f32 / q.z in
                   vec3 (q.x*zinv) (q.y*zinv) zinv)
                v4s in

@@ -141,6 +141,7 @@ impl TypeChecker {
             ExprKind::Lambda(lambda) => {
                 // Special handling for lambdas in check mode
                 // Extract parameter types from the expected function type
+                let original_expected_type = expected_type.clone();
                 let mut expected_type = expected_type.clone();
                 let mut expected_param_types = Vec::new();
 
@@ -164,18 +165,9 @@ impl TypeChecker {
 
                 let mut param_types = Vec::new();
                 for (param, expected_param_type) in lambda.params.iter().zip(expected_param_types.iter()) {
-                    // If parameter has a type annotation, unify it with expected
+                    // If parameter has a type annotation, trust it
+                    // Otherwise use the expected type from bidirectional checking
                     let param_type = if let Some(annotated_type) = param.pattern_type() {
-                        self.context.unify(annotated_type, expected_param_type).map_err(|_| {
-                            CompilerError::TypeError(
-                                format!(
-                                    "Parameter type annotation {} doesn't match expected type {}",
-                                    self.format_type(annotated_type),
-                                    self.format_type(expected_param_type)
-                                ),
-                                param.h.span,
-                            )
-                        })?;
                         annotated_type.clone()
                     } else {
                         // Use the expected type for the parameter
@@ -221,6 +213,18 @@ impl TypeChecker {
                 for param_type in param_types.iter().rev() {
                     func_type = types::function(param_type.clone(), func_type);
                 }
+
+                // Unify the built function type with the original expected type
+                self.context.unify(&func_type, &original_expected_type).map_err(|_| {
+                    CompilerError::TypeError(
+                        format!(
+                            "Lambda type {} doesn't match expected type {}",
+                            self.format_type(&func_type),
+                            self.format_type(&original_expected_type)
+                        ),
+                        expr.h.span,
+                    )
+                })?;
 
                 Ok(func_type)
             }
@@ -315,16 +319,27 @@ impl TypeChecker {
 
         // map: ∀a b n. (a -> b) -> *Array(n, a) -> Array(n, b)
         // The input array is consumed (unique), output is fresh
-        let var_a = self.context.new_variable();
-        let var_b = self.context.new_variable();
-        let var_n = self.context.new_variable(); // Array size variable
+        // Build the type using Type::Variable(0,1,2) for proper polymorphism
+        let var_a = Type::Variable(0);
+        let var_b = Type::Variable(1);
+        let var_n = Type::Variable(2);
         let func_type = Type::arrow(var_a.clone(), var_b.clone());
         let input_array_type =
             types::unique(Type::Constructed(TypeName::Array, vec![var_n.clone(), var_a]));
         let output_array_type = Type::Constructed(TypeName::Array, vec![var_n, var_b]);
         let map_arrow1 = Type::arrow(input_array_type, output_array_type);
         let map_body = Type::arrow(func_type, map_arrow1);
-        let map_scheme = TypeScheme::Monotype(map_body);
+        // Create nested Polytype for ∀a b n
+        let map_scheme = TypeScheme::Polytype {
+            variable: 0,
+            body: Box::new(TypeScheme::Polytype {
+                variable: 1,
+                body: Box::new(TypeScheme::Polytype {
+                    variable: 2,
+                    body: Box::new(TypeScheme::Monotype(map_body)),
+                }),
+            }),
+        };
         self.scope_stack.insert("map".to_string(), map_scheme);
 
         // zip: ∀a b. [a] -> [b] -> [(a, b)]
@@ -1599,4 +1614,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_bidirectional_explicit_annotation_mismatch() {
+        // Minimal test demonstrating bidirectional checking bug with explicit parameter annotations.
+        // Two chained maps: vec3f32->vec4f32, then vec4f32->vec3f32
+        // The second lambda's parameter annotation (q:vec4f32) is correct (v4s is [1]vec4f32),
+        // but bidirectional checking incorrectly rejects it.
+        let source = r#"
+            def test =
+              let arr : [1]vec3f32 = [vec3 1.0f32 2.0f32 3.0f32] in
+              let v4s : [1]vec4f32 = map (\(v:vec3f32) -> vec4 v.x v.y v.z 1.0f32) arr in
+              map (\(q:vec4f32) -> vec3 q.x q.y q.z) v4s
+        "#;
+
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&program) {
+            Ok(_) => {
+                // Should succeed! Both lambda parameter annotations are correct.
+            }
+            Err(e) => {
+                panic!("Type checking should succeed but failed with: {:?}", e);
+            }
+        }
+    }
 }
