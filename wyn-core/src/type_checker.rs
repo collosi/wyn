@@ -798,86 +798,146 @@ impl TypeChecker {
 
                 let mut func_type = func_type_result?;
 
-                // Apply function to each argument using unification
+                // Two-pass approach for better type inference:
+                // 1. First process non-lambda arguments to constrain type variables
+                // 2. Then process lambda arguments with bidirectional checking
+
+                // Collect argument types and expected types for lambdas
+                let mut arg_types: Vec<Option<Type>> = vec![None; args.len()];
+                let mut lambda_expected_types: Vec<Option<Type>> = vec![None; args.len()];
+
+                // First pass: process arguments to constrain type variables
+                // For lambdas, create placeholder type variables to advance func_type
+                // For non-lambdas, infer their types and unify with expected
                 for (i, arg) in args.iter().enumerate() {
                     // Apply context to resolve type variables in function type
                     let func_type_applied = func_type.apply(&self.context);
 
-                    // Extract expected parameter type from function type
-                    let expected_param_type = match &func_type_applied {
-                        Type::Constructed(TypeName::Str("->"), args) if args.len() == 2 => {
-                            Some(args[0].clone())
+                    if matches!(&arg.kind, ExprKind::Lambda(_)) {
+                        // For lambdas: save the expected type for second pass
+                        if let Type::Constructed(TypeName::Str("->"), arrow_args) = &func_type_applied {
+                            if arrow_args.len() == 2 {
+                                lambda_expected_types[i] = Some(arrow_args[0].clone());
+                            }
                         }
-                        _ => None,
-                    };
 
-                    // Use bidirectional checking for lambdas when we know the expected type
-                    let arg_type = if matches!(&arg.kind, ExprKind::Lambda(_)) {
-                        if let Some(ref expected) = expected_param_type {
-                            // Check lambda against expected type (bidirectional)
-                            self.check_expression(arg, expected)?
-                        } else {
-                            // No expected type available, fall back to inference
-                            self.infer_expression(arg)?
-                        }
+                        // Create a fresh type variable as placeholder
+                        // This advances func_type to the next parameter position
+                        let param_type_var = self.context.new_variable();
+                        let result_type = self.context.new_variable();
+                        let expected_func_type = Type::arrow(param_type_var, result_type.clone());
+
+                        // Unify to advance the function type
+                        self.context.unify(&func_type, &expected_func_type).map_err(|e| {
+                            CompilerError::TypeError(
+                                format!("Function call type error: {:?}", e),
+                                arg.h.span
+                            )
+                        })?;
+
+                        // Update func_type for next argument
+                        func_type = result_type;
                     } else {
-                        // Non-lambda argument: use regular inference
-                        self.infer_expression(arg)?
-                    };
+                        // For non-lambda argument: use regular inference
+                        let arg_type = self.infer_expression(arg)?;
+                        arg_types[i] = Some(arg_type.clone());
 
-                    // Check if the expected parameter is unique (for consumption tracking)
-                    // We need to peek into the arrow type structure
-                    let expects_unique =
-                        if let Type::Constructed(TypeName::Str("arrow"), arrow_args) = &func_type_applied {
-                            if let Some(param_type) = arrow_args.first() {
-                                types::is_unique(param_type)
+                        // Check if the expected parameter is unique (for consumption tracking)
+                        // Use the applied version to check for uniqueness
+                        let expects_unique =
+                            if let Type::Constructed(TypeName::Str("arrow"), arrow_args) = &func_type_applied {
+                                if let Some(param_type) = arrow_args.first() {
+                                    types::is_unique(param_type)
+                                } else {
+                                    false
+                                }
                             } else {
                                 false
+                            };
+
+                        // Create a fresh result type variable
+                        let result_type = self.context.new_variable();
+
+                        // Strip uniqueness from arg_type for unification
+                        let arg_type_for_unify = types::strip_unique(&arg_type);
+
+                        // Strip uniqueness from the APPLIED function type before unifying
+                        // This ensures we resolve type variables before stripping
+                        let func_type_for_unify = types::strip_unique(&func_type_applied);
+
+                        // Expected function type: arg_type_for_unify -> result_type
+                        let expected_func_type = Type::arrow(arg_type_for_unify, result_type.clone());
+
+                        // Unify the function type with expected (with uniqueness stripped)
+                        self.context.unify(&func_type_for_unify, &expected_func_type).map_err(|e| {
+                            CompilerError::TypeError(
+                                format!("Function call type error: {:?}", e),
+                                arg.h.span
+                            )
+                        })?;
+
+                        // If the parameter expects unique ownership, mark the variable as consumed
+                        if expects_unique {
+                            if let ExprKind::Identifier(var_name) = &arg.kind {
+                                self.scope_stack.mark_consumed(var_name).map_err(|e| {
+                                    CompilerError::TypeError(
+                                        format!(
+                                            "Cannot consume variable '{}': {}",
+                                            var_name, e
+                                        ),
+                                        arg.h.span
+                                    )
+                                })?;
                             }
-                        } else {
-                            false
-                        };
-
-                    // Create a fresh result type variable
-                    let result_type = self.context.new_variable();
-
-                    // Strip uniqueness from arg_type for unification
-                    // This allows non-unique values to be passed to unique parameters
-                    let arg_type_for_unify = types::strip_unique(&arg_type);
-
-                    // Also strip uniqueness from the function type before unifying
-                    // This ensures unique parameters can accept non-unique arguments
-                    let func_type_for_unify = types::strip_unique(&func_type);
-
-                    // Expected function type: arg_type_for_unify -> result_type
-                    let expected_func_type = Type::arrow(arg_type_for_unify, result_type.clone());
-
-                    // Unify the function type with expected (with uniqueness stripped)
-                    self.context.unify(&func_type_for_unify, &expected_func_type).map_err(|e| {
-                        CompilerError::TypeError(
-                            format!("Function call type error: {:?}", e),
-                            arg.h.span
-                        )
-                    })?;
-
-                    // If the parameter expects unique ownership, mark the variable as consumed
-                    if expects_unique {
-                        if let ExprKind::Identifier(var_name) = &arg.kind {
-                            self.scope_stack.mark_consumed(var_name).map_err(|e| {
-                                CompilerError::TypeError(
-                                    format!(
-                                        "Cannot consume variable '{}': {}",
-                                        var_name, e
-                                    ),
-                                    arg.h.span
-                                )
-                            })?;
                         }
-                        // Note: literals and other expressions can be consumed without tracking
+
+                        // Update func_type to result_type for the next argument (currying)
+                        func_type = result_type;
+                    }
+                }
+
+                // Second pass: process lambda arguments with bidirectional checking
+                // Note: unification already happened in first pass with placeholder variables
+                // This pass just checks the lambda bodies now that type variables are constrained
+                for (i, arg) in args.iter().enumerate() {
+                    if !matches!(&arg.kind, ExprKind::Lambda(_)) {
+                        // Skip non-lambdas in second pass
+                        continue;
                     }
 
-                    // Update func_type to result_type for the next argument (currying)
-                    func_type = result_type;
+                    // Get the expected type we saved in the first pass
+                    // Apply context to resolve any type variables that were bound during first pass
+                    let expected_param_type = lambda_expected_types[i]
+                        .as_ref()
+                        .map(|t| t.apply(&self.context));
+
+                    // Use bidirectional checking for lambdas when we know the expected type
+                    if let Some(ref expected) = expected_param_type {
+                        // Check lambda against expected type (bidirectional)
+                        // This will verify the lambda body type-checks correctly
+                        self.check_expression(arg, expected)?;
+
+                        // Check if the expected parameter is unique (for consumption tracking)
+                        let expects_unique = types::is_unique(expected);
+
+                        // If the parameter expects unique ownership, mark the variable as consumed
+                        if expects_unique {
+                            if let ExprKind::Identifier(var_name) = &arg.kind {
+                                self.scope_stack.mark_consumed(var_name).map_err(|e| {
+                                    CompilerError::TypeError(
+                                        format!(
+                                            "Cannot consume variable '{}': {}",
+                                            var_name, e
+                                        ),
+                                        arg.h.span
+                                    )
+                                })?;
+                            }
+                        }
+                    } else {
+                        // No expected type available, fall back to inference
+                        self.infer_expression(arg)?;
+                    }
                 }
 
                 Ok(func_type.apply(&self.context))
@@ -1640,6 +1700,35 @@ mod tests {
         match checker.check_program(&program) {
             Ok(_) => {
                 // Should succeed! Both lambda parameter annotations are correct.
+            }
+            Err(e) => {
+                panic!("Type checking should succeed but failed with: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_map_with_unannotated_lambda_and_array_index() {
+        // Test that bidirectional checking infers lambda parameter type from array type
+        let source = r#"
+            def test : [12]i32 =
+              let edges : [12][2]i32 = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]] in
+              map (\e -> e[0]) edges
+        "#;
+
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&program) {
+            Ok(_) => {
+                // Should succeed! Bidirectional checking should infer e : [2]i32 from edges
             }
             Err(e) => {
                 panic!("Type checking should succeed but failed with: {:?}", e);

@@ -2042,3 +2042,68 @@ def test (t:f32) : vec3f32 = mix3v a b (t*2.0f32 - 1.0f32)
         other => panic!("Expected FunctionCall, got {:?}", other),
     }
 }
+
+#[test]
+fn test_parse_map_with_lambda_and_array_index() {
+    // Test parsing of: map (\e -> e[0]) edges
+    let input = r#"
+def test : [12]i32 =
+  let edges : [12][2]i32 = [[0,1]] in
+  map (\e -> e[0]) edges
+"#;
+
+    let program = parse_ok(input);
+    assert_eq!(program.declarations.len(), 1);
+
+    let decl = match &program.declarations[0] {
+        Declaration::Decl(d) => d,
+        _ => panic!("Expected Decl"),
+    };
+
+    // Body should be a let-in expression
+    match &decl.body.kind {
+        ExprKind::LetIn(let_in) => {
+            // The body of the let should be: map (\e -> e[0]) edges
+            match &let_in.body.kind {
+                ExprKind::FunctionCall(func_name, args) => {
+                    assert_eq!(func_name, "map");
+                    assert_eq!(args.len(), 2, "map should have 2 arguments");
+
+                    // First argument should be a lambda
+                    match &args[0].kind {
+                        ExprKind::Lambda(lambda) => {
+                            assert_eq!(lambda.params.len(), 1, "Lambda should have 1 parameter");
+                            assert_eq!(lambda.params[0].simple_name(), Some("e"));
+
+                            // Lambda body should be array indexing: e[0]
+                            match &lambda.body.kind {
+                                ExprKind::ArrayIndex(arr, idx) => {
+                                    // arr should be identifier 'e'
+                                    match &arr.kind {
+                                        ExprKind::Identifier(name) => assert_eq!(name, "e"),
+                                        other => panic!("Expected Identifier, got {:?}", other),
+                                    }
+                                    // idx should be int literal 0
+                                    match &idx.kind {
+                                        ExprKind::IntLiteral(n) => assert_eq!(*n, 0),
+                                        other => panic!("Expected IntLiteral, got {:?}", other),
+                                    }
+                                }
+                                other => panic!("Expected ArrayIndex in lambda body, got {:?}", other),
+                            }
+                        }
+                        other => panic!("Expected Lambda as first argument, got {:?}", other),
+                    }
+
+                    // Second argument should be identifier 'edges'
+                    match &args[1].kind {
+                        ExprKind::Identifier(name) => assert_eq!(name, "edges"),
+                        other => panic!("Expected Identifier as second argument, got {:?}", other),
+                    }
+                }
+                other => panic!("Expected FunctionCall in let body, got {:?}", other),
+            }
+        }
+        other => panic!("Expected LetIn, got {:?}", other),
+    }
+}
