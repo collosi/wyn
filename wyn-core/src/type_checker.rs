@@ -134,6 +134,125 @@ impl TypeChecker {
         &self.warnings
     }
 
+    /// Create a fresh type for a pattern based on its structure
+    /// For tuple patterns, creates a tuple of fresh type variables
+    /// For simple patterns, creates a single fresh type variable
+    fn fresh_type_for_pattern(&mut self, pattern: &Pattern) -> Type {
+        match &pattern.kind {
+            PatternKind::Tuple(patterns) => {
+                // Create a tuple type with fresh type variable for each element
+                let elem_types: Vec<Type> =
+                    patterns.iter().map(|p| self.fresh_type_for_pattern(p)).collect();
+                types::tuple(elem_types)
+            }
+            PatternKind::Typed(_, annotated_type) => {
+                // Pattern has explicit type, use it
+                annotated_type.clone()
+            }
+            PatternKind::Attributed(_, inner_pattern) => {
+                // Ignore attributes, recurse on inner pattern
+                self.fresh_type_for_pattern(inner_pattern)
+            }
+            _ => {
+                // For simple patterns (Name, Wildcard, etc.), create a fresh type variable
+                self.context.new_variable()
+            }
+        }
+    }
+
+    /// Bind a pattern with a given type, adding bindings to the current scope
+    /// Returns the actual type that the pattern matches (for type checking)
+    fn bind_pattern(&mut self, pattern: &Pattern, expected_type: &Type) -> Result<Type> {
+        match &pattern.kind {
+            PatternKind::Name(name) => {
+                // Simple name binding
+                let type_scheme = TypeScheme::Monotype(expected_type.clone());
+                self.scope_stack.insert(name.clone(), type_scheme);
+                Ok(expected_type.clone())
+            }
+            PatternKind::Wildcard => {
+                // Wildcard doesn't bind anything
+                Ok(expected_type.clone())
+            }
+            PatternKind::Tuple(patterns) => {
+                // Expected type should be a tuple with matching arity
+                let expected_applied = expected_type.apply(&self.context);
+
+                match expected_applied {
+                    Type::Constructed(TypeName::Str("tuple"), ref elem_types) => {
+                        if elem_types.len() != patterns.len() {
+                            return Err(CompilerError::TypeError(
+                                format!(
+                                    "Tuple pattern has {} elements but type has {}",
+                                    patterns.len(),
+                                    elem_types.len()
+                                ),
+                                pattern.h.span,
+                            ));
+                        }
+
+                        // Bind each sub-pattern with its corresponding element type
+                        for (sub_pattern, elem_type) in patterns.iter().zip(elem_types.iter()) {
+                            self.bind_pattern(sub_pattern, elem_type)?;
+                        }
+
+                        Ok(expected_type.clone())
+                    }
+                    _ => Err(CompilerError::TypeError(
+                        format!(
+                            "Expected tuple type for tuple pattern, got {}",
+                            self.format_type(&expected_applied)
+                        ),
+                        pattern.h.span,
+                    )),
+                }
+            }
+            PatternKind::Typed(inner_pattern, annotated_type) => {
+                // Pattern has a type annotation - unify with expected type
+                self.context.unify(annotated_type, expected_type).map_err(|_| {
+                    CompilerError::TypeError(
+                        format!(
+                            "Pattern type annotation {} doesn't match expected type {}",
+                            self.format_type(annotated_type),
+                            self.format_type(expected_type)
+                        ),
+                        pattern.h.span,
+                    )
+                })?;
+                // Bind the inner pattern with the annotated type
+                self.bind_pattern(inner_pattern, annotated_type)
+            }
+            PatternKind::Attributed(_, inner_pattern) => {
+                // Ignore attributes, bind the inner pattern
+                self.bind_pattern(inner_pattern, expected_type)
+            }
+            PatternKind::Unit => {
+                // Unit pattern should match unit type
+                let unit_type = types::tuple(vec![]);
+                self.context.unify(&unit_type, expected_type).map_err(|_| {
+                    CompilerError::TypeError(
+                        format!(
+                            "Unit pattern doesn't match expected type {}",
+                            self.format_type(expected_type)
+                        ),
+                        pattern.h.span,
+                    )
+                })?;
+                Ok(unit_type)
+            }
+            _ => {
+                // Other patterns not yet supported in lambda parameters
+                Err(CompilerError::TypeError(
+                    format!(
+                        "Pattern {:?} not yet supported in lambda parameters",
+                        pattern.kind
+                    ),
+                    pattern.h.span,
+                ))
+            }
+        }
+    }
+
     /// Check an expression against an expected type (bidirectional checking mode)
     /// Returns the actual type (which should unify with expected_type)
     fn check_expression(&mut self, expr: &Expression, expected_type: &Type) -> Result<Type> {
@@ -175,15 +294,9 @@ impl TypeChecker {
                     };
 
                     param_types.push(param_type.clone());
-                    let type_scheme = TypeScheme::Monotype(param_type);
 
-                    let param_name = param.simple_name().ok_or_else(|| {
-                        CompilerError::TypeError(
-                            "Complex patterns in lambda parameters not yet supported".to_string(),
-                            param.h.span,
-                        )
-                    })?;
-                    self.scope_stack.insert(param_name.to_string(), type_scheme);
+                    // Bind the pattern (handles tuples, wildcards, etc.)
+                    self.bind_pattern(param, &param_type)?;
                 }
 
                 // Check the body
@@ -559,7 +672,13 @@ impl TypeChecker {
 
         if decl.params.is_empty() {
             // Variable or entry point declaration: let/def name: type = value or let/def name = value
-            let expr_type = self.infer_expression(&decl.body)?;
+            let expr_type = if let Some(declared_type) = &decl.ty {
+                // Use bidirectional checking when type annotation is present
+                self.check_expression(&decl.body, declared_type)?
+            } else {
+                // No type annotation, infer the type
+                self.infer_expression(&decl.body)?
+            };
 
             if let Some(declared_type) = &decl.ty {
                 if !self.types_match(&expr_type, declared_type) {
@@ -957,19 +1076,13 @@ impl TypeChecker {
                 let mut param_types = Vec::new();
                 for param in &lambda.params {
                     let param_type = param.pattern_type().cloned().unwrap_or_else(|| {
-                        self.context.new_variable()
+                        // No explicit type annotation - infer from pattern shape
+                        self.fresh_type_for_pattern(param)
                     });
                     param_types.push(param_type.clone());
-                    let type_scheme = TypeScheme::Monotype(param_type.clone());
 
-                    // For now, only support simple name patterns in lambda parameters
-                    let param_name = param.simple_name().ok_or_else(|| {
-                        CompilerError::TypeError(
-                            "Complex patterns in lambda parameters not yet supported".to_string(),
-                            param.h.span
-                        )
-                    })?;
-                    self.scope_stack.insert(param_name.to_string(), type_scheme);
+                    // Bind the pattern (handles tuples, wildcards, etc.)
+                    self.bind_pattern(param, &param_type)?;
                 }
 
                 // Type check the lambda body with parameters in scope
@@ -1729,6 +1842,62 @@ mod tests {
         match checker.check_program(&program) {
             Ok(_) => {
                 // Should succeed! Bidirectional checking should infer e : [2]i32 from edges
+            }
+            Err(e) => {
+                panic!("Type checking should succeed but failed with: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_lambda_with_tuple_pattern() {
+        // Test that lambdas with tuple patterns work
+        let source = r#"
+            def test : (i32, i32) -> i32 =
+              \(x, y) -> x + y
+        "#;
+
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&program) {
+            Ok(_) => {
+                // Should succeed
+            }
+            Err(e) => {
+                panic!("Type checking should succeed but failed with: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_lambda_with_wildcard_in_tuple() {
+        // Test that lambdas with wildcard in tuple patterns work
+        let source = r#"
+            def test : (i32, i32) -> i32 =
+              \(_, acc) -> acc
+        "#;
+
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&program) {
+            Ok(_) => {
+                // Should succeed
             }
             Err(e) => {
                 panic!("Type checking should succeed but failed with: {:?}", e);
