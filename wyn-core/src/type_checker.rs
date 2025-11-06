@@ -1934,13 +1934,14 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Loop body includes pipe per SPECIFICATION.md line 559, needs parens: (loop...) |> f
     fn test_loop_with_tuple_pattern_and_pipe() {
         // Test that loops with tuple patterns can be piped to extract result
+        // Per SPECIFICATION.md line 559, loop bodies extend as far right as possible,
+        // so the pipe must be outside the loop by wrapping in parentheses
         let source = r#"
             def test : i32 =
-              loop (idx, acc) = (0, 10) while idx < 5 do
-                (idx + 1, acc + idx)
+              (loop (idx, acc) = (0, 10) while idx < 5 do
+                (idx + 1, acc + idx))
               |> (\(_, result) -> result)
         "#;
 

@@ -2109,11 +2109,10 @@ def test : [12]i32 =
 }
 
 #[test]
-#[ignore] // Parser correctly includes pipe in loop body per SPECIFICATION.md line 559
 fn test_parse_loop_with_tuple_pattern_and_pipe() {
     // Test parsing of: loop (idx, acc) = (0, 10) while ... do ... |> f
-    // Note: Per spec, loop body extends "as far to the right as possible",
-    // so the pipe IS part of the loop body, not outside it.
+    // Per SPECIFICATION.md line 559, loop body extends "as far to the right as possible",
+    // so the pipe IS part of the loop body, not outside it. This test verifies correct parsing.
     let input = r#"
 def test : i32 =
   loop (idx, acc) = (0, 10) while idx < 5 do
