@@ -1257,25 +1257,30 @@ impl TypeChecker {
                         Type::Constructed(type_name, ref args) => {
                             // Handle Vec type specially for field access
                             if matches!(type_name, TypeName::Vec) {
-                                // Vec(size, element_type)
-                                // Fields x, y, z, w return the element type
-                                if let Some(element_type) = args.get(1) {
-                                    // Check if field is valid (x, y, z, w)
-                                    if matches!(field.as_str(), "x" | "y" | "z" | "w") {
-                                        Ok(element_type.clone())
-                                    } else {
-                                        Err(CompilerError::TypeError(
-                                            format!(
-                                                "Vector type has no field '{}'",
-                                                field
-                                            ),
-                                            expr.h.span
-                                        ))
-                                    }
+                                // Vec(size, element_type) - must have exactly 2 args
+                                if args.len() != 2 {
+                                    return Err(CompilerError::TypeError(
+                                        format!(
+                                            "Malformed Vec type - expected 2 arguments (size, element), got {}",
+                                            args.len()
+                                        ),
+                                        expr.h.span,
+                                    ));
+                                }
+
+                                // Fields x, y, z, w return the element type (args[1])
+                                let element_type = &args[1];
+
+                                // Check if field is valid (x, y, z, w)
+                                if matches!(field.as_str(), "x" | "y" | "z" | "w") {
+                                    Ok(element_type.clone())
                                 } else {
                                     Err(CompilerError::TypeError(
-                                        "Malformed Vec type - missing element type".to_string(),
-                                        expr.h.span,
+                                        format!(
+                                            "Vector type has no field '{}'",
+                                            field
+                                        ),
+                                        expr.h.span
                                     ))
                                 }
                             } else {
@@ -1450,19 +1455,22 @@ impl TypeChecker {
                         // Type check the iterator expression
                         let iter_type = self.infer_expression(iter_expr)?;
 
-                        // Iterator must be an array type: Array(n, elem_type)
+                        // Iterator must be an array type: Array(size, elem_type)
                         if let Type::Constructed(TypeName::Array, args) = &iter_type {
-                            if args.len() >= 2 {
-                                // Array is Array(size, elem_type), so element is at index 1
-                                let elem_type = &args[1];
-                                // Bind iterator pattern with element type
-                                self.bind_pattern(iter_pat, elem_type)?;
-                            } else {
+                            if args.len() != 2 {
                                 return Err(CompilerError::TypeError(
-                                    "Loop for-in expression must be an array".to_string(),
+                                    format!(
+                                        "Malformed Array type - expected 2 arguments (size, element), got {}",
+                                        args.len()
+                                    ),
                                     iter_expr.h.span
                                 ));
                             }
+
+                            // Array is Array(size, elem_type), so element is at index 1
+                            let elem_type = &args[1];
+                            // Bind iterator pattern with element type
+                            self.bind_pattern(iter_pat, elem_type)?;
                         } else {
                             return Err(CompilerError::TypeError(
                                 "Loop for-in expression must be an array".to_string(),
