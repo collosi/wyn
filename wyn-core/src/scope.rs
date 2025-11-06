@@ -140,6 +140,22 @@ impl<T: Clone> ScopeStack<T> {
         self.scopes.len().saturating_sub(1)
     }
 
+    /// Iterate over all bindings in all scopes (from outermost to innermost)
+    /// Calls the provided closure for each (name, value) pair
+    pub fn for_each_binding<F>(&self, mut f: F)
+    where
+        F: FnMut(&str, &T),
+    {
+        for scope in &self.scopes {
+            for (name, state) in &scope.bindings {
+                match state {
+                    BindingState::Available(value) => f(name, value),
+                    BindingState::Consumed(value) => f(name, value),
+                }
+            }
+        }
+    }
+
     /// Collect all names that are defined in outer scopes but not current scope
     /// This is useful for free variable analysis
     pub fn collect_free_variables(&self, used_names: &[String]) -> Vec<String> {

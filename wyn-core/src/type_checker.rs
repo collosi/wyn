@@ -5,7 +5,7 @@ use crate::error::{CompilerError, Result};
 use crate::scope::ScopeStack;
 use log::debug;
 use polytype::{Context, TypeScheme};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 // Implement TypeVarGenerator for Context
 impl TypeVarGenerator for Context<TypeName> {
@@ -58,6 +58,49 @@ impl Default for TypeChecker {
     }
 }
 
+/// Compute free type variables in a Type
+fn fv_type(ty: &Type) -> BTreeSet<usize> {
+    let mut out = BTreeSet::new();
+    fn go(t: &Type, acc: &mut BTreeSet<usize>) {
+        match t {
+            Type::Variable(n) => {
+                acc.insert(*n);
+            }
+            Type::Constructed(_, args) => {
+                for a in args {
+                    go(a, acc);
+                }
+            }
+        }
+    }
+    go(ty, &mut out);
+    out
+}
+
+/// Compute free type variables in a TypeScheme
+fn fv_scheme(s: &TypeScheme<TypeName>) -> BTreeSet<usize> {
+    match s {
+        TypeScheme::Monotype(t) => fv_type(t),
+        TypeScheme::Polytype { variable, body } => {
+            let mut set = fv_scheme(body);
+            set.remove(variable);
+            set
+        }
+    }
+}
+
+/// Wrap a TypeScheme in nested Polytype quantifiers for the given variables
+fn quantify(mut body: TypeScheme<TypeName>, vars: &BTreeSet<usize>) -> TypeScheme<TypeName> {
+    // Quantify in descending order so the smallest variable ends up outermost
+    for v in vars.iter().rev() {
+        body = TypeScheme::Polytype {
+            variable: *v,
+            body: Box::new(body),
+        };
+    }
+    body
+}
+
 impl TypeChecker {
     fn types_equal(&self, left: &Type, right: &Type) -> bool {
         match (left, right) {
@@ -82,6 +125,36 @@ impl TypeChecker {
             }
             Type::Variable(id) => format!("?{}", id),
         }
+    }
+
+    /// Compute all free type variables in the current environment (scope stack)
+    fn env_free_type_vars(&self) -> BTreeSet<usize> {
+        let mut acc = BTreeSet::new();
+        self.scope_stack.for_each_binding(|_name, sch| {
+            acc.extend(fv_scheme(sch));
+        });
+        acc
+    }
+
+    /// HM-style generalization at let: ∀(fv(ty) \ fv(env)). ty
+    /// Quantifies over type variables that are free in ty but not free in the environment
+    fn generalize(&self, ty: &Type) -> TypeScheme<TypeName> {
+        // Always generalize the *solved* view
+        let applied = ty.apply(&self.context);
+
+        // Free vars in type
+        let mut fv_ty = fv_type(&applied);
+
+        // Free vars in environment
+        let fv_env = self.env_free_type_vars();
+
+        // vars to quantify = fv(ty) \ fv(env)
+        for v in fv_env {
+            fv_ty.remove(&v);
+        }
+
+        // Wrap in nested Polytype quantifiers
+        quantify(TypeScheme::Monotype(applied), &fv_ty)
     }
 
     /// Try to extract a qualified name from a FieldAccess expression chain
@@ -690,7 +763,8 @@ impl TypeChecker {
 
             // Add to scope - use declared type if available, otherwise inferred type
             let stored_type = decl.ty.as_ref().unwrap_or(&expr_type).clone();
-            let type_scheme = TypeScheme::Monotype(stored_type.clone());
+            // Generalize the type to enable polymorphism
+            let type_scheme = self.generalize(&stored_type);
             debug!("Inserting variable '{}' into scope", decl.name);
             self.scope_stack.insert(decl.name.clone(), type_scheme);
             debug!("Inferred type for {}: {}", decl.name, stored_type);
@@ -747,8 +821,8 @@ impl TypeChecker {
             // Entry points are now handled separately via Declaration::Entry
             // Regular Decl no longer has attributed return types
 
-            // Update scope with inferred type
-            let type_scheme = TypeScheme::Monotype(func_type.clone());
+            // Update scope with inferred type using generalization
+            let type_scheme = self.generalize(&func_type);
             self.scope_stack.insert(decl.name.clone(), type_scheme);
 
             debug!("Inferred type for {}: {}", decl.name, func_type);
@@ -1100,10 +1174,11 @@ impl TypeChecker {
                     })?;
                 }
 
-                // Push new scope and add binding
+                // Push new scope and add binding with generalization
                 self.scope_stack.push_scope();
                 let bound_type = let_in.ty.as_ref().unwrap_or(&value_type).clone();
-                let type_scheme = TypeScheme::Monotype(bound_type);
+                // Generalize the type to enable polymorphism
+                let type_scheme = self.generalize(&bound_type);
                 self.scope_stack.insert(let_in.name.clone(), type_scheme);
 
                 // Infer type of body expression
@@ -1869,6 +1944,70 @@ mod tests {
         match checker.check_program(&program) {
             Ok(_) => {
                 // Should succeed - loop returns (i32, i32), pipe extracts i32
+            }
+            Err(e) => {
+                panic!("Type checking should succeed but failed with: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_let_polymorphism() {
+        // Test that let-bound values are properly generalized
+        // Without generalization, this would fail because id would be monomorphic
+        let source = r#"
+            def test : bool =
+                let id = \x -> x in
+                let test1 : i32 = id ??? in
+                let test2 : bool = id ??? in
+                test2
+        "#;
+
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&program) {
+            Ok(_warnings) => {
+                // Should succeed - id is polymorphic ∀a. a -> a
+                // Without generalization, this would fail because id would be monomorphic
+                // and couldn't be used at both i32 and bool
+            }
+            Err(e) => {
+                panic!("Type checking should succeed but failed with: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_top_level_polymorphism() {
+        // Test that top-level let/def declarations are generalized
+        let source = r#"
+            def id = \x -> x
+            def test1 : i32 = id ???
+            def test2 : bool = id ???
+        "#;
+
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&program) {
+            Ok(_warnings) => {
+                // Should succeed - id is polymorphic ∀a. a -> a
+                // Without generalization, this would fail because id would be monomorphic
             }
             Err(e) => {
                 panic!("Type checking should succeed but failed with: {:?}", e);
