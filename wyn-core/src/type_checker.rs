@@ -835,28 +835,24 @@ impl TypeChecker {
                     )
                 })?;
 
-                match &array_type {
-                    Type::Constructed(TypeName::Array, args) => {
-                        // Array type is: Array(Size(n), elem_type)
-                        // So element type is at index 1
-                        args.get(1).cloned().ok_or_else(|| {
-                            CompilerError::TypeError(
-                                format!(
-                                    "Array type has no element type: {}",
-                                    array_type
-                                ),
-                                array_expr.h.span
-                            )
-                        })
-                    }
-                    _ => Err(CompilerError::TypeError(
+                // Use HM-style unification instead of pattern matching
+                // This allows indexing arrays whose type is currently a meta-var
+                let size_var = self.context.new_variable();
+                let elem_var = self.context.new_variable();
+                let want_array = Type::Constructed(TypeName::Array, vec![size_var, elem_var.clone()]);
+
+                self.context.unify(&array_type, &want_array).map_err(|_| {
+                    CompilerError::TypeError(
                         format!(
                             "Cannot index non-array type: got {}",
-                            array_type
+                            self.format_type(&array_type.apply(&self.context))
                         ),
                         array_expr.h.span
-                    )),
-                }
+                    )
+                })?;
+
+                // Return the element type, resolved through the context
+                Ok(elem_var.apply(&self.context))
             }
             ExprKind::BinaryOp(op, left, right) => {
                 let left_type = self.infer_expression(left)?;
