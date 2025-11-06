@@ -989,127 +989,10 @@ impl TypeChecker {
                         Err(CompilerError::UndefinedVariable(func_name.clone(), expr.h.span))
                     };
 
-                let mut func_type = func_type_result?;
+                let func_type = func_type_result?;
 
-                // Two-pass approach for better type inference:
-                // 1. First process non-lambda arguments to constrain type variables
-                // 2. Then process lambda arguments with bidirectional checking
-
-                // Collect argument types and expected types for lambdas
-                let mut arg_types: Vec<Option<Type>> = vec![None; args.len()];
-                let mut lambda_expected_types: Vec<Option<Type>> = vec![None; args.len()];
-
-                // First pass: process arguments to constrain type variables
-                // For lambdas, create placeholder type variables to advance func_type
-                // For non-lambdas, infer their types and unify with expected
-                for (i, arg) in args.iter().enumerate() {
-                    if matches!(&arg.kind, ExprKind::Lambda(_)) {
-                        // For lambdas: peel the head with a fresh arrow (α -> β) and unify first
-                        // This works even if func_type is still a meta-variable
-                        let param_type_var = self.context.new_variable();
-                        let result_type = self.context.new_variable();
-                        let expected_func_type = Type::arrow(param_type_var.clone(), result_type.clone());
-
-                        // Unify to constrain func_type to arrow shape and advance position
-                        self.context.unify(&func_type, &expected_func_type).map_err(|e| {
-                            CompilerError::TypeError(
-                                format!("Function call type error: {:?}", e),
-                                arg.h.span
-                            )
-                        })?;
-
-                        // Now extract the parameter type (α) by applying context
-                        // This resolves the type variable with any constraints from unification
-                        let param_type = param_type_var.apply(&self.context);
-                        lambda_expected_types[i] = Some(param_type);
-
-                        // Update func_type for next argument
-                        func_type = result_type;
-                    } else {
-                        // For non-lambda argument: infer type and unify
-                        let arg_type = self.infer_expression(arg)?;
-                        arg_types[i] = Some(arg_type.clone());
-
-                        // Peel the head with a fresh arrow (param_type_var -> result_type) and unify
-                        let param_type_var = self.context.new_variable();
-                        let result_type = self.context.new_variable();
-                        let expected_func_type = Type::arrow(param_type_var.clone(), result_type.clone());
-
-                        // Unify to constrain func_type to arrow shape
-                        self.context.unify(&func_type, &expected_func_type).map_err(|e| {
-                            CompilerError::TypeError(
-                                format!("Function call type error: {:?}", e),
-                                arg.h.span
-                            )
-                        })?;
-
-                        // Now extract the expected parameter type by applying context
-                        let expected_param_type = param_type_var.apply(&self.context);
-
-                        // Check if the expected parameter is unique (for consumption tracking)
-                        let expects_unique = types::is_unique(&expected_param_type);
-
-                        // Strip uniqueness for unification
-                        let arg_type_for_unify = types::strip_unique(&arg_type);
-                        let expected_param_for_unify = types::strip_unique(&expected_param_type);
-
-                        // Unify the argument type with expected parameter type
-                        self.context.unify(&arg_type_for_unify, &expected_param_for_unify).map_err(|e| {
-                            CompilerError::TypeError(
-                                format!("Function argument type mismatch: {:?}", e),
-                                arg.h.span
-                            )
-                        })?;
-
-                        // If the parameter expects unique ownership, mark the variable as consumed
-                        if expects_unique {
-                            if let ExprKind::Identifier(var_name) = &arg.kind {
-                                self.scope_stack.mark_consumed(var_name).map_err(|e| {
-                                    CompilerError::TypeError(
-                                        format!(
-                                            "Cannot consume variable '{}': {}",
-                                            var_name, e
-                                        ),
-                                        arg.h.span
-                                    )
-                                })?;
-                            }
-                        }
-
-                        // Update func_type to result_type for the next argument (currying)
-                        func_type = result_type;
-                    }
-                }
-
-                // Second pass: process lambda arguments with bidirectional checking
-                // Note: unification already happened in first pass with placeholder variables
-                // This pass just checks the lambda bodies now that type variables are constrained
-                for (i, arg) in args.iter().enumerate() {
-                    if !matches!(&arg.kind, ExprKind::Lambda(_)) {
-                        // Skip non-lambdas in second pass
-                        continue;
-                    }
-
-                    // Get the expected type we saved in the first pass
-                    // Apply context to resolve any type variables that were bound during first pass
-                    let expected_param_type = lambda_expected_types[i]
-                        .as_ref()
-                        .map(|t| t.apply(&self.context));
-
-                    // Use bidirectional checking for lambdas when we know the expected type
-                    if let Some(ref expected) = expected_param_type {
-                        // Check lambda against expected type (bidirectional)
-                        // This will verify the lambda body type-checks correctly
-                        self.check_expression(arg, expected)?;
-                        // Note: consumption tracking for unique parameters happens when
-                        // the lambda's parameters are bound, not here (arg is a lambda, not a variable)
-                    } else {
-                        // No expected type available, fall back to inference
-                        self.infer_expression(arg)?;
-                    }
-                }
-
-                Ok(func_type.apply(&self.context))
+                // Use two-pass application for better lambda inference
+                self.apply_two_pass(func_type, args)
             }
             ExprKind::Tuple(elements) => {
                 let elem_types: Result<Vec<Type>> =
@@ -1200,31 +1083,12 @@ impl TypeChecker {
                 Ok(body_type)
             }
             ExprKind::Application(func, args) => {
-                let mut func_type = self.infer_expression(func)?;
+                let func_type = self.infer_expression(func)?;
 
-                // Apply function to each argument
-                for arg in args {
-                    let arg_type = self.infer_expression(arg)?;
-
-                    // Create a fresh result type variable
-                    let result_type = self.context.new_variable();
-
-                    // Expected function type: arg_type -> result_type
-                    let expected_func_type = Type::arrow(arg_type, result_type.clone());
-
-                    // Unify the function type with expected
-                    self.context.unify(&func_type, &expected_func_type).map_err(|e| {
-                        CompilerError::TypeError(
-                            format!("Function application type error: {:?}", e),
-                            arg.h.span
-                        )
-                    })?;
-
-                    // Update func_type to result_type for the next argument (currying)
-                    func_type = result_type;
-                }
-
-                Ok(func_type.apply(&self.context))
+                // Use two-pass application for better lambda inference
+                // This enables proper inference for expressions like (map (\x -> ...) arr)
+                // or (|>) operators with lambdas
+                self.apply_two_pass(func_type, args)
             }
             ExprKind::FieldAccess(expr, field) => {
                 // Try to extract a qualified name (e.g., f32.cos, M.N.x)
@@ -1559,6 +1423,109 @@ impl TypeChecker {
     }
 
     // Removed: fresh_var - now using polytype's context.new_variable()
+
+    /// Two-pass function application for better lambda inference
+    ///
+    /// Pass 1: Process non-lambda arguments to constrain type variables
+    /// Pass 2: Process lambda arguments with bidirectionally checked expected types
+    ///
+    /// This allows map (\x -> ...) arr to infer properly regardless of argument order
+    fn apply_two_pass(&mut self, mut func_type: Type, args: &[Expression]) -> Result<Type> {
+        // Collect argument types and expected types for lambdas
+        let mut arg_types: Vec<Option<Type>> = vec![None; args.len()];
+        let mut lambda_expected_types: Vec<Option<Type>> = vec![None; args.len()];
+
+        // First pass: process arguments to constrain type variables
+        for (i, arg) in args.iter().enumerate() {
+            if matches!(&arg.kind, ExprKind::Lambda(_)) {
+                // For lambdas: peel the head with a fresh arrow (α -> β) and unify
+                let param_type_var = self.context.new_variable();
+                let result_type = self.context.new_variable();
+                let expected_func_type = Type::arrow(param_type_var.clone(), result_type.clone());
+
+                self.context.unify(&func_type, &expected_func_type).map_err(|e| {
+                    CompilerError::TypeError(
+                        format!("Function application type error: {:?}", e),
+                        arg.h.span
+                    )
+                })?;
+
+                // Extract the parameter type by applying context
+                let param_type = param_type_var.apply(&self.context);
+                lambda_expected_types[i] = Some(param_type);
+
+                func_type = result_type;
+            } else {
+                // For non-lambda argument: infer type and unify
+                let arg_type = self.infer_expression(arg)?;
+                arg_types[i] = Some(arg_type.clone());
+
+                // Peel the head with a fresh arrow
+                let param_type_var = self.context.new_variable();
+                let result_type = self.context.new_variable();
+                let expected_func_type = Type::arrow(param_type_var.clone(), result_type.clone());
+
+                self.context.unify(&func_type, &expected_func_type).map_err(|e| {
+                    CompilerError::TypeError(
+                        format!("Function application type error: {:?}", e),
+                        arg.h.span
+                    )
+                })?;
+
+                // Extract the expected parameter type
+                let expected_param_type = param_type_var.apply(&self.context);
+
+                // Check for unique ownership
+                let expects_unique = types::is_unique(&expected_param_type);
+
+                // Strip uniqueness for unification
+                let arg_type_for_unify = types::strip_unique(&arg_type);
+                let expected_param_for_unify = types::strip_unique(&expected_param_type);
+
+                self.context.unify(&arg_type_for_unify, &expected_param_for_unify).map_err(|e| {
+                    CompilerError::TypeError(
+                        format!("Function argument type mismatch: {:?}", e),
+                        arg.h.span
+                    )
+                })?;
+
+                // Mark as consumed if unique
+                if expects_unique {
+                    if let ExprKind::Identifier(var_name) = &arg.kind {
+                        self.scope_stack.mark_consumed(var_name).map_err(|e| {
+                            CompilerError::TypeError(
+                                format!("Cannot consume variable '{}': {}", var_name, e),
+                                arg.h.span
+                            )
+                        })?;
+                    }
+                }
+
+                func_type = result_type;
+            }
+        }
+
+        // Second pass: process lambda arguments with bidirectional checking
+        for (i, arg) in args.iter().enumerate() {
+            if !matches!(&arg.kind, ExprKind::Lambda(_)) {
+                continue;
+            }
+
+            // Get the expected type from first pass
+            let expected_param_type = lambda_expected_types[i]
+                .as_ref()
+                .map(|t| t.apply(&self.context));
+
+            // Use bidirectional checking for lambdas
+            if let Some(ref expected) = expected_param_type {
+                self.check_expression(arg, expected)?;
+            } else {
+                self.infer_expression(arg)?;
+            }
+        }
+
+        Ok(func_type.apply(&self.context))
+    }
 
     /// Check if two types match, treating tuple and attributed_tuple as compatible.
     ///
