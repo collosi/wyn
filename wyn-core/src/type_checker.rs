@@ -906,13 +906,19 @@ impl TypeChecker {
                 let array_type = self.infer_expression(array_expr)?;
                 let index_type = self.infer_expression(index_expr)?;
 
-                // Check index type is i32
-                self.context.unify(&index_type, &types::i32()).map_err(|_| {
-                    CompilerError::TypeError(
-                        format!("Array index must be i32, got {}", self.format_type(&index_type)),
+                // Per spec: array index may be "any unsigned integer type"
+                // We also accept signed integers for compatibility
+                // Apply context first to resolve any type variables
+                let index_type_resolved = index_type.apply(&self.context);
+                if !types::is_integer_type(&index_type_resolved) {
+                    return Err(CompilerError::TypeError(
+                        format!(
+                            "Array index must be an integer type, got {}",
+                            self.format_type(&index_type_resolved)
+                        ),
                         index_expr.h.span
-                    )
-                })?;
+                    ));
+                }
 
                 // Use HM-style unification instead of pattern matching
                 // This allows indexing arrays whose type is currently a meta-var

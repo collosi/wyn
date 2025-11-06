@@ -765,6 +765,21 @@ pub mod types {
         }
     }
 
+    /// Check if a type is an integer type (signed or unsigned)
+    /// Per spec: array indices may be "any unsigned integer type",
+    /// but we also accept signed integers for compatibility
+    pub fn is_integer_type(ty: &Type) -> bool {
+        match ty {
+            Type::Constructed(TypeName::Str(name), args) if args.is_empty() => {
+                matches!(
+                    name.as_ref(),
+                    "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
+                )
+            }
+            _ => false,
+        }
+    }
+
     /// Create a record type: {field1: type1, field2: type2}
     pub fn record(fields: Vec<(String, Type)>) -> Type {
         Type::Constructed(TypeName::Record(fields), vec![])
