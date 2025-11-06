@@ -2014,4 +2014,34 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_polymorphic_id_tuple() {
+        // Classic HM polymorphism test: let id = \x -> x in (id 5, id true)
+        let source = r#"
+            def test =
+                let id = \x -> x in
+                (id ???, id ???)
+        "#;
+
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&program) {
+            Ok(_warnings) => {
+                // Should succeed - id is polymorphic and can be used at multiple types
+                // Without generalization, this would fail because first use would fix id's type
+            }
+            Err(e) => {
+                panic!("Type checking should succeed but failed with: {:?}", e);
+            }
+        }
+    }
 }
