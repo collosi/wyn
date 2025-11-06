@@ -1489,7 +1489,25 @@ impl TypeChecker {
                     )
                 })?;
 
-                // Mark as consumed if unique
+                // Handle uniqueness/consumption:
+                // TODO: Implement proper alias tracking and explicit consumption
+                //
+                // Current limitation: We only track consumption for direct identifiers.
+                // This is unsound because we allow expressions that may alias variables
+                // to be passed to consuming parameters without explicit 'consume' annotations.
+                //
+                // Proper semantics (Futhark-like):
+                // 1. Track alias sets during inference: infer_expression -> (Type, AliasSet)
+                // 2. At consuming positions, check if arg aliases any variables
+                // 3. If aliases non-empty, require explicit 'consume x' expression
+                // 4. If aliases empty (fresh value), allow without consumption
+                //
+                // Examples that should require explicit consume:
+                // - xs[0] where indexing returns a view/reference (not scalar copy)
+                // - slice xs i j (aliases xs)
+                // - f xs where f returns an alias to its parameter
+                //
+                // For now, we conservatively only consume direct identifiers:
                 if expects_unique {
                     if let ExprKind::Identifier(var_name) = &arg.kind {
                         self.scope_stack.mark_consumed(var_name).map_err(|e| {
@@ -1499,6 +1517,8 @@ impl TypeChecker {
                             )
                         })?;
                     }
+                    // WARNING: Non-identifiers are currently allowed without checking aliases.
+                    // This may allow unsound programs where aliased values are consumed.
                 }
 
                 func_type = result_type;
