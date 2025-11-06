@@ -419,9 +419,10 @@ impl TypeChecker {
     pub fn load_builtins(&mut self) -> Result<()> {
         // Add builtin function types directly using manual construction
 
-        // length: ∀a. [a] -> i32
+        // length: ∀a n. [n]a -> i32
+        let var_n = self.context.new_variable();
         let var_a = self.context.new_variable();
-        let array_type = Type::Constructed(TypeName::Str("array"), vec![var_a]);
+        let array_type = Type::Constructed(TypeName::Array, vec![var_n, var_a]);
         let length_body = Type::arrow(array_type, types::i32());
         let length_scheme = TypeScheme::Monotype(length_body);
         self.scope_stack.insert("length".to_string(), length_scheme);
@@ -451,13 +452,14 @@ impl TypeChecker {
         };
         self.scope_stack.insert("map".to_string(), map_scheme);
 
-        // zip: ∀a b. [a] -> [b] -> [(a, b)]
+        // zip: ∀a b n. [n]a -> [n]b -> [n](a, b)
+        let var_n = self.context.new_variable();
         let var_a = self.context.new_variable();
         let var_b = self.context.new_variable();
-        let array_a_type = Type::Constructed(TypeName::Str("array"), vec![var_a.clone()]);
-        let array_b_type = Type::Constructed(TypeName::Str("array"), vec![var_b.clone()]);
-        let tuple_type = Type::Constructed(TypeName::Str("tuple"), vec![var_a, var_b]);
-        let result_array_type = Type::Constructed(TypeName::Str("array"), vec![tuple_type]);
+        let array_a_type = Type::Constructed(TypeName::Array, vec![var_n.clone(), var_a.clone()]);
+        let array_b_type = Type::Constructed(TypeName::Array, vec![var_n.clone(), var_b.clone()]);
+        let tuple_type = types::tuple(vec![var_a, var_b]);
+        let result_array_type = Type::Constructed(TypeName::Array, vec![var_n, tuple_type]);
         let zip_arrow1 = Type::arrow(array_b_type, result_array_type);
         let zip_body = Type::arrow(array_a_type, zip_arrow1);
         let zip_scheme = TypeScheme::Monotype(zip_body);
@@ -1369,10 +1371,11 @@ impl TypeChecker {
                         // Type check the iterator expression
                         let iter_type = self.infer_expression(iter_expr)?;
 
-                        // Iterator must be an array type
-                        if let Type::Constructed(TypeName::Str("array"), args) = &iter_type {
-                            if args.len() >= 1 {
-                                let elem_type = &args[0];
+                        // Iterator must be an array type: Array(n, elem_type)
+                        if let Type::Constructed(TypeName::Array, args) = &iter_type {
+                            if args.len() >= 2 {
+                                // Array is Array(size, elem_type), so element is at index 1
+                                let elem_type = &args[1];
                                 // Bind iterator pattern with element type
                                 self.bind_pattern(iter_pat, elem_type)?;
                             } else {
