@@ -1543,20 +1543,28 @@ impl TypeChecker {
 
     // Removed: fresh_var - now using polytype's context.new_variable()
 
+    /// Check if two types match, treating tuple and attributed_tuple as compatible.
+    ///
+    /// This allows attributed_tuple (used in entry point return types) to match
+    /// plain tuple types. The attributes are metadata for code generation and don't
+    /// affect type compatibility.
     fn types_match(&self, t1: &Type, t2: &Type) -> bool {
         // Apply current substitution without mutating context
         let a = t1.apply(&self.context);
         let b = t2.apply(&self.context);
 
-        // Handle attributed_tuple vs tuple matching
+        // Handle attributed_tuple vs tuple matching (symmetric)
         match (&a, &b) {
-            // Allow regular tuple to match attributed_tuple if component types match
+            // tuple matches attributed_tuple if component types match
             (
-                Type::Constructed(TypeName::Str("tuple"), actual_types),
-                Type::Constructed(TypeName::Str("attributed_tuple"), expected_types),
+                Type::Constructed(TypeName::Str("tuple"), types1),
+                Type::Constructed(TypeName::Str("attributed_tuple"), types2),
+            ) | (
+                Type::Constructed(TypeName::Str("attributed_tuple"), types1),
+                Type::Constructed(TypeName::Str("tuple"), types2),
             ) => {
-                expected_types.len() == actual_types.len()
-                    && expected_types.iter().zip(actual_types.iter()).all(|(e, a)| self.types_equal(a, e))
+                types1.len() == types2.len()
+                    && types1.iter().zip(types2.iter()).all(|(t1, t2)| self.types_equal(t1, t2))
             }
             // Regular case - use structural equality after applying substitution
             _ => self.types_equal(&a, &b),
