@@ -994,22 +994,14 @@ impl TypeChecker {
                 // For lambdas, create placeholder type variables to advance func_type
                 // For non-lambdas, infer their types and unify with expected
                 for (i, arg) in args.iter().enumerate() {
-                    // Apply context to resolve type variables in function type
-                    let func_type_applied = func_type.apply(&self.context);
-
                     if matches!(&arg.kind, ExprKind::Lambda(_)) {
-                        // For lambdas: save the expected type for second pass
-                        if let Some((param_type, _result_type)) = types::as_arrow(&func_type_applied) {
-                            lambda_expected_types[i] = Some(param_type.clone());
-                        }
-
-                        // Create a fresh type variable as placeholder
-                        // This advances func_type to the next parameter position
+                        // For lambdas: peel the head with a fresh arrow (α -> β) and unify first
+                        // This works even if func_type is still a meta-variable
                         let param_type_var = self.context.new_variable();
                         let result_type = self.context.new_variable();
-                        let expected_func_type = Type::arrow(param_type_var, result_type.clone());
+                        let expected_func_type = Type::arrow(param_type_var.clone(), result_type.clone());
 
-                        // Unify to advance the function type
+                        // Unify to constrain func_type to arrow shape and advance position
                         self.context.unify(&func_type, &expected_func_type).map_err(|e| {
                             CompilerError::TypeError(
                                 format!("Function call type error: {:?}", e),
@@ -1017,36 +1009,45 @@ impl TypeChecker {
                             )
                         })?;
 
+                        // Now extract the parameter type (α) by applying context
+                        // This resolves the type variable with any constraints from unification
+                        let param_type = param_type_var.apply(&self.context);
+                        lambda_expected_types[i] = Some(param_type);
+
                         // Update func_type for next argument
                         func_type = result_type;
                     } else {
-                        // For non-lambda argument: use regular inference
+                        // For non-lambda argument: infer type and unify
                         let arg_type = self.infer_expression(arg)?;
                         arg_types[i] = Some(arg_type.clone());
 
-                        // Check if the expected parameter is unique (for consumption tracking)
-                        // Use the applied version to check for uniqueness
-                        let expects_unique = types::as_arrow(&func_type_applied)
-                            .map(|(param_type, _)| types::is_unique(param_type))
-                            .unwrap_or(false);
-
-                        // Create a fresh result type variable
+                        // Peel the head with a fresh arrow (param_type_var -> result_type) and unify
+                        let param_type_var = self.context.new_variable();
                         let result_type = self.context.new_variable();
+                        let expected_func_type = Type::arrow(param_type_var.clone(), result_type.clone());
 
-                        // Strip uniqueness from arg_type for unification
-                        let arg_type_for_unify = types::strip_unique(&arg_type);
-
-                        // Strip uniqueness from the APPLIED function type before unifying
-                        // This ensures we resolve type variables before stripping
-                        let func_type_for_unify = types::strip_unique(&func_type_applied);
-
-                        // Expected function type: arg_type_for_unify -> result_type
-                        let expected_func_type = Type::arrow(arg_type_for_unify, result_type.clone());
-
-                        // Unify the function type with expected (with uniqueness stripped)
-                        self.context.unify(&func_type_for_unify, &expected_func_type).map_err(|e| {
+                        // Unify to constrain func_type to arrow shape
+                        self.context.unify(&func_type, &expected_func_type).map_err(|e| {
                             CompilerError::TypeError(
                                 format!("Function call type error: {:?}", e),
+                                arg.h.span
+                            )
+                        })?;
+
+                        // Now extract the expected parameter type by applying context
+                        let expected_param_type = param_type_var.apply(&self.context);
+
+                        // Check if the expected parameter is unique (for consumption tracking)
+                        let expects_unique = types::is_unique(&expected_param_type);
+
+                        // Strip uniqueness for unification
+                        let arg_type_for_unify = types::strip_unique(&arg_type);
+                        let expected_param_for_unify = types::strip_unique(&expected_param_type);
+
+                        // Unify the argument type with expected parameter type
+                        self.context.unify(&arg_type_for_unify, &expected_param_for_unify).map_err(|e| {
+                            CompilerError::TypeError(
+                                format!("Function argument type mismatch: {:?}", e),
                                 arg.h.span
                             )
                         })?;
