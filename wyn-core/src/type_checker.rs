@@ -1015,24 +1015,8 @@ impl TypeChecker {
                         // Check lambda against expected type (bidirectional)
                         // This will verify the lambda body type-checks correctly
                         self.check_expression(arg, expected)?;
-
-                        // Check if the expected parameter is unique (for consumption tracking)
-                        let expects_unique = types::is_unique(expected);
-
-                        // If the parameter expects unique ownership, mark the variable as consumed
-                        if expects_unique {
-                            if let ExprKind::Identifier(var_name) = &arg.kind {
-                                self.scope_stack.mark_consumed(var_name).map_err(|e| {
-                                    CompilerError::TypeError(
-                                        format!(
-                                            "Cannot consume variable '{}': {}",
-                                            var_name, e
-                                        ),
-                                        arg.h.span
-                                    )
-                                })?;
-                            }
-                        }
+                        // Note: consumption tracking for unique parameters happens when
+                        // the lambda's parameters are bound, not here (arg is a lambda, not a variable)
                     } else {
                         // No expected type available, fall back to inference
                         self.infer_expression(arg)?;
