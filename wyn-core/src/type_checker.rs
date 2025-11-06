@@ -906,7 +906,7 @@ impl TypeChecker {
                 // Check index type is i32
                 self.context.unify(&index_type, &types::i32()).map_err(|_| {
                     CompilerError::TypeError(
-                        format!("Array index must be i32, got {}", index_type),
+                        format!("Array index must be i32, got {}", self.format_type(&index_type)),
                         index_expr.h.span
                     )
                 })?;
@@ -1330,7 +1330,7 @@ impl TypeChecker {
                 // Unify condition with bool type
                 self.context.unify(&condition_ty, &bool_ty).map_err(|_| {
                     CompilerError::TypeError(
-                        format!("If condition must be boolean, got: {}", condition_ty),
+                        format!("If condition must be boolean, got: {}", self.format_type(&condition_ty)),
                         if_expr.condition.h.span
                     )
                 })?;
