@@ -889,13 +889,16 @@ impl TypeChecker {
                             CompilerError::TypeError(
                                 format!(
                                     "Array elements must have the same type, expected {}, got {}",
-                                    first_type, elem_type
+                                    self.format_type(&first_type),
+                                    self.format_type(&elem_type)
                                 ),
                                 elem.h.span
                             )
                         })?;
                     }
 
+                    // Array literals have concrete sizes: [1, 2, 3] has type [3]i32
+                    // Variable sizes require explicit type parameters: def f[n]: [n]i32 = ...
                     Ok(types::sized_array(elements.len(), first_type))
                 }
             }
