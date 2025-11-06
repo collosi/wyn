@@ -267,15 +267,12 @@ impl TypeChecker {
                 // Unwrap nested function types to get parameter types
                 for _ in 0..lambda.params.len() {
                     let applied = expected_type.apply(&self.context);
-                    match applied {
-                        Type::Constructed(TypeName::Str("->"), ref args) if args.len() == 2 => {
-                            expected_param_types.push(args[0].clone());
-                            expected_type = args[1].clone();
-                        }
-                        _ => {
-                            // Expected type doesn't match lambda structure, fall back to inference
-                            return self.infer_expression(expr);
-                        }
+                    if let Some((param_type, result_type)) = types::as_arrow(&applied) {
+                        expected_param_types.push(param_type.clone());
+                        expected_type = result_type.clone();
+                    } else {
+                        // Expected type doesn't match lambda structure, fall back to inference
+                        return self.infer_expression(expr);
                     }
                 }
 
@@ -934,10 +931,8 @@ impl TypeChecker {
 
                     if matches!(&arg.kind, ExprKind::Lambda(_)) {
                         // For lambdas: save the expected type for second pass
-                        if let Type::Constructed(TypeName::Str("->"), arrow_args) = &func_type_applied {
-                            if arrow_args.len() == 2 {
-                                lambda_expected_types[i] = Some(arrow_args[0].clone());
-                            }
+                        if let Some((param_type, _result_type)) = types::as_arrow(&func_type_applied) {
+                            lambda_expected_types[i] = Some(param_type.clone());
                         }
 
                         // Create a fresh type variable as placeholder
@@ -963,16 +958,9 @@ impl TypeChecker {
 
                         // Check if the expected parameter is unique (for consumption tracking)
                         // Use the applied version to check for uniqueness
-                        let expects_unique =
-                            if let Type::Constructed(TypeName::Str("arrow"), arrow_args) = &func_type_applied {
-                                if let Some(param_type) = arrow_args.first() {
-                                    types::is_unique(param_type)
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            };
+                        let expects_unique = types::as_arrow(&func_type_applied)
+                            .map(|(param_type, _)| types::is_unique(param_type))
+                            .unwrap_or(false);
 
                         // Create a fresh result type variable
                         let result_type = self.context.new_variable();

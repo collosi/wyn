@@ -756,6 +756,15 @@ pub mod types {
         Type::arrow(arg, ret)
     }
 
+    /// Destructure an arrow type into (param_type, result_type)
+    /// Returns None if the type is not an arrow type
+    pub fn as_arrow(ty: &Type) -> Option<(&Type, &Type)> {
+        match ty {
+            Type::Constructed(TypeName::Str("->"), args) if args.len() == 2 => Some((&args[0], &args[1])),
+            _ => None,
+        }
+    }
+
     /// Create a record type: {field1: type1, field2: type2}
     pub fn record(fields: Vec<(String, Type)>) -> Type {
         Type::Constructed(TypeName::Record(fields), vec![])
