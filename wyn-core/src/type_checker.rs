@@ -419,11 +419,10 @@ impl TypeChecker {
     pub fn load_builtins(&mut self) -> Result<()> {
         // Add builtin function types directly using manual construction
 
-        // length: ∀a. [a] -> int
+        // length: ∀a. [a] -> i32
         let var_a = self.context.new_variable();
         let array_type = Type::Constructed(TypeName::Str("array"), vec![var_a]);
-        let int_type = Type::Constructed(TypeName::Str("int"), vec![]);
-        let length_body = Type::arrow(array_type, int_type);
+        let length_body = Type::arrow(array_type, types::i32());
         let length_scheme = TypeScheme::Monotype(length_body);
         self.scope_stack.insert("length".to_string(), length_scheme);
 
@@ -492,12 +491,9 @@ impl TypeChecker {
         let dot_body = Type::arrow(var_a.clone(), Type::arrow(var_a, var_b));
         self.scope_stack.insert("dot".to_string(), TypeScheme::Monotype(dot_body));
 
-        // length: ∀a b. a -> b
-        // Polymorphic: takes a vector, returns a scalar
-        let var_a = self.context.new_variable();
-        let var_b = self.context.new_variable();
-        let length_body = Type::arrow(var_a, var_b);
-        self.scope_stack.insert("length".to_string(), TypeScheme::Monotype(length_body));
+        // TODO: Add vector magnitude function (GLSL length)
+        // Should be: vec[n]f32 -> f32 or more generally vec[n]t -> t
+        // For now, removed to avoid conflict with array length function
 
         // Trigonometric functions: f32 -> f32
         let trig_type = Type::arrow(types::f32(), types::f32());
