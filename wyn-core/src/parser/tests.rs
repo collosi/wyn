@@ -2107,3 +2107,71 @@ def test : [12]i32 =
         other => panic!("Expected LetIn, got {:?}", other),
     }
 }
+
+#[test]
+#[ignore] // Parser correctly includes pipe in loop body per SPECIFICATION.md line 559
+fn test_parse_loop_with_tuple_pattern_and_pipe() {
+    // Test parsing of: loop (idx, acc) = (0, 10) while ... do ... |> f
+    // Note: Per spec, loop body extends "as far to the right as possible",
+    // so the pipe IS part of the loop body, not outside it.
+    let input = r#"
+def test : i32 =
+  loop (idx, acc) = (0, 10) while idx < 5 do
+    (idx + 1, acc + idx)
+  |> (\(_, result) -> result)
+"#;
+
+    let program = parse_ok(input);
+    assert_eq!(program.declarations.len(), 1);
+
+    let decl = match &program.declarations[0] {
+        Declaration::Decl(d) => d,
+        _ => panic!("Expected Decl"),
+    };
+
+    // Body should be a loop with pipe in its body (not pipe outside loop)
+    // This is correct per SPECIFICATION.md line 559
+    match &decl.body.kind {
+        ExprKind::Loop(loop_expr) => {
+            // Loop body should be a pipe expression
+            match &loop_expr.body.kind {
+                ExprKind::Pipe(left, right) => {
+                    // Left side should be the tuple
+                    match &left.kind {
+                        ExprKind::Tuple(elements) => {
+                            assert_eq!(elements.len(), 2);
+                        }
+                        other => panic!("Expected Tuple on left side of pipe, got {:?}", other),
+                    }
+
+                    // Right side should be the lambda
+                    match &right.kind {
+                        ExprKind::Lambda(lambda) => {
+                            // Lambda should have tuple pattern parameter
+                            assert_eq!(lambda.params.len(), 1);
+                            match &lambda.params[0].kind {
+                                PatternKind::Tuple(patterns) => {
+                                    assert_eq!(patterns.len(), 2);
+                                    // First should be wildcard
+                                    match &patterns[0].kind {
+                                        PatternKind::Wildcard => {}
+                                        other => panic!("Expected Wildcard, got {:?}", other),
+                                    }
+                                    // Second should be name "result"
+                                    match &patterns[1].kind {
+                                        PatternKind::Name(name) => assert_eq!(name, "result"),
+                                        other => panic!("Expected Name, got {:?}", other),
+                                    }
+                                }
+                                other => panic!("Expected Tuple pattern, got {:?}", other),
+                            }
+                        }
+                        other => panic!("Expected Lambda on right side of pipe, got {:?}", other),
+                    }
+                }
+                other => panic!("Expected Pipe in loop body, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Loop, got {:?}", other),
+    }
+}

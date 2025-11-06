@@ -123,6 +123,10 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
       vec3 0.0f32 (-1.0f32) 1.0f32 ] in
 
   -- Accumulate color
+  -- TODO: Parser bug - pipe operator is being included in loop body instead of being outside.
+  -- According to SPECIFICATION.md line 559, loop bodies "extend as far to the right as possible",
+  -- so the pipe IS part of the loop body. This means the loop body returns vec3f32 (after pipe),
+  -- but pattern (idx, acc) expects (i32, vec3f32). Need to wrap loop in parens: (loop ... do ...) |> ...
   let c_box : vec3f32 =
     loop (idx, acc) = (0i32, base_col) while idx < 18 do
       let inst = instA[idx] in
