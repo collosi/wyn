@@ -216,7 +216,18 @@ impl Mirize {
                 .iter()
                 .filter(|p| !matches!(p.kind, PatternKind::Unit))
                 .map(|p| {
-                    if let PatternKind::Attributed(attrs, _) = &p.kind { attrs.clone() } else { Vec::new() }
+                    // Check if pattern is attributed, or if it's a Typed pattern with an attributed inner pattern
+                    match &p.kind {
+                        PatternKind::Attributed(attrs, _) => attrs.clone(),
+                        PatternKind::Typed(inner, _) => {
+                            if let PatternKind::Attributed(attrs, _) = &inner.kind {
+                                attrs.clone()
+                            } else {
+                                Vec::new()
+                            }
+                        }
+                        _ => Vec::new(),
+                    }
                 })
                 .collect();
 
