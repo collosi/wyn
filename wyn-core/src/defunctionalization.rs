@@ -62,14 +62,18 @@ impl Defunctionalizer {
         for decl in &program.declarations {
             match decl {
                 Declaration::Decl(decl_node) => {
-                    if decl_node.keyword == "let" && decl_node.params.is_empty() {
-                        // Let variable declaration - needs defunctionalization
+                    if decl_node.params.is_empty() {
+                        // Variable declarations (let/def with no params) - may contain Application nodes
                         let (transformed_decl, _sv) =
                             self.defunctionalize_decl(decl_node, &mut scope_stack)?;
                         new_declarations.push(transformed_decl);
                     } else {
-                        // Def declarations or function declarations - already first-order
-                        new_declarations.push(Declaration::Decl(decl_node.clone()));
+                        // Function declarations with params - need to defunctionalize body
+                        let (transformed_body, _sv) =
+                            self.defunctionalize_expression(&decl_node.body, &mut scope_stack)?;
+                        let mut transformed_decl = decl_node.clone();
+                        transformed_decl.body = transformed_body;
+                        new_declarations.push(Declaration::Decl(transformed_decl));
                     }
                 }
                 Declaration::Entry(entry) => {
@@ -390,16 +394,63 @@ impl Defunctionalizer {
                 self.defunctionalize_application(&right_expr, &[left_expr], scope_stack)
             }
 
+            ExprKind::UnaryOp(op, operand) => {
+                let (transformed_operand, sv) = self.defunctionalize_expression(operand, scope_stack)?;
+                let transformed_expr = Expression {
+                    h: expr.h.clone(),
+                    kind: ExprKind::UnaryOp(op.clone(), Box::new(transformed_operand)),
+                };
+                Ok((transformed_expr, sv))
+            }
+
+            ExprKind::Loop(loop_expr) => {
+                let transformed_init = if let Some(init) = &loop_expr.init {
+                    let (transformed, _) = self.defunctionalize_expression(init, scope_stack)?;
+                    Some(Box::new(transformed))
+                } else {
+                    None
+                };
+                let (transformed_body, _) =
+                    self.defunctionalize_expression(&loop_expr.body, scope_stack)?;
+                let transformed_loop = LoopExpr {
+                    init: transformed_init,
+                    body: Box::new(transformed_body),
+                    ..loop_expr.clone()
+                };
+                let transformed_expr = Expression {
+                    h: expr.h.clone(),
+                    kind: ExprKind::Loop(transformed_loop),
+                };
+                Ok((transformed_expr, StaticValue::Dyn(polytype::Type::Variable(0))))
+            }
+
+            ExprKind::TypeAscription(inner, ty) => {
+                let (transformed_inner, sv) = self.defunctionalize_expression(inner, scope_stack)?;
+                let transformed_expr = Expression {
+                    h: expr.h.clone(),
+                    kind: ExprKind::TypeAscription(Box::new(transformed_inner), ty.clone()),
+                };
+                Ok((transformed_expr, sv))
+            }
+
+            ExprKind::TypeCoercion(inner, ty) => {
+                let (transformed_inner, sv) = self.defunctionalize_expression(inner, scope_stack)?;
+                let transformed_expr = Expression {
+                    h: expr.h.clone(),
+                    kind: ExprKind::TypeCoercion(Box::new(transformed_inner), ty.clone()),
+                };
+                Ok((transformed_expr, sv))
+            }
+
             ExprKind::QualifiedName(_, _)
-            | ExprKind::UnaryOp(_, _)
-            | ExprKind::Loop(_)
             | ExprKind::Match(_)
             | ExprKind::Range(_)
-            | ExprKind::TypeAscription(_, _)
-            | ExprKind::TypeCoercion(_, _)
             | ExprKind::Unsafe(_)
             | ExprKind::Assert(_, _) => {
-                todo!("New expression kinds not yet implemented in defunctionalization")
+                todo!(
+                    "Expression kinds not yet implemented in defunctionalization: {:?}",
+                    expr.kind
+                )
             }
         } // NEWCASESHERE - add new cases before this closing brace
     }
@@ -953,6 +1004,43 @@ mod tests {
                     panic!(
                         "Found Application node after defunctionalization - nested applications not flattened"
                     );
+                }
+                other => panic!("Expected FunctionCall, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn test_defunctionalize_qualified_name() {
+        // Test that qualified names like f32.sqrt are defunctionalized correctly
+        let input = "def test = f32.sqrt 4.0f32";
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        // Debug: print the AST before defunctionalization
+        if let Declaration::Decl(d) = &program.declarations[0] {
+            eprintln!("Before defunctionalization: {:?}", d.body.kind);
+        }
+
+        let mut defunc = Defunctionalizer::new();
+        let result = defunc.defunctionalize_program(&program).unwrap();
+
+        // Debug: print the AST after defunctionalization
+        if let Declaration::Decl(d) = &result.declarations[0] {
+            eprintln!("After defunctionalization: {:?}", d.body.kind);
+        }
+
+        // Check that the result is a FunctionCall with dotted name
+        let decl = &result.declarations[0];
+        if let Declaration::Decl(d) = decl {
+            match &d.body.kind {
+                ExprKind::FunctionCall(name, args) => {
+                    assert_eq!(name, "f32.sqrt");
+                    assert_eq!(args.len(), 1);
+                }
+                ExprKind::Application(_, _) => {
+                    panic!("Found Application node after defunctionalization");
                 }
                 other => panic!("Expected FunctionCall, got {:?}", other),
             }
