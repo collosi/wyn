@@ -953,22 +953,21 @@ impl TypeChecker {
                 let array_type = self.infer_expression(array_expr)?;
                 let index_type = self.infer_expression(index_expr)?;
 
+                // Unify index type with i32
                 // Per spec: array index may be "any unsigned integer type"
-                // We also accept signed integers for compatibility
-                // Apply context first to resolve any type variables
-                let index_type_resolved = index_type.apply(&self.context);
-                if !types::is_integer_type(&index_type_resolved) {
-                    return Err(CompilerError::TypeError(
+                // We use i32 for now for compatibility
+                self.context.unify(&index_type, &types::i32()).map_err(|_| {
+                    CompilerError::TypeError(
                         format!(
                             "Array index must be an integer type, got {}",
-                            self.format_type(&index_type_resolved)
+                            self.format_type(&index_type.apply(&self.context))
                         ),
                         index_expr.h.span
-                    ));
-                }
+                    )
+                })?;
 
-                // Use HM-style unification instead of pattern matching
-                // This allows indexing arrays whose type is currently a meta-var
+                // Constrain array type to be Array(n, a) even if it's currently unknown
+                // This allows indexing arrays whose type is a meta-variable
                 let size_var = self.context.new_variable();
                 let elem_var = self.context.new_variable();
                 let want_array = Type::Constructed(TypeName::Array, vec![size_var, elem_var.clone()]);
@@ -2144,6 +2143,134 @@ mod tests {
         match checker.check_program(&program) {
             Ok(_) => {
                 // Should succeed - f32.sqrt is a valid builtin
+            }
+            Err(e) => {
+                panic!("Type checking should succeed but failed with: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_nested_array_indexing() {
+        // Test that nested array indexing type inference works
+        // Reproduces the de_rasterizer.wyn issue: e[0] where e : [2]i32
+        let source = r#"
+            def test =
+                let edges : [3][2]i32 = [[0,1], [1,2], [2,0]] in
+                let verts : [4]f32 = [1.0f32, 2.0f32, 3.0f32, 4.0f32] in
+                let e : [2]i32 = edges[0] in
+                let idx : i32 = e[0] in
+                verts[idx]
+        "#;
+
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&program) {
+            Ok(_) => {
+                // Should succeed - e[0] should be inferred as i32
+            }
+            Err(e) => {
+                panic!("Type checking should succeed but failed with: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_nested_array_indexing_in_lambda() {
+        // Test that nested array indexing works inside a lambda in map
+        // This reproduces the actual de_rasterizer.wyn pattern:
+        // map (\e -> verts[e[0]]) edges
+        let source = r#"
+            def test =
+                let edges : [3][2]i32 = [[0,1], [1,2], [2,0]] in
+                let verts : [4]f32 = [1.0f32, 2.0f32, 3.0f32, 4.0f32] in
+                map (\e -> verts[e[0]]) edges
+        "#;
+
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&program) {
+            Ok(_) => {
+                // Should succeed - e[0] should be inferred as i32 from e : [2]i32
+            }
+            Err(e) => {
+                panic!("Type checking should succeed but failed with: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_nested_array_indexing_with_literal() {
+        // Test with array literal directly in map call, without type annotation
+        // This is closer to the de_rasterizer pattern
+        let source = r#"
+            def test =
+                let verts : [4]f32 = [1.0f32, 2.0f32, 3.0f32, 4.0f32] in
+                map (\e -> verts[e[0]]) [[0,1], [1,2], [2,0]]
+        "#;
+
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&program) {
+            Ok(_) => {
+                // Should succeed
+            }
+            Err(e) => {
+                panic!("Type checking should succeed but failed with: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_nested_array_indexing_in_loop() {
+        // Test nested array indexing inside a loop with map
+        // Exact de_rasterizer pattern: loop with map that indexes with e[0]
+        let source = r#"
+            def test =
+                loop (idx, acc) = (0i32, 0.0f32) while idx < 2 do
+                    let verts : [4]f32 = [1.0f32, 2.0f32, 3.0f32, 4.0f32] in
+                    let edges : [3][2]i32 = [[0,1], [1,2], [2,0]] in
+                    let result = map (\e -> verts[e[0]]) edges in
+                    (idx + 1, acc + 1.0f32)
+        "#;
+
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&program) {
+            Ok(_) => {
+                // Should succeed
             }
             Err(e) => {
                 panic!("Type checking should succeed but failed with: {:?}", e);
