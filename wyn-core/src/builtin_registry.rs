@@ -74,6 +74,13 @@ pub enum SpirvOp {
 pub enum CustomImpl {
     /// Placeholder for future custom implementations
     Placeholder,
+    /// Uninitialized/poison value for allocation bootstrapping
+    /// SAFETY: Must be fully overwritten before being read
+    Uninit,
+    /// Array replication: creates array filled with a value
+    Replicate,
+    /// Functional array update: immutable copy-with-update
+    ArrayUpdate,
 }
 
 /// Polymorphic implementation dispatcher
@@ -511,6 +518,43 @@ impl BuiltinRegistry {
             param_types: vec![arr_t],
             return_type: Self::ty("i32"), // TODO: Should this return the size type instead?
             implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
+        });
+
+        // __uninit: ∀t. t
+        // Returns uninitialized/poison value (must be overwritten before reading)
+        let uninit_type_var = ctx.new_variable();
+        self.register(BuiltinDescriptor {
+            name: "__uninit".to_string(),
+            param_types: vec![],
+            return_type: uninit_type_var,
+            implementation: BuiltinImpl::Custom(CustomImpl::Uninit),
+        });
+
+        // replicate: ∀t. i32 -> t -> []t
+        // Creates array of unknown length filled with a value (length-agnostic)
+        let replicate_elem_var = ctx.new_variable();
+        let replicate_result_type = Type::Constructed(
+            TypeName::Array,
+            vec![ctx.new_variable(), replicate_elem_var.clone()],
+        );
+        self.register(BuiltinDescriptor {
+            name: "replicate".to_string(),
+            param_types: vec![Self::ty("i32"), replicate_elem_var],
+            return_type: replicate_result_type,
+            implementation: BuiltinImpl::Custom(CustomImpl::Replicate),
+        });
+
+        // __array_update: ∀n t. [n]t -> i32 -> t -> [n]t
+        // Functional array update (immutable copy-with-update)
+        let update_size_var = ctx.new_variable();
+        let update_elem_var = ctx.new_variable();
+        let update_arr_type =
+            Type::Constructed(TypeName::Array, vec![update_size_var, update_elem_var.clone()]);
+        self.register(BuiltinDescriptor {
+            name: "__array_update".to_string(),
+            param_types: vec![update_arr_type.clone(), Self::ty("i32"), update_elem_var],
+            return_type: update_arr_type,
+            implementation: BuiltinImpl::Custom(CustomImpl::ArrayUpdate),
         });
 
         self.register(BuiltinDescriptor {

@@ -1027,7 +1027,6 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         let xs_ident_for_len = self.node_counter.mk_node(ExprKind::Identifier(xs_var.clone()), span);
         let len_ident_for_replicate =
             self.node_counter.mk_node(ExprKind::Identifier(len_var.clone()), span);
-        let zero_for_replicate = self.node_counter.mk_node(ExprKind::IntLiteral(0), span);
 
         // length xs
         let len_call = self.node_counter.mk_node(
@@ -1035,12 +1034,17 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             span,
         );
 
-        // Initialize output array using replicate: replicate len default_value
-        // The default value doesn't matter since we'll write to every element
+        // __uninit() - type-polymorphic uninitialized value
+        let uninit_call =
+            self.node_counter.mk_node(ExprKind::FunctionCall("__uninit".to_string(), vec![]), span);
+
+        // Initialize output array using replicate: replicate len (__uninit())
+        // Uses __uninit instead of a typed zero to work with any element type (i32, f32, bool, records, etc.)
+        // SAFETY: Every element will be overwritten in the loop before the array is returned
         let init_out = self.node_counter.mk_node(
             ExprKind::FunctionCall(
                 "replicate".to_string(),
-                vec![len_ident_for_replicate, zero_for_replicate],
+                vec![len_ident_for_replicate, uninit_call],
             ),
             span,
         );

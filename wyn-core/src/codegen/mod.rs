@@ -296,6 +296,25 @@ impl CodeGenerator {
                     type_id: result_type_info.id,
                 })
             }
+            CustomImpl::Uninit => {
+                // TODO: Implement __uninit using OpUndef or appropriate SPIR-V construct
+                // For now, return an error until backend support is ready
+                Err(CompilerError::SpirvError(
+                    "__uninit builtin not yet implemented in codegen".to_string(),
+                ))
+            }
+            CustomImpl::Replicate => {
+                // TODO: Implement replicate - likely needs to be lowered earlier or use loops
+                Err(CompilerError::SpirvError(
+                    "replicate builtin not yet implemented in codegen".to_string(),
+                ))
+            }
+            CustomImpl::ArrayUpdate => {
+                // TODO: Implement __array_update using SPIR-V composite operations
+                Err(CompilerError::SpirvError(
+                    "__array_update builtin not yet implemented in codegen".to_string(),
+                ))
+            }
         }
     }
 
