@@ -101,6 +101,13 @@ impl ConstantFolder {
     fn fold_expression(&mut self, expr: &Expression) -> Result<Expression> {
         let span = expr.h.span;
         match &expr.kind {
+            ExprKind::RecordLiteral(fields) => {
+                let folded_fields = fields
+                    .iter()
+                    .map(|(name, expr)| Ok((name.clone(), self.fold_expression(expr)?)))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(self.node_counter.mk_node(ExprKind::RecordLiteral(folded_fields), expr.h.span))
+            }
             // Handle binary operations - this is where the magic happens
             ExprKind::BinaryOp(op, left, right) => {
                 let folded_left = self.fold_expression(left)?;

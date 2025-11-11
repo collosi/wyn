@@ -286,6 +286,10 @@ impl Mirize {
         })?;
 
         match &expr.kind {
+            ExprKind::RecordLiteral(_) => {
+                unimplemented!("Record literals not yet supported in MIR generation")
+            }
+
             ExprKind::IntLiteral(n) => Ok(self.builder.build_const_int(*n, expr_type)),
 
             ExprKind::FloatLiteral(f) => Ok(self.builder.build_const_float(*f, expr_type)),

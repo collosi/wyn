@@ -876,6 +876,14 @@ impl TypeChecker {
 
     fn infer_expression(&mut self, expr: &Expression) -> Result<Type> {
         let ty = match &expr.kind {
+            ExprKind::RecordLiteral(fields) => {
+                let mut field_types = Vec::new();
+                for (field_name, field_expr) in fields {
+                    let field_ty = self.infer_expression(field_expr)?;
+                    field_types.push((field_name.clone(), field_ty));
+                }
+                Ok(Type::Constructed(TypeName::Record(field_types), vec![]))
+            }
             ExprKind::TypeHole => {
                 // Record this hole for warning emission after type inference completes
                 self.type_holes.push((expr.h.id, expr.h.span.clone()));

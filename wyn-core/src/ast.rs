@@ -536,6 +536,7 @@ pub enum ExprKind {
     UnaryOp(UnaryOp, Box<Expression>), // Unary operations: -, !
     FunctionCall(String, Vec<Expression>),
     Tuple(Vec<Expression>),
+    RecordLiteral(Vec<(String, Expression)>), // e.g. {x: 1, y: 2}
     Lambda(LambdaExpr),
     Application(Box<Expression>, Vec<Expression>), // Function application
     LetIn(LetInExpr),

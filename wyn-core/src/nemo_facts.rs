@@ -191,6 +191,7 @@ impl<W: Write> NemoFactWriter<W> {
 /// Extract expression type name for fact generation
 pub fn expr_type_name(expr: &Expression) -> &'static str {
     match &expr.kind {
+        ExprKind::RecordLiteral(_) => "record_literal",
         ExprKind::IntLiteral(_) => "int_literal",
         ExprKind::FloatLiteral(_) => "float_literal",
         ExprKind::BoolLiteral(_) => "bool_literal",

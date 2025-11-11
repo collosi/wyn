@@ -352,6 +352,22 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                     StaticValue::Dyn(types::tuple(element_types)),
                 ))
             }
+            ExprKind::RecordLiteral(fields) => {
+                let mut transformed_fields = Vec::new();
+                let mut field_svs = HashMap::new();
+
+                for (field_name, field_expr) in fields {
+                    let (transformed_expr, sv) =
+                        self.defunctionalize_expression(field_expr, scope_stack)?;
+                    transformed_fields.push((field_name.clone(), transformed_expr));
+                    field_svs.insert(field_name.clone(), sv);
+                }
+
+                Ok((
+                    self.node_counter.mk_node(ExprKind::RecordLiteral(transformed_fields), span),
+                    StaticValue::Rcd(field_svs),
+                ))
+            }
             ExprKind::LetIn(let_in) => {
                 // Transform the value expression
                 let (transformed_value, value_sv) =
@@ -523,18 +539,17 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         let func_name = format!("__lambda_{}", self.next_function_id);
         self.next_function_id += 1;
 
-        // Create parameters: closure record + lambda parameters
-        let closure_type = if closure_type_fields.is_empty() {
-            self.type_var_gen.new_variable() // No fields, use fresh type variable
-        } else {
-            crate::ast::types::record(closure_type_fields)
-        };
+        // Create parameters: only add __closure if there are free variables
+        let mut func_params = Vec::new();
 
-        let mut func_params = vec![Parameter {
-            attributes: vec![],
-            name: "__closure".to_string(),
-            ty: closure_type,
-        }];
+        if !free_vars.is_empty() {
+            let closure_type = crate::ast::types::record(closure_type_fields.clone());
+            func_params.push(Parameter {
+                attributes: vec![],
+                name: "__closure".to_string(),
+                ty: closure_type,
+            });
+        }
 
         for param in &lambda.params {
             let param_name = param
@@ -756,6 +771,11 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                     free_vars.insert(name.clone());
                 }
             }
+            ExprKind::RecordLiteral(fields) => {
+                for (_name, field_expr) in fields {
+                    self.collect_free_variables(field_expr, bound_vars, free_vars)?;
+                }
+            }
             ExprKind::Lambda(lambda) => {
                 let mut extended_bound = bound_vars.clone();
                 for param in &lambda.params {
@@ -841,21 +861,18 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
 
     fn create_closure_record(
         &mut self,
-        func_name: &str,
+        _func_name: &str,
         free_vars: &HashSet<String>,
     ) -> Result<Expression> {
-        // For now, create a simple record-like structure
-        // In a full implementation, this would create a proper record expression
-        // For SPIR-V compatibility, we might need to represent this as an array or struct
-
-        // Create a tuple with function name and free variables
-        let mut elements =
-            vec![self.node_counter.mk_node(ExprKind::Identifier(func_name.to_string()), Span::dummy())];
+        // Create a record literal with free variables as fields
+        // The field names match the variable names so that rewrite_free_variables works
+        let mut fields = Vec::new();
         for var in free_vars {
-            elements.push(self.node_counter.mk_node(ExprKind::Identifier(var.clone()), Span::dummy()));
+            let field_value = self.node_counter.mk_node(ExprKind::Identifier(var.clone()), Span::dummy());
+            fields.push((var.clone(), field_value));
         }
 
-        Ok(self.node_counter.mk_node(ExprKind::Tuple(elements), Span::dummy()))
+        Ok(self.node_counter.mk_node(ExprKind::RecordLiteral(fields), Span::dummy()))
     }
 
     /// Transform map f xs into a loop that allocates output array and fills it
@@ -1037,6 +1054,15 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             | ExprKind::FloatLiteral(_)
             | ExprKind::BoolLiteral(_)
             | ExprKind::TypeHole => expr.clone(),
+            ExprKind::RecordLiteral(fields) => {
+                let rewritten_fields: Vec<_> = fields
+                    .iter()
+                    .map(|(name, field_expr)| {
+                        (name.clone(), self.rewrite_free_variables(field_expr, free_vars))
+                    })
+                    .collect();
+                self.node_counter.mk_node(ExprKind::RecordLiteral(rewritten_fields), span)
+            }
             ExprKind::BinaryOp(op, left, right) => {
                 let left_rewritten = self.rewrite_free_variables(left, free_vars);
                 let right_rewritten = self.rewrite_free_variables(right, free_vars);

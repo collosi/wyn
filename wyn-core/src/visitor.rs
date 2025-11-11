@@ -245,6 +245,12 @@ pub fn walk_pattern<V: Visitor>(v: &mut V, pat: &Pattern) -> ControlFlow<V::Brea
 
 pub fn walk_expression<V: Visitor>(v: &mut V, e: &Expression) -> ControlFlow<V::Break> {
     match &e.kind {
+        ExprKind::RecordLiteral(fields) => {
+            for (_name, field_expr) in fields {
+                walk_expression(v, field_expr)?;
+            }
+            ControlFlow::Continue(())
+        }
         ExprKind::IntLiteral(n) => v.visit_expr_int_literal(*n),
         ExprKind::FloatLiteral(f) => v.visit_expr_float_literal(*f),
         ExprKind::BoolLiteral(b) => v.visit_expr_bool_literal(*b),

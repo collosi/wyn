@@ -1198,6 +1198,9 @@ impl CodeGenerator {
 
     fn generate_expression(&mut self, expr: &Expression) -> Result<Value> {
         match &expr.kind {
+            ExprKind::RecordLiteral(_) => {
+                unimplemented!("Record literals not yet supported in code generation")
+            }
             ExprKind::TypeHole => Err(CompilerError::TypeError(
                 "Type holes (???) must be replaced before code generation".to_string(),
                 expr.h.span,
