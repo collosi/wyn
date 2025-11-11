@@ -48,19 +48,20 @@ fn test_lambda_captures_free_variable() {
     let defunc_program = defunctionalize_program(input);
 
     // The defunctionalized program should have:
-    // 1. A generated __lambda_0 function that takes (__closure, y) parameters
-    // 2. The original test function
+    // 1. A generated __lam_* function that takes (__closure, y) parameters
+    // 2. An __apply1 dispatcher function
+    // 3. The original test function
     assert_eq!(
         defunc_program.declarations.len(),
-        2,
-        "Should have generated __lambda_0 plus original test"
+        3,
+        "Should have generated __lam_*, __apply1, and original test"
     );
 
     // First declaration should be the generated lambda function
     match &defunc_program.declarations[0] {
         Declaration::Decl(decl) => {
             assert!(
-                decl.name.starts_with("__lambda_"),
+                decl.name.starts_with("__lam_"),
                 "First declaration should be generated lambda, got: {}",
                 decl.name
             );
@@ -100,7 +101,7 @@ fn test_lambda_captures_variable_through_let() {
         .declarations
         .iter()
         .find_map(|d| match d {
-            Declaration::Decl(decl) if decl.name.starts_with("__lambda_") => Some(decl),
+            Declaration::Decl(decl) if decl.name.starts_with("__lam_") => Some(decl),
             _ => None,
         })
         .expect("Should have generated lambda function");
@@ -151,15 +152,14 @@ fn test_lambda_no_free_variables() {
 
     let defunc_program = defunctionalize_program(input);
 
-    // Should have generated lambda plus original
-    assert_eq!(defunc_program.declarations.len(), 2);
+    // Should have generated lambda, __apply1 dispatcher, plus original
+    assert_eq!(defunc_program.declarations.len(), 3);
 
-    // Generated function should have only 1 parameter (no closure needed)
+    // Generated function should have __closure parameter (even if empty) and x
     match &defunc_program.declarations[0] {
         Declaration::Decl(decl) => {
-            assert!(decl.name.starts_with("__lambda_"));
+            assert!(decl.name.starts_with("__lam_"));
             // Should have 2 params: __closure (even if empty) and x
-            // Actually, with empty free vars, we might still add closure param
             assert!(
                 decl.params.len() >= 1,
                 "Should have at least the lambda parameter"
@@ -182,13 +182,13 @@ fn test_lambda_captures_multiple_variables() {
 
     let defunc_program = defunctionalize_program(input);
 
-    // Should have generated lambda plus original
-    assert_eq!(defunc_program.declarations.len(), 2);
+    // Should have generated lambda, __apply1 dispatcher, plus original
+    assert_eq!(defunc_program.declarations.len(), 3);
 
     // Generated function should have __closure parameter with record type containing a, b, c
     match &defunc_program.declarations[0] {
         Declaration::Decl(decl) => {
-            assert!(decl.name.starts_with("__lambda_"));
+            assert!(decl.name.starts_with("__lam_"));
             assert_eq!(decl.params.len(), 2, "Should have __closure and x parameters");
 
             // Check that body has references to __closure.a, __closure.b, __closure.c
@@ -425,4 +425,101 @@ fn test_direct_closure_application_typechecks() {
     }
 
     result.expect("Type checking should succeed");
+}
+
+#[test]
+fn test_map_with_closure_typechecks() {
+    let input = r#"
+        def test : [3]i32 =
+            let x = 5 in
+            map (\y -> x + y) [1, 2, 3]
+    "#;
+
+    // Parse
+    let tokens = crate::lexer::tokenize(input).expect("Tokenization failed");
+    let mut parser = crate::parser::Parser::new(tokens);
+    let program = parser.parse().expect("Parsing failed");
+    let node_counter = parser.take_node_counter();
+
+    // Defunctionalize
+    let type_context = polytype::Context::default();
+    let mut defunc =
+        crate::defunctionalization::Defunctionalizer::new_with_counter(node_counter, type_context);
+    let defunc_program = defunc.defunctionalize_program(&program).expect("Defunctionalization failed");
+    let type_context = defunc.take_type_var_gen();
+
+    // Print the defunctionalized program structure
+    eprintln!("\n=== MAP CLOSURE TEST - DEFUNCTIONALIZED PROGRAM ===");
+    for (i, decl) in defunc_program.declarations.iter().enumerate() {
+        match decl {
+            crate::ast::Declaration::Decl(d) => {
+                eprintln!("Decl {}: {} with {} params", i, d.name, d.params.len());
+
+                // Print details of the test function body
+                if d.name == "test" {
+                    eprintln!("  Test body structure:");
+                    print_expr_structure(&d.body, 2);
+                }
+            }
+            _ => eprintln!("Decl {}: Other", i),
+        }
+    }
+
+    // Type check
+    let mut type_checker = crate::type_checker::TypeChecker::new_with_context(type_context);
+    type_checker.load_builtins().expect("Loading builtins failed");
+    let result = type_checker.check_program(&defunc_program);
+
+    if let Err(e) = &result {
+        eprintln!("\n=== TYPE CHECK ERROR ===");
+        eprintln!("{:?}", e);
+    }
+
+    result.expect("Type checking should succeed");
+}
+
+// Helper function to print expression structure
+fn print_expr_structure(expr: &crate::ast::Expression, indent: usize) {
+    let prefix = " ".repeat(indent);
+    match &expr.kind {
+        crate::ast::ExprKind::LetIn(let_in) => {
+            if let crate::ast::PatternKind::Name(n) = &let_in.pattern.kind {
+                eprintln!("{}let {} = ...", prefix, n);
+            }
+            eprintln!("{}  value:", prefix);
+            print_expr_structure(&let_in.value, indent + 4);
+            eprintln!("{}  body:", prefix);
+            print_expr_structure(&let_in.body, indent + 4);
+        }
+        crate::ast::ExprKind::FunctionCall(name, args) => {
+            eprintln!("{}FunctionCall({}, {} args)", prefix, name, args.len());
+            for (i, arg) in args.iter().enumerate() {
+                eprintln!("{}  arg {}:", prefix, i);
+                print_expr_structure(arg, indent + 4);
+            }
+        }
+        crate::ast::ExprKind::Loop(loop_expr) => {
+            eprintln!("{}Loop", prefix);
+            eprintln!("{}  body:", prefix);
+            print_expr_structure(&loop_expr.body, indent + 4);
+        }
+        crate::ast::ExprKind::Identifier(name) => {
+            eprintln!("{}Identifier({})", prefix, name);
+        }
+        crate::ast::ExprKind::RecordLiteral(fields) => {
+            eprintln!("{}RecordLiteral with {} fields", prefix, fields.len());
+            for (name, _) in fields {
+                eprintln!("{}  field: {}", prefix, name);
+            }
+        }
+        crate::ast::ExprKind::IntLiteral(n) => {
+            eprintln!("{}IntLiteral({})", prefix, n);
+        }
+        crate::ast::ExprKind::ArrayLiteral(elements) => {
+            eprintln!("{}ArrayLiteral({} elements)", prefix, elements.len());
+        }
+        _ => {
+            eprintln!("{}Other({:?})", prefix, std::mem::discriminant(&expr.kind));
+        }
+    }
 }

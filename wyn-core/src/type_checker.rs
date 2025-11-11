@@ -631,15 +631,6 @@ impl TypeChecker {
     }
 
     pub fn check_program(&mut self, program: &Program) -> Result<HashMap<crate::ast::NodeId, Type>> {
-        eprintln!(
-            "[DEBUG TYPECK] Received {} declarations",
-            program.declarations.len()
-        );
-        for decl in &program.declarations {
-            if let Declaration::Decl(d) = decl {
-                eprintln!("[DEBUG TYPECK] Declaration: {}", d.name);
-            }
-        }
         // Process declarations in order - each can only refer to preceding declarations
         for decl in &program.declarations {
             self.check_declaration(decl)?;
@@ -724,11 +715,8 @@ impl TypeChecker {
     fn check_declaration(&mut self, decl: &Declaration) -> Result<()> {
         match decl {
             Declaration::Decl(decl_node) => {
-                eprintln!("[DEBUG TYPECK] Starting to check Decl: {}", decl_node.name);
                 debug!("Checking {} declaration: {}", decl_node.keyword, decl_node.name);
-                self.check_decl(decl_node).inspect_err(|e| {
-                    eprintln!("[DEBUG TYPECK] Error checking Decl {}: {:?}", decl_node.name, e);
-                })
+                self.check_decl(decl_node)
             }
             Declaration::Entry(entry) => {
                 debug!("Checking entry point: {}", entry.name);
@@ -898,11 +886,6 @@ impl TypeChecker {
 
             // Update scope with inferred type using generalization
             let type_scheme = self.generalize(&func_type);
-            eprintln!(
-                "[DEBUG] Inserting function '{}' into scope at depth {}",
-                decl.name,
-                self.scope_stack.depth()
-            );
             self.scope_stack.insert(decl.name.clone(), type_scheme);
 
             debug!("Inferred type for {}: {}", decl.name, func_type);
@@ -1076,8 +1059,6 @@ impl TypeChecker {
                             Err(CompilerError::UndefinedVariable(func_name.clone(), expr.h.span))
                         }
                     } else {
-                        eprintln!("[DEBUG] FunctionCall '{}' not found at {:?}", func_name, expr.h.span);
-                        eprintln!("[DEBUG] Scope stack has {} scopes", self.scope_stack.depth());
                         Err(CompilerError::UndefinedVariable(func_name.clone(), expr.h.span))
                     };
 

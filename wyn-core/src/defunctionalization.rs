@@ -265,16 +265,10 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         let mut new_declarations = Vec::with_capacity(program.declarations.len() * 2);
         let mut scope_stack = ScopeStack::new();
 
-        eprintln!(
-            "[DEBUG DEFUNC] Processing {} declarations",
-            program.declarations.len()
-        );
-
         // Process each declaration, flushing generated lambdas before the declaration itself
         for decl in &program.declarations {
             match decl {
                 Declaration::Decl(decl_node) => {
-                    eprintln!("[DEBUG DEFUNC] Processing Decl: {}", decl_node.name);
                     self.begin_decl(&decl_node.name);
 
                     if decl_node.params.is_empty() {
@@ -284,7 +278,6 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                         // Flush generated lambdas before this declaration
                         new_declarations.extend(self.drain_bucket_as_decls());
                         new_declarations.push(transformed_decl);
-                        eprintln!("[DEBUG DEFUNC] Added variable decl: {}", decl_node.name);
                     } else {
                         // Function declarations with params - need to defunctionalize body
                         let (transformed_body, _sv) =
@@ -294,13 +287,11 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                         let mut transformed_decl = decl_node.clone();
                         transformed_decl.body = transformed_body;
                         new_declarations.push(Declaration::Decl(transformed_decl));
-                        eprintln!("[DEBUG DEFUNC] Added function decl: {}", decl_node.name);
                     }
 
                     self.end_decl();
                 }
                 Declaration::Entry(entry) => {
-                    eprintln!("[DEBUG DEFUNC] Processing Entry: {}", entry.name);
                     self.begin_decl(&entry.name);
 
                     // Entry points need defunctionalization too
@@ -544,13 +535,24 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                     }
                 }
 
-                // Regular function calls (first-order) remain unchanged
+                // Transform arguments first
                 let mut transformed_args = Vec::new();
                 for arg in args {
                     let (transformed_arg, _sv) = self.defunctionalize_expression(arg, scope_stack)?;
                     transformed_args.push(transformed_arg);
                 }
 
+                // Special handling for higher-order builtins like map
+                if name == "map" && transformed_args.len() == 2 {
+                    // map f xs -> loop-based implementation
+                    return self.defunctionalize_map(
+                        &transformed_args[0],
+                        &transformed_args[1],
+                        scope_stack,
+                    );
+                }
+
+                // Regular function calls (first-order) remain unchanged
                 Ok((
                     self.node_counter.mk_node(ExprKind::FunctionCall(name.clone(), transformed_args), span),
                     StaticValue::Dyn(self.type_var_gen.new_variable()),
@@ -910,12 +912,6 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
     ) -> Result<(Expression, StaticValue)> {
         let (transformed_func, func_sv) = self.defunctionalize_expression(func, scope_stack)?;
 
-        eprintln!(
-            "[DEBUG DEFUNC APP] func: {:?}, func_sv: {:?}",
-            std::mem::discriminant(&func.kind),
-            std::mem::discriminant(&func_sv)
-        );
-
         let mut transformed_args = Vec::new();
         for arg in args {
             let (transformed_arg, _arg_sv) = self.defunctionalize_expression(arg, scope_stack)?;
@@ -1222,7 +1218,8 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         let i_ident4 = self.node_counter.mk_node(ExprKind::Identifier(i_var.clone()), span);
         let one_lit = self.node_counter.mk_node(ExprKind::IntLiteral(1), span);
         let zero_lit = self.node_counter.mk_node(ExprKind::IntLiteral(0), span);
-        let out_ident2 = self.node_counter.mk_node(ExprKind::Identifier(out_var.clone()), span);
+        let out_init_ident =
+            self.node_counter.mk_node(ExprKind::Identifier(format!("{}_init", out_var)), span);
 
         // i < len
         let condition = self.node_counter.mk_node(
@@ -1266,8 +1263,9 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         // (i + 1, updated_out)
         let loop_body = self.node_counter.mk_node(ExprKind::Tuple(vec![i_inc, updated_out]), span);
 
-        // (0, out)
-        let initial_value = self.node_counter.mk_node(ExprKind::Tuple(vec![zero_lit, out_ident2]), span);
+        // (0, out_init)
+        let initial_value =
+            self.node_counter.mk_node(ExprKind::Tuple(vec![zero_lit, out_init_ident]), span);
 
         // loop (i, out) = (0, out) while i < len do (i + 1, updated_out)
         let i_pattern = self.node_counter.mk_node(PatternKind::Name(i_var), span);
@@ -1285,13 +1283,34 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         );
 
         // let out = replicate len 0 in <loop>
-        let out_pattern = self.node_counter.mk_node(crate::ast::PatternKind::Name(out_var), span);
-        let with_out = self.node_counter.mk_node(
+        let out_init_pattern =
+            self.node_counter.mk_node(crate::ast::PatternKind::Name(format!("{}_init", out_var)), span);
+        let with_out_init = self.node_counter.mk_node(
             ExprKind::LetIn(LetInExpr {
-                pattern: out_pattern,
+                pattern: out_init_pattern,
                 ty: None,
                 value: Box::new(init_out),
                 body: Box::new(loop_expr),
+            }),
+            span,
+        );
+
+        // let (_, result_out) = <loop> in result_out
+        let wildcard_pattern = self.node_counter.mk_node(crate::ast::PatternKind::Wildcard, span);
+        let result_out_pattern =
+            self.node_counter.mk_node(crate::ast::PatternKind::Name(format!("{}_result", out_var)), span);
+        let tuple_pattern = self.node_counter.mk_node(
+            crate::ast::PatternKind::Tuple(vec![wildcard_pattern, result_out_pattern]),
+            span,
+        );
+        let result_out_ident =
+            self.node_counter.mk_node(ExprKind::Identifier(format!("{}_result", out_var)), span);
+        let with_out = self.node_counter.mk_node(
+            ExprKind::LetIn(LetInExpr {
+                pattern: tuple_pattern,
+                ty: None,
+                value: Box::new(with_out_init),
+                body: Box::new(result_out_ident),
             }),
             span,
         );
