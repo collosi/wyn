@@ -1212,6 +1212,7 @@ impl TypeChecker {
                                 let type_name_str = match &type_name {
                                     TypeName::Str(s) => s.to_string(),
                                     TypeName::Array => "array".to_string(),
+                                    TypeName::Unsized => "unsized".to_string(),
                                     TypeName::Vec => "vec".to_string(),
                                     TypeName::Size(n) => n.to_string(),
                                     TypeName::SizeVar(name) => name.clone(),

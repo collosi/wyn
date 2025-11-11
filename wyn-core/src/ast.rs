@@ -215,6 +215,8 @@ pub enum TypeName {
     Str(&'static str),
     /// Array type constructor (takes size and element type)
     Array,
+    /// Unsized/anonymous array size placeholder (for []t syntax where size is inferred)
+    Unsized,
     /// Vector type constructor (takes size and element type)
     Vec,
     /// Array size literal
@@ -223,7 +225,7 @@ pub enum TypeName {
     SizeVar(String),
     /// Type variable from user code: 'a, 'b (not yet bound to TypeVar)
     UserVar(String),
-    /// Type names parsed from source code (user-defined types, type aliases, or references to built-in types like "vec3")
+    /// Type names parsed from source code (user-defined types, type aliases)
     Named(String),
     /// Uniqueness/consuming type marker (corresponds to "*" prefix)
     Unique,
@@ -242,6 +244,7 @@ impl std::fmt::Display for TypeName {
         match self {
             TypeName::Str(s) => write!(f, "{}", s),
             TypeName::Array => write!(f, "Array"),
+            TypeName::Unsized => write!(f, ""),
             TypeName::Vec => write!(f, "Vec"),
             TypeName::Size(n) => write!(f, "{}", n),
             TypeName::SizeVar(name) => write!(f, "{}", name),
@@ -293,6 +296,7 @@ impl polytype::Name for TypeName {
         match self {
             TypeName::Str(s) => s.to_string(),
             TypeName::Array => "Array".to_string(),
+            TypeName::Unsized => "".to_string(),
             TypeName::Vec => "Vec".to_string(),
             TypeName::Size(n) => format!("Size({})", n),
             TypeName::SizeVar(v) => format!("[{}]", v),

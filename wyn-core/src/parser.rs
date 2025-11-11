@@ -560,7 +560,7 @@ impl Parser {
                         self.advance();
                         base = Type::Constructed(
                             TypeName::Array,
-                            vec![Type::Constructed(TypeName::Str("unsized"), vec![]), base],
+                            vec![Type::Constructed(TypeName::Unsized, vec![]), base],
                         );
                     } else if let Some(Token::Identifier(name)) = self.peek() {
                         // Size variable [n]
@@ -585,8 +585,10 @@ impl Parser {
                 }
                 // Regular type argument application
                 Some(Token::Identifier(_)) | Some(Token::LeftParen) | Some(Token::LeftBrace) => {
-                    let arg_type = self.parse_array_or_base_type()?;
-                    base = Type::Constructed(TypeName::Str("app"), vec![base, arg_type]);
+                    let _arg_type = self.parse_array_or_base_type()?;
+                    unimplemented!(
+                        "Type constructor application (e.g., 'F T') is not yet supported. This feature allows applying type arguments to type constructors."
+                    );
                 }
                 _ => break,
             }
@@ -647,7 +649,7 @@ impl Parser {
                 let elem_type = self.parse_array_or_base_type()?;
                 return Ok(Type::Constructed(
                     TypeName::Array,
-                    vec![Type::Constructed(TypeName::Str("unsized"), vec![]), elem_type],
+                    vec![Type::Constructed(TypeName::Unsized, vec![]), elem_type],
                 ));
             }
 
