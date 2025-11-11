@@ -12,6 +12,37 @@ pub enum StaticValue {
     Arr(Box<StaticValue>),                // Array of static values
 }
 
+impl StaticValue {
+    /// Extract a type from a StaticValue for use in closure type construction
+    pub fn to_type(&self) -> Type {
+        match self {
+            StaticValue::Dyn(ty) => ty.clone(),
+            StaticValue::Arr(elem_sv) => {
+                // Array type - create Array(size, element_type)
+                // For now, use a type variable for size since we don't track it
+                let elem_type = elem_sv.to_type();
+                Type::Constructed(
+                    TypeName::Array,
+                    vec![Type::Variable(100), elem_type]
+                )
+            }
+            StaticValue::Rcd(fields) => {
+                // Record type - extract field types
+                let field_types: Vec<(String, Type)> = fields
+                    .iter()
+                    .map(|(name, sv)| (name.clone(), sv.to_type()))
+                    .collect();
+                crate::ast::types::record(field_types)
+            }
+            StaticValue::Lam(_param, _body, _env) => {
+                // Lambda - use a function type variable for now
+                // TODO: construct proper function type
+                Type::Variable(101)
+            }
+        }
+    }
+}
+
 /// Translation environment mapping variables to static values
 /// Note: This is being replaced by ScopeStack<StaticValue> throughout the codebase
 pub type Environment = HashMap<String, StaticValue>;
@@ -476,13 +507,6 @@ impl Defunctionalizer {
         lambda: &LambdaExpr,
         scope_stack: &mut ScopeStack<StaticValue>,
     ) -> Result<(Expression, StaticValue)> {
-        // TODO: Defunctionalization doesn't properly rewrite free variable references in lambda bodies
-        // to access them from the closure parameter. Currently, free variables are identified and
-        // captured in the closure record, but the lambda body still references them directly instead
-        // of accessing them through __closure.field. This causes "undefined variable" errors during
-        // type checking when the generated function tries to reference captured variables.
-        // Fix: Transform the lambda body to replace free variable references with closure field accesses.
-
         // Find free variables in the lambda body
         let free_vars = self.find_free_variables(
             &lambda.body,
@@ -491,9 +515,13 @@ impl Defunctionalizer {
 
         // Create a closure record with free variables
         let mut closure_fields = HashMap::new();
+        let mut closure_type_fields = Vec::new();
         for var in &free_vars {
             if let Ok(sv) = scope_stack.lookup(var) {
                 closure_fields.insert(var.clone(), sv.clone());
+                // Extract type from StaticValue for the closure record type
+                let var_type = sv.to_type();
+                closure_type_fields.push((var.clone(), var_type));
             }
         }
 
@@ -502,10 +530,16 @@ impl Defunctionalizer {
         self.next_function_id += 1;
 
         // Create parameters: closure record + lambda parameters
+        let closure_type = if closure_type_fields.is_empty() {
+            polytype::Type::Variable(4) // No fields, use type variable
+        } else {
+            crate::ast::types::record(closure_type_fields)
+        };
+
         let mut func_params = vec![Parameter {
             attributes: vec![],
             name: "__closure".to_string(),
-            ty: polytype::Type::Variable(4), // Will be refined later
+            ty: closure_type,
         }];
 
         for param in &lambda.params {
@@ -525,6 +559,13 @@ impl Defunctionalizer {
             });
         }
 
+        // Rewrite free variable references in lambda body to access them from __closure
+        let rewritten_body = if !free_vars.is_empty() {
+            self.rewrite_free_variables(&*lambda.body, &free_vars)
+        } else {
+            (*lambda.body).clone()
+        };
+
         // Transform lambda body with parameter scope
         scope_stack.push_scope();
         for param in &lambda.params {
@@ -540,7 +581,7 @@ impl Defunctionalizer {
             scope_stack.insert(param_name, StaticValue::Dyn(param_ty));
         }
 
-        let (transformed_body, _body_sv) = self.defunctionalize_expression(&lambda.body, scope_stack)?;
+        let (transformed_body, _body_sv) = self.defunctionalize_expression(&rewritten_body, scope_stack)?;
 
         // Pop parameter scope
         scope_stack.pop_scope();
@@ -982,6 +1023,193 @@ impl Defunctionalizer {
         );
 
         Ok((result, StaticValue::Dyn(polytype::Type::Variable(0))))
+    }
+
+    /// Rewrite free variable references in an expression to access them from a closure record
+    /// Replaces Identifier(var) with FieldAccess(Identifier("__closure"), var) for each free variable
+    fn rewrite_free_variables(
+        &mut self,
+        expr: &Expression,
+        free_vars: &HashSet<String>,
+    ) -> Expression {
+        let span = expr.h.span;
+        match &expr.kind {
+            ExprKind::Identifier(name) if free_vars.contains(name) => {
+                // Rewrite free variable to closure field access: __closure.name
+                let closure_id = self.node_counter.mk_node(
+                    ExprKind::Identifier("__closure".to_string()),
+                    span,
+                );
+                self.node_counter.mk_node(
+                    ExprKind::FieldAccess(Box::new(closure_id), name.clone()),
+                    span,
+                )
+            }
+            ExprKind::Identifier(_) => expr.clone(),
+            ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::TypeHole => expr.clone(),
+            ExprKind::BinaryOp(op, left, right) => {
+                let left_rewritten = self.rewrite_free_variables(left, free_vars);
+                let right_rewritten = self.rewrite_free_variables(right, free_vars);
+                self.node_counter.mk_node(
+                    ExprKind::BinaryOp(op.clone(), Box::new(left_rewritten), Box::new(right_rewritten)),
+                    span,
+                )
+            }
+            ExprKind::UnaryOp(op, operand) => {
+                let operand_rewritten = self.rewrite_free_variables(operand, free_vars);
+                self.node_counter.mk_node(
+                    ExprKind::UnaryOp(op.clone(), Box::new(operand_rewritten)),
+                    span,
+                )
+            }
+            ExprKind::FunctionCall(name, args) => {
+                let args_rewritten: Vec<_> = args
+                    .iter()
+                    .map(|arg| self.rewrite_free_variables(arg, free_vars))
+                    .collect();
+                self.node_counter.mk_node(
+                    ExprKind::FunctionCall(name.clone(), args_rewritten),
+                    span,
+                )
+            }
+            ExprKind::Application(func, args) => {
+                let func_rewritten = self.rewrite_free_variables(func, free_vars);
+                let args_rewritten: Vec<_> = args
+                    .iter()
+                    .map(|arg| self.rewrite_free_variables(arg, free_vars))
+                    .collect();
+                self.node_counter.mk_node(
+                    ExprKind::Application(Box::new(func_rewritten), args_rewritten),
+                    span,
+                )
+            }
+            ExprKind::LetIn(let_in) => {
+                let value_rewritten = self.rewrite_free_variables(&let_in.value, free_vars);
+
+                // Remove bound names from free_vars for the body
+                let mut body_free_vars = free_vars.clone();
+                for name in let_in.pattern.collect_names() {
+                    body_free_vars.remove(&name);
+                }
+                let body_rewritten = self.rewrite_free_variables(&let_in.body, &body_free_vars);
+
+                self.node_counter.mk_node(
+                    ExprKind::LetIn(LetInExpr {
+                        pattern: let_in.pattern.clone(),
+                        ty: let_in.ty.clone(),
+                        value: Box::new(value_rewritten),
+                        body: Box::new(body_rewritten),
+                    }),
+                    span,
+                )
+            }
+            ExprKind::If(if_expr) => {
+                let condition = self.rewrite_free_variables(&if_expr.condition, free_vars);
+                let then_branch = self.rewrite_free_variables(&if_expr.then_branch, free_vars);
+                let else_branch = self.rewrite_free_variables(&if_expr.else_branch, free_vars);
+                self.node_counter.mk_node(
+                    ExprKind::If(IfExpr {
+                        condition: Box::new(condition),
+                        then_branch: Box::new(then_branch),
+                        else_branch: Box::new(else_branch),
+                    }),
+                    span,
+                )
+            }
+            ExprKind::Tuple(elements) => {
+                let elements_rewritten: Vec<_> = elements
+                    .iter()
+                    .map(|elem| self.rewrite_free_variables(elem, free_vars))
+                    .collect();
+                self.node_counter.mk_node(ExprKind::Tuple(elements_rewritten), span)
+            }
+            ExprKind::ArrayLiteral(elements) => {
+                let elements_rewritten: Vec<_> = elements
+                    .iter()
+                    .map(|elem| self.rewrite_free_variables(elem, free_vars))
+                    .collect();
+                self.node_counter.mk_node(ExprKind::ArrayLiteral(elements_rewritten), span)
+            }
+            ExprKind::ArrayIndex(array, index) => {
+                let array_rewritten = self.rewrite_free_variables(array, free_vars);
+                let index_rewritten = self.rewrite_free_variables(index, free_vars);
+                self.node_counter.mk_node(
+                    ExprKind::ArrayIndex(Box::new(array_rewritten), Box::new(index_rewritten)),
+                    span,
+                )
+            }
+            ExprKind::FieldAccess(expr_inner, field) => {
+                let expr_rewritten = self.rewrite_free_variables(expr_inner, free_vars);
+                self.node_counter.mk_node(
+                    ExprKind::FieldAccess(Box::new(expr_rewritten), field.clone()),
+                    span,
+                )
+            }
+            ExprKind::Loop(loop_expr) => {
+                let init_rewritten = loop_expr.init.as_ref().map(|init| {
+                    Box::new(self.rewrite_free_variables(init, free_vars))
+                });
+
+                // Remove loop pattern bound names from free_vars for the body
+                let mut body_free_vars = free_vars.clone();
+                for name in loop_expr.pattern.collect_names() {
+                    body_free_vars.remove(&name);
+                }
+
+                let form_rewritten = match &loop_expr.form {
+                    LoopForm::While(cond) => {
+                        LoopForm::While(Box::new(self.rewrite_free_variables(cond, &body_free_vars)))
+                    }
+                    LoopForm::For(iter_name, iter_expr) => {
+                        let iter_expr_rewritten = self.rewrite_free_variables(iter_expr, free_vars);
+                        // Also remove iterator name from body free vars
+                        body_free_vars.remove(iter_name);
+                        LoopForm::For(iter_name.clone(), Box::new(iter_expr_rewritten))
+                    }
+                    LoopForm::ForIn(iter_pat, iter_expr) => {
+                        let iter_expr_rewritten = self.rewrite_free_variables(iter_expr, free_vars);
+                        // Also remove iterator pattern names
+                        for name in iter_pat.collect_names() {
+                            body_free_vars.remove(&name);
+                        }
+                        LoopForm::ForIn(iter_pat.clone(), Box::new(iter_expr_rewritten))
+                    }
+                };
+
+                let body_rewritten = self.rewrite_free_variables(&loop_expr.body, &body_free_vars);
+
+                self.node_counter.mk_node(
+                    ExprKind::Loop(LoopExpr {
+                        init: init_rewritten,
+                        pattern: loop_expr.pattern.clone(),
+                        form: form_rewritten,
+                        body: Box::new(body_rewritten),
+                    }),
+                    span,
+                )
+            }
+            ExprKind::TypeAscription(inner, ty) => {
+                let inner_rewritten = self.rewrite_free_variables(inner, free_vars);
+                self.node_counter.mk_node(
+                    ExprKind::TypeAscription(Box::new(inner_rewritten), ty.clone()),
+                    span,
+                )
+            }
+            ExprKind::TypeCoercion(inner, ty) => {
+                let inner_rewritten = self.rewrite_free_variables(inner, free_vars);
+                self.node_counter.mk_node(
+                    ExprKind::TypeCoercion(Box::new(inner_rewritten), ty.clone()),
+                    span,
+                )
+            }
+            // For lambda, we don't rewrite - it will be defunctionalized separately
+            ExprKind::Lambda(_) => expr.clone(),
+            // Other expression kinds - just clone for now
+            _ => expr.clone(),
+        }
     }
 }
 

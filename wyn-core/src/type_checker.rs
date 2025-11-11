@@ -1161,6 +1161,22 @@ impl TypeChecker {
                                         expr.h.span
                                     ))
                                 }
+                            } else if let TypeName::Record(fields) = &type_name {
+                                // Handle Record type specially - look up field in the record's field list
+                                for (field_name, field_type) in fields {
+                                    if field_name == field {
+                                        return Ok(field_type.clone());
+                                    }
+                                }
+                                // Field not found in record
+                                return Err(CompilerError::TypeError(
+                                    format!(
+                                        "Record type has no field '{}'. Available fields: {}",
+                                        field,
+                                        fields.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+                                    ),
+                                    expr.h.span
+                                ));
                             } else {
                                 // Get the type name as a string for other types
                                 let type_name_str = match &type_name {

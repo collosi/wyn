@@ -24,6 +24,9 @@ pub enum CompilerError {
     #[error("Module system error: {0}")]
     ModuleError(String),
 
+    #[error("Defunctionalization error: {0}")]
+    DefunctionalizationError(String),
+
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 
