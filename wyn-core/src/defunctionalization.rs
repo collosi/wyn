@@ -661,11 +661,59 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                     }
                 }
             }
-            StaticValue::Rcd(_) => {
-                // Closure application - would need to unpack closure and call function
-                Err(CompilerError::SpirvError(
-                    "Closure application not yet implemented in defunctionalization".to_string(),
-                ))
+            StaticValue::Rcd(_closure_fields) => {
+                // Closure application - the closure is a record with __fun field and free variable fields
+                // Extract the function name from __fun field and call it with (closure, args...)
+                // The closure record itself becomes the first argument (__closure parameter)
+                match &transformed_func.kind {
+                    ExprKind::RecordLiteral(fields) => {
+                        // Extract __fun field
+                        let func_name = fields
+                            .iter()
+                            .find(|(name, _)| name == "__fun")
+                            .and_then(|(_, expr)| match &expr.kind {
+                                ExprKind::Identifier(name) => Some(name.clone()),
+                                _ => None,
+                            })
+                            .ok_or_else(|| {
+                                CompilerError::DefunctionalizationError(
+                                    "Closure record missing __fun field".to_string(),
+                                )
+                            })?;
+
+                        // Call the function with closure as first arg, then the application args
+                        let mut all_args = vec![transformed_func];
+                        all_args.extend(transformed_args);
+
+                        Ok((
+                            self.node_counter
+                                .mk_node(ExprKind::FunctionCall(func_name, all_args), Span::dummy()),
+                            StaticValue::Dyn(self.type_var_gen.new_variable()),
+                        ))
+                    }
+                    ExprKind::Identifier(closure_var) => {
+                        // The closure is a variable - need to extract __fun field at runtime
+                        // Create: __fun_var = closure_var.__fun; __fun_var(closure_var, args...)
+                        let fun_access = self.node_counter.mk_node(
+                            ExprKind::FieldAccess(Box::new(transformed_func.clone()), "__fun".to_string()),
+                            Span::dummy(),
+                        );
+
+                        // For now, we can't directly call a field access result
+                        // This would require let-binding or inline evaluation
+                        // Simplest: assume the __fun field contains a known function name
+                        // For a more complete implementation, we'd need indirect calls or trampolines
+                        Err(CompilerError::DefunctionalizationError(
+                            "Closure application with variable closures not yet fully supported. \
+                             Closures must be applied directly where they're created."
+                                .to_string(),
+                        ))
+                    }
+                    _ => Err(CompilerError::DefunctionalizationError(format!(
+                        "Unexpected closure expression form: {:?}",
+                        transformed_func.kind
+                    ))),
+                }
             }
             _ => {
                 // Regular function call
@@ -861,12 +909,20 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
 
     fn create_closure_record(
         &mut self,
-        _func_name: &str,
+        func_name: &str,
         free_vars: &HashSet<String>,
     ) -> Result<Expression> {
-        // Create a record literal with free variables as fields
-        // The field names match the variable names so that rewrite_free_variables works
+        // Create a record literal with __fun field (function name) and free variables
+        // The __fun field stores the function to call
+        // The other field names match the variable names so that rewrite_free_variables works
         let mut fields = Vec::new();
+
+        // Add __fun field with the function name
+        let fun_value =
+            self.node_counter.mk_node(ExprKind::Identifier(func_name.to_string()), Span::dummy());
+        fields.push(("__fun".to_string(), fun_value));
+
+        // Add free variable fields
         for var in free_vars {
             let field_value = self.node_counter.mk_node(ExprKind::Identifier(var.clone()), Span::dummy());
             fields.push((var.clone(), field_value));
