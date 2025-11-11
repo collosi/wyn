@@ -30,8 +30,10 @@ impl StaticValue {
                 crate::ast::types::record(field_types)
             }
             StaticValue::Lam(_param, _body, _env) => {
-                // Lambda - use a fresh type variable for now
-                // TODO: construct proper function type
+                // Lambda - treat as opaque with fresh type variable
+                // We could construct a proper function type (param_types -> ret_type),
+                // but since lambdas get defunctionalized into named functions,
+                // the type checker will infer the correct type from the generated function.
                 gen.new_variable()
             }
         }
@@ -149,22 +151,34 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                     new_declarations.push(Declaration::Val(val_decl.clone()));
                 }
                 Declaration::TypeBind(_) => {
-                    unimplemented!("Type bindings are not yet supported in defunctionalization")
+                    return Err(CompilerError::DefunctionalizationError(
+                        "Type bindings are not yet supported in defunctionalization".to_string(),
+                    ));
                 }
                 Declaration::ModuleBind(_) => {
-                    unimplemented!("Module bindings are not yet supported in defunctionalization")
+                    return Err(CompilerError::DefunctionalizationError(
+                        "Module bindings are not yet supported in defunctionalization".to_string(),
+                    ));
                 }
                 Declaration::ModuleTypeBind(_) => {
-                    unimplemented!("Module type bindings are not yet supported in defunctionalization")
+                    return Err(CompilerError::DefunctionalizationError(
+                        "Module type bindings are not yet supported in defunctionalization".to_string(),
+                    ));
                 }
                 Declaration::Open(_) => {
-                    unimplemented!("Open declarations are not yet supported in defunctionalization")
+                    return Err(CompilerError::DefunctionalizationError(
+                        "Open declarations are not yet supported in defunctionalization".to_string(),
+                    ));
                 }
                 Declaration::Import(_) => {
-                    unimplemented!("Import declarations are not yet supported in defunctionalization")
+                    return Err(CompilerError::DefunctionalizationError(
+                        "Import declarations are not yet supported in defunctionalization".to_string(),
+                    ));
                 }
                 Declaration::Local(_) => {
-                    unimplemented!("Local declarations are not yet supported in defunctionalization")
+                    return Err(CompilerError::DefunctionalizationError(
+                        "Local declarations are not yet supported in defunctionalization".to_string(),
+                    ));
                 }
             }
         }
@@ -303,24 +317,30 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                     }
                 }
 
-                let array_sv =
-                    StaticValue::Arr(Box::new(element_sv.unwrap_or(StaticValue::Dyn(types::i32()))));
+                // Array static value wraps the element's static value
+                // Use fresh type variable if array is empty
+                let array_sv = StaticValue::Arr(Box::new(element_sv.unwrap_or_else(|| self.dyn_unknown())));
                 Ok((
                     self.node_counter.mk_node(ExprKind::ArrayLiteral(transformed_elements), span),
                     array_sv,
                 ))
             }
             ExprKind::ArrayIndex(array, index) => {
-                let (transformed_array, _array_sv) = self.defunctionalize_expression(array, scope_stack)?;
+                let (transformed_array, array_sv) = self.defunctionalize_expression(array, scope_stack)?;
                 let (transformed_index, _index_sv) = self.defunctionalize_expression(index, scope_stack)?;
 
-                // Result type depends on array element type - for now, assume dynamic
+                // Extract element type from array if available
+                let elem_sv = match array_sv {
+                    StaticValue::Arr(elem) => *elem,
+                    _ => self.dyn_unknown(),
+                };
+
                 Ok((
                     self.node_counter.mk_node(
                         ExprKind::ArrayIndex(Box::new(transformed_array), Box::new(transformed_index)),
                         span,
                     ),
-                    StaticValue::Dyn(self.type_var_gen.new_variable()),
+                    elem_sv,
                 ))
             }
             ExprKind::BinaryOp(op, left, right) => {
@@ -511,10 +531,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                     h: expr.h.clone(),
                     kind: ExprKind::Loop(transformed_loop),
                 };
-                Ok((
-                    transformed_expr,
-                    StaticValue::Dyn(self.type_var_gen.new_variable()),
-                ))
+                Ok((transformed_expr, self.dyn_unknown()))
             }
 
             ExprKind::TypeAscription(inner, ty) => {
@@ -535,15 +552,63 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                 Ok((transformed_expr, sv))
             }
 
-            ExprKind::QualifiedName(_, _)
-            | ExprKind::Match(_)
-            | ExprKind::Range(_)
-            | ExprKind::Unsafe(_)
-            | ExprKind::Assert(_, _) => {
-                todo!(
-                    "Expression kinds not yet implemented in defunctionalization: {:?}",
-                    expr.kind
-                )
+            ExprKind::QualifiedName(_, _) => {
+                // Qualified names are already resolved - pass through
+                Ok((expr.clone(), self.dyn_unknown()))
+            }
+
+            ExprKind::Match(_) => {
+                // Match expressions not yet fully supported
+                Err(CompilerError::DefunctionalizationError(
+                    "Match expressions not yet supported in defunctionalization".to_string(),
+                ))
+            }
+
+            ExprKind::Range(range_expr) => {
+                let (start_transformed, _) =
+                    self.defunctionalize_expression(&range_expr.start, scope_stack)?;
+                let (end_transformed, _) = self.defunctionalize_expression(&range_expr.end, scope_stack)?;
+                let step_transformed = if let Some(step) = &range_expr.step {
+                    let (transformed, _) = self.defunctionalize_expression(step, scope_stack)?;
+                    Some(Box::new(transformed))
+                } else {
+                    None
+                };
+                Ok((
+                    Expression {
+                        h: expr.h.clone(),
+                        kind: ExprKind::Range(RangeExpr {
+                            start: Box::new(start_transformed),
+                            step: step_transformed,
+                            end: Box::new(end_transformed),
+                            kind: range_expr.kind.clone(),
+                        }),
+                    },
+                    self.dyn_unknown(),
+                ))
+            }
+
+            ExprKind::Unsafe(inner) => {
+                let (transformed_inner, sv) = self.defunctionalize_expression(inner, scope_stack)?;
+                Ok((
+                    Expression {
+                        h: expr.h.clone(),
+                        kind: ExprKind::Unsafe(Box::new(transformed_inner)),
+                    },
+                    sv,
+                ))
+            }
+
+            ExprKind::Assert(cond, inner) => {
+                let (transformed_cond, _) = self.defunctionalize_expression(cond, scope_stack)?;
+                let (transformed_inner, sv) = self.defunctionalize_expression(inner, scope_stack)?;
+                Ok((
+                    Expression {
+                        h: expr.h.clone(),
+                        kind: ExprKind::Assert(Box::new(transformed_cond), Box::new(transformed_inner)),
+                    },
+                    sv,
+                ))
             }
         } // NEWCASESHERE - add new cases before this closing brace
     }
