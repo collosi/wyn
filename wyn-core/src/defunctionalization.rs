@@ -660,7 +660,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             let param_name = param
                 .simple_name()
                 .ok_or_else(|| {
-                    CompilerError::ParseError(
+                    CompilerError::DefunctionalizationError(
                         "Complex patterns in lambda parameters not yet supported".to_string(),
                     )
                 })?
@@ -687,7 +687,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             let param_name = param
                 .simple_name()
                 .ok_or_else(|| {
-                    CompilerError::ParseError(
+                    CompilerError::DefunctionalizationError(
                         "Complex patterns in lambda parameters not yet supported".to_string(),
                     )
                 })?
@@ -759,7 +759,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                     _ => {
                         // More complex case - would need closure unpacking
                         // For now, return error
-                        Err(CompilerError::SpirvError(
+                        Err(CompilerError::DefunctionalizationError(
                             "Complex function application not yet supported in defunctionalization"
                                 .to_string(),
                         ))
@@ -857,7 +857,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
     fn extract_base_name(expr: &Expression) -> Result<String> {
         match &expr.kind {
             ExprKind::Identifier(name) => Ok(name.clone()),
-            _ => Err(CompilerError::SpirvError(format!(
+            _ => Err(CompilerError::DefunctionalizationError(format!(
                 "Expected identifier as base of qualified name, got {:?}",
                 expr.kind
             ))),
@@ -1063,7 +1063,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         let func_name = match &func.kind {
             ExprKind::Identifier(name) => name.clone(),
             _ => {
-                return Err(CompilerError::SpirvError(
+                return Err(CompilerError::DefunctionalizationError(
                     "map currently only supports simple function identifiers".to_string(),
                 ));
             }
