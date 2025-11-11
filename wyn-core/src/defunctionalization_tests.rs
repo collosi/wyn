@@ -1,15 +1,37 @@
-use crate::ast::{Declaration, ExprKind, Program};
+use crate::ast::{Declaration, ExprKind, Program, Type};
 use crate::defunctionalization::Defunctionalizer;
 use crate::lexer::tokenize;
 use crate::parser::Parser;
+use crate::type_checker::TypeVarGenerator;
+
+/// Simple test implementation of TypeVarGenerator
+struct TestTypeVarGen {
+    next_id: usize,
+}
+
+impl TestTypeVarGen {
+    fn new() -> Self {
+        TestTypeVarGen { next_id: 0 }
+    }
+}
+
+impl TypeVarGenerator for TestTypeVarGen {
+    fn new_variable(&mut self) -> Type {
+        let id = self.next_id;
+        self.next_id += 1;
+        Type::Variable(id)
+    }
+}
 
 /// Helper to parse and defunctionalize a program
 fn defunctionalize_program(input: &str) -> Program {
     let tokens = tokenize(input).expect("Tokenization failed");
     let mut parser = Parser::new(tokens);
     let program = parser.parse().expect("Parsing failed");
+    let node_counter = parser.take_node_counter();
 
-    let mut defunc = Defunctionalizer::new();
+    let type_var_gen = TestTypeVarGen::new();
+    let mut defunc = Defunctionalizer::new_with_counter(node_counter, type_var_gen);
     defunc.defunctionalize_program(&program).expect("Defunctionalization failed")
 }
 
@@ -208,8 +230,10 @@ mod tests {
         let tokens = tokenize(input).unwrap();
         let mut parser = Parser::new(tokens);
         let program = parser.parse().unwrap();
+        let node_counter = parser.take_node_counter();
 
-        let mut defunc = Defunctionalizer::new();
+        let type_var_gen = TestTypeVarGen::new();
+        let mut defunc = Defunctionalizer::new_with_counter(node_counter, type_var_gen);
         let result = defunc.defunctionalize_program(&program).unwrap();
 
         // The let declaration should be transformed
@@ -224,8 +248,10 @@ mod tests {
         let tokens = tokenize(input).unwrap();
         let mut parser = Parser::new(tokens);
         let program = parser.parse().unwrap();
+        let node_counter = parser.take_node_counter();
 
-        let mut defunc = Defunctionalizer::new();
+        let type_var_gen = TestTypeVarGen::new();
+        let mut defunc = Defunctionalizer::new_with_counter(node_counter, type_var_gen);
         let result = defunc.defunctionalize_program(&program).unwrap();
 
         // Check that the result doesn't contain any Application nodes
@@ -260,7 +286,9 @@ mod tests {
             eprintln!("Before defunctionalization: {:?}", d.body.kind);
         }
 
-        let mut defunc = Defunctionalizer::new();
+        let node_counter = parser.take_node_counter();
+        let type_var_gen = TestTypeVarGen::new();
+        let mut defunc = Defunctionalizer::new_with_counter(node_counter, type_var_gen);
         let result = defunc.defunctionalize_program(&program).unwrap();
 
         // Debug: print the AST after defunctionalization
@@ -307,7 +335,9 @@ mod tests {
         }
 
         // Then defunctionalize
-        let mut defunc = Defunctionalizer::new();
+        let node_counter = folder.take_node_counter();
+        let type_var_gen = TestTypeVarGen::new();
+        let mut defunc = Defunctionalizer::new_with_counter(node_counter, type_var_gen);
         let result = defunc.defunctionalize_program(&program).unwrap();
 
         // Check that the result doesn't contain any Application nodes

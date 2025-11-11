@@ -14,25 +14,25 @@ pub enum StaticValue {
 
 impl StaticValue {
     /// Extract a type from a StaticValue for use in closure type construction
-    pub fn to_type(&self) -> Type {
+    pub fn to_type<G: crate::type_checker::TypeVarGenerator>(&self, gen: &mut G) -> Type {
         match self {
             StaticValue::Dyn(ty) => ty.clone(),
             StaticValue::Arr(elem_sv) => {
                 // Array type - create Array(size, element_type)
-                // For now, use a type variable for size since we don't track it
-                let elem_type = elem_sv.to_type();
-                Type::Constructed(TypeName::Array, vec![Type::Variable(100), elem_type])
+                // Use a fresh type variable for size since we don't track it statically
+                let elem_type = elem_sv.to_type(gen);
+                Type::Constructed(TypeName::Array, vec![gen.new_variable(), elem_type])
             }
             StaticValue::Rcd(fields) => {
                 // Record type - extract field types
                 let field_types: Vec<(String, Type)> =
-                    fields.iter().map(|(name, sv)| (name.clone(), sv.to_type())).collect();
+                    fields.iter().map(|(name, sv)| (name.clone(), sv.to_type(gen))).collect();
                 crate::ast::types::record(field_types)
             }
             StaticValue::Lam(_param, _body, _env) => {
-                // Lambda - use a function type variable for now
+                // Lambda - use a fresh type variable for now
                 // TODO: construct proper function type
-                Type::Variable(101)
+                gen.new_variable()
             }
         }
     }
@@ -51,33 +51,25 @@ pub struct DefunctionalizedFunction {
     pub body: Expression,
 }
 
-pub struct Defunctionalizer {
+pub struct Defunctionalizer<T: crate::type_checker::TypeVarGenerator> {
     next_function_id: usize,
+    type_var_gen: T,
     generated_functions: Vec<DefunctionalizedFunction>,
     node_counter: NodeCounter,
 }
 
-impl Default for Defunctionalizer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Defunctionalizer {
-    pub fn new() -> Self {
+impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
+    pub fn new_with_counter(node_counter: NodeCounter, type_var_gen: T) -> Self {
         Defunctionalizer {
             next_function_id: 0,
-            generated_functions: Vec::new(),
-            node_counter: NodeCounter::new(),
-        }
-    }
-
-    pub fn new_with_counter(node_counter: NodeCounter) -> Self {
-        Defunctionalizer {
-            next_function_id: 0,
+            type_var_gen,
             generated_functions: Vec::new(),
             node_counter,
         }
+    }
+
+    pub fn take_type_var_gen(self) -> T {
+        self.type_var_gen
     }
 
     pub fn defunctionalize_program(&mut self, program: &Program) -> Result<Program> {
@@ -253,7 +245,7 @@ impl Defunctionalizer {
                     // Unknown variable - assume dynamic with type variable
                     Ok((
                         self.node_counter.mk_node(ExprKind::Identifier(name.clone()), span),
-                        StaticValue::Dyn(polytype::Type::Variable(0)),
+                        StaticValue::Dyn(self.type_var_gen.new_variable()),
                     ))
                 }
             }
@@ -290,7 +282,7 @@ impl Defunctionalizer {
                         ExprKind::ArrayIndex(Box::new(transformed_array), Box::new(transformed_index)),
                         span,
                     ),
-                    StaticValue::Dyn(polytype::Type::Variable(1)),
+                    StaticValue::Dyn(self.type_var_gen.new_variable()),
                 ))
             }
             ExprKind::BinaryOp(op, left, right) => {
@@ -309,8 +301,8 @@ impl Defunctionalizer {
                         ty.clone()
                     }
                     _ => {
-                        // Fallback to a generic type variable if we can't determine the type
-                        polytype::Type::Variable(4)
+                        // Fallback to a fresh type variable if we can't determine the type
+                        self.type_var_gen.new_variable()
                     }
                 };
 
@@ -336,7 +328,7 @@ impl Defunctionalizer {
 
                 Ok((
                     self.node_counter.mk_node(ExprKind::FunctionCall(name.clone(), transformed_args), span),
-                    StaticValue::Dyn(polytype::Type::Variable(2)),
+                    StaticValue::Dyn(self.type_var_gen.new_variable()),
                 ))
             }
             ExprKind::Tuple(elements) => {
@@ -350,7 +342,7 @@ impl Defunctionalizer {
                     // Extract type from static value
                     let elem_type = match sv {
                         StaticValue::Dyn(ty) => ty,
-                        _ => polytype::Type::Variable(3),
+                        _ => self.type_var_gen.new_variable(),
                     };
                     element_types.push(elem_type);
                 }
@@ -423,7 +415,7 @@ impl Defunctionalizer {
 
             ExprKind::TypeHole => Ok((
                 self.node_counter.mk_node(ExprKind::TypeHole, span),
-                StaticValue::Dyn(polytype::Type::Variable(0)), // Type to be inferred
+                StaticValue::Dyn(self.type_var_gen.new_variable()), // Type to be inferred
             )),
 
             ExprKind::Pipe(left, right) => {
@@ -463,7 +455,10 @@ impl Defunctionalizer {
                     h: expr.h.clone(),
                     kind: ExprKind::Loop(transformed_loop),
                 };
-                Ok((transformed_expr, StaticValue::Dyn(polytype::Type::Variable(0))))
+                Ok((
+                    transformed_expr,
+                    StaticValue::Dyn(self.type_var_gen.new_variable()),
+                ))
             }
 
             ExprKind::TypeAscription(inner, ty) => {
@@ -515,7 +510,7 @@ impl Defunctionalizer {
             if let Ok(sv) = scope_stack.lookup(var) {
                 closure_fields.insert(var.clone(), sv.clone());
                 // Extract type from StaticValue for the closure record type
-                let var_type = sv.to_type();
+                let var_type = sv.to_type(&mut self.type_var_gen);
                 closure_type_fields.push((var.clone(), var_type));
             }
         }
@@ -526,7 +521,7 @@ impl Defunctionalizer {
 
         // Create parameters: closure record + lambda parameters
         let closure_type = if closure_type_fields.is_empty() {
-            polytype::Type::Variable(4) // No fields, use type variable
+            self.type_var_gen.new_variable() // No fields, use fresh type variable
         } else {
             crate::ast::types::record(closure_type_fields)
         };
@@ -546,7 +541,8 @@ impl Defunctionalizer {
                     )
                 })?
                 .to_string();
-            let param_ty = param.pattern_type().cloned().unwrap_or(polytype::Type::Variable(5));
+            let param_ty =
+                param.pattern_type().cloned().unwrap_or_else(|| self.type_var_gen.new_variable());
             func_params.push(Parameter {
                 attributes: vec![],
                 name: param_name,
@@ -572,7 +568,8 @@ impl Defunctionalizer {
                     )
                 })?
                 .to_string();
-            let param_ty = param.pattern_type().cloned().unwrap_or(polytype::Type::Variable(6));
+            let param_ty =
+                param.pattern_type().cloned().unwrap_or_else(|| self.type_var_gen.new_variable());
             scope_stack.insert(param_name, StaticValue::Dyn(param_ty));
         }
 
@@ -582,7 +579,7 @@ impl Defunctionalizer {
         scope_stack.pop_scope();
 
         // Create the generated function
-        let return_type = lambda.return_type.clone().unwrap_or(polytype::Type::Variable(7));
+        let return_type = lambda.return_type.clone().unwrap_or_else(|| self.type_var_gen.new_variable());
         let generated_func = DefunctionalizedFunction {
             name: func_name.clone(),
             params: func_params,
@@ -632,7 +629,7 @@ impl Defunctionalizer {
                                 ExprKind::FunctionCall(func_name.clone(), transformed_args),
                                 Span::dummy(),
                             ),
-                            StaticValue::Dyn(polytype::Type::Variable(2)),
+                            StaticValue::Dyn(self.type_var_gen.new_variable()),
                         ))
                     }
                     _ => {
@@ -670,7 +667,7 @@ impl Defunctionalizer {
                                 ExprKind::FunctionCall(func_name.clone(), transformed_args),
                                 Span::dummy(),
                             ),
-                            StaticValue::Dyn(polytype::Type::Variable(2)),
+                            StaticValue::Dyn(self.type_var_gen.new_variable()),
                         ))
                     }
                     ExprKind::FieldAccess(base, field) => {
@@ -683,7 +680,7 @@ impl Defunctionalizer {
                                 ExprKind::FunctionCall(dotted_name, transformed_args),
                                 Span::dummy(),
                             ),
-                            StaticValue::Dyn(polytype::Type::Variable(2)),
+                            StaticValue::Dyn(self.type_var_gen.new_variable()),
                         ))
                     }
                     ExprKind::FunctionCall(func_name, existing_args) => {
@@ -696,7 +693,7 @@ impl Defunctionalizer {
                                 ExprKind::FunctionCall(func_name.clone(), all_args),
                                 Span::dummy(),
                             ),
-                            StaticValue::Dyn(polytype::Type::Variable(2)),
+                            StaticValue::Dyn(self.type_var_gen.new_variable()),
                         ))
                     }
                     ExprKind::Application(nested_func, nested_args) => {
@@ -1017,7 +1014,7 @@ impl Defunctionalizer {
             span,
         );
 
-        Ok((result, StaticValue::Dyn(polytype::Type::Variable(0))))
+        Ok((result, StaticValue::Dyn(self.type_var_gen.new_variable())))
     }
 
     /// Rewrite free variable references in an expression to access them from a closure record

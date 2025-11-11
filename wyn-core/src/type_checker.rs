@@ -1,11 +1,16 @@
 use crate::ast::TypeName;
 use crate::ast::*;
-use crate::builtin_registry::{BuiltinDescriptor, TypeVarGenerator};
+use crate::builtin_registry::BuiltinDescriptor;
 use crate::error::{CompilerError, Result};
 use crate::scope::ScopeStack;
 use log::debug;
 use polytype::{Context, TypeScheme};
 use std::collections::{BTreeSet, HashMap};
+
+/// Trait for generating fresh type variables
+pub trait TypeVarGenerator {
+    fn new_variable(&mut self) -> Type;
+}
 
 // Implement TypeVarGenerator for Context
 impl TypeVarGenerator for Context<TypeName> {
@@ -189,6 +194,20 @@ impl TypeChecker {
 
     pub fn new() -> Self {
         let mut context = Context::default();
+        let builtin_registry = crate::builtin_registry::BuiltinRegistry::new(&mut context);
+
+        TypeChecker {
+            scope_stack: ScopeStack::new(),
+            context,
+            record_field_map: HashMap::new(),
+            builtin_registry,
+            type_table: HashMap::new(),
+            warnings: Vec::new(),
+            type_holes: Vec::new(),
+        }
+    }
+
+    pub fn new_with_context(mut context: Context<TypeName>) -> Self {
         let builtin_registry = crate::builtin_registry::BuiltinRegistry::new(&mut context);
 
         TypeChecker {
@@ -508,23 +527,34 @@ impl TypeChecker {
 
         // map: ∀a b n. (a -> b) -> *Array(n, a) -> Array(n, b)
         // The input array is consumed (unique), output is fresh
-        // Build the type using Type::Variable(0,1,2) for proper polymorphism
-        let var_a = Type::Variable(0);
-        let var_b = Type::Variable(1);
-        let var_n = Type::Variable(2);
-        let func_type = Type::arrow(var_a.clone(), var_b.clone());
-        let input_array_type =
-            types::unique(Type::Constructed(TypeName::Array, vec![var_n.clone(), var_a]));
-        let output_array_type = Type::Constructed(TypeName::Array, vec![var_n, var_b]);
+        // Build the type using fresh type variables for proper polymorphism
+        let var_a = self.context.new_variable();
+        let var_b = self.context.new_variable();
+        let var_n = self.context.new_variable();
+
+        // Extract the variable IDs for the TypeScheme
+        let var_a_id = if let Type::Variable(id) = var_a { id } else { panic!("Expected Type::Variable") };
+        let var_b_id = if let Type::Variable(id) = var_b { id } else { panic!("Expected Type::Variable") };
+        let var_n_id = if let Type::Variable(id) = var_n { id } else { panic!("Expected Type::Variable") };
+
+        let func_type = Type::arrow(Type::Variable(var_a_id), Type::Variable(var_b_id));
+        let input_array_type = types::unique(Type::Constructed(
+            TypeName::Array,
+            vec![Type::Variable(var_n_id), Type::Variable(var_a_id)],
+        ));
+        let output_array_type = Type::Constructed(
+            TypeName::Array,
+            vec![Type::Variable(var_n_id), Type::Variable(var_b_id)],
+        );
         let map_arrow1 = Type::arrow(input_array_type, output_array_type);
         let map_body = Type::arrow(func_type, map_arrow1);
         // Create nested Polytype for ∀a b n
         let map_scheme = TypeScheme::Polytype {
-            variable: 0,
+            variable: var_a_id,
             body: Box::new(TypeScheme::Polytype {
-                variable: 1,
+                variable: var_b_id,
                 body: Box::new(TypeScheme::Polytype {
-                    variable: 2,
+                    variable: var_n_id,
                     body: Box::new(TypeScheme::Monotype(map_body)),
                 }),
             }),

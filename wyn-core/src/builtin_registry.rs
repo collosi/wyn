@@ -2,12 +2,8 @@
 // Provides type signatures and code generation implementations for all builtin functions
 
 use crate::ast::{Type, TypeName, TypeScheme};
+use crate::type_checker::TypeVarGenerator;
 use std::collections::HashMap;
-
-/// Trait for generating fresh type variables
-pub trait TypeVarGenerator {
-    fn new_variable(&mut self) -> Type;
-}
 
 /// Implementation strategy for a builtin function
 #[derive(Debug, Clone, PartialEq)]
