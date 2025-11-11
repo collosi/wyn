@@ -114,15 +114,18 @@ impl Monomorphizer {
 
                     // Get the concrete types for this call
                     // For now, we'll extract types from the arguments
-                    let arg_types: Vec<Type> = new_args
+                    let arg_types: Result<Vec<Type>> = new_args
                         .iter()
                         .map(|arg| {
-                            self.type_table.get(&arg.h.id).cloned().unwrap_or_else(|| {
-                                // Fallback: create a placeholder type
-                                Type::Constructed(TypeName::Str("unknown"), vec![])
+                            self.type_table.get(&arg.h.id).cloned().ok_or_else(|| {
+                                crate::error::CompilerError::TypeError(
+                                    format!("Missing type information for argument in monomorphization (node id: {})", arg.h.id.0),
+                                    arg.h.span
+                                )
                             })
                         })
                         .collect();
+                    let arg_types = arg_types?;
 
                     // Generate a specialized version of the function
                     let specialized_name =

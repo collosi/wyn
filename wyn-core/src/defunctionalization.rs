@@ -409,7 +409,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                         }),
                         span,
                     ),
-                    StaticValue::Dyn(Type::Constructed(TypeName::Str("unknown"), vec![])), // If expressions are runtime values
+                    StaticValue::Dyn(self.type_var_gen.new_variable()), // If expressions are runtime values
                 ))
             }
 
