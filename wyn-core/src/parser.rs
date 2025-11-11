@@ -1293,6 +1293,7 @@ impl Parser {
                     Ok(first_expr)
                 }
             }
+            Some(Token::LeftBrace) => self.parse_record_literal(),
             Some(Token::Backslash) => self.parse_lambda(),
             Some(Token::Let) => self.parse_let_in(),
             Some(Token::If) => self.parse_if_then_else(),
@@ -1337,6 +1338,62 @@ impl Parser {
         let end_span = self.previous_span();
         let span = start_span.merge(&end_span);
         Ok(self.node_counter.mk_node(ExprKind::ArrayLiteral(elements), span))
+    }
+
+    fn parse_record_literal(&mut self) -> Result<Expression> {
+        trace!("parse_record_literal: next token = {:?}", self.peek());
+        let start_span = self.current_span();
+        self.expect(Token::LeftBrace)?;
+
+        let mut fields = Vec::new();
+
+        // Empty record: {}
+        if self.check(&Token::RightBrace) {
+            self.advance();
+            let end_span = self.previous_span();
+            let span = start_span.merge(&end_span);
+            return Ok(self.node_counter.mk_node(ExprKind::RecordLiteral(fields), span));
+        }
+
+        // Parse field: value pairs
+        loop {
+            // Parse field name
+            let field_name = if let Some(Token::Identifier(name)) = self.peek() {
+                let name = name.clone();
+                self.advance();
+                name
+            } else {
+                return Err(CompilerError::ParseError(format!(
+                    "Expected field name in record literal, got {:?} at {}",
+                    self.peek(),
+                    self.current_span()
+                )));
+            };
+
+            // Expect colon
+            self.expect(Token::Colon)?;
+
+            // Parse field value
+            let field_value = self.parse_expression()?;
+
+            fields.push((field_name, field_value));
+
+            // Check for comma or end of record
+            if self.check(&Token::Comma) {
+                self.advance();
+                // Allow trailing comma
+                if self.check(&Token::RightBrace) {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        self.expect(Token::RightBrace)?;
+        let end_span = self.previous_span();
+        let span = start_span.merge(&end_span);
+        Ok(self.node_counter.mk_node(ExprKind::RecordLiteral(fields), span))
     }
 
     fn parse_lambda(&mut self) -> Result<Expression> {

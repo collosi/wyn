@@ -2202,3 +2202,50 @@ fn test_let_tuple_pattern() {
         other => panic!("Expected LetIn, got {:?}", other),
     }
 }
+
+#[test]
+fn test_parse_record_literal_empty() {
+    let input = "def test = {}";
+    let program = parse_ok(input);
+    let decl = single_decl(input);
+
+    match &decl.body.kind {
+        ExprKind::RecordLiteral(fields) => {
+            assert_eq!(fields.len(), 0);
+        }
+        other => panic!("Expected RecordLiteral, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_record_literal_single_field() {
+    let input = "def test = {x: 42}";
+    let decl = single_decl(input);
+
+    match &decl.body.kind {
+        ExprKind::RecordLiteral(fields) => {
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[0].0, "x");
+            match &fields[0].1.kind {
+                ExprKind::IntLiteral(n) => assert_eq!(*n, 42),
+                other => panic!("Expected IntLiteral, got {:?}", other),
+            }
+        }
+        other => panic!("Expected RecordLiteral, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_record_literal_multiple_fields() {
+    let input = "def test = {__tag: 0, v3s: v3s}";
+    let decl = single_decl(input);
+
+    match &decl.body.kind {
+        ExprKind::RecordLiteral(fields) => {
+            assert_eq!(fields.len(), 2);
+            assert_eq!(fields[0].0, "__tag");
+            assert_eq!(fields[1].0, "v3s");
+        }
+        other => panic!("Expected RecordLiteral, got {:?}", other),
+    }
+}
