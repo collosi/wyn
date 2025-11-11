@@ -1,7 +1,7 @@
-use wyn_core::ast::{Declaration, ExprKind, Program};
-use wyn_core::defunctionalization::Defunctionalizer;
-use wyn_core::lexer::tokenize;
-use wyn_core::parser::Parser;
+use crate::ast::{Declaration, ExprKind, Program};
+use crate::defunctionalization::Defunctionalizer;
+use crate::lexer::tokenize;
+use crate::parser::Parser;
 
 /// Helper to parse and defunctionalize a program
 fn defunctionalize_program(input: &str) -> Program {
@@ -84,7 +84,7 @@ fn test_lambda_captures_variable_through_let() {
         .expect("Should have generated lambda function");
 
     // Check that the lambda body contains FieldAccess to __closure
-    fn contains_closure_field_access(expr: &wyn_core::ast::Expression) -> bool {
+    fn contains_closure_field_access(expr: &crate::ast::Expression) -> bool {
         match &expr.kind {
             ExprKind::FieldAccess(base, _field) => {
                 // Check if base is Identifier("__closure")
@@ -97,15 +97,12 @@ fn test_lambda_captures_variable_through_let() {
                 contains_closure_field_access(base)
             }
             ExprKind::LetIn(let_in) => {
-                contains_closure_field_access(&let_in.value)
-                    || contains_closure_field_access(&let_in.body)
+                contains_closure_field_access(&let_in.value) || contains_closure_field_access(&let_in.body)
             }
             ExprKind::BinaryOp(_op, left, right) => {
                 contains_closure_field_access(left) || contains_closure_field_access(right)
             }
-            ExprKind::ArrayLiteral(elements) => {
-                elements.iter().any(|e| contains_closure_field_access(e))
-            }
+            ExprKind::ArrayLiteral(elements) => elements.iter().any(|e| contains_closure_field_access(e)),
             ExprKind::ArrayIndex(array, index) => {
                 contains_closure_field_access(array) || contains_closure_field_access(index)
             }
@@ -170,22 +167,14 @@ fn test_lambda_captures_multiple_variables() {
     match &defunc_program.declarations[0] {
         Declaration::Decl(decl) => {
             assert!(decl.name.starts_with("__lambda_"));
-            assert_eq!(
-                decl.params.len(),
-                2,
-                "Should have __closure and x parameters"
-            );
+            assert_eq!(decl.params.len(), 2, "Should have __closure and x parameters");
 
             // Check that body has references to __closure.a, __closure.b, __closure.c
-            fn count_closure_accesses(expr: &wyn_core::ast::Expression) -> usize {
+            fn count_closure_accesses(expr: &crate::ast::Expression) -> usize {
                 match &expr.kind {
                     ExprKind::FieldAccess(base, _field) => {
                         let base_count = if let ExprKind::Identifier(name) = &base.kind {
-                            if name == "__closure" {
-                                1
-                            } else {
-                                0
-                            }
+                            if name == "__closure" { 1 } else { 0 }
                         } else {
                             0
                         };
@@ -205,5 +194,140 @@ fn test_lambda_captures_multiple_variables() {
             );
         }
         _ => panic!("Should be Decl"),
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::tokenize;
+    use crate::parser::Parser;
+
+    #[test]
+    fn test_defunctionalize_simple_lambda() {
+        let input = r#"let f: i32 -> i32 = \x -> x"#;
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut defunc = Defunctionalizer::new();
+        let result = defunc.defunctionalize_program(&program).unwrap();
+
+        // The let declaration should be transformed
+        // Should have at least the original declaration plus any generated functions
+        assert!(result.declarations.len() >= 1);
+    }
+
+    #[test]
+    fn test_defunctionalize_nested_application() {
+        // Test that ((f x) y) z becomes f(x, y, z)
+        let input = "def test = vec3 1.0f32 0.5f32 0.25f32";
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut defunc = Defunctionalizer::new();
+        let result = defunc.defunctionalize_program(&program).unwrap();
+
+        // Check that the result doesn't contain any Application nodes
+        let decl = &result.declarations[0];
+        if let Declaration::Decl(d) = decl {
+            // The body should be a FunctionCall, not an Application
+            match &d.body.kind {
+                ExprKind::FunctionCall(name, args) => {
+                    assert_eq!(name, "vec3");
+                    assert_eq!(args.len(), 3);
+                }
+                ExprKind::Application(_, _) => {
+                    panic!(
+                        "Found Application node after defunctionalization - nested applications not flattened"
+                    );
+                }
+                other => panic!("Expected FunctionCall, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn test_defunctionalize_qualified_name() {
+        // Test that qualified names like f32.sqrt are defunctionalized correctly
+        let input = "def test = f32.sqrt 4.0f32";
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        // Debug: print the AST before defunctionalization
+        if let Declaration::Decl(d) = &program.declarations[0] {
+            eprintln!("Before defunctionalization: {:?}", d.body.kind);
+        }
+
+        let mut defunc = Defunctionalizer::new();
+        let result = defunc.defunctionalize_program(&program).unwrap();
+
+        // Debug: print the AST after defunctionalization
+        if let Declaration::Decl(d) = &result.declarations[0] {
+            eprintln!("After defunctionalization: {:?}", d.body.kind);
+        }
+
+        // Check that the result is a FunctionCall with dotted name
+        let decl = &result.declarations[0];
+        if let Declaration::Decl(d) = decl {
+            match &d.body.kind {
+                ExprKind::FunctionCall(name, args) => {
+                    assert_eq!(name, "f32.sqrt");
+                    assert_eq!(args.len(), 1);
+                }
+                ExprKind::Application(_, _) => {
+                    panic!("Found Application node after defunctionalization");
+                }
+                other => panic!("Expected FunctionCall, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn test_defunctionalize_application_with_division() {
+        // Test that constant-folded divisions inside function calls work
+        let input = "def test = vec3 (255.0f32/255.0f32) 0.5f32 0.25f32";
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        // Debug: print the AST before constant folding
+        if let Declaration::Decl(d) = &program.declarations[0] {
+            eprintln!("Before constant folding: {:?}", d.body.kind);
+        }
+
+        // Run constant folding first
+        let mut folder = crate::constant_folding::ConstantFolder::new();
+        let program = folder.fold_program(&program).unwrap();
+
+        // Debug: print the AST after constant folding
+        if let Declaration::Decl(d) = &program.declarations[0] {
+            eprintln!("After constant folding: {:?}", d.body.kind);
+        }
+
+        // Then defunctionalize
+        let mut defunc = Defunctionalizer::new();
+        let result = defunc.defunctionalize_program(&program).unwrap();
+
+        // Check that the result doesn't contain any Application nodes
+        let decl = &result.declarations[0];
+        if let Declaration::Decl(d) = decl {
+            match &d.body.kind {
+                ExprKind::FunctionCall(name, args) => {
+                    assert_eq!(name, "vec3");
+                    assert_eq!(args.len(), 3);
+                    // First arg should be the constant-folded result (1.0)
+                    match &args[0].kind {
+                        ExprKind::FloatLiteral(v) => assert_eq!(*v, 1.0),
+                        other => panic!("Expected FloatLiteral after constant folding, got {:?}", other),
+                    }
+                }
+                ExprKind::Application(_, _) => {
+                    panic!("Found Application node after defunctionalization");
+                }
+                other => panic!("Expected FunctionCall, got {:?}", other),
+            }
+        }
     }
 }

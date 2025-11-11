@@ -27,6 +27,9 @@ mod mirize_tests;
 #[cfg(test)]
 mod integration_tests;
 
+#[cfg(test)]
+mod defunctionalization_tests;
+
 use error::Result;
 
 pub struct Compiler;

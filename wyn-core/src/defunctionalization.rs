@@ -21,17 +21,12 @@ impl StaticValue {
                 // Array type - create Array(size, element_type)
                 // For now, use a type variable for size since we don't track it
                 let elem_type = elem_sv.to_type();
-                Type::Constructed(
-                    TypeName::Array,
-                    vec![Type::Variable(100), elem_type]
-                )
+                Type::Constructed(TypeName::Array, vec![Type::Variable(100), elem_type])
             }
             StaticValue::Rcd(fields) => {
                 // Record type - extract field types
-                let field_types: Vec<(String, Type)> = fields
-                    .iter()
-                    .map(|(name, sv)| (name.clone(), sv.to_type()))
-                    .collect();
+                let field_types: Vec<(String, Type)> =
+                    fields.iter().map(|(name, sv)| (name.clone(), sv.to_type())).collect();
                 crate::ast::types::record(field_types)
             }
             StaticValue::Lam(_param, _body, _env) => {
@@ -1027,23 +1022,14 @@ impl Defunctionalizer {
 
     /// Rewrite free variable references in an expression to access them from a closure record
     /// Replaces Identifier(var) with FieldAccess(Identifier("__closure"), var) for each free variable
-    fn rewrite_free_variables(
-        &mut self,
-        expr: &Expression,
-        free_vars: &HashSet<String>,
-    ) -> Expression {
+    fn rewrite_free_variables(&mut self, expr: &Expression, free_vars: &HashSet<String>) -> Expression {
         let span = expr.h.span;
         match &expr.kind {
             ExprKind::Identifier(name) if free_vars.contains(name) => {
                 // Rewrite free variable to closure field access: __closure.name
-                let closure_id = self.node_counter.mk_node(
-                    ExprKind::Identifier("__closure".to_string()),
-                    span,
-                );
-                self.node_counter.mk_node(
-                    ExprKind::FieldAccess(Box::new(closure_id), name.clone()),
-                    span,
-                )
+                let closure_id =
+                    self.node_counter.mk_node(ExprKind::Identifier("__closure".to_string()), span);
+                self.node_counter.mk_node(ExprKind::FieldAccess(Box::new(closure_id), name.clone()), span)
             }
             ExprKind::Identifier(_) => expr.clone(),
             ExprKind::IntLiteral(_)
@@ -1060,27 +1046,17 @@ impl Defunctionalizer {
             }
             ExprKind::UnaryOp(op, operand) => {
                 let operand_rewritten = self.rewrite_free_variables(operand, free_vars);
-                self.node_counter.mk_node(
-                    ExprKind::UnaryOp(op.clone(), Box::new(operand_rewritten)),
-                    span,
-                )
+                self.node_counter.mk_node(ExprKind::UnaryOp(op.clone(), Box::new(operand_rewritten)), span)
             }
             ExprKind::FunctionCall(name, args) => {
-                let args_rewritten: Vec<_> = args
-                    .iter()
-                    .map(|arg| self.rewrite_free_variables(arg, free_vars))
-                    .collect();
-                self.node_counter.mk_node(
-                    ExprKind::FunctionCall(name.clone(), args_rewritten),
-                    span,
-                )
+                let args_rewritten: Vec<_> =
+                    args.iter().map(|arg| self.rewrite_free_variables(arg, free_vars)).collect();
+                self.node_counter.mk_node(ExprKind::FunctionCall(name.clone(), args_rewritten), span)
             }
             ExprKind::Application(func, args) => {
                 let func_rewritten = self.rewrite_free_variables(func, free_vars);
-                let args_rewritten: Vec<_> = args
-                    .iter()
-                    .map(|arg| self.rewrite_free_variables(arg, free_vars))
-                    .collect();
+                let args_rewritten: Vec<_> =
+                    args.iter().map(|arg| self.rewrite_free_variables(arg, free_vars)).collect();
                 self.node_counter.mk_node(
                     ExprKind::Application(Box::new(func_rewritten), args_rewritten),
                     span,
@@ -1120,17 +1096,13 @@ impl Defunctionalizer {
                 )
             }
             ExprKind::Tuple(elements) => {
-                let elements_rewritten: Vec<_> = elements
-                    .iter()
-                    .map(|elem| self.rewrite_free_variables(elem, free_vars))
-                    .collect();
+                let elements_rewritten: Vec<_> =
+                    elements.iter().map(|elem| self.rewrite_free_variables(elem, free_vars)).collect();
                 self.node_counter.mk_node(ExprKind::Tuple(elements_rewritten), span)
             }
             ExprKind::ArrayLiteral(elements) => {
-                let elements_rewritten: Vec<_> = elements
-                    .iter()
-                    .map(|elem| self.rewrite_free_variables(elem, free_vars))
-                    .collect();
+                let elements_rewritten: Vec<_> =
+                    elements.iter().map(|elem| self.rewrite_free_variables(elem, free_vars)).collect();
                 self.node_counter.mk_node(ExprKind::ArrayLiteral(elements_rewritten), span)
             }
             ExprKind::ArrayIndex(array, index) => {
@@ -1149,9 +1121,10 @@ impl Defunctionalizer {
                 )
             }
             ExprKind::Loop(loop_expr) => {
-                let init_rewritten = loop_expr.init.as_ref().map(|init| {
-                    Box::new(self.rewrite_free_variables(init, free_vars))
-                });
+                let init_rewritten = loop_expr
+                    .init
+                    .as_ref()
+                    .map(|init| Box::new(self.rewrite_free_variables(init, free_vars)));
 
                 // Remove loop pattern bound names from free_vars for the body
                 let mut body_free_vars = free_vars.clone();
@@ -1209,144 +1182,6 @@ impl Defunctionalizer {
             ExprKind::Lambda(_) => expr.clone(),
             // Other expression kinds - just clone for now
             _ => expr.clone(),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::lexer::tokenize;
-    use crate::parser::Parser;
-
-    #[test]
-    fn test_defunctionalize_simple_lambda() {
-        let input = r#"let f: i32 -> i32 = \x -> x"#;
-        let tokens = tokenize(input).unwrap();
-        let mut parser = Parser::new(tokens);
-        let program = parser.parse().unwrap();
-
-        let mut defunc = Defunctionalizer::new();
-        let result = defunc.defunctionalize_program(&program).unwrap();
-
-        // Should have generated a new function
-        assert!(defunc.generated_functions.len() > 0);
-
-        // The let declaration should be transformed
-        assert_eq!(result.declarations.len(), 2); // original let + generated function
-    }
-
-    #[test]
-    fn test_defunctionalize_nested_application() {
-        // Test that ((f x) y) z becomes f(x, y, z)
-        let input = "def test = vec3 1.0f32 0.5f32 0.25f32";
-        let tokens = tokenize(input).unwrap();
-        let mut parser = Parser::new(tokens);
-        let program = parser.parse().unwrap();
-
-        let mut defunc = Defunctionalizer::new();
-        let result = defunc.defunctionalize_program(&program).unwrap();
-
-        // Check that the result doesn't contain any Application nodes
-        let decl = &result.declarations[0];
-        if let Declaration::Decl(d) = decl {
-            // The body should be a FunctionCall, not an Application
-            match &d.body.kind {
-                ExprKind::FunctionCall(name, args) => {
-                    assert_eq!(name, "vec3");
-                    assert_eq!(args.len(), 3);
-                }
-                ExprKind::Application(_, _) => {
-                    panic!(
-                        "Found Application node after defunctionalization - nested applications not flattened"
-                    );
-                }
-                other => panic!("Expected FunctionCall, got {:?}", other),
-            }
-        }
-    }
-
-    #[test]
-    fn test_defunctionalize_qualified_name() {
-        // Test that qualified names like f32.sqrt are defunctionalized correctly
-        let input = "def test = f32.sqrt 4.0f32";
-        let tokens = tokenize(input).unwrap();
-        let mut parser = Parser::new(tokens);
-        let program = parser.parse().unwrap();
-
-        // Debug: print the AST before defunctionalization
-        if let Declaration::Decl(d) = &program.declarations[0] {
-            eprintln!("Before defunctionalization: {:?}", d.body.kind);
-        }
-
-        let mut defunc = Defunctionalizer::new();
-        let result = defunc.defunctionalize_program(&program).unwrap();
-
-        // Debug: print the AST after defunctionalization
-        if let Declaration::Decl(d) = &result.declarations[0] {
-            eprintln!("After defunctionalization: {:?}", d.body.kind);
-        }
-
-        // Check that the result is a FunctionCall with dotted name
-        let decl = &result.declarations[0];
-        if let Declaration::Decl(d) = decl {
-            match &d.body.kind {
-                ExprKind::FunctionCall(name, args) => {
-                    assert_eq!(name, "f32.sqrt");
-                    assert_eq!(args.len(), 1);
-                }
-                ExprKind::Application(_, _) => {
-                    panic!("Found Application node after defunctionalization");
-                }
-                other => panic!("Expected FunctionCall, got {:?}", other),
-            }
-        }
-    }
-
-    #[test]
-    fn test_defunctionalize_application_with_division() {
-        // Test that constant-folded divisions inside function calls work
-        let input = "def test = vec3 (255.0f32/255.0f32) 0.5f32 0.25f32";
-        let tokens = tokenize(input).unwrap();
-        let mut parser = Parser::new(tokens);
-        let program = parser.parse().unwrap();
-
-        // Debug: print the AST before constant folding
-        if let Declaration::Decl(d) = &program.declarations[0] {
-            eprintln!("Before constant folding: {:?}", d.body.kind);
-        }
-
-        // Run constant folding first
-        let mut folder = crate::constant_folding::ConstantFolder::new();
-        let program = folder.fold_program(&program).unwrap();
-
-        // Debug: print the AST after constant folding
-        if let Declaration::Decl(d) = &program.declarations[0] {
-            eprintln!("After constant folding: {:?}", d.body.kind);
-        }
-
-        // Then defunctionalize
-        let mut defunc = Defunctionalizer::new();
-        let result = defunc.defunctionalize_program(&program).unwrap();
-
-        // Check that the result doesn't contain any Application nodes
-        let decl = &result.declarations[0];
-        if let Declaration::Decl(d) = decl {
-            match &d.body.kind {
-                ExprKind::FunctionCall(name, args) => {
-                    assert_eq!(name, "vec3");
-                    assert_eq!(args.len(), 3);
-                    // First arg should be the constant-folded result (1.0)
-                    match &args[0].kind {
-                        ExprKind::FloatLiteral(v) => assert_eq!(*v, 1.0),
-                        other => panic!("Expected FloatLiteral after constant folding, got {:?}", other),
-                    }
-                }
-                ExprKind::Application(_, _) => {
-                    panic!("Found Application node after defunctionalization");
-                }
-                other => panic!("Expected FunctionCall, got {:?}", other),
-            }
         }
     }
 }
