@@ -506,11 +506,11 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
 
             ExprKind::UnaryOp(op, operand) => {
                 let (transformed_operand, sv) = self.defunctionalize_expression(operand, scope_stack)?;
-                let transformed_expr = Expression {
-                    h: expr.h.clone(),
-                    kind: ExprKind::UnaryOp(op.clone(), Box::new(transformed_operand)),
-                };
-                Ok((transformed_expr, sv))
+                Ok((
+                    self.node_counter
+                        .mk_node(ExprKind::UnaryOp(op.clone(), Box::new(transformed_operand)), span),
+                    sv,
+                ))
             }
 
             ExprKind::Loop(loop_expr) => {
@@ -527,29 +527,32 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                     body: Box::new(transformed_body),
                     ..loop_expr.clone()
                 };
-                let transformed_expr = Expression {
-                    h: expr.h.clone(),
-                    kind: ExprKind::Loop(transformed_loop),
-                };
-                Ok((transformed_expr, self.dyn_unknown()))
+                Ok((
+                    self.node_counter.mk_node(ExprKind::Loop(transformed_loop), span),
+                    self.dyn_unknown(),
+                ))
             }
 
             ExprKind::TypeAscription(inner, ty) => {
                 let (transformed_inner, sv) = self.defunctionalize_expression(inner, scope_stack)?;
-                let transformed_expr = Expression {
-                    h: expr.h.clone(),
-                    kind: ExprKind::TypeAscription(Box::new(transformed_inner), ty.clone()),
-                };
-                Ok((transformed_expr, sv))
+                Ok((
+                    self.node_counter.mk_node(
+                        ExprKind::TypeAscription(Box::new(transformed_inner), ty.clone()),
+                        span,
+                    ),
+                    sv,
+                ))
             }
 
             ExprKind::TypeCoercion(inner, ty) => {
                 let (transformed_inner, sv) = self.defunctionalize_expression(inner, scope_stack)?;
-                let transformed_expr = Expression {
-                    h: expr.h.clone(),
-                    kind: ExprKind::TypeCoercion(Box::new(transformed_inner), ty.clone()),
-                };
-                Ok((transformed_expr, sv))
+                Ok((
+                    self.node_counter.mk_node(
+                        ExprKind::TypeCoercion(Box::new(transformed_inner), ty.clone()),
+                        span,
+                    ),
+                    sv,
+                ))
             }
 
             ExprKind::QualifiedName(_, _) => {
@@ -575,15 +578,15 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                     None
                 };
                 Ok((
-                    Expression {
-                        h: expr.h.clone(),
-                        kind: ExprKind::Range(RangeExpr {
+                    self.node_counter.mk_node(
+                        ExprKind::Range(RangeExpr {
                             start: Box::new(start_transformed),
                             step: step_transformed,
                             end: Box::new(end_transformed),
                             kind: range_expr.kind.clone(),
                         }),
-                    },
+                        span,
+                    ),
                     self.dyn_unknown(),
                 ))
             }
@@ -591,10 +594,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             ExprKind::Unsafe(inner) => {
                 let (transformed_inner, sv) = self.defunctionalize_expression(inner, scope_stack)?;
                 Ok((
-                    Expression {
-                        h: expr.h.clone(),
-                        kind: ExprKind::Unsafe(Box::new(transformed_inner)),
-                    },
+                    self.node_counter.mk_node(ExprKind::Unsafe(Box::new(transformed_inner)), span),
                     sv,
                 ))
             }
@@ -603,10 +603,10 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                 let (transformed_cond, _) = self.defunctionalize_expression(cond, scope_stack)?;
                 let (transformed_inner, sv) = self.defunctionalize_expression(inner, scope_stack)?;
                 Ok((
-                    Expression {
-                        h: expr.h.clone(),
-                        kind: ExprKind::Assert(Box::new(transformed_cond), Box::new(transformed_inner)),
-                    },
+                    self.node_counter.mk_node(
+                        ExprKind::Assert(Box::new(transformed_cond), Box::new(transformed_inner)),
+                        span,
+                    ),
                     sv,
                 ))
             }
