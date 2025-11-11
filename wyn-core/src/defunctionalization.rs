@@ -50,6 +50,14 @@ pub struct DefunctionalizedFunction {
     pub body: Expression,
 }
 
+/// Metadata for a lambda used to generate __applyN dispatchers
+#[derive(Debug, Clone)]
+struct LambdaMeta {
+    tag: i32,
+    name: String,
+    arity: usize,
+}
+
 pub struct Defunctionalizer<T: crate::type_checker::TypeVarGenerator> {
     next_function_id: usize,
     type_var_gen: T,
@@ -57,6 +65,8 @@ pub struct Defunctionalizer<T: crate::type_checker::TypeVarGenerator> {
     current_bucket: Vec<DefunctionalizedFunction>,
     /// Stack of enclosing declaration names for better lambda naming
     enclosing_decl_stack: Vec<String>,
+    /// Registry of lambdas in current bucket for __applyN generation
+    lambda_registry: Vec<LambdaMeta>,
     node_counter: NodeCounter,
 }
 
@@ -67,6 +77,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             type_var_gen,
             current_bucket: Vec::new(),
             enclosing_decl_stack: Vec::new(),
+            lambda_registry: Vec::new(),
             node_counter,
         }
     }
@@ -94,6 +105,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
     /// Called at the start of transforming a top-level declaration
     fn begin_decl(&mut self, name: &str) {
         self.current_bucket.clear();
+        self.lambda_registry.clear();
         self.enclosing_decl_stack.push(name.to_string());
     }
 
@@ -101,11 +113,94 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
     fn end_decl(&mut self) {
         self.enclosing_decl_stack.pop();
         self.current_bucket.clear();
+        self.lambda_registry.clear();
+    }
+
+    /// Generate __applyN dispatcher for a given arity
+    fn generate_apply_dispatcher(&mut self, arity: usize, lambdas: &[LambdaMeta]) -> Declaration {
+        // Parameters: __closure, a0, a1, ..., a_{N-1}
+        let mut params = Vec::with_capacity(arity + 1);
+
+        // Closure parameter
+        let closure_pat =
+            self.node_counter.mk_node(PatternKind::Name("__closure".to_string()), Span::dummy());
+        let closure_ty = self.type_var_gen.new_variable();
+        let closure_param = self.node_counter.mk_node(
+            PatternKind::Typed(Box::new(closure_pat), closure_ty),
+            Span::dummy(),
+        );
+        params.push(closure_param);
+
+        // Application argument parameters: a0, a1, ..., a_{arity-1}
+        for i in 0..arity {
+            let arg_pat = self.node_counter.mk_node(PatternKind::Name(format!("a{}", i)), Span::dummy());
+            let arg_ty = self.type_var_gen.new_variable();
+            let arg_param =
+                self.node_counter.mk_node(PatternKind::Typed(Box::new(arg_pat), arg_ty), Span::dummy());
+            params.push(arg_param);
+        }
+
+        // Build match expression on __closure.__tag
+        // For now, use a chained if-else structure since we don't have pattern matching on integers
+        let closure_ident = self.mk(ExprKind::Identifier("__closure".to_string()));
+        let tag_access = self.mk(ExprKind::FieldAccess(
+            Box::new(closure_ident),
+            "__tag".to_string(),
+        ));
+
+        let mut body_expr = None;
+
+        // Build from last case to first (to construct nested if-else)
+        for lambda in lambdas.iter().rev() {
+            let tag_lit = self.mk(ExprKind::IntLiteral(lambda.tag));
+            let tag_check = self.mk(ExprKind::BinaryOp(
+                BinaryOp { op: "==".to_string() },
+                Box::new(tag_access.clone()),
+                Box::new(tag_lit),
+            ));
+
+            // Build function call: __lam_name(__closure, a0, a1, ..., a_{arity-1})
+            let mut call_args = vec![self.mk(ExprKind::Identifier("__closure".to_string()))];
+            for i in 0..arity {
+                call_args.push(self.mk(ExprKind::Identifier(format!("a{}", i))));
+            }
+            let then_branch = self.mk(ExprKind::FunctionCall(lambda.name.clone(), call_args));
+
+            if let Some(else_branch) = body_expr {
+                body_expr = Some(self.mk(ExprKind::If(IfExpr {
+                    condition: Box::new(tag_check),
+                    then_branch: Box::new(then_branch),
+                    else_branch: Box::new(else_branch),
+                })));
+            } else {
+                // Last case (no else branch - this should never be reached if tags are correct)
+                body_expr = Some(then_branch);
+            }
+        }
+
+        let body = body_expr.unwrap_or_else(|| {
+            // Empty dispatcher - should never happen, but provide a dummy error
+            self.mk(ExprKind::IntLiteral(-1))
+        });
+
+        Declaration::Decl(Decl {
+            keyword: "def",
+            attributes: vec![],
+            name: format!("__apply{}", arity),
+            size_params: vec![],
+            type_params: vec![],
+            params,
+            ty: None,
+            body,
+        })
     }
 
     /// Drain the current bucket into a vector of Declarations
+    /// Also generates __applyN dispatchers for each arity used
     fn drain_bucket_as_decls(&mut self) -> Vec<Declaration> {
         let mut out = Vec::with_capacity(self.current_bucket.len());
+
+        // Add the lambda functions FIRST (before dispatchers that reference them)
         for func in self.current_bucket.drain(..) {
             out.push(Declaration::Decl(Decl {
                 keyword: "def",
@@ -127,6 +222,20 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                 body: func.body,
             }));
         }
+
+        // Generate __applyN dispatchers for each arity (after lambda functions)
+        use std::collections::BTreeMap;
+        let mut by_arity: BTreeMap<usize, Vec<LambdaMeta>> = BTreeMap::new();
+        for lambda_meta in &self.lambda_registry {
+            by_arity.entry(lambda_meta.arity).or_default().push(lambda_meta.clone());
+        }
+
+        for (arity, lambdas) in by_arity {
+            if !lambdas.is_empty() {
+                out.push(self.generate_apply_dispatcher(arity, &lambdas));
+            }
+        }
+
         out
     }
 
@@ -410,6 +519,31 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                 ))
             }
             ExprKind::FunctionCall(name, args) => {
+                // Check if the function name refers to a closure in scope
+                // If so, convert to __applyN call
+                if let Ok(sv) = scope_stack.lookup(name) {
+                    if matches!(sv, StaticValue::Rcd(_)) {
+                        // This is a closure application - convert to __applyN
+                        let arity = args.len();
+                        let apply_name = format!("__apply{}", arity);
+
+                        // Transform arguments
+                        let mut transformed_args = Vec::new();
+                        for arg in args {
+                            let (transformed_arg, _sv) =
+                                self.defunctionalize_expression(arg, scope_stack)?;
+                            transformed_args.push(transformed_arg);
+                        }
+
+                        // Call __applyN with closure identifier and args
+                        let closure_ident = self.mk(ExprKind::Identifier(name.clone()));
+                        let mut all_args = vec![closure_ident];
+                        all_args.extend(transformed_args);
+
+                        return Ok(self.ret_dyn(ExprKind::FunctionCall(apply_name, all_args)));
+                    }
+                }
+
                 // Regular function calls (first-order) remain unchanged
                 let mut transformed_args = Vec::new();
                 for arg in args {
@@ -679,17 +813,25 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         let top = self.enclosing_decl_stack.last().map(String::as_str).unwrap_or("top");
         let func_name = format!("__lam_{}_{}", top, id);
 
-        // Create parameters: only add __closure if there are free variables
+        // Assign a unique tag for this lambda (per-bucket tag space)
+        let tag = self.lambda_registry.len() as i32;
+        let arity = lambda.params.len();
+
+        // Create parameters: ALWAYS add __closure parameter (even if empty)
         let mut func_params = Vec::new();
 
-        if !free_vars.is_empty() {
-            let closure_type = crate::ast::types::record(closure_type_fields.clone());
-            func_params.push(Parameter {
-                attributes: vec![],
-                name: "__closure".to_string(),
-                ty: closure_type,
-            });
-        }
+        let closure_type = if !free_vars.is_empty() {
+            crate::ast::types::record(closure_type_fields.clone())
+        } else {
+            // Empty record type for lambdas with no free variables
+            crate::ast::types::record(vec![])
+        };
+
+        func_params.push(Parameter {
+            attributes: vec![],
+            name: "__closure".to_string(),
+            ty: closure_type,
+        });
 
         for param in &lambda.params {
             let param_name = param
@@ -748,18 +890,16 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
 
         self.current_bucket.push(generated_func);
 
-        // Create closure constructor expression
-        if free_vars.is_empty() {
-            // No free variables - just return function name
-            Ok((
-                self.node_counter.mk_node(ExprKind::Identifier(func_name), Span::dummy()),
-                StaticValue::Lam("__unused".to_string(), (*lambda.body).clone()),
-            ))
-        } else {
-            // Create closure record
-            let closure_record = self.create_closure_record(&func_name, &free_vars)?;
-            Ok((closure_record, StaticValue::Rcd(closure_fields)))
-        }
+        // Register lambda in the registry for __applyN generation
+        self.lambda_registry.push(LambdaMeta {
+            tag,
+            name: func_name.clone(),
+            arity,
+        });
+
+        // Create closure constructor expression - ALWAYS a record with __tag
+        let closure_record = self.create_closure_record(tag, &free_vars)?;
+        Ok((closure_record, StaticValue::Rcd(closure_fields)))
     }
 
     fn defunctionalize_application(
@@ -770,6 +910,12 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
     ) -> Result<(Expression, StaticValue)> {
         let (transformed_func, func_sv) = self.defunctionalize_expression(func, scope_stack)?;
 
+        eprintln!(
+            "[DEBUG DEFUNC APP] func: {:?}, func_sv: {:?}",
+            std::mem::discriminant(&func.kind),
+            std::mem::discriminant(&func_sv)
+        );
+
         let mut transformed_args = Vec::new();
         for arg in args {
             let (transformed_arg, _arg_sv) = self.defunctionalize_expression(arg, scope_stack)?;
@@ -777,79 +923,16 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         }
 
         match func_sv {
-            StaticValue::Lam(_param, _body) => {
-                // Direct lambda application - inline if simple enough
-                // For now, convert to function call
-                match &transformed_func.kind {
-                    ExprKind::Identifier(func_name) => {
-                        // Function call without closure
-                        Ok((
-                            self.node_counter.mk_node(
-                                ExprKind::FunctionCall(func_name.clone(), transformed_args),
-                                Span::dummy(),
-                            ),
-                            StaticValue::Dyn(self.type_var_gen.new_variable()),
-                        ))
-                    }
-                    _ => {
-                        // More complex case - would need closure unpacking
-                        // For now, return error
-                        Err(CompilerError::DefunctionalizationError(
-                            "Complex function application not yet supported in defunctionalization"
-                                .to_string(),
-                        ))
-                    }
-                }
-            }
             StaticValue::Rcd(_closure_fields) => {
-                // Closure application - the closure is a record with __fun field and free variable fields
-                // Extract the function name from __fun field and call it with (closure, args...)
-                // The closure record itself becomes the first argument (__closure parameter)
-                match &transformed_func.kind {
-                    ExprKind::RecordLiteral(fields) => {
-                        // Extract __fun field
-                        let func_name = fields
-                            .iter()
-                            .find(|(name, _)| name == "__fun")
-                            .and_then(|(_, expr)| match &expr.kind {
-                                ExprKind::Identifier(name) => Some(name.clone()),
-                                _ => None,
-                            })
-                            .ok_or_else(|| {
-                                CompilerError::DefunctionalizationError(
-                                    "Closure record missing __fun field".to_string(),
-                                )
-                            })?;
+                // Closure application - use __applyN dispatcher
+                let arity = transformed_args.len();
+                let apply_name = format!("__apply{}", arity);
 
-                        // Call the function with closure as first arg, then the application args
-                        let mut all_args = vec![transformed_func];
-                        all_args.extend(transformed_args);
+                // Call __applyN with closure and args
+                let mut all_args = vec![transformed_func];
+                all_args.extend(transformed_args);
 
-                        Ok(self.ret_dyn(ExprKind::FunctionCall(func_name, all_args)))
-                    }
-                    ExprKind::Identifier(closure_var) => {
-                        // The closure is a variable - need to extract __fun field at runtime
-                        // Create: __fun_var = closure_var.__fun; __fun_var(closure_var, args...)
-                        let fun_access = self.node_counter.mk_node(
-                            ExprKind::FieldAccess(Box::new(transformed_func.clone()), "__fun".to_string()),
-                            Span::dummy(),
-                        );
-
-                        // For now, we can't directly call a field access result
-                        // This would require let-binding or inline evaluation
-                        // Simplest: assume the __fun field contains a known function name
-                        // For a more complete implementation, we'd need indirect calls or trampolines
-                        Err(CompilerError::DefunctionalizationError(
-                            "Closure application with variable closures not yet fully supported. \
-                             Closures must be applied directly where they're created."
-                                .to_string(),
-                        ))
-                    }
-                    _ => Err(CompilerError::DefunctionalizationError(format!(
-                        "Unexpected closure expression form: {:?}",
-                        transformed_func.kind
-                    ))),
-                }
+                Ok(self.ret_dyn(ExprKind::FunctionCall(apply_name, all_args)))
             }
             _ => {
                 // Regular function call - extract name and existing args, then append new args
@@ -1053,22 +1136,20 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         Ok(())
     }
 
-    fn create_closure_record(
-        &mut self,
-        func_name: &str,
-        free_vars: &HashSet<String>,
-    ) -> Result<Expression> {
-        // Create a record literal with __fun field (function name) and free variables
-        // The __fun field stores the function to call
+    fn create_closure_record(&mut self, tag: i32, free_vars: &HashSet<String>) -> Result<Expression> {
+        // Create a record literal with __tag field and free variables
+        // The __tag field is used by __applyN dispatchers to route to the correct function
         // The other field names match the variable names so that rewrite_free_variables works
         let mut fields = Vec::new();
 
-        // Add __fun field with the function name
-        let fun_value = self.mk(ExprKind::Identifier(func_name.to_string()));
-        fields.push(("__fun".to_string(), fun_value));
+        // Add __tag field with the integer tag
+        let tag_value = self.mk(ExprKind::IntLiteral(tag));
+        fields.push(("__tag".to_string(), tag_value));
 
-        // Add free variable fields
-        for var in free_vars {
+        // Add free variable fields (sorted for determinism)
+        let mut sorted_vars: Vec<_> = free_vars.iter().collect();
+        sorted_vars.sort();
+        for var in sorted_vars {
             let field_value = self.mk(ExprKind::Identifier(var.clone()));
             fields.push((var.clone(), field_value));
         }
@@ -1094,21 +1175,15 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
     ) -> Result<(Expression, StaticValue)> {
         let span = Span::dummy();
 
-        // Extract function name (assuming it's a simple identifier for now)
-        let func_name = match &func.kind {
-            ExprKind::Identifier(name) => name.clone(),
-            _ => {
-                return Err(CompilerError::DefunctionalizationError(
-                    "map currently only supports simple function identifiers".to_string(),
-                ));
-            }
-        };
+        // func can be any expression (identifier or closure record)
+        // We'll call __apply1 with it in the loop body
 
         // Generate unique variable names
         let i_var = format!("__map_i_{}", self.next_function_id);
         let out_var = format!("__map_out_{}", self.next_function_id);
         let xs_var = format!("__map_xs_{}", self.next_function_id);
         let len_var = format!("__map_len_{}", self.next_function_id);
+        let func_var = format!("__map_f_{}", self.next_function_id);
         self.next_function_id += 1;
 
         // Build ALL leaf nodes first to avoid borrow checker issues
@@ -1163,9 +1238,14 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         let array_index =
             self.node_counter.mk_node(ExprKind::ArrayIndex(Box::new(xs_ident), Box::new(i_ident2)), span);
 
-        // f xs[i]
-        let func_app =
-            self.node_counter.mk_node(ExprKind::FunctionCall(func_name, vec![array_index]), span);
+        // Build func identifier for __apply1 call
+        let func_ident = self.node_counter.mk_node(ExprKind::Identifier(func_var.clone()), span);
+
+        // __apply1(f, xs[i])
+        let func_app = self.node_counter.mk_node(
+            ExprKind::FunctionCall("__apply1".to_string(), vec![func_ident, array_index]),
+            span,
+        );
 
         // __array_update(out, i, f xs[i])
         let updated_out = self.node_counter.mk_node(
@@ -1230,12 +1310,24 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
 
         // let xs = <array> in <with_len>
         let xs_pattern = self.node_counter.mk_node(crate::ast::PatternKind::Name(xs_var), span);
-        let result = self.node_counter.mk_node(
+        let with_xs = self.node_counter.mk_node(
             ExprKind::LetIn(LetInExpr {
                 pattern: xs_pattern,
                 ty: None,
                 value: Box::new(array.clone()),
                 body: Box::new(with_len),
+            }),
+            span,
+        );
+
+        // let f = <func> in <with_xs>
+        let func_pattern = self.node_counter.mk_node(crate::ast::PatternKind::Name(func_var), span);
+        let result = self.node_counter.mk_node(
+            ExprKind::LetIn(LetInExpr {
+                pattern: func_pattern,
+                ty: None,
+                value: Box::new(func.clone()),
+                body: Box::new(with_xs),
             }),
             span,
         );

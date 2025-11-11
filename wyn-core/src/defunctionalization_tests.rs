@@ -361,3 +361,68 @@ mod tests {
         }
     }
 }
+#[test]
+fn test_direct_closure_application_typechecks() {
+    let input = r#"
+        def test : i32 =
+            let x = 5 in
+            let f = \y -> x + y in
+            f 10
+    "#;
+
+    // Parse
+    let tokens = crate::lexer::tokenize(input).expect("Tokenization failed");
+    let mut parser = crate::parser::Parser::new(tokens);
+    let program = parser.parse().expect("Parsing failed");
+    let node_counter = parser.take_node_counter();
+
+    // Print original program
+    eprintln!("\n=== ORIGINAL PROGRAM ===");
+    for (i, decl) in program.declarations.iter().enumerate() {
+        match decl {
+            crate::ast::Declaration::Decl(d) => {
+                eprintln!("Decl {}: {}", i, d.name);
+                if d.name == "test" {
+                    eprintln!("  Original test body: {:#?}", d.body.kind);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Defunctionalize
+    let type_context = polytype::Context::default();
+    let mut defunc =
+        crate::defunctionalization::Defunctionalizer::new_with_counter(node_counter, type_context);
+    let defunc_program = defunc.defunctionalize_program(&program).expect("Defunctionalization failed");
+    let type_context = defunc.take_type_var_gen();
+
+    // Print the defunctionalized program structure
+    eprintln!("\n=== DEFUNCTIONALIZED PROGRAM ===");
+    for (i, decl) in defunc_program.declarations.iter().enumerate() {
+        match decl {
+            crate::ast::Declaration::Decl(d) => {
+                eprintln!("Decl {}: {} with {} params", i, d.name, d.params.len());
+                eprintln!("  Body kind: {:?}", std::mem::discriminant(&d.body.kind));
+
+                // For the test declaration, print the actual expression structure
+                if d.name == "test" {
+                    eprintln!("  Test body details: {:#?}", d.body.kind);
+                }
+            }
+            _ => eprintln!("Decl {}: Other", i),
+        }
+    }
+
+    // Type check
+    let mut type_checker = crate::type_checker::TypeChecker::new_with_context(type_context);
+    type_checker.load_builtins().expect("Loading builtins failed");
+    let result = type_checker.check_program(&defunc_program);
+
+    if let Err(e) = &result {
+        eprintln!("\n=== TYPE CHECK ERROR ===");
+        eprintln!("{:?}", e);
+    }
+
+    result.expect("Type checking should succeed");
+}
