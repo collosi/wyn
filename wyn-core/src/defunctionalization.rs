@@ -6,10 +6,10 @@ use std::collections::{HashMap, HashSet};
 /// Static values for defunctionalization, as described in the Futhark paper
 #[derive(Debug, Clone, PartialEq)]
 pub enum StaticValue {
-    Dyn(Type),                            // Dynamic value with type
-    Lam(String, Expression, Environment), // Lambda: param name, body, environment
-    Rcd(HashMap<String, StaticValue>),    // Record of static values
-    Arr(Box<StaticValue>),                // Array of static values
+    Dyn(Type),                         // Dynamic value with type
+    Lam(String, Expression),           // Lambda: param name, body (defunctionalized immediately)
+    Rcd(HashMap<String, StaticValue>), // Record of static values
+    Arr(Box<StaticValue>),             // Array of static values
 }
 
 impl StaticValue {
@@ -29,7 +29,7 @@ impl StaticValue {
                     fields.iter().map(|(name, sv)| (name.clone(), sv.to_type(gen))).collect();
                 crate::ast::types::record(field_types)
             }
-            StaticValue::Lam(_param, _body, _env) => {
+            StaticValue::Lam(_param, _body) => {
                 // Lambda - treat as opaque with fresh type variable
                 // We could construct a proper function type (param_types -> ret_type),
                 // but since lambdas get defunctionalized into named functions,
@@ -39,10 +39,6 @@ impl StaticValue {
         }
     }
 }
-
-/// Translation environment mapping variables to static values
-/// Note: This is being replaced by ScopeStack<StaticValue> throughout the codebase
-pub type Environment = HashMap<String, StaticValue>;
 
 /// Generated function for defunctionalized lambda
 #[derive(Debug, Clone)]
@@ -273,7 +269,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                                 sv.clone(),
                             ))
                         }
-                        StaticValue::Lam(_, _, _) => {
+                        StaticValue::Lam(_, _) => {
                             // Reference to a function - this would need special handling
                             // For now, keep as identifier
                             Ok((
@@ -718,7 +714,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             // No free variables - just return function name
             Ok((
                 self.node_counter.mk_node(ExprKind::Identifier(func_name), Span::dummy()),
-                StaticValue::Lam("__unused".to_string(), (*lambda.body).clone(), HashMap::new()),
+                StaticValue::Lam("__unused".to_string(), (*lambda.body).clone()),
             ))
         } else {
             // Create closure record
@@ -742,7 +738,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         }
 
         match func_sv {
-            StaticValue::Lam(_param, _body, _closure_env) => {
+            StaticValue::Lam(_param, _body) => {
                 // Direct lambda application - inline if simple enough
                 // For now, convert to function call
                 match &transformed_func.kind {
