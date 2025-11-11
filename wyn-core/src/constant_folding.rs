@@ -224,7 +224,7 @@ impl ConstantFolder {
 
                 Ok(self.node_counter.mk_node(
                     ExprKind::LetIn(LetInExpr {
-                        name: let_in.name.clone(),
+                        pattern: let_in.pattern.clone(),
                         ty: let_in.ty.clone(),
                         value: Box::new(folded_value),
                         body: Box::new(folded_body),

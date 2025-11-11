@@ -235,11 +235,16 @@ impl TypeChecker {
 
     /// Bind a pattern with a given type, adding bindings to the current scope
     /// Returns the actual type that the pattern matches (for type checking)
-    fn bind_pattern(&mut self, pattern: &Pattern, expected_type: &Type) -> Result<Type> {
+    /// If generalize is true, generalizes types for polymorphism (used in let bindings)
+    fn bind_pattern(&mut self, pattern: &Pattern, expected_type: &Type, generalize: bool) -> Result<Type> {
         match &pattern.kind {
             PatternKind::Name(name) => {
                 // Simple name binding
-                let type_scheme = TypeScheme::Monotype(expected_type.clone());
+                let type_scheme = if generalize {
+                    self.generalize(expected_type)
+                } else {
+                    TypeScheme::Monotype(expected_type.clone())
+                };
                 self.scope_stack.insert(name.clone(), type_scheme);
                 Ok(expected_type.clone())
             }
@@ -266,7 +271,7 @@ impl TypeChecker {
 
                         // Bind each sub-pattern with its corresponding element type
                         for (sub_pattern, elem_type) in patterns.iter().zip(elem_types.iter()) {
-                            self.bind_pattern(sub_pattern, elem_type)?;
+                            self.bind_pattern(sub_pattern, elem_type, generalize)?;
                         }
 
                         Ok(expected_type.clone())
@@ -293,11 +298,11 @@ impl TypeChecker {
                     )
                 })?;
                 // Bind the inner pattern with the annotated type
-                self.bind_pattern(inner_pattern, annotated_type)
+                self.bind_pattern(inner_pattern, annotated_type, generalize)
             }
             PatternKind::Attributed(_, inner_pattern) => {
                 // Ignore attributes, bind the inner pattern
-                self.bind_pattern(inner_pattern, expected_type)
+                self.bind_pattern(inner_pattern, expected_type, generalize)
             }
             PatternKind::Unit => {
                 // Unit pattern should match unit type
@@ -366,7 +371,8 @@ impl TypeChecker {
                     param_types.push(param_type.clone());
 
                     // Bind the pattern (handles tuples, wildcards, etc.)
-                    self.bind_pattern(param, &param_type)?;
+                    // Lambda parameters are not generalized
+                    self.bind_pattern(param, &param_type, false)?;
                 }
 
                 // Check the body
@@ -1015,7 +1021,8 @@ impl TypeChecker {
                     param_types.push(param_type.clone());
 
                     // Bind the pattern (handles tuples, wildcards, etc.)
-                    self.bind_pattern(param, &param_type)?;
+                    // Lambda parameters are not generalized
+                    self.bind_pattern(param, &param_type, false)?;
                 }
 
                 // Type check the lambda body with parameters in scope
@@ -1067,12 +1074,13 @@ impl TypeChecker {
                     })?;
                 }
 
-                // Push new scope and add binding with generalization
+                // Push new scope and bind pattern
                 self.scope_stack.push_scope();
                 let bound_type = let_in.ty.as_ref().unwrap_or(&value_type).clone();
-                // Generalize the type to enable polymorphism
-                let type_scheme = self.generalize(&bound_type);
-                self.scope_stack.insert(let_in.name.clone(), type_scheme);
+
+                // Bind all names in the pattern
+                // Let bindings should be generalized for polymorphism
+                self.bind_pattern(&let_in.pattern, &bound_type, true)?;
 
                 // Infer type of body expression
                 let body_type = self.infer_expression(&let_in.body)?;
@@ -1292,7 +1300,8 @@ impl TypeChecker {
                 self.scope_stack.push_scope();
 
                 // Bind the loop pattern with its type
-                self.bind_pattern(&loop_expr.pattern, &pattern_type)?;
+                // Loop variables are not generalized
+                self.bind_pattern(&loop_expr.pattern, &pattern_type, false)?;
 
                 // Type check loop form
                 match &loop_expr.form {
@@ -1340,7 +1349,8 @@ impl TypeChecker {
                             // Array is Array(size, elem_type), so element is at index 1
                             let elem_type = &args[1];
                             // Bind iterator pattern with element type
-                            self.bind_pattern(iter_pat, elem_type)?;
+                            // For-in loop variables are not generalized
+                            self.bind_pattern(iter_pat, elem_type, false)?;
                         } else {
                             return Err(CompilerError::TypeError(
                                 "Loop for-in expression must be an array".to_string(),
@@ -1446,7 +1456,7 @@ impl TypeChecker {
                 self.context.unify(&func_type, &expected_func_type).map_err(|e| {
                     CompilerError::TypeError(
                         format!("Function application type error: {:?}", e),
-                        arg.h.span
+                        arg.h.span,
                     )
                 })?;
 
@@ -1468,7 +1478,7 @@ impl TypeChecker {
                 self.context.unify(&func_type, &expected_func_type).map_err(|e| {
                     CompilerError::TypeError(
                         format!("Function application type error: {:?}", e),
-                        arg.h.span
+                        arg.h.span,
                     )
                 })?;
 
@@ -1485,7 +1495,7 @@ impl TypeChecker {
                 self.context.unify(&arg_type_for_unify, &expected_param_for_unify).map_err(|e| {
                     CompilerError::TypeError(
                         format!("Function argument type mismatch: {:?}", e),
-                        arg.h.span
+                        arg.h.span,
                     )
                 })?;
 
@@ -1513,7 +1523,7 @@ impl TypeChecker {
                         self.scope_stack.mark_consumed(var_name).map_err(|e| {
                             CompilerError::TypeError(
                                 format!("Cannot consume variable '{}': {}", var_name, e),
-                                arg.h.span
+                                arg.h.span,
                             )
                         })?;
                     }
@@ -1532,9 +1542,7 @@ impl TypeChecker {
             }
 
             // Get the expected type from first pass
-            let expected_param_type = lambda_expected_types[i]
-                .as_ref()
-                .map(|t| t.apply(&self.context));
+            let expected_param_type = lambda_expected_types[i].as_ref().map(|t| t.apply(&self.context));
 
             // Use bidirectional checking for lambdas
             if let Some(ref expected) = expected_param_type {
@@ -1563,7 +1571,8 @@ impl TypeChecker {
             (
                 Type::Constructed(TypeName::Str("tuple"), types1),
                 Type::Constructed(TypeName::Str("attributed_tuple"), types2),
-            ) | (
+            )
+            | (
                 Type::Constructed(TypeName::Str("attributed_tuple"), types1),
                 Type::Constructed(TypeName::Str("tuple"), types2),
             ) => {
@@ -2052,6 +2061,33 @@ mod tests {
             Ok(_warnings) => {
                 // Should succeed - id is polymorphic and can be used at multiple types
                 // Without generalization, this would fail because first use would fix id's type
+            }
+            Err(e) => {
+                panic!("Type checking should succeed but failed with: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_qualified_name_sqrt() {
+        // Test that qualified names like f32.sqrt type check correctly
+        let source = r#"
+            def test : f32 = f32.sqrt 4.0f32
+        "#;
+
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&program) {
+            Ok(_) => {
+                // Should succeed - f32.sqrt is a valid builtin
             }
             Err(e) => {
                 panic!("Type checking should succeed but failed with: {:?}", e);

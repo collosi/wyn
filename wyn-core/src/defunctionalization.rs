@@ -113,9 +113,11 @@ impl Defunctionalizer {
             }
         }
 
-        // Add generated functions as def declarations
+        // Add generated functions as def declarations AT THE BEGINNING
+        // so they're in scope when functions that reference them are type-checked
+        let mut generated_decls = Vec::new();
         for func in &self.generated_functions {
-            new_declarations.push(Declaration::Decl(Decl {
+            generated_decls.push(Declaration::Decl(Decl {
                 keyword: "def",
                 attributes: vec![],
                 name: func.name.clone(),
@@ -124,12 +126,24 @@ impl Defunctionalizer {
                 params: func
                     .params
                     .iter()
-                    .map(|p| self.node_counter.mk_node(PatternKind::Name(p.name.clone()), Span::dummy()))
+                    .map(|p| {
+                        // Create a pattern with type annotation if the parameter has a concrete type
+                        let name_pattern =
+                            self.node_counter.mk_node(PatternKind::Name(p.name.clone()), Span::dummy());
+                        // Wrap in Typed pattern to preserve type information
+                        self.node_counter.mk_node(
+                            PatternKind::Typed(Box::new(name_pattern), p.ty.clone()),
+                            Span::dummy(),
+                        )
+                    })
                     .collect(),
                 ty: None, // Function definitions don't have explicit type annotations
                 body: func.body.clone(),
             }));
         }
+        // Prepend generated functions to the beginning of declarations
+        generated_decls.extend(new_declarations);
+        let new_declarations = generated_decls;
 
         Ok(Program {
             declarations: new_declarations,
@@ -325,9 +339,11 @@ impl Defunctionalizer {
                 let (transformed_value, value_sv) =
                     self.defunctionalize_expression(&let_in.value, scope_stack)?;
 
-                // Push new scope and add binding
+                // Push new scope and add bindings for all names in the pattern
                 scope_stack.push_scope();
-                scope_stack.insert(let_in.name.clone(), value_sv);
+                for name in let_in.pattern.collect_names() {
+                    scope_stack.insert(name, value_sv.clone());
+                }
 
                 // Transform the body expression
                 let (transformed_body, body_sv) =
@@ -339,7 +355,7 @@ impl Defunctionalizer {
                 Ok((
                     self.node_counter.mk_node(
                         ExprKind::LetIn(crate::ast::LetInExpr {
-                            name: let_in.name.clone(),
+                            pattern: let_in.pattern.clone(),
                             ty: let_in.ty.clone(),
                             value: Box::new(transformed_value),
                             body: Box::new(transformed_body),
@@ -460,6 +476,13 @@ impl Defunctionalizer {
         lambda: &LambdaExpr,
         scope_stack: &mut ScopeStack<StaticValue>,
     ) -> Result<(Expression, StaticValue)> {
+        // TODO: Defunctionalization doesn't properly rewrite free variable references in lambda bodies
+        // to access them from the closure parameter. Currently, free variables are identified and
+        // captured in the closure record, but the lambda body still references them directly instead
+        // of accessing them through __closure.field. This causes "undefined variable" errors during
+        // type checking when the generated function tries to reference captured variables.
+        // Fix: Transform the lambda body to replace free variable references with closure field accesses.
+
         // Find free variables in the lambda body
         let free_vars = self.find_free_variables(
             &lambda.body,
@@ -738,9 +761,11 @@ impl Defunctionalizer {
                 // Collect free variables from value expression
                 self.collect_free_variables(&let_in.value, bound_vars, free_vars)?;
 
-                // Add let binding to bound variables and collect from body
+                // Add all names from pattern to bound variables and collect from body
                 let mut extended_bound = bound_vars.clone();
-                extended_bound.insert(let_in.name.clone());
+                for name in let_in.pattern.collect_names() {
+                    extended_bound.insert(name);
+                }
                 self.collect_free_variables(&let_in.body, &extended_bound, free_vars)?;
             }
             ExprKind::IntLiteral(_)
@@ -921,9 +946,10 @@ impl Defunctionalizer {
         );
 
         // let out = replicate len 0 in <loop>
+        let out_pattern = self.node_counter.mk_node(crate::ast::PatternKind::Name(out_var), span);
         let with_out = self.node_counter.mk_node(
             ExprKind::LetIn(LetInExpr {
-                name: out_var,
+                pattern: out_pattern,
                 ty: None,
                 value: Box::new(init_out),
                 body: Box::new(loop_expr),
@@ -932,9 +958,10 @@ impl Defunctionalizer {
         );
 
         // let len = length xs in <with_out>
+        let len_pattern = self.node_counter.mk_node(crate::ast::PatternKind::Name(len_var), span);
         let with_len = self.node_counter.mk_node(
             ExprKind::LetIn(LetInExpr {
-                name: len_var,
+                pattern: len_pattern,
                 ty: None,
                 value: Box::new(len_call),
                 body: Box::new(with_out),
@@ -943,9 +970,10 @@ impl Defunctionalizer {
         );
 
         // let xs = <array> in <with_len>
+        let xs_pattern = self.node_counter.mk_node(crate::ast::PatternKind::Name(xs_var), span);
         let result = self.node_counter.mk_node(
             ExprKind::LetIn(LetInExpr {
-                name: xs_var,
+                pattern: xs_pattern,
                 ty: None,
                 value: Box::new(array.clone()),
                 body: Box::new(with_len),

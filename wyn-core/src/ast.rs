@@ -557,8 +557,8 @@ pub struct LambdaExpr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LetInExpr {
-    pub name: String,
-    pub ty: Option<Type>,
+    pub pattern: Pattern, // Can be Name, Tuple, etc.
+    pub ty: Option<Type>, // Optional type annotation
     pub value: Box<Expression>,
     pub body: Box<Expression>,
 }
@@ -660,6 +660,29 @@ impl Pattern {
             PatternKind::Typed(_, ty) => Some(ty),
             PatternKind::Attributed(_, inner) => inner.pattern_type(),
             _ => None,
+        }
+    }
+
+    /// Collect all names bound by this pattern
+    /// For Name("x") returns vec!["x"]
+    /// For Tuple([Name("x"), Name("y")]) returns vec!["x", "y"]
+    /// For nested patterns, recursively collects all names
+    pub fn collect_names(&self) -> Vec<String> {
+        match &self.kind {
+            PatternKind::Name(name) => vec![name.clone()],
+            PatternKind::Tuple(patterns) => patterns.iter().flat_map(|p| p.collect_names()).collect(),
+            PatternKind::Typed(inner, _) => inner.collect_names(),
+            PatternKind::Attributed(_, inner) => inner.collect_names(),
+            PatternKind::Record(fields) => fields
+                .iter()
+                .flat_map(|f| {
+                    if let Some(ref pat) = f.pattern { pat.collect_names() } else { vec![f.field.clone()] }
+                })
+                .collect(),
+            PatternKind::Constructor(_, patterns) => {
+                patterns.iter().flat_map(|p| p.collect_names()).collect()
+            }
+            _ => vec![], // Wildcard, Literal, Unit bind no names
         }
     }
 }

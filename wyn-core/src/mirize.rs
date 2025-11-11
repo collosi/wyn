@@ -210,26 +210,25 @@ impl Mirize {
         self.entry_points.push(func_id);
 
         // Extract parameter attributes (skip Unit patterns)
-        let param_attrs: Vec<Vec<Attribute>> =
-            entry
-                .params
-                .iter()
-                .filter(|p| !matches!(p.kind, PatternKind::Unit))
-                .map(|p| {
-                    // Check if pattern is attributed, or if it's a Typed pattern with an attributed inner pattern
-                    match &p.kind {
-                        PatternKind::Attributed(attrs, _) => attrs.clone(),
-                        PatternKind::Typed(inner, _) => {
-                            if let PatternKind::Attributed(attrs, _) = &inner.kind {
-                                attrs.clone()
-                            } else {
-                                Vec::new()
-                            }
+        let param_attrs: Vec<Vec<Attribute>> = entry
+            .params
+            .iter()
+            .filter(|p| !matches!(p.kind, PatternKind::Unit))
+            .map(|p| {
+                // Check if pattern is attributed, or if it's a Typed pattern with an attributed inner pattern
+                match &p.kind {
+                    PatternKind::Attributed(attrs, _) => attrs.clone(),
+                    PatternKind::Typed(inner, _) => {
+                        if let PatternKind::Attributed(attrs, _) = &inner.kind {
+                            attrs.clone()
+                        } else {
+                            Vec::new()
                         }
-                        _ => Vec::new(),
                     }
-                })
-                .collect();
+                    _ => Vec::new(),
+                }
+            })
+            .collect();
 
         // Convert return_attributes to AttributedType format for MIR
         let attributed_return_types: Vec<AttributedType> = entry
@@ -361,9 +360,11 @@ impl Mirize {
                 // Save current environment
                 let saved_env = self.env.clone();
 
-                // Process binding
+                // Process binding - bind all names from pattern
                 let value_reg = self.mirize_expression(&let_in_expr.value)?;
-                self.env.insert(let_in_expr.name.clone(), value_reg);
+                for name in let_in_expr.pattern.collect_names() {
+                    self.env.insert(name, value_reg.clone());
+                }
 
                 // Process body
                 let result_reg = self.mirize_expression(&let_in_expr.body)?;

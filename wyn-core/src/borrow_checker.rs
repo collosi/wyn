@@ -428,15 +428,21 @@ impl<'a, W: Write> Visitor for FactExtractor<'a, W> {
         let location_id = *self.location_counter - 1;
 
         // Let binding creates a lifetime
+        // For complex patterns, we track each name separately
         let lifetime_id = self.borrow_checker.get_next_lifetime_id();
-        try_cf!(
-            self.fact_writer.write_var_def_fact(location_id, &let_in.name).map_err(BorrowChecker::io_error)
-        );
-        try_cf!(
-            self.fact_writer
-                .write_lifetime_start_fact(lifetime_id, location_id, &let_in.name)
-                .map_err(BorrowChecker::io_error)
-        );
+
+        // Collect all names bound by the pattern
+        let names = let_in.pattern.collect_names();
+        for name in &names {
+            try_cf!(
+                self.fact_writer.write_var_def_fact(location_id, name).map_err(BorrowChecker::io_error)
+            );
+            try_cf!(
+                self.fact_writer
+                    .write_lifetime_start_fact(lifetime_id, location_id, name)
+                    .map_err(BorrowChecker::io_error)
+            );
+        }
 
         // Analyze value expression
         self.visit_expression(&let_in.value)?;

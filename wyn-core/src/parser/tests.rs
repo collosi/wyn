@@ -2174,3 +2174,31 @@ def test : i32 =
         other => panic!("Expected Loop, got {:?}", other),
     }
 }
+
+#[test]
+fn test_let_tuple_pattern() {
+    let input = "def test = let (x, y) = (1, 2) in x + y";
+    let decl = single_decl(input);
+
+    // Check that we have a LetIn expression with a tuple pattern
+    match &decl.body.kind {
+        ExprKind::LetIn(let_in) => {
+            // Check that the pattern is a tuple pattern
+            match &let_in.pattern.kind {
+                PatternKind::Tuple(patterns) => {
+                    assert_eq!(patterns.len(), 2);
+                    match &patterns[0].kind {
+                        PatternKind::Name(n) => assert_eq!(n, "x"),
+                        other => panic!("Expected Name pattern, got {:?}", other),
+                    }
+                    match &patterns[1].kind {
+                        PatternKind::Name(n) => assert_eq!(n, "y"),
+                        other => panic!("Expected Name pattern, got {:?}", other),
+                    }
+                }
+                other => panic!("Expected Tuple pattern, got {:?}", other),
+            }
+        }
+        other => panic!("Expected LetIn, got {:?}", other),
+    }
+}

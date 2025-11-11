@@ -1393,7 +1393,7 @@ impl Parser {
 
         let start_span = self.current_span();
         self.expect(Token::Let)?;
-        let name = self.expect_identifier()?;
+        let pattern = self.parse_pattern()?;
 
         // Optional type annotation
         let ty = if self.check(&Token::Colon) {
@@ -1411,7 +1411,7 @@ impl Parser {
 
         Ok(self.node_counter.mk_node(
             ExprKind::LetIn(LetInExpr {
-                name,
+                pattern,
                 ty,
                 value,
                 body,
