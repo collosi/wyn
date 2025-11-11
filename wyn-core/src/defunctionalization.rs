@@ -72,6 +72,22 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         self.type_var_gen
     }
 
+    /// Helper: Create a StaticValue::Dyn with a fresh type variable
+    fn dyn_unknown(&mut self) -> StaticValue {
+        StaticValue::Dyn(self.type_var_gen.new_variable())
+    }
+
+    /// Helper: Create an expression node with dummy span
+    fn mk(&mut self, kind: ExprKind) -> Expression {
+        self.node_counter.mk_node(kind, Span::dummy())
+    }
+
+    /// Helper: Create an expression with Dyn static value (for unknown types)
+    fn ret_dyn(&mut self, kind: ExprKind) -> (Expression, StaticValue) {
+        let expr = self.mk(kind);
+        (expr, self.dyn_unknown())
+    }
+
     pub fn defunctionalize_program(&mut self, program: &Program) -> Result<Program> {
         let mut new_declarations = Vec::new();
         let mut scope_stack = ScopeStack::new();
@@ -404,14 +420,11 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                 let field_sv = match &expr_sv {
                     StaticValue::Rcd(fields) => {
                         // Look up the field in the record
-                        fields.get(field).cloned().unwrap_or_else(|| {
-                            // Field not found, use a type variable
-                            StaticValue::Dyn(self.type_var_gen.new_variable())
-                        })
+                        fields.get(field).cloned().unwrap_or_else(|| self.dyn_unknown())
                     }
                     _ => {
                         // Not a record, can't extract field info - use type variable
-                        StaticValue::Dyn(self.type_var_gen.new_variable())
+                        self.dyn_unknown()
                     }
                 };
 
@@ -430,23 +443,14 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                     self.defunctionalize_expression(&if_expr.then_branch, scope_stack)?;
                 let (else_branch, _else_sv) =
                     self.defunctionalize_expression(&if_expr.else_branch, scope_stack)?;
-                Ok((
-                    self.node_counter.mk_node(
-                        ExprKind::If(IfExpr {
-                            condition: Box::new(condition),
-                            then_branch: Box::new(then_branch),
-                            else_branch: Box::new(else_branch),
-                        }),
-                        span,
-                    ),
-                    StaticValue::Dyn(self.type_var_gen.new_variable()), // If expressions are runtime values
-                ))
+                Ok(self.ret_dyn(ExprKind::If(IfExpr {
+                    condition: Box::new(condition),
+                    then_branch: Box::new(then_branch),
+                    else_branch: Box::new(else_branch),
+                })))
             }
 
-            ExprKind::TypeHole => Ok((
-                self.node_counter.mk_node(ExprKind::TypeHole, span),
-                StaticValue::Dyn(self.type_var_gen.new_variable()), // Type to be inferred
-            )),
+            ExprKind::TypeHole => Ok(self.ret_dyn(ExprKind::TypeHole)),
 
             ExprKind::Pipe(left, right) => {
                 // a |> f desugars to f(a)
@@ -699,11 +703,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                         let mut all_args = vec![transformed_func];
                         all_args.extend(transformed_args);
 
-                        Ok((
-                            self.node_counter
-                                .mk_node(ExprKind::FunctionCall(func_name, all_args), Span::dummy()),
-                            StaticValue::Dyn(self.type_var_gen.new_variable()),
-                        ))
+                        Ok(self.ret_dyn(ExprKind::FunctionCall(func_name, all_args)))
                     }
                     ExprKind::Identifier(closure_var) => {
                         // The closure is a variable - need to extract __fun field at runtime
@@ -743,39 +743,21 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                             );
                         }
 
-                        Ok((
-                            self.node_counter.mk_node(
-                                ExprKind::FunctionCall(func_name.clone(), transformed_args),
-                                Span::dummy(),
-                            ),
-                            StaticValue::Dyn(self.type_var_gen.new_variable()),
-                        ))
+                        Ok(self.ret_dyn(ExprKind::FunctionCall(func_name.clone(), transformed_args)))
                     }
                     ExprKind::FieldAccess(base, field) => {
                         // Qualified name like f32.cos - convert to dotted name for builtin lookup
                         let qual_name =
                             crate::ast::QualName::new(vec![Self::extract_base_name(base)?], field.clone());
                         let dotted_name = qual_name.to_dotted();
-                        Ok((
-                            self.node_counter.mk_node(
-                                ExprKind::FunctionCall(dotted_name, transformed_args),
-                                Span::dummy(),
-                            ),
-                            StaticValue::Dyn(self.type_var_gen.new_variable()),
-                        ))
+                        Ok(self.ret_dyn(ExprKind::FunctionCall(dotted_name, transformed_args)))
                     }
                     ExprKind::FunctionCall(func_name, existing_args) => {
                         // This is a partial application that's already been transformed to FunctionCall
                         // Append the new args to the existing ones
                         let mut all_args = existing_args.clone();
                         all_args.extend(transformed_args);
-                        Ok((
-                            self.node_counter.mk_node(
-                                ExprKind::FunctionCall(func_name.clone(), all_args),
-                                Span::dummy(),
-                            ),
-                            StaticValue::Dyn(self.type_var_gen.new_variable()),
-                        ))
+                        Ok(self.ret_dyn(ExprKind::FunctionCall(func_name.clone(), all_args)))
                     }
                     ExprKind::Application(nested_func, nested_args) => {
                         // Recursive application - this shouldn't happen after defunctionalization
@@ -975,17 +957,16 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         let mut fields = Vec::new();
 
         // Add __fun field with the function name
-        let fun_value =
-            self.node_counter.mk_node(ExprKind::Identifier(func_name.to_string()), Span::dummy());
+        let fun_value = self.mk(ExprKind::Identifier(func_name.to_string()));
         fields.push(("__fun".to_string(), fun_value));
 
         // Add free variable fields
         for var in free_vars {
-            let field_value = self.node_counter.mk_node(ExprKind::Identifier(var.clone()), Span::dummy());
+            let field_value = self.mk(ExprKind::Identifier(var.clone()));
             fields.push((var.clone(), field_value));
         }
 
-        Ok(self.node_counter.mk_node(ExprKind::RecordLiteral(fields), Span::dummy()))
+        Ok(self.mk(ExprKind::RecordLiteral(fields)))
     }
 
     /// Transform map f xs into a loop that allocates output array and fills it
@@ -1152,7 +1133,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             span,
         );
 
-        Ok((result, StaticValue::Dyn(self.type_var_gen.new_variable())))
+        Ok((result, self.dyn_unknown()))
     }
 
     /// Rewrite free variable references in an expression to access them from a closure record
@@ -1345,10 +1326,10 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             PatternKind::Tuple(elements) => {
                 // Tuple pattern - need to decompose the value
                 // For now, if we don't have static tuple info, bind all to Dyn
-                for (i, elem_pattern) in elements.iter().enumerate() {
+                for (_i, elem_pattern) in elements.iter().enumerate() {
                     // Try to extract element type if available
                     // For now, just bind to a fresh type variable
-                    let elem_sv = StaticValue::Dyn(self.type_var_gen.new_variable());
+                    let elem_sv = self.dyn_unknown();
                     self.bind_pattern(elem_pattern, &elem_sv, scope_stack)?;
                 }
                 Ok(())
