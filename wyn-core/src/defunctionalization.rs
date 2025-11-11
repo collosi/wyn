@@ -96,6 +96,25 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         self.node_counter.mk_node(kind, Span::dummy())
     }
 
+    /// Extract the __tag value from a closure record literal, if present
+    fn extract_closure_tag(&self, e: &Expression) -> Option<i32> {
+        if let ExprKind::RecordLiteral(fields) = &e.kind {
+            for (k, v) in fields {
+                if k == "__tag" {
+                    if let ExprKind::IntLiteral(t) = v.kind {
+                        return Some(t);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Look up the lambda name for a given tag in the current bucket
+    fn lambda_name_for_tag(&self, tag: i32) -> Option<&str> {
+        self.lambda_registry.iter().find(|m| m.tag == tag).map(|m| m.name.as_str())
+    }
+
     /// Helper: Create an expression with Dyn static value (for unknown types)
     fn ret_dyn(&mut self, kind: ExprKind) -> (Expression, StaticValue) {
         let expr = self.mk(kind);
@@ -196,11 +215,12 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
     }
 
     /// Drain the current bucket into a vector of Declarations
-    /// Also generates __applyN dispatchers for each arity used
+    /// Note: No longer generates global __applyN dispatchers
+    /// Dispatchers are now generated on-demand at call sites when needed
     fn drain_bucket_as_decls(&mut self) -> Vec<Declaration> {
         let mut out = Vec::with_capacity(self.current_bucket.len());
 
-        // Add the lambda functions FIRST (before dispatchers that reference them)
+        // Add the lambda functions
         for func in self.current_bucket.drain(..) {
             out.push(Declaration::Decl(Decl {
                 keyword: "def",
@@ -223,18 +243,8 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             }));
         }
 
-        // Generate __applyN dispatchers for each arity (after lambda functions)
-        use std::collections::BTreeMap;
-        let mut by_arity: BTreeMap<usize, Vec<LambdaMeta>> = BTreeMap::new();
-        for lambda_meta in &self.lambda_registry {
-            by_arity.entry(lambda_meta.arity).or_default().push(lambda_meta.clone());
-        }
-
-        for (arity, lambdas) in by_arity {
-            if !lambdas.is_empty() {
-                out.push(self.generate_apply_dispatcher(arity, &lambdas));
-            }
-        }
+        // No longer generating global __applyN dispatchers here
+        // They are generated on-demand at call sites when direct calls aren't possible
 
         out
     }
@@ -819,15 +829,14 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         let tag = self.lambda_registry.len() as i32;
         let arity = lambda.params.len();
 
-        // Create parameters: ALWAYS add __closure parameter (even if empty)
+        // Create parameters: ALWAYS add __closure parameter with __tag field
         let mut func_params = Vec::new();
 
-        let closure_type = if !free_vars.is_empty() {
-            crate::ast::types::record(closure_type_fields.clone())
-        } else {
-            // Empty record type for lambdas with no free variables
-            crate::ast::types::record(vec![])
-        };
+        // Closure type always includes __tag : i32 plus any captured environment fields
+        let mut closure_type_fields_with_tag = Vec::with_capacity(closure_type_fields.len() + 1);
+        closure_type_fields_with_tag.push(("__tag".to_string(), crate::ast::types::i32()));
+        closure_type_fields_with_tag.extend(closure_type_fields.clone());
+        let closure_type = crate::ast::types::record(closure_type_fields_with_tag);
 
         func_params.push(Parameter {
             attributes: vec![],
@@ -901,7 +910,12 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
 
         // Create closure constructor expression - ALWAYS a record with __tag
         let closure_record = self.create_closure_record(tag, &free_vars)?;
-        Ok((closure_record, StaticValue::Rcd(closure_fields)))
+
+        // Include __tag in the StaticValue for consistency
+        let mut closure_fields_sv = closure_fields.clone();
+        closure_fields_sv.insert("__tag".to_string(), StaticValue::Dyn(crate::ast::types::i32()));
+
+        Ok((closure_record, StaticValue::Rcd(closure_fields_sv)))
     }
 
     fn defunctionalize_application(
@@ -1175,12 +1189,18 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         // We'll call __apply1 with it in the loop body
 
         // Generate unique variable names
-        let i_var = format!("__map_i_{}", self.next_function_id);
-        let out_var = format!("__map_out_{}", self.next_function_id);
-        let xs_var = format!("__map_xs_{}", self.next_function_id);
-        let len_var = format!("__map_len_{}", self.next_function_id);
-        let func_var = format!("__map_f_{}", self.next_function_id);
+        let map_id = self.next_function_id;
+        let i_var = format!("__map_i_{}", map_id);
+        let out_var = format!("__map_out_{}", map_id);
+        let xs_var = format!("__map_xs_{}", map_id);
+        let len_var = format!("__map_len_{}", map_id);
+        let func_var = format!("__map_f_{}", map_id);
         self.next_function_id += 1;
+
+        eprintln!(
+            "DEBUG defunctionalize_map: map_id={}, generating vars: i={}, out={}, xs={}, len={}, func={}",
+            map_id, i_var, out_var, xs_var, len_var, func_var
+        );
 
         // Build ALL leaf nodes first to avoid borrow checker issues
         let xs_ident_for_len = self.node_counter.mk_node(ExprKind::Identifier(xs_var.clone()), span);
@@ -1235,14 +1255,65 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         let array_index =
             self.node_counter.mk_node(ExprKind::ArrayIndex(Box::new(xs_ident), Box::new(i_ident2)), span);
 
-        // Build func identifier for __apply1 call
+        // Try to specialize the callee: if func is a closure record with a known __tag,
+        // call the lambda directly instead of using __apply1 dispatcher
+        let mut call_callee_is_direct = None;
+        if let Some(tag) = self.extract_closure_tag(func) {
+            eprintln!("DEBUG defunctionalize_map: extracted tag={}", tag);
+            if let Some(lam_name) = self.lambda_name_for_tag(tag) {
+                eprintln!("DEBUG defunctionalize_map: will use direct call to {}", lam_name);
+                call_callee_is_direct = Some(lam_name.to_string());
+            } else {
+                eprintln!(
+                    "DEBUG defunctionalize_map: no lambda found for tag {}, registry has {} entries",
+                    tag,
+                    self.lambda_registry.len()
+                );
+                for meta in &self.lambda_registry {
+                    eprintln!("  registry entry: tag={} name={}", meta.tag, meta.name);
+                }
+            }
+        } else {
+            eprintln!(
+                "DEBUG defunctionalize_map: could not extract tag, func.kind={:?}",
+                std::mem::discriminant(&func.kind)
+            );
+        }
+
+        // Build func identifier for call
         let func_ident = self.node_counter.mk_node(ExprKind::Identifier(func_var.clone()), span);
 
-        // __apply1(f, xs[i])
-        let func_app = self.node_counter.mk_node(
-            ExprKind::FunctionCall("__apply1".to_string(), vec![func_ident, array_index]),
-            span,
-        );
+        // EITHER direct call to the known __lam_* ... OR generic dispatcher if callee not statically known
+        let func_app = if let Some(lam_name) = call_callee_is_direct {
+            eprintln!(
+                "DEBUG defunctionalize_map: generating direct call: {}({}, {}[{}])",
+                lam_name, func_var, xs_var, i_var
+            );
+            eprintln!(
+                "DEBUG defunctionalize_map: array_index.kind = {:?}",
+                array_index.kind
+            );
+            // Direct call: __lam_foo(closure, xs[i])
+            let call = self.node_counter.mk_node(
+                ExprKind::FunctionCall(lam_name, vec![func_ident.clone(), array_index.clone()]),
+                span,
+            );
+            eprintln!(
+                "DEBUG defunctionalize_map: generated call args: func_ident={:?}, array_index={:?}",
+                func_ident.kind, array_index.kind
+            );
+            call
+        } else {
+            eprintln!(
+                "DEBUG defunctionalize_map: generating dispatcher call: __apply1({}, {}[{}])",
+                func_var, xs_var, i_var
+            );
+            // Generic dispatcher: __apply1(closure, xs[i])
+            self.node_counter.mk_node(
+                ExprKind::FunctionCall("__apply1".to_string(), vec![func_ident, array_index]),
+                span,
+            )
+        };
 
         // __array_update(out, i, f xs[i])
         let updated_out = self.node_counter.mk_node(

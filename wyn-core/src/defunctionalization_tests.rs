@@ -35,6 +35,47 @@ fn defunctionalize_program(input: &str) -> Program {
     defunc.defunctionalize_program(&program).expect("Defunctionalization failed")
 }
 
+/// Helper to parse, defunctionalize, and type-check a program
+/// Takes an assertion function that can inspect the defunctionalized program
+/// If the assertion fails or type checking fails, prints the defunctionalized program
+fn check_defunctionalized<F>(input: &str, assertion: F)
+where
+    F: FnOnce(&Program),
+{
+    let tokens = tokenize(input).expect("Tokenization failed");
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().expect("Parsing failed");
+    let node_counter = parser.take_node_counter();
+
+    let type_context = polytype::Context::default();
+    let mut defunc = Defunctionalizer::new_with_counter(node_counter, type_context);
+    let defunc_program = defunc.defunctionalize_program(&program).expect("Defunctionalization failed");
+
+    // Run the assertion
+    assertion(&defunc_program);
+
+    // Now type-check the defunctionalized program
+    let type_context = defunc.take_type_var_gen();
+
+    // Enable debug logging
+    std::env::set_var("RUST_LOG", "debug");
+    env_logger::try_init().ok();
+
+    let mut type_checker = crate::type_checker::TypeChecker::new_with_context(type_context);
+    type_checker.load_builtins().expect("Loading builtins failed");
+
+    eprintln!("\n=== STARTING TYPE CHECK ===");
+    let result = type_checker.check_program(&defunc_program);
+
+    if let Err(e) = result {
+        eprintln!("\n=== TYPE CHECK ERROR ===");
+        eprintln!("{:?}", e);
+        eprintln!("\n=== DEFUNCTIONALIZED PROGRAM ===");
+        eprintln!("{:#?}", defunc_program);
+        panic!("Type checking failed: {:?}", e);
+    }
+}
+
 /// Test that free variables in lambda bodies are rewritten to access closure fields
 #[test]
 fn test_lambda_captures_free_variable() {
@@ -522,4 +563,22 @@ fn print_expr_structure(expr: &crate::ast::Expression, indent: usize) {
             eprintln!("{}Other({:?})", prefix, std::mem::discriminant(&expr.kind));
         }
     }
+}
+
+#[test]
+fn test_two_maps_second_captures_first_result() {
+    // Minimal failing case: two maps where second map's lambda captures result of first map
+    // This tests that type variables don't bleed between the two __apply1 calls
+    let input = r#"
+def test : f32 =
+    let v4s : [2]vec4f32 = [vec4 1.0f32 2.0f32 3.0f32 4.0f32, vec4 5.0f32 6.0f32 7.0f32 8.0f32] in
+    let v3s : [2]vec3f32 = map (\(q:vec4f32) -> vec3 q.x q.y q.z) v4s in
+    let indices : [2]i32 = [0, 1] in
+    let results : [2]f32 = map (\i -> v3s[i].x) indices in
+    results[0]
+    "#;
+
+    check_defunctionalized(input, |_program| {
+        // Just checking that defunctionalization and type-checking succeed
+    });
 }

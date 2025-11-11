@@ -78,6 +78,11 @@ impl Span {
         }
     }
 
+    /// Check if this is a generated/dummy span (all zeros)
+    pub fn is_generated(&self) -> bool {
+        self.start_line == 0 && self.start_col == 0 && self.end_line == 0 && self.end_col == 0
+    }
+
     /// Merge two spans to create a span covering both
     pub fn merge(&self, other: &Span) -> Span {
         let (start_line, start_col) = if self.start_line < other.start_line

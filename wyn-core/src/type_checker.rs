@@ -504,11 +504,15 @@ impl TypeChecker {
             .collect();
 
         // Build the function type: param1 -> param2 -> ... -> return
-        let func_type =
-            param_types.iter().rev().fold(return_type, |acc, param_ty| Type::arrow(param_ty.clone(), acc));
+        let func_type = param_types.iter().rev().fold(return_type.clone(), |acc, param_ty| {
+            Type::arrow(param_ty.clone(), acc)
+        });
 
-        // Apply the context to resolve any constraints
-        func_type.apply(&self.context)
+        // NOTE: We do NOT call .apply(&self.context) here!
+        // That would substitute variables that were unified in previous calls,
+        // causing type variable sharing across different call sites.
+        // Each instantiation should get truly fresh, independent type variables.
+        func_type
     }
 
     // TODO: Polymorphic builtins (map, zip, length) need special handling
@@ -520,9 +524,24 @@ impl TypeChecker {
         // length: ∀a n. [n]a -> i32
         let var_n = self.context.new_variable();
         let var_a = self.context.new_variable();
-        let array_type = Type::Constructed(TypeName::Array, vec![var_n, var_a]);
+
+        let var_n_id = if let Type::Variable(id) = var_n { id } else { panic!("Expected Type::Variable") };
+        let var_a_id = if let Type::Variable(id) = var_a { id } else { panic!("Expected Type::Variable") };
+
+        let array_type = Type::Constructed(
+            TypeName::Array,
+            vec![Type::Variable(var_n_id), Type::Variable(var_a_id)],
+        );
         let length_body = Type::arrow(array_type, types::i32());
-        let length_scheme = TypeScheme::Monotype(length_body);
+
+        // Create Polytype ∀n a. [n]a -> i32
+        let length_scheme = TypeScheme::Polytype {
+            variable: var_n_id,
+            body: Box::new(TypeScheme::Polytype {
+                variable: var_a_id,
+                body: Box::new(TypeScheme::Monotype(length_body)),
+            }),
+        };
         self.scope_stack.insert("length".to_string(), length_scheme);
 
         // map: ∀a b n. (a -> b) -> *Array(n, a) -> Array(n, b)
@@ -565,33 +584,89 @@ impl TypeChecker {
         let var_n = self.context.new_variable();
         let var_a = self.context.new_variable();
         let var_b = self.context.new_variable();
-        let array_a_type = Type::Constructed(TypeName::Array, vec![var_n.clone(), var_a.clone()]);
-        let array_b_type = Type::Constructed(TypeName::Array, vec![var_n.clone(), var_b.clone()]);
-        let tuple_type = types::tuple(vec![var_a, var_b]);
-        let result_array_type = Type::Constructed(TypeName::Array, vec![var_n, tuple_type]);
+
+        let var_n_id = if let Type::Variable(id) = var_n { id } else { panic!("Expected Type::Variable") };
+        let var_a_id = if let Type::Variable(id) = var_a { id } else { panic!("Expected Type::Variable") };
+        let var_b_id = if let Type::Variable(id) = var_b { id } else { panic!("Expected Type::Variable") };
+
+        let array_a_type = Type::Constructed(
+            TypeName::Array,
+            vec![Type::Variable(var_n_id), Type::Variable(var_a_id)],
+        );
+        let array_b_type = Type::Constructed(
+            TypeName::Array,
+            vec![Type::Variable(var_n_id), Type::Variable(var_b_id)],
+        );
+        let tuple_type = types::tuple(vec![Type::Variable(var_a_id), Type::Variable(var_b_id)]);
+        let result_array_type =
+            Type::Constructed(TypeName::Array, vec![Type::Variable(var_n_id), tuple_type]);
         let zip_arrow1 = Type::arrow(array_b_type, result_array_type);
         let zip_body = Type::arrow(array_a_type, zip_arrow1);
-        let zip_scheme = TypeScheme::Monotype(zip_body);
+
+        let zip_scheme = TypeScheme::Polytype {
+            variable: var_n_id,
+            body: Box::new(TypeScheme::Polytype {
+                variable: var_a_id,
+                body: Box::new(TypeScheme::Polytype {
+                    variable: var_b_id,
+                    body: Box::new(TypeScheme::Monotype(zip_body)),
+                }),
+            }),
+        };
         self.scope_stack.insert("zip".to_string(), zip_scheme);
 
         // Array to vector conversion: to_vec
         // to_vec: ∀n a. [n]a -> Vec(n, a)
         let var_n = self.context.new_variable();
         let var_a = self.context.new_variable();
-        let array_input = Type::Constructed(TypeName::Array, vec![var_n.clone(), var_a.clone()]);
-        let vec_output = Type::Constructed(TypeName::Vec, vec![var_n, var_a]);
-        let to_vec_body = Type::arrow(array_input, vec_output);
-        self.scope_stack.insert("to_vec".to_string(), TypeScheme::Monotype(to_vec_body));
 
-        // replicate: ∀a. i32 -> a -> [?]a
+        let var_n_id = if let Type::Variable(id) = var_n { id } else { panic!("Expected Type::Variable") };
+        let var_a_id = if let Type::Variable(id) = var_a { id } else { panic!("Expected Type::Variable") };
+
+        let array_input = Type::Constructed(
+            TypeName::Array,
+            vec![Type::Variable(var_n_id), Type::Variable(var_a_id)],
+        );
+        let vec_output = Type::Constructed(
+            TypeName::Vec,
+            vec![Type::Variable(var_n_id), Type::Variable(var_a_id)],
+        );
+        let to_vec_body = Type::arrow(array_input, vec_output);
+
+        let to_vec_scheme = TypeScheme::Polytype {
+            variable: var_n_id,
+            body: Box::new(TypeScheme::Polytype {
+                variable: var_a_id,
+                body: Box::new(TypeScheme::Monotype(to_vec_body)),
+            }),
+        };
+        self.scope_stack.insert("to_vec".to_string(), to_vec_scheme);
+
+        // replicate: ∀size a. i32 -> a -> [size]a
         // Creates an array of length n filled with the given value
         // Note: The size is determined by type inference from context
         let var_a = self.context.new_variable();
         let var_size = self.context.new_variable(); // Size will be inferred
-        let output_array = Type::Constructed(TypeName::Array, vec![var_size.clone(), var_a.clone()]);
+
+        let var_a_id = if let Type::Variable(id) = var_a { id } else { panic!("Expected Type::Variable") };
+        let var_size_id =
+            if let Type::Variable(id) = var_size { id } else { panic!("Expected Type::Variable") };
+
+        let output_array = Type::Constructed(
+            TypeName::Array,
+            vec![Type::Variable(var_size_id), Type::Variable(var_a_id)],
+        );
         let i32_type = Type::Constructed(TypeName::Str("i32"), vec![]);
-        let replicate_body = Type::arrow(i32_type, Type::arrow(var_a, output_array));
-        self.scope_stack.insert("replicate".to_string(), TypeScheme::Monotype(replicate_body));
+        let replicate_body = Type::arrow(i32_type, Type::arrow(Type::Variable(var_a_id), output_array));
+
+        let replicate_scheme = TypeScheme::Polytype {
+            variable: var_size_id,
+            body: Box::new(TypeScheme::Polytype {
+                variable: var_a_id,
+                body: Box::new(TypeScheme::Monotype(replicate_body)),
+            }),
+        };
+        self.scope_stack.insert("replicate".to_string(), replicate_scheme);
 
         // Vector operations
         // dot: ∀a b. a -> a -> b
@@ -599,8 +674,23 @@ impl TypeChecker {
         // The SPIR-V validator will ensure the types are actually compatible
         let var_a = self.context.new_variable();
         let var_b = self.context.new_variable();
-        let dot_body = Type::arrow(var_a.clone(), Type::arrow(var_a, var_b));
-        self.scope_stack.insert("dot".to_string(), TypeScheme::Monotype(dot_body));
+
+        let var_a_id = if let Type::Variable(id) = var_a { id } else { panic!("Expected Type::Variable") };
+        let var_b_id = if let Type::Variable(id) = var_b { id } else { panic!("Expected Type::Variable") };
+
+        let dot_body = Type::arrow(
+            Type::Variable(var_a_id),
+            Type::arrow(Type::Variable(var_a_id), Type::Variable(var_b_id)),
+        );
+
+        let dot_scheme = TypeScheme::Polytype {
+            variable: var_a_id,
+            body: Box::new(TypeScheme::Polytype {
+                variable: var_b_id,
+                body: Box::new(TypeScheme::Monotype(dot_body)),
+            }),
+        };
+        self.scope_stack.insert("dot".to_string(), dot_scheme);
 
         // TODO: Add vector magnitude function (GLSL length)
         // Should be: vec[n]f32 -> f32 or more generally vec[n]t -> t
@@ -1050,7 +1140,8 @@ impl TypeChecker {
                 // Get function type - check scope stack first, then builtin registry
                 let func_type_result: Result<Type> =
                     if let Ok(type_scheme) = self.scope_stack.lookup(func_name) {
-                        Ok(type_scheme.instantiate(&mut self.context))
+                        let instantiated = type_scheme.instantiate(&mut self.context);
+                        Ok(instantiated)
                     } else if self.builtin_registry.is_builtin(func_name) {
                         // Get type from builtin registry
                         if let Some(desc) = self.builtin_registry.get(func_name) {
@@ -1615,10 +1706,22 @@ impl TypeChecker {
                 let expected_param_for_unify = types::strip_unique(&expected_param_type);
 
                 self.context.unify(&arg_type_for_unify, &expected_param_for_unify).map_err(|e| {
-                    CompilerError::TypeError(
-                        format!("Function argument type mismatch: {:?}", e),
-                        arg.h.span,
-                    )
+                    let error_msg = if arg.h.span.is_generated() {
+                        format!(
+                            "Function argument type mismatch at argument {}: {:?}\n\
+                             Expected param type: {}\n\
+                             Actual arg type: {}\n\
+                             Generated expression: {:#?}",
+                            i + 1,
+                            e,
+                            self.format_type(&expected_param_for_unify),
+                            self.format_type(&arg_type_for_unify),
+                            arg
+                        )
+                    } else {
+                        format!("Function argument type mismatch: {:?}", e)
+                    };
+                    CompilerError::TypeError(error_msg, arg.h.span)
                 })?;
 
                 // Handle uniqueness/consumption:
@@ -1771,6 +1874,44 @@ mod tests {
 
         let mut checker = TypeChecker::new();
         assert!(checker.check_program(&program).is_ok());
+    }
+
+    #[test]
+    fn test_two_length_and_replicate_calls() {
+        // Simplified test: two calls to length/replicate with different array element types
+        // This tests that type variables don't bleed between the two calls
+        let input = r#"
+def test : f32 =
+    let v4s : [2]vec4f32 = [vec4 1.0f32 2.0f32 3.0f32 4.0f32, vec4 5.0f32 6.0f32 7.0f32 8.0f32] in
+    let len1 = length v4s in
+    let out1 = replicate len1 (__uninit()) in
+
+    let indices : [2]i32 = [0, 1] in
+    let len2 = length indices in
+    let out2 = replicate len2 (__uninit()) in
+
+    42.0f32
+        "#;
+
+        std::env::set_var("RUST_LOG", "debug");
+        env_logger::try_init().ok();
+
+        let tokens = tokenize(input).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+        let result = checker.check_program(&program);
+
+        if let Err(e) = &result {
+            eprintln!("Type check failed: {:?}", e);
+        }
+
+        assert!(
+            result.is_ok(),
+            "Two length/replicate calls should type-check successfully"
+        );
     }
 
     #[test]
