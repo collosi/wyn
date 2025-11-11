@@ -88,6 +88,28 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         (expr, self.dyn_unknown())
     }
 
+    /// Extract function name and existing args from a callable expression
+    /// Returns (name, existing_args) where existing_args is empty for simple calls
+    fn as_callable(expr: &Expression) -> Result<(String, Vec<Expression>)> {
+        match &expr.kind {
+            ExprKind::Identifier(name) => Ok((name.clone(), vec![])),
+            ExprKind::FieldAccess(base, field) => {
+                // Qualified name like f32.cos - convert to dotted name
+                let qual_name =
+                    crate::ast::QualName::new(vec![Self::extract_base_name(base)?], field.clone());
+                Ok((qual_name.to_dotted(), vec![]))
+            }
+            ExprKind::FunctionCall(name, existing_args) => {
+                // Partial application - return existing args to be extended
+                Ok((name.clone(), existing_args.clone()))
+            }
+            _ => Err(CompilerError::DefunctionalizationError(format!(
+                "Invalid function in application: {:?}",
+                expr.kind
+            ))),
+        }
+    }
+
     pub fn defunctionalize_program(&mut self, program: &Program) -> Result<Program> {
         let mut new_declarations = Vec::new();
         let mut scope_stack = ScopeStack::new();
@@ -730,52 +752,37 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                 }
             }
             _ => {
-                // Regular function call
-                match &transformed_func.kind {
-                    ExprKind::Identifier(func_name) => {
-                        // Special handling for higher-order builtins like map
-                        if func_name == "map" && transformed_args.len() == 2 {
-                            // map f xs -> loop-based implementation
-                            return self.defunctionalize_map(
-                                &transformed_args[0],
-                                &transformed_args[1],
-                                scope_stack,
-                            );
-                        }
-
-                        Ok(self.ret_dyn(ExprKind::FunctionCall(func_name.clone(), transformed_args)))
-                    }
-                    ExprKind::FieldAccess(base, field) => {
-                        // Qualified name like f32.cos - convert to dotted name for builtin lookup
-                        let qual_name =
-                            crate::ast::QualName::new(vec![Self::extract_base_name(base)?], field.clone());
-                        let dotted_name = qual_name.to_dotted();
-                        Ok(self.ret_dyn(ExprKind::FunctionCall(dotted_name, transformed_args)))
-                    }
-                    ExprKind::FunctionCall(func_name, existing_args) => {
-                        // This is a partial application that's already been transformed to FunctionCall
-                        // Append the new args to the existing ones
-                        let mut all_args = existing_args.clone();
-                        all_args.extend(transformed_args);
-                        Ok(self.ret_dyn(ExprKind::FunctionCall(func_name.clone(), all_args)))
-                    }
-                    ExprKind::Application(nested_func, nested_args) => {
-                        // Recursive application - this shouldn't happen after defunctionalization
-                        // but handle it by recursively processing
-                        self.defunctionalize_application(
-                            &Expression {
-                                h: transformed_func.h.clone(),
-                                kind: ExprKind::Application(nested_func.clone(), nested_args.clone()),
-                            },
-                            args,
-                            scope_stack,
-                        )
-                    }
-                    _ => Err(CompilerError::SpirvError(format!(
-                        "Invalid function in application: {:?}",
-                        transformed_func.kind
-                    ))),
+                // Regular function call - extract name and existing args, then append new args
+                if let ExprKind::Application(nested_func, nested_args) = &transformed_func.kind {
+                    // Recursive application - shouldn't happen after defunctionalization
+                    // Handle by recursively processing
+                    return self.defunctionalize_application(
+                        &Expression {
+                            h: transformed_func.h.clone(),
+                            kind: ExprKind::Application(nested_func.clone(), nested_args.clone()),
+                        },
+                        args,
+                        scope_stack,
+                    );
                 }
+
+                let (func_name, existing_args) = Self::as_callable(&transformed_func)?;
+
+                // Special handling for higher-order builtins like map
+                if func_name == "map" && existing_args.is_empty() && transformed_args.len() == 2 {
+                    // map f xs -> loop-based implementation
+                    return self.defunctionalize_map(
+                        &transformed_args[0],
+                        &transformed_args[1],
+                        scope_stack,
+                    );
+                }
+
+                // Append new args to existing args (for partial application)
+                let mut all_args = existing_args;
+                all_args.extend(transformed_args);
+
+                Ok(self.ret_dyn(ExprKind::FunctionCall(func_name, all_args)))
             }
         }
     }
