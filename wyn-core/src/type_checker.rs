@@ -2277,4 +2277,49 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_function_call_in_lambda_inside_loop() {
+        // Test that top-level functions are visible inside nested contexts
+        // Reproduces de_rasterizer pattern: calling a helper function from within
+        // a lambda that's inside a map inside a loop, with captured variables
+        // and nested array indexing
+        let source = r#"
+            def line (weight:f32) (p:f32) (p0:f32) (p1:f32) (w:f32) : f32 =
+              weight + p + p0 + p1 + w
+
+            def main =
+              let weight = 1.0f32 in
+              let uv = 2.0f32 in
+              let line_width = 3.0f32 in
+              loop (idx, acc) = (0i32, 0.0f32) while idx < 2 do
+                let edges : [2][2]i32 = [[0,1], [1,2]] in
+                let verts1 : [3]f32 = [1.0f32, 2.0f32, 3.0f32] in
+                let result = map (\e ->
+                  let a = verts1[e[0]] in
+                  let b = verts1[e[1]] in
+                  line weight uv a b line_width)
+                  edges in
+                (idx + 1, acc + 1.0f32)
+        "#;
+
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&program) {
+            Ok(_) => {
+                // Should succeed - helper should be visible in lambda
+            }
+            Err(e) => {
+                panic!("Type checking should succeed but failed with: {:?}", e);
+            }
+        }
+    }
 }

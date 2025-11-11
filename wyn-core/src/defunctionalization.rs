@@ -53,7 +53,10 @@ pub struct DefunctionalizedFunction {
 pub struct Defunctionalizer<T: crate::type_checker::TypeVarGenerator> {
     next_function_id: usize,
     type_var_gen: T,
-    generated_functions: Vec<DefunctionalizedFunction>,
+    /// Per-declaration bucket for generated lambda functions
+    current_bucket: Vec<DefunctionalizedFunction>,
+    /// Stack of enclosing declaration names for better lambda naming
+    enclosing_decl_stack: Vec<String>,
     node_counter: NodeCounter,
 }
 
@@ -62,7 +65,8 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         Defunctionalizer {
             next_function_id: 0,
             type_var_gen,
-            generated_functions: Vec::new(),
+            current_bucket: Vec::new(),
+            enclosing_decl_stack: Vec::new(),
             node_counter,
         }
     }
@@ -85,6 +89,45 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
     fn ret_dyn(&mut self, kind: ExprKind) -> (Expression, StaticValue) {
         let expr = self.mk(kind);
         (expr, self.dyn_unknown())
+    }
+
+    /// Called at the start of transforming a top-level declaration
+    fn begin_decl(&mut self, name: &str) {
+        self.current_bucket.clear();
+        self.enclosing_decl_stack.push(name.to_string());
+    }
+
+    /// Called at the end of transforming a top-level declaration
+    fn end_decl(&mut self) {
+        self.enclosing_decl_stack.pop();
+        self.current_bucket.clear();
+    }
+
+    /// Drain the current bucket into a vector of Declarations
+    fn drain_bucket_as_decls(&mut self) -> Vec<Declaration> {
+        let mut out = Vec::with_capacity(self.current_bucket.len());
+        for func in self.current_bucket.drain(..) {
+            out.push(Declaration::Decl(Decl {
+                keyword: "def",
+                attributes: vec![],
+                name: func.name,
+                size_params: vec![],
+                type_params: vec![],
+                params: func
+                    .params
+                    .iter()
+                    .map(|p| {
+                        let pat =
+                            self.node_counter.mk_node(PatternKind::Name(p.name.clone()), Span::dummy());
+                        self.node_counter
+                            .mk_node(PatternKind::Typed(Box::new(pat), p.ty.clone()), Span::dummy())
+                    })
+                    .collect(),
+                ty: None,
+                body: func.body,
+            }));
+        }
+        out
     }
 
     /// Extract function name and existing args from a callable expression
@@ -110,34 +153,57 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
     }
 
     pub fn defunctionalize_program(&mut self, program: &Program) -> Result<Program> {
-        let mut new_declarations = Vec::new();
+        let mut new_declarations = Vec::with_capacity(program.declarations.len() * 2);
         let mut scope_stack = ScopeStack::new();
 
-        // First pass: collect all declarations and transform them
+        eprintln!(
+            "[DEBUG DEFUNC] Processing {} declarations",
+            program.declarations.len()
+        );
+
+        // Process each declaration, flushing generated lambdas before the declaration itself
         for decl in &program.declarations {
             match decl {
                 Declaration::Decl(decl_node) => {
+                    eprintln!("[DEBUG DEFUNC] Processing Decl: {}", decl_node.name);
+                    self.begin_decl(&decl_node.name);
+
                     if decl_node.params.is_empty() {
                         // Variable declarations (let/def with no params) - may contain Application nodes
                         let (transformed_decl, _sv) =
                             self.defunctionalize_decl(decl_node, &mut scope_stack)?;
+                        // Flush generated lambdas before this declaration
+                        new_declarations.extend(self.drain_bucket_as_decls());
                         new_declarations.push(transformed_decl);
+                        eprintln!("[DEBUG DEFUNC] Added variable decl: {}", decl_node.name);
                     } else {
                         // Function declarations with params - need to defunctionalize body
                         let (transformed_body, _sv) =
                             self.defunctionalize_expression(&decl_node.body, &mut scope_stack)?;
+                        // Flush generated lambdas before this declaration
+                        new_declarations.extend(self.drain_bucket_as_decls());
                         let mut transformed_decl = decl_node.clone();
                         transformed_decl.body = transformed_body;
                         new_declarations.push(Declaration::Decl(transformed_decl));
+                        eprintln!("[DEBUG DEFUNC] Added function decl: {}", decl_node.name);
                     }
+
+                    self.end_decl();
                 }
                 Declaration::Entry(entry) => {
+                    eprintln!("[DEBUG DEFUNC] Processing Entry: {}", entry.name);
+                    self.begin_decl(&entry.name);
+
                     // Entry points need defunctionalization too
                     let (transformed_body, _sv) =
                         self.defunctionalize_expression(&entry.body, &mut scope_stack)?;
+                    // Flush generated lambdas before this entry
+                    new_declarations.extend(self.drain_bucket_as_decls());
                     let mut transformed_entry = entry.clone();
                     transformed_entry.body = transformed_body;
                     new_declarations.push(Declaration::Entry(transformed_entry));
+
+                    self.end_decl();
                 }
                 Declaration::Uniform(uniform_decl) => {
                     // Uniform declarations have no body
@@ -180,38 +246,8 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             }
         }
 
-        // Add generated functions as def declarations AT THE BEGINNING
-        // so they're in scope when functions that reference them are type-checked
-        let mut generated_decls = Vec::new();
-        for func in &self.generated_functions {
-            generated_decls.push(Declaration::Decl(Decl {
-                keyword: "def",
-                attributes: vec![],
-                name: func.name.clone(),
-                size_params: vec![],
-                type_params: vec![],
-                params: func
-                    .params
-                    .iter()
-                    .map(|p| {
-                        // Create a pattern with type annotation if the parameter has a concrete type
-                        let name_pattern =
-                            self.node_counter.mk_node(PatternKind::Name(p.name.clone()), Span::dummy());
-                        // Wrap in Typed pattern to preserve type information
-                        self.node_counter.mk_node(
-                            PatternKind::Typed(Box::new(name_pattern), p.ty.clone()),
-                            Span::dummy(),
-                        )
-                    })
-                    .collect(),
-                ty: None, // Function definitions don't have explicit type annotations
-                body: func.body.clone(),
-            }));
-        }
-        // Prepend generated functions to the beginning of declarations
-        generated_decls.extend(new_declarations);
-        let new_declarations = generated_decls;
-
+        // All generated lambdas have been flushed into new_declarations
+        // right before their enclosing declaration, so we're done
         Ok(Program {
             declarations: new_declarations,
         })
@@ -637,9 +673,11 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             }
         }
 
-        // Generate a unique function name
-        let func_name = format!("__lambda_{}", self.next_function_id);
+        // Generate a unique function name with enclosing declaration context
+        let id = self.next_function_id;
         self.next_function_id += 1;
+        let top = self.enclosing_decl_stack.last().map(String::as_str).unwrap_or("top");
+        let func_name = format!("__lam_{}_{}", top, id);
 
         // Create parameters: only add __closure if there are free variables
         let mut func_params = Vec::new();
@@ -699,7 +737,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         // Pop parameter scope
         scope_stack.pop_scope();
 
-        // Create the generated function
+        // Create the generated function and push to current bucket
         let return_type = lambda.return_type.clone().unwrap_or_else(|| self.type_var_gen.new_variable());
         let generated_func = DefunctionalizedFunction {
             name: func_name.clone(),
@@ -708,7 +746,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             body: transformed_body,
         };
 
-        self.generated_functions.push(generated_func);
+        self.current_bucket.push(generated_func);
 
         // Create closure constructor expression
         if free_vars.is_empty() {
