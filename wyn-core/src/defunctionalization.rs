@@ -498,10 +498,14 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         scope_stack: &mut ScopeStack<StaticValue>,
     ) -> Result<(Expression, StaticValue)> {
         // Find free variables in the lambda body
-        let free_vars = self.find_free_variables(
-            &lambda.body,
-            &lambda.params.iter().filter_map(|p| p.simple_name().map(|s| s.to_string())).collect(),
-        )?;
+        // Build set of bound parameters
+        let mut bound = HashSet::new();
+        for p in &lambda.params {
+            if let Some(n) = p.simple_name() {
+                bound.insert(n.to_string());
+            }
+        }
+        let free_vars = self.find_free_variables(&lambda.body, &bound)?;
 
         // Create a closure record with free variables
         let mut closure_fields = HashMap::new();
