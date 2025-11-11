@@ -906,16 +906,59 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                 self.collect_free_variables(right, bound_vars, free_vars)?;
             }
 
-            ExprKind::QualifiedName(_, _)
-            | ExprKind::UnaryOp(_, _)
-            | ExprKind::Loop(_)
-            | ExprKind::Match(_)
-            | ExprKind::Range(_)
-            | ExprKind::TypeAscription(_, _)
-            | ExprKind::TypeCoercion(_, _)
-            | ExprKind::Unsafe(_)
-            | ExprKind::Assert(_, _) => {
-                todo!("New expression kinds not yet implemented in collect_free_variables")
+            ExprKind::QualifiedName(_, _) => {
+                // Qualified names don't contain free variables
+            }
+            ExprKind::UnaryOp(_, operand) => {
+                self.collect_free_variables(operand, bound_vars, free_vars)?;
+            }
+            ExprKind::Loop(loop_expr) => {
+                // Collect from init expression
+                if let Some(init) = &loop_expr.init {
+                    self.collect_free_variables(init, bound_vars, free_vars)?;
+                }
+
+                // Add loop pattern names to bound vars for body
+                let mut loop_bound = bound_vars.clone();
+                for name in loop_expr.pattern.collect_names() {
+                    loop_bound.insert(name);
+                }
+
+                // Collect from loop form (condition/range)
+                match &loop_expr.form {
+                    LoopForm::For(_name, expr) => {
+                        self.collect_free_variables(expr, &loop_bound, free_vars)?;
+                    }
+                    LoopForm::ForIn(_pattern, expr) => {
+                        self.collect_free_variables(expr, bound_vars, free_vars)?;
+                    }
+                    LoopForm::While(cond) => {
+                        self.collect_free_variables(cond, &loop_bound, free_vars)?;
+                    }
+                }
+
+                // Collect from body
+                self.collect_free_variables(&loop_expr.body, &loop_bound, free_vars)?;
+            }
+            ExprKind::Match(_) => {
+                // Match expressions not yet fully supported
+                return Err(CompilerError::DefunctionalizationError(
+                    "Match expressions not yet supported in defunctionalization".to_string(),
+                ));
+            }
+            ExprKind::Range(range_expr) => {
+                self.collect_free_variables(&range_expr.start, bound_vars, free_vars)?;
+                self.collect_free_variables(&range_expr.end, bound_vars, free_vars)?;
+            }
+            ExprKind::TypeAscription(expr, _ty) | ExprKind::TypeCoercion(expr, _ty) => {
+                self.collect_free_variables(expr, bound_vars, free_vars)?;
+            }
+            ExprKind::Unsafe(expr) => {
+                self.collect_free_variables(expr, bound_vars, free_vars)?;
+            }
+            ExprKind::Assert(cond, expr) => {
+                self.collect_free_variables(cond, bound_vars, free_vars)?;
+                self.collect_free_variables(expr, bound_vars, free_vars)?;
             }
         } // NEWCASESHERE - add new cases before this closing brace
         Ok(())
