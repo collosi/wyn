@@ -373,11 +373,9 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                 let (transformed_value, value_sv) =
                     self.defunctionalize_expression(&let_in.value, scope_stack)?;
 
-                // Push new scope and add bindings for all names in the pattern
+                // Push new scope and add bindings based on pattern structure
                 scope_stack.push_scope();
-                for name in let_in.pattern.collect_names() {
-                    scope_stack.insert(name, value_sv.clone());
-                }
+                self.bind_pattern(&let_in.pattern, &value_sv, scope_stack)?;
 
                 // Transform the body expression
                 let (transformed_body, body_sv) =
@@ -401,12 +399,28 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             }
             ExprKind::FieldAccess(expr, field) => {
                 let (transformed_expr, expr_sv) = self.defunctionalize_expression(expr, scope_stack)?;
+
+                // Extract the field's static value from the base if it's a record
+                let field_sv = match &expr_sv {
+                    StaticValue::Rcd(fields) => {
+                        // Look up the field in the record
+                        fields.get(field).cloned().unwrap_or_else(|| {
+                            // Field not found, use a type variable
+                            StaticValue::Dyn(self.type_var_gen.new_variable())
+                        })
+                    }
+                    _ => {
+                        // Not a record, can't extract field info - use type variable
+                        StaticValue::Dyn(self.type_var_gen.new_variable())
+                    }
+                };
+
                 Ok((
                     self.node_counter.mk_node(
                         ExprKind::FieldAccess(Box::new(transformed_expr), field.clone()),
                         span,
                     ),
-                    expr_sv, // Field access doesn't change the static value representation
+                    field_sv,
                 ))
             }
             ExprKind::If(if_expr) => {
@@ -1265,6 +1279,49 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             ExprKind::Lambda(_) => expr.clone(),
             // Other expression kinds - just clone for now
             _ => expr.clone(),
+        }
+    }
+
+    /// Bind pattern names to appropriate StaticValues based on pattern structure
+    fn bind_pattern(
+        &mut self,
+        pattern: &Pattern,
+        value_sv: &StaticValue,
+        scope_stack: &mut ScopeStack<StaticValue>,
+    ) -> Result<()> {
+        match &pattern.kind {
+            PatternKind::Name(name) => {
+                // Simple name binding - bind to the whole value
+                scope_stack.insert(name.clone(), value_sv.clone());
+                Ok(())
+            }
+            PatternKind::Tuple(elements) => {
+                // Tuple pattern - need to decompose the value
+                // For now, if we don't have static tuple info, bind all to Dyn
+                for (i, elem_pattern) in elements.iter().enumerate() {
+                    // Try to extract element type if available
+                    // For now, just bind to a fresh type variable
+                    let elem_sv = StaticValue::Dyn(self.type_var_gen.new_variable());
+                    self.bind_pattern(elem_pattern, &elem_sv, scope_stack)?;
+                }
+                Ok(())
+            }
+            PatternKind::Wildcard => {
+                // Wildcard - no binding needed
+                Ok(())
+            }
+            PatternKind::Typed(inner, _ty) => {
+                // Typed pattern - recurse on inner pattern
+                self.bind_pattern(inner, value_sv, scope_stack)
+            }
+            PatternKind::Attributed(_attrs, inner) => {
+                // Attributed pattern - recurse on inner pattern
+                self.bind_pattern(inner, value_sv, scope_stack)
+            }
+            _ => {
+                // Other patterns not yet handled - bind nothing for now
+                Ok(())
+            }
         }
     }
 }
