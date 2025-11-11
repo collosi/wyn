@@ -88,6 +88,7 @@ impl CodeAnnotator {
                     }
                     TypeName::Record(fields) => {
                         self.output.push('{');
+                        // BTreeMap maintains sorted order automatically
                         for (i, (name, ty)) in fields.iter().enumerate() {
                             if i > 0 {
                                 self.output.push_str(", ");

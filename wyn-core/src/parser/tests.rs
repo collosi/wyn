@@ -1603,7 +1603,7 @@ fn test_parse_record_type_empty() {
     let decl = single_decl("let x: {} = ???");
 
     assert_eq!(decl.name, "x");
-    assert!(matches!(&decl.ty, Some(Type::Constructed(TypeName::Record(fields), _)) if fields.len() == 0));
+    assert!(matches!(&decl.ty, Some(Type::Constructed(TypeName::Record(fields), _)) if fields.is_empty()));
 }
 
 #[test]
@@ -1613,7 +1613,7 @@ fn test_parse_record_type_single_field() {
 
     assert_eq!(decl.name, "r");
     assert!(
-        matches!(&decl.ty, Some(Type::Constructed(TypeName::Record(fields), _)) if fields.len() == 1 && fields[0].0 == "x")
+        matches!(&decl.ty, Some(Type::Constructed(TypeName::Record(fields), _)) if fields.len() == 1 && fields.contains_key("x"))
     );
 }
 
@@ -1625,7 +1625,7 @@ fn test_parse_record_type_multiple_fields() {
     assert_eq!(decl.name, "r");
     assert!(
         matches!(&decl.ty, Some(Type::Constructed(TypeName::Record(fields), _))
-        if fields.len() == 3 && fields[0].0 == "x" && fields[1].0 == "y" && fields[2].0 == "z")
+        if fields.len() == 3 && fields.contains_key("x") && fields.contains_key("y") && fields.contains_key("z"))
     );
 }
 

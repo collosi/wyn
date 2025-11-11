@@ -882,7 +882,10 @@ impl TypeChecker {
                     let field_ty = self.infer_expression(field_expr)?;
                     field_types.push((field_name.clone(), field_ty));
                 }
-                Ok(Type::Constructed(TypeName::Record(field_types), vec![]))
+                Ok(Type::Constructed(
+                    TypeName::Record(field_types.into_iter().collect()),
+                    vec![],
+                ))
             }
             ExprKind::TypeHole => {
                 // Record this hole for warning emission after type inference completes
@@ -1200,11 +1203,9 @@ impl TypeChecker {
                                     ))
                                 }
                             } else if let TypeName::Record(fields) = &type_name {
-                                // Handle Record type specially - look up field in the record's field list
-                                for (field_name, field_type) in fields {
-                                    if field_name == field {
-                                        return Ok(field_type.clone());
-                                    }
+                                // Handle Record type specially - look up field in the record's field map
+                                if let Some(field_type) = fields.get(field) {
+                                    return Ok(field_type.clone());
                                 }
                                 // Field not found in record
                                 return Err(CompilerError::TypeError(
