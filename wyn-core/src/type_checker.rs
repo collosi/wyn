@@ -631,6 +631,15 @@ impl TypeChecker {
     }
 
     pub fn check_program(&mut self, program: &Program) -> Result<HashMap<crate::ast::NodeId, Type>> {
+        eprintln!(
+            "[DEBUG TYPECK] Received {} declarations",
+            program.declarations.len()
+        );
+        for decl in &program.declarations {
+            if let Declaration::Decl(d) = decl {
+                eprintln!("[DEBUG TYPECK] Declaration: {}", d.name);
+            }
+        }
         // Process declarations in order - each can only refer to preceding declarations
         for decl in &program.declarations {
             self.check_declaration(decl)?;
@@ -715,8 +724,11 @@ impl TypeChecker {
     fn check_declaration(&mut self, decl: &Declaration) -> Result<()> {
         match decl {
             Declaration::Decl(decl_node) => {
+                eprintln!("[DEBUG TYPECK] Starting to check Decl: {}", decl_node.name);
                 debug!("Checking {} declaration: {}", decl_node.keyword, decl_node.name);
-                self.check_decl(decl_node)
+                self.check_decl(decl_node).inspect_err(|e| {
+                    eprintln!("[DEBUG TYPECK] Error checking Decl {}: {:?}", decl_node.name, e);
+                })
             }
             Declaration::Entry(entry) => {
                 debug!("Checking entry point: {}", entry.name);
@@ -859,6 +871,11 @@ impl TypeChecker {
 
             // Update scope with inferred type using generalization
             let type_scheme = self.generalize(&func_type);
+            eprintln!(
+                "[DEBUG] Inserting function '{}' into scope at depth {}",
+                decl.name,
+                self.scope_stack.depth()
+            );
             self.scope_stack.insert(decl.name.clone(), type_scheme);
 
             debug!("Inferred type for {}: {}", decl.name, func_type);
@@ -1032,6 +1049,8 @@ impl TypeChecker {
                             Err(CompilerError::UndefinedVariable(func_name.clone(), expr.h.span))
                         }
                     } else {
+                        eprintln!("[DEBUG] FunctionCall '{}' not found at {:?}", func_name, expr.h.span);
+                        eprintln!("[DEBUG] Scope stack has {} scopes", self.scope_stack.depth());
                         Err(CompilerError::UndefinedVariable(func_name.clone(), expr.h.span))
                     };
 
@@ -1166,6 +1185,30 @@ impl TypeChecker {
                 {
                     // Not a qualified name, proceed with normal field access
                     let expr_type = self.infer_expression(expr)?;
+
+                    // Check if this is a vector field access (x, y, z, w)
+                    // If so, constrain the type to be a Vec even if it's currently unknown
+                    if matches!(field.as_str(), "x" | "y" | "z" | "w") {
+                        // Create a Vec type with unknown size and element type
+                        let size_var = self.context.new_variable();
+                        let elem_var = self.context.new_variable();
+                        let want_vec = Type::Constructed(TypeName::Vec, vec![size_var, elem_var.clone()]);
+
+                        // Unify to constrain expr_type to be a Vec
+                        self.context.unify(&expr_type, &want_vec).map_err(|_| {
+                            CompilerError::TypeError(
+                                format!(
+                                    "Field access '{}' requires a vector type, got {}",
+                                    field,
+                                    self.format_type(&expr_type.apply(&self.context))
+                                ),
+                                expr.h.span
+                            )
+                        })?;
+
+                        // Return the element type
+                        return Ok(elem_var.apply(&self.context));
+                    }
 
                     // Apply context to resolve any type variables that have been unified
                     let expr_type = expr_type.apply(&self.context);
