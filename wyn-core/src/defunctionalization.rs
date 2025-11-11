@@ -25,6 +25,7 @@ impl StaticValue {
             }
             StaticValue::Rcd(fields) => {
                 // Record type - extract field types
+                // Field order doesn't matter due to custom PartialEq for TypeName::Record
                 let field_types: Vec<(String, Type)> =
                     fields.iter().map(|(name, sv)| (name.clone(), sv.to_type(gen))).collect();
                 crate::ast::types::record(field_types)

@@ -209,7 +209,7 @@ pub type Expression = Node<ExprKind>;
 /// - `Named`: Type names parsed from user source code (e.g., "vec3", "MyType")
 ///            Could refer to built-in types, type aliases, or user-defined types
 ///            Uses owned String since the name comes from parsed input
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub enum TypeName {
     /// Primitive type names hardcoded in compiler: "i32", "f32", "tuple", "->", etc.
     Str(&'static str),
@@ -334,6 +334,80 @@ impl polytype::Name for TypeName {
 impl From<&'static str> for TypeName {
     fn from(s: &'static str) -> Self {
         TypeName::Str(s)
+    }
+}
+
+// Custom PartialEq to implement structural typing for records
+// In Futhark, {x: i32, y: f32} == {y: f32, x: i32} (field order doesn't matter)
+impl PartialEq for TypeName {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (TypeName::Str(a), TypeName::Str(b)) => a == b,
+            (TypeName::Array, TypeName::Array) => true,
+            (TypeName::Unsized, TypeName::Unsized) => true,
+            (TypeName::Vec, TypeName::Vec) => true,
+            (TypeName::Size(a), TypeName::Size(b)) => a == b,
+            (TypeName::SizeVar(a), TypeName::SizeVar(b)) => a == b,
+            (TypeName::UserVar(a), TypeName::UserVar(b)) => a == b,
+            (TypeName::Named(a), TypeName::Named(b)) => a == b,
+            (TypeName::Unique, TypeName::Unique) => true,
+            (TypeName::Record(fields_a), TypeName::Record(fields_b)) => {
+                // Records are equal if they have the same fields (order-independent)
+                if fields_a.len() != fields_b.len() {
+                    return false;
+                }
+                // Check that every field in a exists in b with the same type
+                for (name_a, ty_a) in fields_a {
+                    match fields_b.iter().find(|(name_b, _)| name_a == name_b) {
+                        Some((_, ty_b)) if ty_a == ty_b => {}
+                        _ => return false,
+                    }
+                }
+                true
+            }
+            (TypeName::Sum(variants_a), TypeName::Sum(variants_b)) => {
+                // Sum types - order matters for constructors
+                variants_a == variants_b
+            }
+            (TypeName::Existential(vars_a, ty_a), TypeName::Existential(vars_b, ty_b)) => {
+                vars_a == vars_b && ty_a == ty_b
+            }
+            (TypeName::NamedParam(name_a, ty_a), TypeName::NamedParam(name_b, ty_b)) => {
+                name_a == name_b && ty_a == ty_b
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for TypeName {}
+
+// Custom Hash to match the custom PartialEq
+impl std::hash::Hash for TypeName {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Use discriminant to distinguish variants
+        std::mem::discriminant(self).hash(state);
+        match self {
+            TypeName::Str(s) => s.hash(state),
+            TypeName::Array | TypeName::Unsized | TypeName::Vec | TypeName::Unique => {}
+            TypeName::Size(n) => n.hash(state),
+            TypeName::SizeVar(v) | TypeName::UserVar(v) | TypeName::Named(v) => v.hash(state),
+            TypeName::Record(fields) => {
+                // Hash fields in sorted order for consistency with PartialEq
+                let mut sorted_fields = fields.clone();
+                sorted_fields.sort_by(|a, b| a.0.cmp(&b.0));
+                sorted_fields.hash(state);
+            }
+            TypeName::Sum(variants) => variants.hash(state),
+            TypeName::Existential(vars, ty) => {
+                vars.hash(state);
+                ty.hash(state);
+            }
+            TypeName::NamedParam(name, ty) => {
+                name.hash(state);
+                ty.hash(state);
+            }
+        }
     }
 }
 
