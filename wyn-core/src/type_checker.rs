@@ -1256,9 +1256,9 @@ impl TypeChecker {
                 // or (|>) operators with lambdas
                 self.apply_two_pass(func_type, args)
             }
-            ExprKind::FieldAccess(expr, field) => {
+            ExprKind::FieldAccess(inner_expr, field) => {
                 // Try to extract a qualified name (e.g., f32.cos, M.N.x)
-                if let Some(qual_name) = Self::try_extract_qual_name(expr, field) {
+                if let Some(qual_name) = Self::try_extract_qual_name(inner_expr, field) {
                     let dotted = qual_name.to_dotted();
                     let mangled = qual_name.mangle();
 
@@ -1266,6 +1266,7 @@ impl TypeChecker {
                     if let Ok(scheme) = self.scope_stack.lookup(&mangled) {
                         // Instantiate the type scheme
                         let ty = scheme.instantiate(&mut self.context);
+                        self.type_table.insert(expr.h.id, ty.clone());
                         return Ok(ty);
                     }
 
@@ -1273,7 +1274,9 @@ impl TypeChecker {
                     if self.builtin_registry.is_builtin(&dotted) {
                         if let Some(desc) = self.builtin_registry.get(&dotted) {
                             // Instantiate with fresh type variables
-                            return Ok(self.instantiate_builtin_type(&desc.clone()));
+                            let ty = self.instantiate_builtin_type(&desc.clone());
+                            self.type_table.insert(expr.h.id, ty.clone());
+                            return Ok(ty);
                         }
                     }
 
@@ -1283,14 +1286,16 @@ impl TypeChecker {
                 // Not a qualified name (or wasn't found), treat as normal field access
                 {
                     // Not a qualified name, proceed with normal field access
-                    let expr_type = self.infer_expression(expr)?;
+                    let expr_type = self.infer_expression(inner_expr)?;
 
                     // Check if this is a __tag field access (closure tag for defunctionalization)
                     // Allow it on any type variable and return i32
                     if field == "__tag" {
                         // The type checker can't verify this is actually a closure record,
                         // but the defunctionalizer guarantees it. Just return i32.
-                        return Ok(types::i32());
+                        let ty = types::i32();
+                        self.type_table.insert(expr.h.id, ty.clone());
+                        return Ok(ty);
                     }
 
                     // Apply context to resolve any type variables that have been unified
@@ -1300,6 +1305,7 @@ impl TypeChecker {
                     // First check if it's a record with the requested field
                     if let Type::Constructed(TypeName::Record(fields), _) = &expr_type {
                         if let Some(field_type) = fields.get(field) {
+                            self.type_table.insert(expr.h.id, field_type.clone());
                             return Ok(field_type.clone());
                         }
                     }
@@ -1325,7 +1331,9 @@ impl TypeChecker {
                         })?;
 
                         // Return the element type
-                        return Ok(elem_var.apply(&self.context));
+                        let result_ty = elem_var.apply(&self.context);
+                        self.type_table.insert(expr.h.id, result_ty.clone());
+                        return Ok(result_ty);
                     }
 
                     // Extract the type name from the expression type
@@ -1362,6 +1370,7 @@ impl TypeChecker {
                             } else if let TypeName::Record(fields) = &type_name {
                                 // Handle Record type specially - look up field in the record's field map
                                 if let Some(field_type) = fields.get(field) {
+                                    self.type_table.insert(expr.h.id, field_type.clone());
                                     return Ok(field_type.clone());
                                 }
                                 // Field not found in record

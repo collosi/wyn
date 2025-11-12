@@ -1290,11 +1290,6 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         let func_var = format!("__map_f_{}", map_id);
         self.next_function_id += 1;
 
-        eprintln!(
-            "DEBUG defunctionalize_map: map_id={}, generating vars: i={}, out={}, xs={}, len={}, func={}",
-            map_id, i_var, out_var, xs_var, len_var, func_var
-        );
-
         // Build ALL leaf nodes first to avoid borrow checker issues
         let xs_ident_for_len = self.node_counter.mk_node(ExprKind::Identifier(xs_var.clone()), span);
         let len_ident_for_replicate =
@@ -1352,25 +1347,9 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         // call the lambda directly instead of using __apply1 dispatcher
         let mut call_callee_is_direct = None;
         if let Some(tag) = self.extract_closure_tag(func) {
-            eprintln!("DEBUG defunctionalize_map: extracted tag={}", tag);
             if let Some(lam_name) = self.lambda_name_for_tag(tag) {
-                eprintln!("DEBUG defunctionalize_map: will use direct call to {}", lam_name);
                 call_callee_is_direct = Some(lam_name.to_string());
-            } else {
-                eprintln!(
-                    "DEBUG defunctionalize_map: no lambda found for tag {}, registry has {} entries",
-                    tag,
-                    self.lambda_registry.len()
-                );
-                for meta in &self.lambda_registry {
-                    eprintln!("  registry entry: tag={} name={}", meta.tag, meta.name);
-                }
             }
-        } else {
-            eprintln!(
-                "DEBUG defunctionalize_map: could not extract tag, func.kind={:?}",
-                std::mem::discriminant(&func.kind)
-            );
         }
 
         // Build func identifier for call
@@ -1378,29 +1357,12 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
 
         // EITHER direct call to the known __lam_* ... OR generic dispatcher if callee not statically known
         let func_app = if let Some(lam_name) = call_callee_is_direct {
-            eprintln!(
-                "DEBUG defunctionalize_map: generating direct call: {}({}, {}[{}])",
-                lam_name, func_var, xs_var, i_var
-            );
-            eprintln!(
-                "DEBUG defunctionalize_map: array_index.kind = {:?}",
-                array_index.kind
-            );
             // Direct call: __lam_foo(closure, xs[i])
-            let call = self.node_counter.mk_node(
+            self.node_counter.mk_node(
                 ExprKind::FunctionCall(lam_name, vec![func_ident.clone(), array_index.clone()]),
                 span,
-            );
-            eprintln!(
-                "DEBUG defunctionalize_map: generated call args: func_ident={:?}, array_index={:?}",
-                func_ident.kind, array_index.kind
-            );
-            call
+            )
         } else {
-            eprintln!(
-                "DEBUG defunctionalize_map: generating dispatcher call: __apply1({}, {}[{}])",
-                func_var, xs_var, i_var
-            );
             // Generic dispatcher: __apply1(closure, xs[i])
             self.node_counter.mk_node(
                 ExprKind::FunctionCall("__apply1".to_string(), vec![func_ident, array_index]),
