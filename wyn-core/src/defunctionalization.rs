@@ -10,6 +10,14 @@ pub enum StaticValue {
     Lam(String, Expression),           // Lambda: param name, body (defunctionalized immediately)
     Rcd(HashMap<String, StaticValue>), // Record of static values
     Arr(Box<StaticValue>),             // Array of static values
+
+    // Defunctionalized closure with precise call-target info
+    Closure {
+        tag: i32,                          // runtime tag baked into the record
+        lam_name: String,                  // __lam_* symbol to call directly
+        arity: usize,                      // number of (non-closure) params
+        env: HashMap<String, StaticValue>, // captured fields (not including __tag)
+    },
 }
 
 impl StaticValue {
@@ -36,6 +44,15 @@ impl StaticValue {
                 // but since lambdas get defunctionalized into named functions,
                 // the type checker will infer the correct type from the generated function.
                 gen.new_variable()
+            }
+            StaticValue::Closure { env, .. } => {
+                // Closure value is a record { __tag: i32, <env fields...> }
+                let mut fields: Vec<(String, Type)> = Vec::with_capacity(env.len() + 1);
+                fields.push(("__tag".to_string(), crate::ast::types::i32()));
+                for (k, v) in env {
+                    fields.push((k.clone(), v.to_type(gen)));
+                }
+                crate::ast::types::record(fields)
             }
         }
     }
@@ -431,6 +448,13 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                                 sv.clone(),
                             ))
                         }
+                        StaticValue::Closure { .. } => {
+                            // Reference to a defunctionalized closure
+                            Ok((
+                                self.node_counter.mk_node(ExprKind::Identifier(name.clone()), span),
+                                sv.clone(),
+                            ))
+                        }
                         StaticValue::Arr(_) => Ok((
                             self.node_counter.mk_node(ExprKind::Identifier(name.clone()), span),
                             sv.clone(),
@@ -521,27 +545,48 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             }
             ExprKind::FunctionCall(name, args) => {
                 // Check if the function name refers to a closure in scope
-                // If so, convert to __applyN call
                 if let Ok(sv) = scope_stack.lookup(name) {
-                    if matches!(sv, StaticValue::Rcd(_)) {
-                        // This is a closure application - convert to __applyN
-                        let arity = args.len();
-                        let apply_name = format!("__apply{}", arity);
+                    match sv {
+                        StaticValue::Closure { lam_name, .. } => {
+                            // Clone lam_name before mutable borrow
+                            let lam_name = lam_name.clone();
 
-                        // Transform arguments
-                        let mut transformed_args = Vec::new();
-                        for arg in args {
-                            let (transformed_arg, _sv) =
-                                self.defunctionalize_expression(arg, scope_stack)?;
-                            transformed_args.push(transformed_arg);
+                            // Direct call to known lambda
+                            let mut transformed_args = Vec::new();
+                            for arg in args {
+                                let (transformed_arg, _sv) =
+                                    self.defunctionalize_expression(arg, scope_stack)?;
+                                transformed_args.push(transformed_arg);
+                            }
+
+                            // Call __lam_* with closure identifier and args
+                            let closure_ident = self.mk(ExprKind::Identifier(name.clone()));
+                            let mut all_args = vec![closure_ident];
+                            all_args.extend(transformed_args);
+
+                            return Ok(self.ret_dyn(ExprKind::FunctionCall(lam_name, all_args)));
                         }
+                        StaticValue::Rcd(_) => {
+                            // Legacy path: closure as Rcd - convert to __applyN
+                            let arity = args.len();
+                            let apply_name = format!("__apply{}", arity);
 
-                        // Call __applyN with closure identifier and args
-                        let closure_ident = self.mk(ExprKind::Identifier(name.clone()));
-                        let mut all_args = vec![closure_ident];
-                        all_args.extend(transformed_args);
+                            // Transform arguments
+                            let mut transformed_args = Vec::new();
+                            for arg in args {
+                                let (transformed_arg, _sv) =
+                                    self.defunctionalize_expression(arg, scope_stack)?;
+                                transformed_args.push(transformed_arg);
+                            }
 
-                        return Ok(self.ret_dyn(ExprKind::FunctionCall(apply_name, all_args)));
+                            // Call __applyN with closure identifier and args
+                            let closure_ident = self.mk(ExprKind::Identifier(name.clone()));
+                            let mut all_args = vec![closure_ident];
+                            all_args.extend(transformed_args);
+
+                            return Ok(self.ret_dyn(ExprKind::FunctionCall(apply_name, all_args)));
+                        }
+                        _ => {}
                     }
                 }
 
@@ -911,11 +956,15 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         // Create closure constructor expression - ALWAYS a record with __tag
         let closure_record = self.create_closure_record(tag, &free_vars)?;
 
-        // Include __tag in the StaticValue for consistency
-        let mut closure_fields_sv = closure_fields.clone();
-        closure_fields_sv.insert("__tag".to_string(), StaticValue::Dyn(crate::ast::types::i32()));
+        // Return StaticValue::Closure with precise call-target info
+        let sv = StaticValue::Closure {
+            tag,
+            lam_name: func_name.clone(),
+            arity,
+            env: closure_fields, // note: without __tag
+        };
 
-        Ok((closure_record, StaticValue::Rcd(closure_fields_sv)))
+        Ok((closure_record, sv))
     }
 
     fn defunctionalize_application(
@@ -932,9 +981,26 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             transformed_args.push(transformed_arg);
         }
 
-        match func_sv {
+        match &func_sv {
+            StaticValue::Closure { lam_name, .. } => {
+                // Direct call to known lambda: __lam_foo(closure, args...)
+                let mut all_args = vec![transformed_func];
+                all_args.extend(transformed_args);
+                Ok(self.ret_dyn(ExprKind::FunctionCall(lam_name.clone(), all_args)))
+            }
             StaticValue::Rcd(_closure_fields) => {
-                // Closure application - use __applyN dispatcher
+                // Legacy path for record literals without Closure SV
+                // Try to extract tag from the expression (for inline record literals)
+                if let Some(tag) = self.extract_closure_tag(&transformed_func) {
+                    if let Some(lam_name) = self.lambda_name_for_tag(tag) {
+                        // Direct call to known lambda: __lam_foo(closure, args...)
+                        let mut all_args = vec![transformed_func];
+                        all_args.extend(transformed_args);
+                        return Ok(self.ret_dyn(ExprKind::FunctionCall(lam_name.to_string(), all_args)));
+                    }
+                }
+
+                // Fallback: use __applyN dispatcher
                 let arity = transformed_args.len();
                 let apply_name = format!("__apply{}", arity);
 

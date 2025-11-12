@@ -90,12 +90,11 @@ fn test_lambda_captures_free_variable() {
 
     // The defunctionalized program should have:
     // 1. A generated __lam_* function that takes (__closure, y) parameters
-    // 2. An __apply1 dispatcher function
-    // 3. The original test function
+    // 2. The original test function (no dispatcher with direct calls optimization)
     assert_eq!(
         defunc_program.declarations.len(),
-        3,
-        "Should have generated __lam_*, __apply1, and original test"
+        2,
+        "Should have generated __lam_* and original test"
     );
 
     // First declaration should be the generated lambda function
@@ -193,8 +192,8 @@ fn test_lambda_no_free_variables() {
 
     let defunc_program = defunctionalize_program(input);
 
-    // Should have generated lambda, __apply1 dispatcher, plus original
-    assert_eq!(defunc_program.declarations.len(), 3);
+    // Should have generated lambda plus original (no dispatcher with direct calls optimization)
+    assert_eq!(defunc_program.declarations.len(), 2);
 
     // Generated function should have __closure parameter (even if empty) and x
     match &defunc_program.declarations[0] {
@@ -223,8 +222,8 @@ fn test_lambda_captures_multiple_variables() {
 
     let defunc_program = defunctionalize_program(input);
 
-    // Should have generated lambda, __apply1 dispatcher, plus original
-    assert_eq!(defunc_program.declarations.len(), 3);
+    // Should have generated lambda plus original (no dispatcher with direct calls optimization)
+    assert_eq!(defunc_program.declarations.len(), 2);
 
     // Generated function should have __closure parameter with record type containing a, b, c
     match &defunc_program.declarations[0] {
