@@ -388,14 +388,45 @@ impl Mirize {
 
             ExprKind::FieldAccess(record, field_name) => {
                 let record_reg = self.mirize_expression(record)?;
-                // TODO: Look up field index from record type
-                // For now, map field names to indices (x=0, y=1, z=2, w=3)
-                let field_idx = match field_name.as_str() {
-                    "x" => 0,
-                    "y" => 1,
-                    "z" => 2,
-                    "w" => 3,
-                    _ => return Err(CompilerError::MirError(format!("Unknown field: {}", field_name))),
+
+                // Look up field index from record type
+                let field_idx = match &record_reg.ty {
+                    Type::Constructed(TypeName::Vec, _) => {
+                        // Vector field access (x, y, z, w)
+                        match field_name.as_str() {
+                            "x" => 0,
+                            "y" => 1,
+                            "z" => 2,
+                            "w" => 3,
+                            _ => {
+                                return Err(CompilerError::MirError(format!(
+                                    "Unknown vector field: {}",
+                                    field_name
+                                )));
+                            }
+                        }
+                    }
+                    Type::Constructed(TypeName::Record(fields), _) => {
+                        // Record field access - find field index by name
+                        fields
+                            .keys()
+                            .enumerate()
+                            .find(|(_, name)| name.as_str() == field_name)
+                            .map(|(idx, _)| idx as u32)
+                            .ok_or_else(|| {
+                                CompilerError::MirError(format!(
+                                    "Unknown field '{}' in record with fields: {:?}",
+                                    field_name,
+                                    fields.keys().collect::<Vec<_>>()
+                                ))
+                            })?
+                    }
+                    _ => {
+                        return Err(CompilerError::MirError(format!(
+                            "Field access on non-record type: {:?}",
+                            record_reg.ty
+                        )));
+                    }
                 };
                 Ok(self.builder.build_extract_element(record_reg, field_idx, expr_type))
             }
