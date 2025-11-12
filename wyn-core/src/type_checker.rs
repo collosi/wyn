@@ -1622,8 +1622,16 @@ impl TypeChecker {
                 Ok(result_type)
             }
 
-            ExprKind::TypeAscription(_, _) => {
-                todo!("TypeAscription not yet implemented in type checker")
+            ExprKind::TypeAscription(expr, ascribed_ty) => {
+                // Type ascription: check the inner expression and unify with ascribed type
+                let expr_ty = self.infer_expression(expr)?;
+                self.context.unify(&expr_ty, ascribed_ty).map_err(|e| {
+                    CompilerError::TypeError(
+                        format!("Type ascription failed: {:?}", e),
+                        expr.h.span,
+                    )
+                })?;
+                Ok(ascribed_ty.clone())
             }
 
             ExprKind::TypeCoercion(_, _) => {

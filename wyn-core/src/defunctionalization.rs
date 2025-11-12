@@ -132,6 +132,13 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         self.lambda_registry.iter().find(|m| m.tag == tag).map(|m| m.name.as_str())
     }
 
+    /// Extract type from a StaticValue for closure environment fields.
+    /// With annotated types in scope, this should return concrete types from Dyn variants.
+    fn env_field_type_from_sv(&mut self, sv: &StaticValue) -> Type {
+        // Simply use to_type - if annotations are present, SVs will be Dyn(concrete_type)
+        sv.to_type(&mut self.type_var_gen)
+    }
+
     /// Helper: Create an expression with Dyn static value (for unknown types)
     fn ret_dyn(&mut self, kind: ExprKind) -> (Expression, StaticValue) {
         let expr = self.mk(kind);
@@ -655,9 +662,18 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                 let (transformed_value, value_sv) =
                     self.defunctionalize_expression(&let_in.value, scope_stack)?;
 
+                // Extract type annotation from either let_in.ty or the pattern (if it's Typed)
+                let annotated_ty = let_in.ty.as_ref().or_else(|| {
+                    if let PatternKind::Typed(_, ty) = &let_in.pattern.kind { Some(ty) } else { None }
+                });
+
+                // Prefer the annotated type if present for closure environment typing
+                let annotated_sv = annotated_ty.map(|ty| StaticValue::Dyn(ty.clone()));
+                let sv_for_binding = annotated_sv.as_ref().unwrap_or(&value_sv);
+
                 // Push new scope and add bindings based on pattern structure
                 scope_stack.push_scope();
-                self.bind_pattern(&let_in.pattern, &value_sv, scope_stack)?;
+                self.bind_pattern(&let_in.pattern, sv_for_binding, scope_stack)?;
 
                 // Transform the body expression
                 let (transformed_body, body_sv) =
@@ -854,13 +870,9 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
 
         // Create a closure record with free variables
         let mut closure_fields = HashMap::new();
-        let mut closure_type_fields = Vec::new();
         for var in &free_vars {
             if let Ok(sv) = scope_stack.lookup(var) {
                 closure_fields.insert(var.clone(), sv.clone());
-                // Extract type from StaticValue for the closure record type
-                let var_type = sv.to_type(&mut self.type_var_gen);
-                closure_type_fields.push((var.clone(), var_type));
             }
         }
 
@@ -874,19 +886,34 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         let tag = self.lambda_registry.len() as i32;
         let arity = lambda.params.len();
 
-        // Create parameters: ALWAYS add __closure parameter with __tag field
-        let mut func_params = Vec::new();
+        // Build ONE canonical closure record type by extracting concrete types from scope
+        // This ensures the lambda parameter type matches the actual closure record type
+        let mut sorted_free_vars: Vec<_> = free_vars.iter().collect();
+        sorted_free_vars.sort();
 
-        // Closure type always includes __tag : i32 plus any captured environment fields
-        let mut closure_type_fields_with_tag = Vec::with_capacity(closure_type_fields.len() + 1);
-        closure_type_fields_with_tag.push(("__tag".to_string(), crate::ast::types::i32()));
-        closure_type_fields_with_tag.extend(closure_type_fields.clone());
-        let closure_type = crate::ast::types::record(closure_type_fields_with_tag);
+        let mut closure_type_fields = Vec::with_capacity(sorted_free_vars.len() + 1);
+        closure_type_fields.push(("__tag".to_string(), crate::ast::types::i32()));
+
+        for var in sorted_free_vars {
+            let sv = scope_stack.lookup(var).map_err(|_| {
+                CompilerError::DefunctionalizationError(format!(
+                    "Free variable '{}' not in scope when building closure type",
+                    var
+                ))
+            })?;
+            let ty = self.env_field_type_from_sv(sv);
+            closure_type_fields.push((var.clone(), ty));
+        }
+
+        let closure_type = crate::ast::types::record(closure_type_fields);
+
+        // Create parameters: ALWAYS add __closure parameter with canonical type
+        let mut func_params = Vec::new();
 
         func_params.push(Parameter {
             attributes: vec![],
             name: "__closure".to_string(),
-            ty: closure_type,
+            ty: closure_type.clone(),
         });
 
         for param in &lambda.params {
