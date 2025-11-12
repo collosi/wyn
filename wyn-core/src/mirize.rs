@@ -122,9 +122,10 @@ impl Mirize {
         let return_type = if let Some(ty) = &decl.ty {
             ty.clone()
         } else {
-            return Err(CompilerError::MirError(
-                "Function missing return type annotation".to_string(),
-            ));
+            return Err(CompilerError::MirError(format!(
+                "Function '{}' missing return type annotation",
+                decl.name
+            )));
         };
 
         // Check if this is an entry point

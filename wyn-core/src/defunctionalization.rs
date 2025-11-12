@@ -262,7 +262,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                             .mk_node(PatternKind::Typed(Box::new(pat), p.ty.clone()), Span::dummy())
                     })
                     .collect(),
-                ty: None,
+                ty: Some(func.return_type),
                 body: func.body,
             }));
         }
