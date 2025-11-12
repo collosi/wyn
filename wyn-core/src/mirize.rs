@@ -450,8 +450,17 @@ impl Mirize {
                 todo!("QualifiedName not yet implemented in MIR")
             }
 
-            ExprKind::UnaryOp(_, _) => {
-                todo!("UnaryOp not yet implemented in MIR")
+            ExprKind::UnaryOp(op, operand) => {
+                let operand_reg = self.mirize_expression(operand)?;
+
+                match op.op.as_str() {
+                    "-" => Ok(self.builder.build_neg(operand_reg)),
+                    "!" => Ok(self.builder.build_not(operand_reg)),
+                    _ => Err(CompilerError::MirError(format!(
+                        "Unknown unary operator: {}",
+                        op.op
+                    ))),
+                }
             }
 
             ExprKind::Loop(loop_expr) => {

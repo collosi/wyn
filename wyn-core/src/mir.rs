@@ -32,6 +32,10 @@ pub enum Instruction {
     ConstFloat(Register, f32),
     ConstBool(Register, bool),
 
+    // Unary operations
+    Neg(Register, Register), // dest = -operand
+    Not(Register, Register), // dest = !operand (logical not)
+
     // Binary operations
     Add(Register, Register, Register), // dest = left + right
     Sub(Register, Register, Register),
@@ -380,6 +384,20 @@ impl Builder {
         let reg = self.new_register(ty);
         self.emit(Instruction::ConstBool(reg.clone(), value));
         reg
+    }
+
+    // === Unary operations ===
+
+    pub fn build_neg(&mut self, operand: Register) -> Register {
+        let dest = self.new_register(operand.ty.clone());
+        self.emit(Instruction::Neg(dest.clone(), operand));
+        dest
+    }
+
+    pub fn build_not(&mut self, operand: Register) -> Register {
+        let dest = self.new_register(operand.ty.clone());
+        self.emit(Instruction::Not(dest.clone(), operand));
+        dest
     }
 
     // === Binary operations ===

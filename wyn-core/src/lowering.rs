@@ -414,6 +414,28 @@ impl Lowering {
                 self.current_register_map.insert(dest.id, const_id);
             }
 
+            Instruction::Neg(dest, operand) => {
+                let type_id = self.get_or_create_type(&dest.ty)?;
+                let operand_id = self.get_register(operand)?;
+
+                let result_id = if self.is_float_type(&dest.ty) {
+                    self.builder.f_negate(type_id, None, operand_id)?
+                } else {
+                    self.builder.s_negate(type_id, None, operand_id)?
+                };
+
+                self.current_register_map.insert(dest.id, result_id);
+            }
+
+            Instruction::Not(dest, operand) => {
+                let type_id = self.get_or_create_type(&dest.ty)?;
+                let operand_id = self.get_register(operand)?;
+
+                let result_id = self.builder.logical_not(type_id, None, operand_id)?;
+
+                self.current_register_map.insert(dest.id, result_id);
+            }
+
             Instruction::Add(dest, left, right) => {
                 let type_id = self.get_or_create_type(&dest.ty)?;
                 let left_id = self.get_register(left)?;
