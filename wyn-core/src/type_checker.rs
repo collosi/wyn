@@ -1497,107 +1497,16 @@ impl TypeChecker {
                 }
             }
 
-            ExprKind::Loop(loop_expr) => {
-                // Type check the initial value
-                let init_type = if let Some(init) = &loop_expr.init {
-                    self.infer_expression(init)?
-                } else {
-                    // If no init provided, infer from pattern variables in scope
-                    // For now, just create a fresh type variable
-                    self.context.new_variable()
-                };
+            ExprKind::Loop(_) => {
+                return Err(CompilerError::TypeError(
+                    "Loop should be desugared to InternalLoop before type checking".to_string(),
+                    expr.h.span
+                ));
+            }
 
-                // Extract pattern type if annotated, otherwise use init type
-                let pattern_type = loop_expr.pattern.pattern_type().cloned().unwrap_or(init_type.clone());
-
-                // Unify init with pattern type
-                self.context.unify(&init_type, &pattern_type).map_err(|e| {
-                    CompilerError::TypeError(
-                        format!("Loop initial value type mismatch: {:?}", e),
-                        loop_expr.init.as_ref().map(|e| e.h.span).unwrap_or(expr.h.span)
-                    )
-                })?;
-
-                // Push new scope for loop variables
-                self.scope_stack.push_scope();
-
-                // Bind the loop pattern with its type
-                // Loop variables are not generalized
-                self.bind_pattern(&loop_expr.pattern, &pattern_type, false)?;
-
-                // Type check loop form
-                match &loop_expr.form {
-                    LoopForm::While(cond) => {
-                        let cond_type = self.infer_expression(cond)?;
-                        // Condition must be boolean
-                        self.context.unify(&cond_type, &types::bool_type()).map_err(|e| {
-                            CompilerError::TypeError(
-                                format!("Loop while condition must be bool: {:?}", e),
-                                cond.h.span
-                            )
-                        })?;
-                    }
-                    LoopForm::For(name, bound) => {
-                        // For x < n form: name is the loop variable, bound is n
-                        // Bind name as i32
-                        let type_scheme = TypeScheme::Monotype(types::i32());
-                        self.scope_stack.insert(name.clone(), type_scheme);
-
-                        // Check that bound is i32
-                        let bound_type = self.infer_expression(bound)?;
-                        self.context.unify(&bound_type, &types::i32()).map_err(|e| {
-                            CompilerError::TypeError(
-                                format!("Loop for bound must be i32: {:?}", e),
-                                bound.h.span
-                            )
-                        })?;
-                    }
-                    LoopForm::ForIn(iter_pat, iter_expr) => {
-                        // Type check the iterator expression
-                        let iter_type = self.infer_expression(iter_expr)?;
-
-                        // Iterator must be an array type: Array(size, elem_type)
-                        if let Type::Constructed(TypeName::Array, args) = &iter_type {
-                            if args.len() != 2 {
-                                return Err(CompilerError::TypeError(
-                                    format!(
-                                        "Malformed Array type - expected 2 arguments (size, element), got {}",
-                                        args.len()
-                                    ),
-                                    iter_expr.h.span
-                                ));
-                            }
-
-                            // Array is Array(size, elem_type), so element is at index 1
-                            let elem_type = &args[1];
-                            // Bind iterator pattern with element type
-                            // For-in loop variables are not generalized
-                            self.bind_pattern(iter_pat, elem_type, false)?;
-                        } else {
-                            return Err(CompilerError::TypeError(
-                                "Loop for-in expression must be an array".to_string(),
-                                iter_expr.h.span
-                            ));
-                        }
-                    }
-                }
-
-                // Type check loop body
-                let body_type = self.infer_expression(&loop_expr.body)?;
-
-                // Body type must match pattern type (loop accumulator)
-                self.context.unify(&body_type, &pattern_type).map_err(|e| {
-                    CompilerError::TypeError(
-                        format!("Loop body type must match pattern type: {:?}", e),
-                        loop_expr.body.h.span
-                    )
-                })?;
-
-                // Pop loop scope
-                self.scope_stack.pop_scope();
-
-                // Loop result type is the pattern/body type
-                Ok(pattern_type)
+            ExprKind::InternalLoop(_internal_loop) => {
+                // TODO: Implement type checking for InternalLoop
+                todo!("Type checking for InternalLoop not yet implemented")
             }
 
             ExprKind::Match(_) => {

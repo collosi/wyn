@@ -211,6 +211,7 @@ pub fn expr_type_name(expr: &Expression) -> &'static str {
         ExprKind::QualifiedName(_, _) => "qualified_name",
         ExprKind::UnaryOp(_, _) => "unary_op",
         ExprKind::Loop(_) => "loop",
+        ExprKind::InternalLoop(_) => "internal_loop",
         ExprKind::Match(_) => "match",
         ExprKind::Range(_) => "range",
         ExprKind::Pipe(_, _) => "pipe",

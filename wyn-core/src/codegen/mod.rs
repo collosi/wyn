@@ -1774,6 +1774,7 @@ impl CodeGenerator {
             ExprKind::QualifiedName(_, _)
             | ExprKind::UnaryOp(_, _)
             | ExprKind::Loop(_)
+            | ExprKind::InternalLoop(_)
             | ExprKind::Match(_)
             | ExprKind::Range(_)
             | ExprKind::TypeAscription(_, _)

@@ -76,7 +76,8 @@ struct LambdaMeta {
 }
 
 pub struct Defunctionalizer<T: crate::type_checker::TypeVarGenerator> {
-    next_function_id: usize,
+    /// Counter for generating fresh IDs (used for function names, temporary variables, etc.)
+    next_id: usize,
     type_var_gen: T,
     /// Per-declaration bucket for generated lambda functions
     current_bucket: Vec<DefunctionalizedFunction>,
@@ -90,13 +91,20 @@ pub struct Defunctionalizer<T: crate::type_checker::TypeVarGenerator> {
 impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
     pub fn new_with_counter(node_counter: NodeCounter, type_var_gen: T) -> Self {
         Defunctionalizer {
-            next_function_id: 0,
+            next_id: 0,
             type_var_gen,
             current_bucket: Vec::new(),
             enclosing_decl_stack: Vec::new(),
             lambda_registry: Vec::new(),
             node_counter,
         }
+    }
+
+    /// Get the next syntax ID for naming lambdas, temporary variables, etc.
+    fn next_syntax_id(&mut self) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
     }
 
     pub fn take_type_var_gen(self) -> T {
@@ -754,22 +762,13 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             }
 
             ExprKind::Loop(loop_expr) => {
-                let transformed_init = if let Some(init) = &loop_expr.init {
-                    let (transformed, _) = self.defunctionalize_expression(init, scope_stack)?;
-                    Some(Box::new(transformed))
-                } else {
-                    None
-                };
-                let (transformed_body, _) =
-                    self.defunctionalize_expression(&loop_expr.body, scope_stack)?;
-                let transformed_loop = LoopExpr {
-                    init: transformed_init,
-                    body: Box::new(transformed_body),
-                    ..loop_expr.clone()
-                };
-                Ok((
-                    self.node_counter.mk_node(ExprKind::Loop(transformed_loop), span),
-                    self.dyn_unknown(),
+                // Convert LoopExpr to InternalLoop by desugaring patterns
+                self.desugar_loop_to_internal(loop_expr, scope_stack, span)
+            }
+
+            ExprKind::InternalLoop(_) => {
+                Err(CompilerError::DefunctionalizationError(
+                    "InternalLoop should not appear as input to defunctionalization".to_string(),
                 ))
             }
 
@@ -877,8 +876,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         }
 
         // Generate a unique function name with enclosing declaration context
-        let id = self.next_function_id;
-        self.next_function_id += 1;
+        let id = self.next_syntax_id();
         let top = self.enclosing_decl_stack.last().map(String::as_str).unwrap_or("top");
         let func_name = format!("__lam_{}_{}", top, id);
 
@@ -1215,6 +1213,11 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                 // Collect from body
                 self.collect_free_variables(&loop_expr.body, &loop_bound, free_vars)?;
             }
+            ExprKind::InternalLoop(_) => {
+                return Err(CompilerError::DefunctionalizationError(
+                    "InternalLoop should not appear as input to defunctionalization".to_string(),
+                ));
+            }
             ExprKind::Match(_) => {
                 // Match expressions not yet fully supported
                 return Err(CompilerError::DefunctionalizationError(
@@ -1282,13 +1285,12 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         // We'll call __apply1 with it in the loop body
 
         // Generate unique variable names
-        let map_id = self.next_function_id;
+        let map_id = self.next_syntax_id();
         let i_var = format!("__map_i_{}", map_id);
         let out_var = format!("__map_out_{}", map_id);
         let xs_var = format!("__map_xs_{}", map_id);
         let len_var = format!("__map_len_{}", map_id);
         let func_var = format!("__map_f_{}", map_id);
-        self.next_function_id += 1;
 
         // Build ALL leaf nodes first to avoid borrow checker issues
         let xs_ident_for_len = self.node_counter.mk_node(ExprKind::Identifier(xs_var.clone()), span);
@@ -1633,6 +1635,10 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                     span,
                 )
             }
+            ExprKind::InternalLoop(_) => {
+                // InternalLoop should not appear as input to defunctionalization
+                panic!("InternalLoop should not appear as input to defunctionalization");
+            }
             ExprKind::TypeAscription(inner, ty) => {
                 let inner_rewritten = self.rewrite_free_variables(inner, free_vars);
                 self.node_counter.mk_node(
@@ -1695,5 +1701,265 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                 Ok(())
             }
         }
+    }
+
+    /// Desugar a pattern into a simple name pattern plus extraction bindings.
+    /// Returns (simple_pattern, bindings) where bindings is a list of (name, extraction_expr).
+    /// The extraction expressions reference the simple pattern's variable name.
+    /// Preserves type annotations on the simple pattern.
+    fn desugar_pattern(&mut self, pattern: &Pattern) -> Result<(Pattern, Vec<(String, Expression)>)> {
+        match &pattern.kind {
+            PatternKind::Name(_) => {
+                // Already simple - no desugaring needed
+                Ok((pattern.clone(), vec![]))
+            }
+            PatternKind::Typed(inner, ty) => {
+                // Recursively desugar the inner pattern, then re-wrap with type annotation
+                let (simple_inner, bindings) = self.desugar_pattern(inner)?;
+
+                // Wrap the simple pattern with the type annotation
+                let typed_pattern = self.node_counter.mk_node(
+                    PatternKind::Typed(Box::new(simple_inner), ty.clone()),
+                    pattern.h.span,
+                );
+
+                Ok((typed_pattern, bindings))
+            }
+            PatternKind::Tuple(patterns) => {
+                // Generate a fresh variable name for the tuple
+                let tmp_var = format!("__tmp_{}", self.next_syntax_id());
+
+                let simple_pattern = self.node_counter.mk_node(
+                    PatternKind::Name(tmp_var.clone()),
+                    pattern.h.span,
+                );
+
+                // Create bindings for each tuple element
+                let mut bindings = Vec::new();
+                for (idx, elem_pat) in patterns.iter().enumerate() {
+                    // Extract name from pattern (only support simple names in tuple elements for now)
+                    let name = match &elem_pat.kind {
+                        PatternKind::Name(n) => n.clone(),
+                        PatternKind::Typed(inner, _) => {
+                            match &inner.kind {
+                                PatternKind::Name(n) => n.clone(),
+                                _ => {
+                                    return Err(CompilerError::DefunctionalizationError(
+                                        format!("Complex patterns in tuple elements not supported: {:?}", inner.kind)
+                                    ));
+                                }
+                            }
+                        }
+                        _ => {
+                            return Err(CompilerError::DefunctionalizationError(
+                                format!("Complex patterns in tuple elements not supported: {:?}", elem_pat.kind)
+                            ));
+                        }
+                    };
+
+                    // Create extraction expression: tuple_get_N(tmp_var)
+                    let tmp_var_expr = self.node_counter.mk_node(
+                        ExprKind::Identifier(tmp_var.clone()),
+                        Span::dummy(),
+                    );
+                    let extraction = self.node_counter.mk_node(
+                        ExprKind::FunctionCall(
+                            format!("tuple_get_{}", idx),
+                            vec![tmp_var_expr],
+                        ),
+                        Span::dummy(),
+                    );
+
+                    bindings.push((name, extraction));
+                }
+
+                Ok((simple_pattern, bindings))
+            }
+            PatternKind::Record(fields) => {
+                // Generate a fresh variable name for the record
+                let tmp_var = format!("__tmp_{}", self.next_syntax_id());
+
+                let simple_pattern = self.node_counter.mk_node(
+                    PatternKind::Name(tmp_var.clone()),
+                    pattern.h.span,
+                );
+
+                // Create bindings for each record field
+                let mut bindings = Vec::new();
+                for field in fields {
+                    let field_name = field.field.clone();
+
+                    // For full patterns, extract the binding name
+                    let binding_name = if let Some(pat) = &field.pattern {
+                        match &pat.kind {
+                            PatternKind::Name(n) => n.clone(),
+                            _ => {
+                                return Err(CompilerError::DefunctionalizationError(
+                                    format!("Complex patterns in record fields not supported: {:?}", pat.kind)
+                                ));
+                            }
+                        }
+                    } else {
+                        // Shorthand: field name is the binding name
+                        field_name.clone()
+                    };
+
+                    // Create extraction expression: tmp_var.field_name
+                    let tmp_var_expr = self.node_counter.mk_node(
+                        ExprKind::Identifier(tmp_var.clone()),
+                        Span::dummy(),
+                    );
+                    let extraction = self.node_counter.mk_node(
+                        ExprKind::FieldAccess(Box::new(tmp_var_expr), field_name),
+                        Span::dummy(),
+                    );
+
+                    bindings.push((binding_name, extraction));
+                }
+
+                Ok((simple_pattern, bindings))
+            }
+            _ => {
+                Err(CompilerError::DefunctionalizationError(
+                    format!("Unsupported pattern kind for desugaring: {:?}", pattern.kind)
+                ))
+            }
+        }
+    }
+
+    /// Convert a LoopExpr to InternalLoop by desugaring patterns
+    fn desugar_loop_to_internal(
+        &mut self,
+        loop_expr: &LoopExpr,
+        scope_stack: &mut ScopeStack<StaticValue>,
+        span: Span,
+    ) -> Result<(Expression, StaticValue)> {
+        use crate::ast::{InternalLoop, LoopForm};
+
+        match &loop_expr.form {
+            LoopForm::While(condition_expr) => {
+                // Desugar while-style loop
+                // loop (idx, acc) = (0, base) while idx < 18 do body
+
+                // 1. Desugar the init pattern to get simple names and extraction bindings
+                let (simple_pattern, init_bindings) = self.desugar_pattern(&loop_expr.pattern)?;
+
+                // 2. Transform and evaluate the init expression
+                let init = loop_expr.init.as_ref()
+                    .ok_or_else(|| CompilerError::DefunctionalizationError(
+                        "While loop must have init expression".to_string()
+                    ))?;
+                let (transformed_init, _) = self.defunctionalize_expression(init, scope_stack)?;
+
+                // 3. Create init_vars: evaluate init and bind to temporary, then extract components
+                let mut init_vars = Vec::new();
+                let init_tmp = format!("__loop_init_{}", self.next_syntax_id());
+                init_vars.push((init_tmp.clone(), Box::new(transformed_init)));
+
+                // Add extraction init vars (e.g., __init_idx = tuple_get_0(__loop_init_0))
+                for (_name, extraction_expr) in &init_bindings {
+                    let init_var_name = format!("__init_{}", self.next_syntax_id());
+                    // Substitute the tmp var into the extraction expression
+                    let substituted = self.substitute_identifier_in_expr(
+                        extraction_expr,
+                        &extraction_expr, // original pattern tmp var
+                        &init_tmp,
+                    );
+                    init_vars.push((init_var_name, Box::new(substituted)));
+                }
+
+                // 4. Extract loop_vars from the simple_pattern
+                let loop_vars = self.extract_loop_vars_from_pattern(&simple_pattern)?;
+
+                // 5. Transform condition, substituting pattern variable references
+                let (transformed_condition, _) = self.defunctionalize_expression(condition_expr, scope_stack)?;
+
+                // 6. Transform body with pattern bindings
+                let (transformed_body, _) = self.defunctionalize_expression(&loop_expr.body, scope_stack)?;
+                let final_body = if !init_bindings.is_empty() {
+                    // Wrap body with let-in expressions for pattern variables
+                    let mut body = transformed_body;
+                    for (name, extraction_expr) in init_bindings.iter().rev() {
+                        let name_pat = self.node_counter.mk_node(
+                            PatternKind::Name(name.clone()),
+                            Span::dummy(),
+                        );
+                        body = self.node_counter.mk_node(
+                            ExprKind::LetIn(LetInExpr {
+                                pattern: name_pat,
+                                ty: None,
+                                value: Box::new(extraction_expr.clone()),
+                                body: Box::new(body),
+                            }),
+                            Span::dummy(),
+                        );
+                    }
+                    body
+                } else {
+                    transformed_body
+                };
+
+                // 7. Create body_destructuring expressions (same as init_bindings extractions)
+                let body_destructuring: Vec<Expression> = init_bindings.iter()
+                    .map(|(_, extraction_expr)| extraction_expr.clone())
+                    .collect();
+
+                let internal_loop = InternalLoop {
+                    init_vars,
+                    loop_vars,
+                    condition: Some(Box::new(transformed_condition)),
+                    body: Box::new(final_body),
+                    body_destructuring,
+                };
+
+                Ok((
+                    self.node_counter.mk_node(ExprKind::InternalLoop(internal_loop), span),
+                    self.dyn_unknown(),
+                ))
+            }
+            _ => {
+                // TODO: Handle ForIn and For forms
+                Err(CompilerError::DefunctionalizationError(
+                    format!("Loop form not yet supported: {:?}", loop_expr.form)
+                ))
+            }
+        }
+    }
+
+    /// Extract loop variable names and types from a simple pattern
+    fn extract_loop_vars_from_pattern(&self, pattern: &Pattern) -> Result<Vec<(String, Option<Type>)>> {
+        match &pattern.kind {
+            PatternKind::Name(name) => {
+                Ok(vec![(name.clone(), None)])
+            }
+            PatternKind::Typed(inner, ty) => {
+                let mut vars = self.extract_loop_vars_from_pattern(inner)?;
+                // Apply type to the variable
+                if vars.len() == 1 {
+                    vars[0].1 = Some(ty.clone());
+                }
+                Ok(vars)
+            }
+            PatternKind::Tuple(patterns) => {
+                let mut all_vars = Vec::new();
+                for pat in patterns {
+                    let vars = self.extract_loop_vars_from_pattern(pat)?;
+                    all_vars.extend(vars);
+                }
+                Ok(all_vars)
+            }
+            _ => {
+                Err(CompilerError::DefunctionalizationError(
+                    format!("Pattern should be simple after desugaring: {:?}", pattern.kind)
+                ))
+            }
+        }
+    }
+
+    /// Substitute an identifier in an expression (helper for rewriting extraction expressions)
+    fn substitute_identifier_in_expr(&self, expr: &Expression, _old_name: &Expression, new_name: &str) -> Expression {
+        // For now, just return a clone - this needs proper implementation
+        // TODO: Walk the expression tree and replace identifiers
+        expr.clone()
     }
 }
