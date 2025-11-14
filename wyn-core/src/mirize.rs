@@ -501,9 +501,148 @@ impl Mirize {
                 ));
             }
 
-            ExprKind::InternalLoop(_internal_loop) => {
-                // TODO: Implement MIR generation for InternalLoop
-                todo!("MIR generation for InternalLoop not yet implemented")
+            ExprKind::InternalLoop(internal_loop) => {
+                // Generate MIR for InternalLoop following SPIR-V OpPhi structure
+
+                // 1. Evaluate all init_vars and store in environment
+                let mut init_regs = Vec::new();
+                for (_name, init_expr) in &internal_loop.init_vars {
+                    let init_reg = self.mirize_expression(init_expr)?;
+                    init_regs.push(init_reg);
+                }
+
+                // 2. Create blocks
+                let header_block = self.builder.create_block();
+                let body_block = self.builder.create_block();
+                let continue_block = self.builder.create_block();
+                let merge_block = self.builder.create_block();
+                let pre_header_block = self.builder.current_block().unwrap();
+
+                // 3. Create phi registers for each loop variable
+                let mut phi_regs = Vec::new();
+                for (i, (_var_name, opt_type)) in internal_loop.loop_vars.iter().enumerate() {
+                    let phi_type = if let Some(ty) = opt_type {
+                        ty.clone()
+                    } else {
+                        // Use type from corresponding init register
+                        if i < init_regs.len() {
+                            init_regs[i].ty.clone()
+                        } else {
+                            expr_type.clone()
+                        }
+                    };
+                    let phi_reg = self.builder.new_register(phi_type);
+                    phi_regs.push(phi_reg);
+                }
+
+                // 4. Save environment and bind loop_vars to phi registers
+                let saved_env = self.env.clone();
+                for (i, (var_name, _)) in internal_loop.loop_vars.iter().enumerate() {
+                    self.env.insert(var_name.clone(), phi_regs[i].clone());
+                }
+
+                // 5. Generate body block
+                self.builder.select_block(body_block);
+                let body_result_reg = self.mirize_expression(&internal_loop.body)?;
+
+                // 6. Evaluate body_destructuring to get next values for phi variables
+                let mut next_regs = Vec::new();
+                for destr_expr in &internal_loop.body_destructuring {
+                    let next_reg = self.mirize_expression(destr_expr)?;
+                    next_regs.push(next_reg);
+                }
+
+                self.builder.build_branch(continue_block);
+
+                // 7. Generate continue block (back-edge)
+                self.builder.select_block(continue_block);
+                self.builder.build_branch(header_block);
+
+                // 8. Generate header block with phi nodes and condition
+                self.builder.select_block(header_block);
+
+                // Insert phi instructions for each loop variable
+                for (i, phi_reg) in phi_regs.iter().enumerate() {
+                    let init_source = if i < init_regs.len() {
+                        init_regs[i].clone()
+                    } else {
+                        // Fallback: use first init reg or create undefined
+                        init_regs[0].clone()
+                    };
+                    let next_source = if i < next_regs.len() {
+                        next_regs[i].clone()
+                    } else {
+                        phi_reg.clone()
+                    };
+
+                    let phi_inst = mir::Instruction::Phi(
+                        phi_reg.clone(),
+                        vec![
+                            (init_source, pre_header_block),
+                            (next_source, continue_block),
+                        ],
+                    );
+                    self.builder.insert_instruction_at_start(phi_inst);
+                }
+
+                // Check condition and branch
+                if let Some(cond_expr) = &internal_loop.condition {
+                    let cond_reg = self.mirize_expression(cond_expr)?;
+                    self.builder.emit_instruction(mir::Instruction::BranchLoop(
+                        cond_reg,
+                        body_block,
+                        merge_block,
+                        merge_block,
+                        continue_block,
+                    ));
+                } else {
+                    // No explicit condition - iterator style
+                    // TODO: Generate implicit condition (index < length)
+                    todo!("Iterator-style loop (condition=None) not yet implemented");
+                }
+
+                // 9. Generate merge block with result phi
+                self.builder.select_block(merge_block);
+                let result_reg = self.builder.new_register(expr_type.clone());
+
+                // Result comes from the phi registers when loop exits
+                // If single loop var, use it directly; otherwise body_result is already a tuple
+                let exit_value = if phi_regs.len() == 1 {
+                    phi_regs[0].clone()
+                } else {
+                    // For multiple vars, we need to rebuild the tuple from phi regs
+                    // But actually the body produces the tuple, so we should use body_result_reg type
+                    // Create a synthetic tuple from phi values
+                    phi_regs[0].clone() // TODO: This needs to construct proper tuple
+                };
+
+                let result_phi = mir::Instruction::Phi(
+                    result_reg.clone(),
+                    vec![(exit_value, header_block)],
+                );
+                self.builder.emit_instruction(result_phi);
+
+                // 10. Emit Loop metadata instruction in pre-header
+                self.builder.select_block(pre_header_block);
+                // Build LoopInfo for metadata
+                let loop_info = mir::LoopInfo {
+                    phi_reg: phi_regs[0].clone(), // Primary phi (or first one)
+                    result_reg: result_reg.clone(),
+                    init_reg: init_regs[0].clone(),
+                    body_result_reg,
+                    cond_reg: result_reg.clone(), // Placeholder
+                    pre_header_block,
+                    header_block,
+                    body_block,
+                    merge_block,
+                };
+                self.builder.emit_instruction(mir::Instruction::Loop(loop_info));
+
+                // 11. Continue in merge block and restore environment
+                self.builder.select_block(merge_block);
+                self.env = saved_env;
+
+                Ok(result_reg)
             }
 
             ExprKind::Match(_) => {

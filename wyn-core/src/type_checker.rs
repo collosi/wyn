@@ -1504,9 +1504,85 @@ impl TypeChecker {
                 ));
             }
 
-            ExprKind::InternalLoop(_internal_loop) => {
-                // TODO: Implement type checking for InternalLoop
-                todo!("Type checking for InternalLoop not yet implemented")
+            ExprKind::InternalLoop(internal_loop) => {
+                // Push scope for the entire loop construct
+                self.scope_stack.push_scope();
+
+                // Type check and bind init_vars
+                for (var_name, init_expr) in &internal_loop.init_vars {
+                    let init_type = self.infer_expression(init_expr)?;
+                    let type_scheme = TypeScheme::Monotype(init_type);
+                    self.scope_stack.insert(var_name.clone(), type_scheme);
+                }
+
+                // Bind loop_vars (phi variables)
+                let mut loop_var_types = Vec::new();
+                for (var_name, opt_type) in &internal_loop.loop_vars {
+                    let var_type = if let Some(ty) = opt_type {
+                        ty.clone()
+                    } else {
+                        // If no type annotation, create a fresh type variable
+                        self.context.new_variable()
+                    };
+
+                    // Bind loop variable in scope (not generalized)
+                    let type_scheme = TypeScheme::Monotype(var_type.clone());
+                    self.scope_stack.insert(var_name.clone(), type_scheme);
+                    loop_var_types.push(var_type);
+                }
+
+                // Type check condition if present
+                if let Some(cond) = &internal_loop.condition {
+                    let cond_type = self.infer_expression(cond)?;
+                    // Condition must be boolean
+                    self.context.unify(&cond_type, &types::bool_type()).map_err(|e| {
+                        CompilerError::TypeError(
+                            format!("Loop condition must be bool: {:?}", e),
+                            cond.h.span
+                        )
+                    })?;
+                }
+
+                // Type check loop body
+                let body_type = self.infer_expression(&internal_loop.body)?;
+
+                // Type check body_destructuring expressions
+                // These extract components from the body result
+                let mut destructured_types = Vec::new();
+                for destr_expr in &internal_loop.body_destructuring {
+                    let destr_type = self.infer_expression(destr_expr)?;
+                    destructured_types.push(destr_type);
+                }
+
+                // Verify that body_destructuring results match loop_var types
+                if destructured_types.len() != loop_var_types.len() {
+                    return Err(CompilerError::TypeError(
+                        format!(
+                            "Loop body destructuring count mismatch: expected {}, got {}",
+                            loop_var_types.len(),
+                            destructured_types.len()
+                        ),
+                        expr.h.span
+                    ));
+                }
+
+                for (i, (destr_type, loop_var_type)) in destructured_types.iter().zip(&loop_var_types).enumerate() {
+                    self.context.unify(destr_type, loop_var_type).map_err(|e| {
+                        CompilerError::TypeError(
+                            format!(
+                                "Loop body destructuring type mismatch at index {}: {:?}",
+                                i, e
+                            ),
+                            expr.h.span
+                        )
+                    })?;
+                }
+
+                // Pop loop scope
+                self.scope_stack.pop_scope();
+
+                // Loop result type is the body type (which should match the loop vars structure)
+                Ok(body_type)
             }
 
             ExprKind::Match(_) => {
