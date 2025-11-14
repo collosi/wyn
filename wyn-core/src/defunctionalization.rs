@@ -1757,15 +1757,15 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                         }
                     };
 
-                    // Create extraction expression: tuple_get_N(tmp_var)
+                    // Create extraction expression: tmp_var.N (field access with numeric index)
                     let tmp_var_expr = self.node_counter.mk_node(
                         ExprKind::Identifier(tmp_var.clone()),
                         Span::dummy(),
                     );
                     let extraction = self.node_counter.mk_node(
-                        ExprKind::FunctionCall(
-                            format!("tuple_get_{}", idx),
-                            vec![tmp_var_expr],
+                        ExprKind::FieldAccess(
+                            Box::new(tmp_var_expr),
+                            idx.to_string(),
                         ),
                         Span::dummy(),
                     );
@@ -1856,53 +1856,73 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                 let init_tmp = format!("__loop_init_{}", self.next_syntax_id());
                 init_vars.push((init_tmp.clone(), Box::new(transformed_init)));
 
-                // Add extraction init vars (e.g., __init_idx = tuple_get_0(__loop_init_0))
-                for (_name, extraction_expr) in &init_bindings {
+                // Add extraction init vars by recreating the extraction expressions with the correct variable
+                // Instead of using expressions from init_bindings (which reference __tmp_0),
+                // create new expressions that reference init_tmp
+                for (idx, (_name, _extraction_expr)) in init_bindings.iter().enumerate() {
                     let init_var_name = format!("__init_{}", self.next_syntax_id());
-                    // Substitute the tmp var into the extraction expression
-                    let substituted = self.substitute_identifier_in_expr(
-                        extraction_expr,
-                        &extraction_expr, // original pattern tmp var
-                        &init_tmp,
+
+                    // Create expression: init_tmp.idx (field access)
+                    let init_tmp_expr = self.node_counter.mk_node(
+                        ExprKind::Identifier(init_tmp.clone()),
+                        Span::dummy(),
                     );
-                    init_vars.push((init_var_name, Box::new(substituted)));
+                    let extraction = self.node_counter.mk_node(
+                        ExprKind::FieldAccess(
+                            Box::new(init_tmp_expr),
+                            idx.to_string(),
+                        ),
+                        Span::dummy(),
+                    );
+
+                    init_vars.push((init_var_name, Box::new(extraction)));
                 }
 
-                // 4. Extract loop_vars from the simple_pattern
-                let loop_vars = self.extract_loop_vars_from_pattern(&simple_pattern)?;
+                // 4. Extract loop_vars from the init_bindings (the actual variable names)
+                let loop_vars: Vec<(String, Option<Type>)> = init_bindings.iter()
+                    .map(|(name, _)| (name.clone(), None)) // TODO: extract types if available
+                    .collect();
 
                 // 5. Transform condition, substituting pattern variable references
                 let (transformed_condition, _) = self.defunctionalize_expression(condition_expr, scope_stack)?;
 
                 // 6. Transform body with pattern bindings
+                // Note: The body should just use the loop variables directly (idx, acc)
+                // which will be bound to the phi registers in MIR. No let-in wrapping needed!
                 let (transformed_body, _) = self.defunctionalize_expression(&loop_expr.body, scope_stack)?;
-                let final_body = if !init_bindings.is_empty() {
-                    // Wrap body with let-in expressions for pattern variables
-                    let mut body = transformed_body;
-                    for (name, extraction_expr) in init_bindings.iter().rev() {
-                        let name_pat = self.node_counter.mk_node(
-                            PatternKind::Name(name.clone()),
-                            Span::dummy(),
-                        );
-                        body = self.node_counter.mk_node(
-                            ExprKind::LetIn(LetInExpr {
-                                pattern: name_pat,
-                                ty: None,
-                                value: Box::new(extraction_expr.clone()),
-                                body: Box::new(body),
-                            }),
-                            Span::dummy(),
-                        );
-                    }
-                    body
-                } else {
-                    transformed_body
-                };
+                let final_body = transformed_body;
 
-                // 7. Create body_destructuring expressions (same as init_bindings extractions)
+                // 7. Create body_destructuring expressions
+                // These need to reference a special body result variable, not the init pattern temp
+                // For now, create expressions that extract from the loop variables themselves
                 let body_destructuring: Vec<Expression> = init_bindings.iter()
-                    .map(|(_, extraction_expr)| extraction_expr.clone())
+                    .enumerate()
+                    .map(|(idx, (var_name, _))| {
+                        // Create expression: loop_var.idx (for extracting from the body result tuple)
+                        // But we need to use a placeholder that MIR will understand
+                        // For now, just create the field access on the variable name
+                        let var_expr = self.node_counter.mk_node(
+                            ExprKind::Identifier(var_name.clone()),
+                            Span::dummy(),
+                        );
+                        var_expr
+                    })
                     .collect();
+
+                eprintln!("\n=== InternalLoop Desugaring ===");
+                eprintln!("Original pattern: {:?}", loop_expr.pattern.kind);
+                eprintln!("Simple pattern: {:?}", simple_pattern.kind);
+                eprintln!("init_bindings:");
+                for (name, expr) in &init_bindings {
+                    eprintln!("  {} = {:?}", name, expr.kind);
+                }
+                eprintln!("init_vars: {:?}", init_vars.iter().map(|(n, _)| n).collect::<Vec<_>>());
+                eprintln!("loop_vars: {:?}", loop_vars);
+                eprintln!("body_destructuring expressions:");
+                for (i, expr) in body_destructuring.iter().enumerate() {
+                    eprintln!("  [{}]: {:?}", i, expr.kind);
+                }
+                eprintln!("================================\n");
 
                 let internal_loop = InternalLoop {
                     init_vars,
