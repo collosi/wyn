@@ -336,7 +336,7 @@ impl ConstantFolder {
             ExprKind::InternalLoop(_) => {
                 // InternalLoop is generated after constant folding, should never appear here
                 Err(CompilerError::MirError(
-                    "InternalLoop should not appear during constant folding".to_string()
+                    "InternalLoop should not appear during constant folding".to_string(),
                 ))
             }
 

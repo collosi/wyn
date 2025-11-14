@@ -2212,10 +2212,10 @@ def test : f32 =
                 (idx + 1, acc + idx)
         "#;
 
-        use crate::lexer;
-        use crate::parser::Parser;
         use crate::constant_folding::ConstantFolder;
         use crate::defunctionalization::Defunctionalizer;
+        use crate::lexer;
+        use crate::parser::Parser;
 
         let tokens = lexer::tokenize(source).unwrap();
         let mut parser = Parser::new(tokens);
@@ -2254,10 +2254,10 @@ def test : f32 =
                 (idx + 1, acc + idx)
         "#;
 
-        use crate::lexer;
-        use crate::parser::Parser;
         use crate::constant_folding::ConstantFolder;
         use crate::defunctionalization::Defunctionalizer;
+        use crate::lexer;
+        use crate::parser::Parser;
 
         let tokens = lexer::tokenize(source).unwrap();
         let mut parser = Parser::new(tokens);
@@ -2282,9 +2282,6 @@ def test : f32 =
                 // Should succeed - loop returns (i32, i32) tuple
             }
             Err(e) => {
-                eprintln!("\n=== DEFUNCTIONALIZED PROGRAM ===");
-                eprintln!("{:#?}", defunc_program);
-                eprintln!("=================================\n");
                 panic!("Type checking should succeed but failed with: {:?}", e);
             }
         }

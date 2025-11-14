@@ -421,6 +421,15 @@ impl Mirize {
                                 ))
                             })?
                     }
+                    Type::Constructed(TypeName::Str(name), _) if *name == "tuple" => {
+                        // Tuple field access - parse numeric field name (0, 1, 2, ...)
+                        field_name.parse::<u32>().map_err(|_| {
+                            CompilerError::MirError(format!(
+                                "Invalid tuple field access: '{}' (expected numeric index)",
+                                field_name
+                            ))
+                        })?
+                    }
                     _ => {
                         return Err(CompilerError::MirError(format!(
                             "Field access on non-record type: {:?}",
@@ -525,11 +534,7 @@ impl Mirize {
                         ty.clone()
                     } else {
                         // Use type from corresponding init register
-                        if i < init_regs.len() {
-                            init_regs[i].ty.clone()
-                        } else {
-                            expr_type.clone()
-                        }
+                        if i < init_regs.len() { init_regs[i].ty.clone() } else { expr_type.clone() }
                     };
                     let phi_reg = self.builder.new_register(phi_type);
                     phi_regs.push(phi_reg);
@@ -569,18 +574,12 @@ impl Mirize {
                         // Fallback: use first init reg or create undefined
                         init_regs[0].clone()
                     };
-                    let next_source = if i < next_regs.len() {
-                        next_regs[i].clone()
-                    } else {
-                        phi_reg.clone()
-                    };
+                    let next_source =
+                        if i < next_regs.len() { next_regs[i].clone() } else { phi_reg.clone() };
 
                     let phi_inst = mir::Instruction::Phi(
                         phi_reg.clone(),
-                        vec![
-                            (init_source, pre_header_block),
-                            (next_source, continue_block),
-                        ],
+                        vec![(init_source, pre_header_block), (next_source, continue_block)],
                     );
                     self.builder.insert_instruction_at_start(phi_inst);
                 }
@@ -616,10 +615,8 @@ impl Mirize {
                     phi_regs[0].clone() // TODO: This needs to construct proper tuple
                 };
 
-                let result_phi = mir::Instruction::Phi(
-                    result_reg.clone(),
-                    vec![(exit_value, header_block)],
-                );
+                let result_phi =
+                    mir::Instruction::Phi(result_reg.clone(), vec![(exit_value, header_block)]);
                 self.builder.emit_instruction(result_phi);
 
                 // 10. Emit Loop metadata instruction in pre-header
