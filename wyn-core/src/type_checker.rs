@@ -2298,6 +2298,28 @@ def test : f32 =
         }
     }
 
+    /// Helper to parse, fold, and defunctionalize source code
+    fn parse_and_defunctionalize(source: &str) -> crate::ast::Program {
+        use crate::constant_folding::ConstantFolder;
+        use crate::defunctionalization::Defunctionalizer;
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        // Run constant folding
+        let mut folder = ConstantFolder::new();
+        let folded_program = folder.fold_program(&program).unwrap();
+
+        // Run defunctionalization to convert Loop to InternalLoop and map to loops
+        let node_counter = parser.take_node_counter();
+        let type_context = polytype::Context::default();
+        let mut defunc = Defunctionalizer::new_with_counter(node_counter, type_context);
+        defunc.defunctionalize_program(&folded_program).unwrap()
+    }
+
     #[test]
     #[ignore] // TODO: Fix array size type variable inference
     fn test_map_with_array_size_inference() {
@@ -2577,12 +2599,7 @@ def test : [8]i32 =
                     (idx + 1, acc + 1.0f32)
         "#;
 
-        use crate::lexer;
-        use crate::parser::Parser;
-
-        let tokens = lexer::tokenize(source).unwrap();
-        let mut parser = Parser::new(tokens);
-        let program = parser.parse().unwrap();
+        let program = parse_and_defunctionalize(source);
 
         let mut checker = TypeChecker::new();
         checker.load_builtins().unwrap();
@@ -2622,12 +2639,7 @@ def test : [8]i32 =
                 (idx + 1, acc + 1.0f32)
         "#;
 
-        use crate::lexer;
-        use crate::parser::Parser;
-
-        let tokens = lexer::tokenize(source).unwrap();
-        let mut parser = Parser::new(tokens);
-        let program = parser.parse().unwrap();
+        let program = parse_and_defunctionalize(source);
 
         let mut checker = TypeChecker::new();
         checker.load_builtins().unwrap();
