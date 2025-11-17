@@ -287,8 +287,16 @@ impl Mirize {
         })?;
 
         match &expr.kind {
-            ExprKind::RecordLiteral(_) => {
-                unimplemented!("Record literals not yet supported in MIR generation")
+            ExprKind::RecordLiteral(fields) => {
+                // Evaluate all field values in order
+                let mut field_regs = Vec::new();
+                for (_field_name, field_expr) in fields {
+                    let field_reg = self.mirize_expression(field_expr)?;
+                    field_regs.push(field_reg);
+                }
+
+                // Records are represented as tuples in MIR (field order matters)
+                Ok(self.builder.build_tuple(field_regs, expr_type))
             }
 
             ExprKind::IntLiteral(n) => Ok(self.builder.build_const_int(*n, expr_type)),
@@ -365,10 +373,43 @@ impl Mirize {
                 // Save current environment
                 let saved_env = self.env.clone();
 
-                // Process binding - bind all names from pattern
+                // Process binding value
                 let value_reg = self.mirize_expression(&let_in_expr.value)?;
-                for name in let_in_expr.pattern.collect_names() {
-                    self.env.insert(name, value_reg.clone());
+
+                // Bind names from pattern
+                // For tuple patterns, we need to extract elements; for simple names, bind directly
+                match &let_in_expr.pattern.kind {
+                    crate::ast::PatternKind::Name(name) => {
+                        // Simple binding
+                        self.env.insert(name.clone(), value_reg.clone());
+                    }
+                    crate::ast::PatternKind::Tuple(_patterns) => {
+                        // Tuple pattern - extract each element
+                        let names = let_in_expr.pattern.collect_names();
+
+                        for (idx, name) in names.iter().enumerate() {
+                            // Get element type from the value's tuple type
+                            let elem_type = match &value_reg.ty {
+                                Type::Constructed(TypeName::Str(n), elem_types) if *n == "tuple" => {
+                                    elem_types.get(idx).cloned().unwrap_or_else(|| value_reg.ty.clone())
+                                }
+                                _ => value_reg.ty.clone(),
+                            };
+
+                            let elem_reg = self.builder.build_extract_element(
+                                value_reg.clone(),
+                                idx as u32,
+                                elem_type,
+                            );
+                            self.env.insert(name.clone(), elem_reg);
+                        }
+                    }
+                    _ => {
+                        // Other patterns - bind all names to the whole value (TODO: implement properly)
+                        for name in let_in_expr.pattern.collect_names() {
+                            self.env.insert(name, value_reg.clone());
+                        }
+                    }
                 }
 
                 // Process body
@@ -425,8 +466,8 @@ impl Mirize {
                         // Tuple field access - parse numeric field name (0, 1, 2, ...)
                         field_name.parse::<u32>().map_err(|_| {
                             CompilerError::MirError(format!(
-                                "Invalid tuple field access: '{}' (expected numeric index)",
-                                field_name
+                                "Invalid tuple field access: '{}' (expected numeric index). Tuple type: {:?}",
+                                field_name, record_reg.ty
                             ))
                         })?
                     }
@@ -534,7 +575,14 @@ impl Mirize {
                         ty.clone()
                     } else {
                         // Use type from corresponding init register
-                        if i < init_regs.len() { init_regs[i].ty.clone() } else { expr_type.clone() }
+                        // Note: init_regs[0] is the full init tuple, init_regs[1..] are extracted components
+                        // So loop_vars[i] corresponds to init_regs[i+1]
+                        let init_idx = i + 1;
+                        if init_idx < init_regs.len() {
+                            init_regs[init_idx].ty.clone()
+                        } else {
+                            expr_type.clone()
+                        }
                     };
                     let phi_reg = self.builder.new_register(phi_type);
                     phi_regs.push(phi_reg);
@@ -550,7 +598,9 @@ impl Mirize {
                 self.builder.select_block(body_block);
                 let body_result_reg = self.mirize_expression(&internal_loop.body)?;
 
-                // 6. Evaluate body_destructuring to get next values for phi variables
+                // 6. Bind body result to environment and evaluate body_destructuring
+                self.env.insert("__body_result".to_string(), body_result_reg.clone());
+
                 let mut next_regs = Vec::new();
                 for destr_expr in &internal_loop.body_destructuring {
                     let next_reg = self.mirize_expression(destr_expr)?;
@@ -568,14 +618,11 @@ impl Mirize {
 
                 // Insert phi instructions for each loop variable
                 for (i, phi_reg) in phi_regs.iter().enumerate() {
-                    let init_source = if i < init_regs.len() {
-                        init_regs[i].clone()
-                    } else {
-                        // Fallback: use first init reg or create undefined
-                        init_regs[0].clone()
-                    };
-                    let next_source =
-                        if i < next_regs.len() { next_regs[i].clone() } else { phi_reg.clone() };
+                    // init_regs[0] is the full init tuple, init_regs[1..] are extracted components
+                    // So loop_vars[i] corresponds to init_regs[i+1]
+                    let init_idx = i + 1;
+                    let init_source = init_regs[init_idx].clone();
+                    let next_source = next_regs[i].clone();
 
                     let phi_inst = mir::Instruction::Phi(
                         phi_reg.clone(),
@@ -705,5 +752,79 @@ mod tests {
         assert_eq!(mir_module.functions.len(), 1);
         assert_eq!(mir_module.functions[0].name, "add");
         assert_eq!(mir_module.functions[0].params.len(), 2);
+    }
+
+    #[test]
+    fn test_let_tuple_pattern() {
+        let source = r#"
+def test : i32 =
+  let pair = (1, 2) in
+  let (a, b) = pair in
+  a + b
+"#;
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut type_checker = TypeChecker::new();
+        type_checker.load_builtins().unwrap();
+        let type_table = type_checker.check_program(&program).unwrap();
+
+        let mirize = Mirize::new(type_table);
+        let mir_module = mirize.mirize_program(&program).unwrap();
+
+        assert_eq!(mir_module.functions.len(), 1);
+        assert_eq!(mir_module.functions[0].name, "test");
+
+        // Should have instructions to create tuple, extract elements, and add them
+        let entry_block = &mir_module.functions[0].blocks[0];
+        let has_make_tuple =
+            entry_block.instructions.iter().any(|inst| matches!(inst, Instruction::MakeTuple(..)));
+        let has_extract =
+            entry_block.instructions.iter().any(|inst| matches!(inst, Instruction::ExtractElement(..)));
+
+        assert!(has_make_tuple, "Should have MakeTuple instruction");
+        assert!(has_extract, "Should have ExtractElement instruction");
+    }
+
+    #[test]
+    fn test_let_tuple_pattern_with_field_access() {
+        let source = r#"
+def test : f32 =
+  let pair = (1.0f32, vec3 2.0f32 3.0f32 4.0f32) in
+  let (a, v) = pair in
+  a + v.x
+"#;
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        let mut type_checker = TypeChecker::new();
+        type_checker.load_builtins().unwrap();
+        let type_table = type_checker.check_program(&program).unwrap();
+
+        let mirize = Mirize::new(type_table);
+        let mir_module = mirize.mirize_program(&program).unwrap();
+
+        assert_eq!(mir_module.functions.len(), 1);
+        assert_eq!(mir_module.functions[0].name, "test");
+
+        // Should have instructions to create tuple, extract elements, then access field
+        let entry_block = &mir_module.functions[0].blocks[0];
+        let has_make_tuple =
+            entry_block.instructions.iter().any(|inst| matches!(inst, Instruction::MakeTuple(..)));
+        let extract_count = entry_block
+            .instructions
+            .iter()
+            .filter(|inst| matches!(inst, Instruction::ExtractElement(..)))
+            .count();
+
+        assert!(has_make_tuple, "Should have MakeTuple instruction");
+        // Should have at least 3 extracts: 2 from tuple pattern, 1 from vec3.x
+        assert!(
+            extract_count >= 3,
+            "Should have at least 3 ExtractElement instructions, got {}",
+            extract_count
+        );
     }
 }

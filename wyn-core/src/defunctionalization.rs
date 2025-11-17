@@ -1880,19 +1880,19 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                 let final_body = transformed_body;
 
                 // 7. Create body_destructuring expressions
-                // These need to reference a special body result variable, not the init pattern temp
-                // For now, create expressions that extract from the loop variables themselves
+                // These extract values from __body_result (which MIR will bind to the body result register)
                 let body_destructuring: Vec<Expression> = init_bindings
                     .iter()
                     .enumerate()
-                    .map(|(idx, (var_name, _))| {
-                        // Create expression: loop_var.idx (for extracting from the body result tuple)
-                        // But we need to use a placeholder that MIR will understand
-                        // For now, just create the field access on the variable name
-                        let var_expr = self
+                    .map(|(idx, (_var_name, _))| {
+                        // Create expression: __body_result.idx
+                        let body_result_ident = self
                             .node_counter
-                            .mk_node(ExprKind::Identifier(var_name.clone()), Span::dummy());
-                        var_expr
+                            .mk_node(ExprKind::Identifier("__body_result".to_string()), Span::dummy());
+                        self.node_counter.mk_node(
+                            ExprKind::FieldAccess(Box::new(body_result_ident), idx.to_string()),
+                            Span::dummy(),
+                        )
                     })
                     .collect();
 

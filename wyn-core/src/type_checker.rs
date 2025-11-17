@@ -1571,6 +1571,10 @@ impl TypeChecker {
                 // Type check loop body
                 let body_type = self.infer_expression(&internal_loop.body)?;
 
+                // Bind __body_result to the body type so destructuring expressions can reference it
+                let type_scheme = TypeScheme::Monotype(body_type.clone());
+                self.scope_stack.insert("__body_result".to_string(), type_scheme);
+
                 // Type check body_destructuring expressions
                 // These extract components from the body result
                 let mut destructured_types = Vec::new();
@@ -2280,6 +2284,63 @@ def test : f32 =
         match checker.check_program(&defunc_program) {
             Ok(_) => {
                 // Should succeed - loop returns (i32, i32) tuple
+            }
+            Err(e) => {
+                panic!("Type checking should succeed but failed with: {:?}", e);
+            }
+        }
+    }
+
+    fn contains_type_variable(ty: &Type) -> bool {
+        match ty {
+            Type::Variable(_) => true,
+            Type::Constructed(_, args) => args.iter().any(contains_type_variable),
+        }
+    }
+
+    #[test]
+    #[ignore] // TODO: Fix array size type variable inference
+    fn test_map_with_array_size_inference() {
+        let source = r#"
+def test : [8]i32 =
+  let arr = [1, 2, 3, 4, 5, 6, 7, 8] in
+  map (\x -> x + 1) arr
+"#;
+
+        use crate::constant_folding::ConstantFolder;
+        use crate::defunctionalization::Defunctionalizer;
+        use crate::lexer;
+        use crate::parser::Parser;
+
+        let tokens = lexer::tokenize(source).unwrap();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse().unwrap();
+
+        // Run constant folding
+        let mut folder = ConstantFolder::new();
+        let folded_program = folder.fold_program(&program).unwrap();
+
+        // Run defunctionalization to convert map to InternalLoop
+        let node_counter = parser.take_node_counter();
+        let type_context = polytype::Context::default();
+        let mut defunc = Defunctionalizer::new_with_counter(node_counter, type_context);
+        let defunc_program = defunc.defunctionalize_program(&folded_program).unwrap();
+
+        // Type check the defunctionalized program
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&defunc_program) {
+            Ok(type_table) => {
+                // Check that all types are fully resolved (no Variables)
+                for (node_id, ty) in &type_table {
+                    if matches!(ty, Type::Variable(_)) || contains_type_variable(ty) {
+                        panic!(
+                            "Type table contains unresolved type variable at {:?}: {:?}",
+                            node_id, ty
+                        );
+                    }
+                }
             }
             Err(e) => {
                 panic!("Type checking should succeed but failed with: {:?}", e);

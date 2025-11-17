@@ -244,6 +244,12 @@ impl Lowering {
                     _ => return Err(CompilerError::SpirvError(format!("Unsupported type: {:?}", ty))),
                 }
             }
+            Type::Variable(_) => {
+                return Err(CompilerError::SpirvError(format!(
+                    "Unresolved type variable in SPIR-V lowering: {:?}. This indicates incomplete type inference.",
+                    ty
+                )));
+            }
             _ => return Err(CompilerError::SpirvError(format!("Unsupported type: {:?}", ty))),
         };
 
