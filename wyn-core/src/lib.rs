@@ -30,6 +30,9 @@ mod integration_tests;
 #[cfg(test)]
 mod defunctionalization_tests;
 
+#[cfg(test)]
+mod type_checker_tests;
+
 use error::Result;
 
 pub struct Compiler;
