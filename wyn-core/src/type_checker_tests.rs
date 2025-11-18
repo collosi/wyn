@@ -478,7 +478,6 @@ fn parse_and_defunctionalize(source: &str) -> crate::ast::Program {
 }
 
 #[test]
-#[ignore] // TODO: Fix array size type variable inference
 fn test_map_with_array_size_inference() {
     let source = r#"
 def test : [8]i32 =
@@ -505,8 +504,13 @@ def test : [8]i32 =
     let mut defunc = Defunctionalizer::new_with_counter(node_counter, type_context);
     let defunc_program = defunc.defunctionalize_program(&folded_program).unwrap();
 
-    // Type check the defunctionalized program
-    let mut checker = TypeChecker::new();
+    // Print defunctionalized AST
+    eprintln!("Defunctionalized AST:");
+    eprintln!("{}", crate::diags::AstFormatter::format_program(&defunc_program));
+
+    // Type check the defunctionalized program with shared context and ascription variables
+    let (type_context, ascription_variables) = defunc.take();
+    let mut checker = TypeChecker::new_with_context(type_context, ascription_variables);
     checker.load_builtins().unwrap();
 
     match checker.check_program(&defunc_program) {
@@ -836,3 +840,110 @@ def test : [5]i32 =
         }
     }
 }
+
+/// Test that type variables in internal loops get properly resolved through back edges
+/// This is a minimal reproduction of the issue with map's __alloc_array
+#[test]
+fn test_internal_loop_type_variable_resolution() {
+    use crate::ast::{
+        Decl, Declaration, ExprKind, InternalLoop, NodeCounter, PatternKind, PhiVar, Program, Span,
+    };
+
+    let mut nc = NodeCounter::new();
+
+    // Build a minimal internal loop:
+    // def test: i32 =
+    //   let init_val = ??? in   // type variable ?0
+    //   internal_loop
+    //     loop_phi acc = [init: init_val] [next: __body_result]
+    //     while acc < 10
+    //     body: acc + 1
+    //
+    // The issue: init_val has type ?0, body returns i32,
+    // but if we don't unify next_expr type with loop_var type, ?0 stays unresolved
+
+    // init_val = ??? (type hole creates a fresh type variable)
+    let init_val_expr = nc.mk_node(ExprKind::TypeHole, Span::dummy());
+
+    // acc (identifier in condition and body)
+    let acc_ident = nc.mk_node(ExprKind::Identifier("acc".to_string()), Span::dummy());
+    let acc_ident2 = nc.mk_node(ExprKind::Identifier("acc".to_string()), Span::dummy());
+
+    // acc < 10
+    let ten = nc.mk_node(ExprKind::IntLiteral(10), Span::dummy());
+    let condition = nc.mk_node(
+        ExprKind::BinaryOp(
+            crate::ast::BinaryOp { op: "<".to_string() },
+            Box::new(acc_ident),
+            Box::new(ten),
+        ),
+        Span::dummy(),
+    );
+
+    // acc + 1
+    let one = nc.mk_node(ExprKind::IntLiteral(1), Span::dummy());
+    let body = nc.mk_node(
+        ExprKind::BinaryOp(
+            crate::ast::BinaryOp { op: "+".to_string() },
+            Box::new(acc_ident2),
+            Box::new(one),
+        ),
+        Span::dummy(),
+    );
+
+    // __body_result (reference to loop body result for next iteration)
+    let body_result = nc.mk_node(ExprKind::Identifier("__body_result".to_string()), Span::dummy());
+
+    // The internal loop
+    let internal_loop = nc.mk_node(
+        ExprKind::InternalLoop(InternalLoop {
+            phi_vars: vec![PhiVar {
+                init_name: "__init_acc".to_string(),
+                init_expr: Box::new(init_val_expr),
+                loop_var_name: "acc".to_string(),
+                loop_var_type: None, // Will be inferred from init
+                next_expr: body_result,
+            }],
+            condition: Some(Box::new(condition)),
+            body: Box::new(body),
+        }),
+        Span::dummy(),
+    );
+
+    let decl = Declaration::Decl(Decl {
+        keyword: "def",
+        attributes: vec![],
+        name: "test".to_string(),
+        size_params: vec![],
+        type_params: vec![],
+        params: vec![],
+        ty: Some(crate::ast::types::i32()), // Return type is i32
+        body: internal_loop,
+    });
+
+    let program = Program {
+        declarations: vec![decl],
+    };
+
+    // Type check
+    let mut checker = TypeChecker::new();
+    checker.load_builtins().unwrap();
+
+    match checker.check_program(&program) {
+        Ok(type_table) => {
+            // Check that all types are fully resolved
+            for (node_id, ty) in &type_table {
+                if matches!(ty, Type::Variable(_)) || contains_type_variable(ty) {
+                    panic!(
+                        "Type table contains unresolved type variable at {:?}: {:?}",
+                        node_id, ty
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            panic!("Type checking failed: {:?}", e);
+        }
+    }
+}
+

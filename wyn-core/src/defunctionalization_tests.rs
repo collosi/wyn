@@ -55,13 +55,13 @@ where
     assertion(&defunc_program);
 
     // Now type-check the defunctionalized program
-    let type_context = defunc.take_type_var_gen();
+    let (type_context, ascription_variables) = defunc.take();
 
     // Enable debug logging
     std::env::set_var("RUST_LOG", "debug");
     env_logger::try_init().ok();
 
-    let mut type_checker = crate::type_checker::TypeChecker::new_with_context(type_context);
+    let mut type_checker = crate::type_checker::TypeChecker::new_with_context(type_context, ascription_variables);
     type_checker.load_builtins().expect("Loading builtins failed");
 
     eprintln!("\n=== STARTING TYPE CHECK ===");
@@ -435,7 +435,7 @@ fn test_direct_closure_application_typechecks() {
     let mut defunc =
         crate::defunctionalization::Defunctionalizer::new_with_counter(node_counter, type_context);
     let defunc_program = defunc.defunctionalize_program(&program).expect("Defunctionalization failed");
-    let type_context = defunc.take_type_var_gen();
+    let (type_context, ascription_variables) = defunc.take();
 
     // Print the defunctionalized program structure
     eprintln!("\n=== DEFUNCTIONALIZED PROGRAM ===");
@@ -455,7 +455,7 @@ fn test_direct_closure_application_typechecks() {
     }
 
     // Type check
-    let mut type_checker = crate::type_checker::TypeChecker::new_with_context(type_context);
+    let mut type_checker = crate::type_checker::TypeChecker::new_with_context(type_context, ascription_variables);
     type_checker.load_builtins().expect("Loading builtins failed");
     let result = type_checker.check_program(&defunc_program);
 
@@ -486,7 +486,7 @@ fn test_map_with_closure_typechecks() {
     let mut defunc =
         crate::defunctionalization::Defunctionalizer::new_with_counter(node_counter, type_context);
     let defunc_program = defunc.defunctionalize_program(&program).expect("Defunctionalization failed");
-    let type_context = defunc.take_type_var_gen();
+    let (type_context, ascription_variables) = defunc.take();
 
     // Print the defunctionalized program structure
     eprintln!("\n=== MAP CLOSURE TEST - DEFUNCTIONALIZED PROGRAM ===");
@@ -506,7 +506,7 @@ fn test_map_with_closure_typechecks() {
     }
 
     // Type check
-    let mut type_checker = crate::type_checker::TypeChecker::new_with_context(type_context);
+    let mut type_checker = crate::type_checker::TypeChecker::new_with_context(type_context, ascription_variables);
     type_checker.load_builtins().expect("Loading builtins failed");
     let result = type_checker.check_program(&defunc_program);
 

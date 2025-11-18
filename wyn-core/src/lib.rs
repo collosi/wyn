@@ -5,6 +5,7 @@ pub mod builtin_registry;
 pub mod cfg;
 pub mod cfg_nemo;
 pub mod codegen;
+pub mod diags;
 pub mod constant_folding;
 pub mod defunctionalization;
 pub mod error;
@@ -68,10 +69,10 @@ impl Compiler {
         let mut defunc =
             defunctionalization::Defunctionalizer::new_with_counter(node_counter, type_context);
         let program = defunc.defunctionalize_program(&program)?;
-        let type_context = defunc.take_type_var_gen();
+        let (type_context, ascription_variables) = defunc.take();
 
         // Type check
-        let mut type_checker = type_checker::TypeChecker::new_with_context(type_context);
+        let mut type_checker = type_checker::TypeChecker::new_with_context(type_context, ascription_variables);
         type_checker.load_builtins()?;
         let _type_table = type_checker.check_program(&program)?;
 
@@ -106,10 +107,10 @@ impl Compiler {
         let mut defunc =
             defunctionalization::Defunctionalizer::new_with_counter(node_counter, type_context);
         let program = defunc.defunctionalize_program(&program)?;
-        let type_context = defunc.take_type_var_gen();
+        let (type_context, ascription_variables) = defunc.take();
 
         // Type check
-        let mut type_checker = type_checker::TypeChecker::new_with_context(type_context);
+        let mut type_checker = type_checker::TypeChecker::new_with_context(type_context, ascription_variables);
         type_checker.load_builtins()?;
         let type_table = type_checker.check_program(&program)?;
 

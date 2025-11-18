@@ -86,6 +86,8 @@ pub struct Defunctionalizer<T: crate::type_checker::TypeVarGenerator> {
     /// Registry of lambdas in current bucket for __applyN generation
     lambda_registry: Vec<LambdaMeta>,
     node_counter: NodeCounter,
+    /// Type variables created for type ascriptions that should not be generalized
+    ascription_variables: HashSet<polytype::Variable>,
 }
 
 impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
@@ -97,6 +99,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             enclosing_decl_stack: Vec::new(),
             lambda_registry: Vec::new(),
             node_counter,
+            ascription_variables: HashSet::new(),
         }
     }
 
@@ -107,8 +110,10 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         id
     }
 
-    pub fn take_type_var_gen(self) -> T {
-        self.type_var_gen
+    /// Consume the defunctionalizer and return the type variable generator
+    /// and the set of ascription variables that should not be generalized
+    pub fn take(self) -> (T, HashSet<polytype::Variable>) {
+        (self.type_var_gen, self.ascription_variables)
     }
 
     /// Helper: Create a StaticValue::Dyn with a fresh type variable
@@ -1271,6 +1276,47 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
     ///     (i + 1, updated_out)
     ///
     /// TODO: Eventually handle in-place updates to avoid copying output array each iteration
+
+    /// Build the output array type for map.
+    /// Returns `[n]t` where:
+    /// - n comes from the input array's type (or fresh variable)
+    /// - t comes from the lambda's return type (or fresh variable)
+    ///
+    /// HACK: This is a workaround for not having dependent types for array lengths.
+    /// Ideally, `__alloc_array` would take a runtime length and produce an array
+    /// whose type-level size matches that value (like Futhark's `replicate n x : [n]t`).
+    /// Without dependent types, we can't connect the runtime `i32` from `length(xs)`
+    /// to the type-level size `n` in `[n]t`. So we extract type info here and emit
+    /// a type ascription to constrain the output array's type.
+    /// Create a new type variable and track it as an ascription variable
+    /// that should not be generalized during type checking
+    fn new_ascription_var(&mut self) -> Type {
+        let ty = self.type_var_gen.new_variable();
+        if let Type::Variable(id) = ty {
+            self.ascription_variables.insert(id);
+        }
+        ty
+    }
+
+    fn build_map_output_type(&mut self, array: &Expression, func: &Expression) -> (Type, Type, Type) {
+        // Try to extract size and element type from array's type annotation
+        let (size_type, input_elem_type) = match &array.kind {
+            ExprKind::TypeAscription(_, Type::Constructed(TypeName::Array, args)) if args.len() == 2 => {
+                (args[0].clone(), args[1].clone())
+            }
+            _ => (self.new_ascription_var(), self.new_ascription_var()),
+        };
+
+        // Try to extract return type from lambda
+        let output_elem_type = match &func.kind {
+            ExprKind::Lambda(lambda) => lambda.return_type.clone(),
+            _ => None,
+        }
+        .unwrap_or_else(|| self.new_ascription_var());
+
+        (size_type, input_elem_type, output_elem_type)
+    }
+
     fn defunctionalize_map(
         &mut self,
         func: &Expression,
@@ -1278,6 +1324,10 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         scope_stack: &mut ScopeStack<StaticValue>,
     ) -> Result<(Expression, StaticValue)> {
         let span = Span::dummy();
+
+        // Build output array type for type ascription
+        let (size_type, input_array_elem_type, output_array_elem_type) =
+            self.build_map_output_type(array, func);
 
         // func can be any expression (identifier or closure record)
         // We'll call __apply1 with it in the loop body
@@ -1292,8 +1342,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
 
         // Build ALL leaf nodes first to avoid borrow checker issues
         let xs_ident_for_len = self.node_counter.mk_node(ExprKind::Identifier(xs_var.clone()), span);
-        let xs_ident_for_alloc = self.node_counter.mk_node(ExprKind::Identifier(xs_var.clone()), span);
-        let len_ident_for_loop = self.node_counter.mk_node(ExprKind::Identifier(len_var.clone()), span);
+        let len_ident_for_alloc = self.node_counter.mk_node(ExprKind::Identifier(len_var.clone()), span);
 
         // length xs
         let len_call = self.node_counter.mk_node(
@@ -1301,12 +1350,12 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             span,
         );
 
-        // Initialize output array using __alloc_array: __alloc_array xs
-        // This preserves the size of xs in the type system, so map [n]t -> [n]t'
-        // __alloc_array has type ∀n t. [n]t -> [n]t, so it returns an array of the same size
+        // Initialize output array using __alloc_array: __alloc_array len
+        // __alloc_array has type ∀n t. i32 -> [n]t
+        // Size n and element type t are inferred from usage (via __array_update)
         // SAFETY: Every element will be overwritten in the loop before the array is returned
         let init_out = self.node_counter.mk_node(
-            ExprKind::FunctionCall("__alloc_array".to_string(), vec![xs_ident_for_alloc]),
+            ExprKind::FunctionCall("__alloc_array".to_string(), vec![len_ident_for_alloc]),
             span,
         );
 
@@ -1320,8 +1369,6 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         let i_ident4 = self.node_counter.mk_node(ExprKind::Identifier(i_var.clone()), span);
         let one_lit = self.node_counter.mk_node(ExprKind::IntLiteral(1), span);
         let zero_lit = self.node_counter.mk_node(ExprKind::IntLiteral(0), span);
-        let out_init_ident =
-            self.node_counter.mk_node(ExprKind::Identifier(format!("{}_init", out_var)), span);
 
         // i < len
         let condition = self.node_counter.mk_node(
@@ -1380,58 +1427,62 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             span,
         );
 
-        // (i + 1, updated_out)
-        let loop_body = self.node_counter.mk_node(ExprKind::Tuple(vec![i_inc, updated_out]), span);
+        // Loop body just does the array update (mutates in place)
+        // The body expression is __array_update(out, i, f xs[i])
+        let loop_body = updated_out;
 
-        // (0, out_init)
-        let initial_value =
-            self.node_counter.mk_node(ExprKind::Tuple(vec![zero_lit, out_init_ident]), span);
+        // Build __body_result identifier for next_expr (unused but required by InternalLoop)
+        let body_result_ident =
+            self.node_counter.mk_node(ExprKind::Identifier("__body_result".to_string()), span);
+        let _ = body_result_ident; // silence warning - we don't actually need it
 
-        // Create a standard Loop AST node: loop (i, out) = (0, out_init) while i < len do body
-        let i_pattern = self.node_counter.mk_node(PatternKind::Name(i_var.clone()), span);
-        let out_pattern = self.node_counter.mk_node(PatternKind::Name(out_var.clone()), span);
-        let loop_pattern =
-            self.node_counter.mk_node(PatternKind::Tuple(vec![i_pattern, out_pattern]), span);
+        // next_expr for i: i + 1
+        let next_i = i_inc;
 
-        let loop_ast = LoopExpr {
-            pattern: loop_pattern,
-            init: Some(Box::new(initial_value)),
-            form: LoopForm::While(Box::new(condition)),
-            body: Box::new(loop_body),
-        };
-
-        // Now desugar this Loop to InternalLoop using the existing helper
-        let (loop_expr, _) = self.desugar_loop_to_internal(&loop_ast, scope_stack, span)?;
-
-        // let out = replicate len 0 in <loop>
-        let out_init_pattern =
-            self.node_counter.mk_node(crate::ast::PatternKind::Name(format!("{}_init", out_var)), span);
-        let with_out_init = self.node_counter.mk_node(
-            ExprKind::LetIn(LetInExpr {
-                pattern: out_init_pattern,
-                ty: None,
-                value: Box::new(init_out),
-                body: Box::new(loop_expr),
+        // Create InternalLoop with single phi var for index
+        let internal_loop = self.node_counter.mk_node(
+            ExprKind::InternalLoop(InternalLoop {
+                phi_vars: vec![PhiVar {
+                    init_name: format!("__init_{}", i_var),
+                    init_expr: Box::new(zero_lit),
+                    loop_var_name: i_var.clone(),
+                    loop_var_type: None,
+                    next_expr: next_i,
+                }],
+                condition: Some(Box::new(condition)),
+                body: Box::new(loop_body),
             }),
             span,
         );
 
-        // let (_, result_out) = <loop> in result_out
-        let wildcard_pattern = self.node_counter.mk_node(crate::ast::PatternKind::Wildcard, span);
-        let result_out_pattern =
-            self.node_counter.mk_node(crate::ast::PatternKind::Name(format!("{}_result", out_var)), span);
-        let tuple_pattern = self.node_counter.mk_node(
-            crate::ast::PatternKind::Tuple(vec![wildcard_pattern, result_out_pattern]),
+        // let out = __alloc_array(xs) in <loop>; out
+        // We need to return out after the loop
+        let out_ident_result = self.node_counter.mk_node(ExprKind::Identifier(out_var.clone()), span);
+
+        // Sequence: run loop then return out
+        // Use a let to bind loop result (which we ignore) then return out
+        let ignored_pattern = self.node_counter.mk_node(crate::ast::PatternKind::Wildcard, span);
+        let with_loop = self.node_counter.mk_node(
+            ExprKind::LetIn(LetInExpr {
+                pattern: ignored_pattern,
+                ty: None,
+                value: Box::new(internal_loop),
+                body: Box::new(out_ident_result),
+            }),
             span,
         );
-        let result_out_ident =
-            self.node_counter.mk_node(ExprKind::Identifier(format!("{}_result", out_var)), span);
+
+        // let out : [n]t = __alloc_array(len) in <with_loop>
+        let out_pattern = self.node_counter.mk_node(crate::ast::PatternKind::Name(out_var.clone()), span);
         let with_out = self.node_counter.mk_node(
             ExprKind::LetIn(LetInExpr {
-                pattern: tuple_pattern,
-                ty: None,
-                value: Box::new(with_out_init),
-                body: Box::new(result_out_ident),
+                pattern: out_pattern,
+                ty: Some(Type::Constructed(
+                    TypeName::Array,
+                    vec![size_type.clone(), output_array_elem_type],
+                )),
+                value: Box::new(init_out),
+                body: Box::new(with_loop),
             }),
             span,
         );
@@ -1453,7 +1504,10 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         let with_xs = self.node_counter.mk_node(
             ExprKind::LetIn(LetInExpr {
                 pattern: xs_pattern,
-                ty: None,
+                ty: Some(Type::Constructed(
+                    TypeName::Array,
+                    vec![size_type, input_array_elem_type],
+                )),
                 value: Box::new(array.clone()),
                 body: Box::new(with_len),
             }),

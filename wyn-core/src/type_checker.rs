@@ -5,7 +5,7 @@ use crate::error::{CompilerError, Result};
 use crate::scope::ScopeStack;
 use log::debug;
 use polytype::{Context, TypeScheme};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Trait for generating fresh type variables
 pub trait TypeVarGenerator {
@@ -55,6 +55,7 @@ pub struct TypeChecker {
     type_table: HashMap<crate::ast::NodeId, Type>, // Maps expression NodeId to inferred type
     warnings: Vec<TypeWarning>,                    // Collected warnings
     type_holes: Vec<(NodeId, Span)>,               // Track type hole locations for warning emission
+    ascription_variables: HashSet<polytype::Variable>, // Type variables that should not be generalized
 }
 
 impl Default for TypeChecker {
@@ -151,8 +152,9 @@ impl TypeChecker {
         acc
     }
 
-    /// HM-style generalization at let: ∀(fv(ty) \ fv(env)). ty
+    /// HM-style generalization at let: ∀(fv(ty) \ fv(env) \ ascription_vars). ty
     /// Quantifies over type variables that are free in ty but not free in the environment
+    /// and not in the set of ascription variables (which must remain monomorphic)
     fn generalize(&self, ty: &Type) -> TypeScheme<TypeName> {
         // Always generalize the *solved* view
         let applied = ty.apply(&self.context);
@@ -163,9 +165,12 @@ impl TypeChecker {
         // Free vars in environment
         let fv_env = self.env_free_type_vars();
 
-        // vars to quantify = fv(ty) \ fv(env)
+        // vars to quantify = fv(ty) \ fv(env) \ ascription_vars
         for v in fv_env {
             fv_ty.remove(&v);
+        }
+        for v in &self.ascription_variables {
+            fv_ty.remove(v);
         }
 
         // Wrap in nested Polytype quantifiers
@@ -214,10 +219,15 @@ impl TypeChecker {
             type_table: HashMap::new(),
             warnings: Vec::new(),
             type_holes: Vec::new(),
+            ascription_variables: HashSet::new(),
         }
     }
 
-    pub fn new_with_context(mut context: Context<TypeName>) -> Self {
+    pub fn new_with_context(
+        context: Context<TypeName>,
+        ascription_variables: HashSet<polytype::Variable>,
+    ) -> Self {
+        let mut context = context;
         let builtin_registry = crate::builtin_registry::BuiltinRegistry::new(&mut context);
 
         TypeChecker {
@@ -228,6 +238,7 @@ impl TypeChecker {
             type_table: HashMap::new(),
             warnings: Vec::new(),
             type_holes: Vec::new(),
+            ascription_variables,
         }
     }
 
@@ -682,37 +693,26 @@ impl TypeChecker {
         };
         self.scope_stack.insert("replicate".to_string(), replicate_scheme);
 
-        // __alloc_array: ∀n t1 t2. [n]t1 -> [n]t2
-        // Allocates an uninitialized array of the same size as the template array
-        // Used by map desugaring to preserve array sizes
-        // The result type t2 can differ from input type t1 (for map f where f: t1 -> t2)
+        // __alloc_array: ∀n t. i32 -> [n]t
+        // Allocates an uninitialized array of the given size
+        // Used by map desugaring; size n and element type t are inferred from usage
         let var_n = self.context.new_variable();
-        let var_t1 = self.context.new_variable();
-        let var_t2 = self.context.new_variable();
+        let var_t = self.context.new_variable();
         let var_n_id = if let Type::Variable(id) = var_n { id } else { panic!("Expected Type::Variable") };
-        let var_t1_id =
-            if let Type::Variable(id) = var_t1 { id } else { panic!("Expected Type::Variable") };
-        let var_t2_id =
-            if let Type::Variable(id) = var_t2 { id } else { panic!("Expected Type::Variable") };
+        let var_t_id =
+            if let Type::Variable(id) = var_t { id } else { panic!("Expected Type::Variable") };
 
-        let template_array = Type::Constructed(
+        let array_type = Type::Constructed(
             TypeName::Array,
-            vec![Type::Variable(var_n_id), Type::Variable(var_t1_id)],
+            vec![Type::Variable(var_n_id), Type::Variable(var_t_id)],
         );
-        let result_array = Type::Constructed(
-            TypeName::Array,
-            vec![Type::Variable(var_n_id), Type::Variable(var_t2_id)],
-        );
-        let alloc_array_body = Type::arrow(template_array, result_array);
+        let alloc_array_body = Type::arrow(types::i32(), array_type);
 
         let alloc_array_scheme = TypeScheme::Polytype {
             variable: var_n_id,
             body: Box::new(TypeScheme::Polytype {
-                variable: var_t1_id,
-                body: Box::new(TypeScheme::Polytype {
-                    variable: var_t2_id,
-                    body: Box::new(TypeScheme::Monotype(alloc_array_body)),
-                }),
+                variable: var_t_id,
+                body: Box::new(TypeScheme::Monotype(alloc_array_body)),
             }),
         };
         self.scope_stack.insert("__alloc_array".to_string(), alloc_array_scheme);
@@ -778,7 +778,14 @@ impl TypeChecker {
         // Emit warnings for all type holes now that types are fully inferred
         self.emit_hole_warnings();
 
-        Ok(self.type_table.clone())
+        // Apply the context to all types in the type table to resolve type variables
+        let resolved_table: HashMap<crate::ast::NodeId, Type> = self
+            .type_table
+            .iter()
+            .map(|(node_id, ty)| (*node_id, ty.apply(&self.context)))
+            .collect();
+
+        Ok(resolved_table)
     }
 
     /// Emit warnings for all type holes showing their inferred types
@@ -1194,6 +1201,8 @@ impl TypeChecker {
                 }
             }
             ExprKind::FunctionCall(func_name, args) => {
+                let is_debug = func_name == "__array_update" || func_name == "__alloc_array";
+
                 // Get function type - check scope stack first, then builtin registry
                 let func_type_result: Result<Type> =
                     if let Ok(type_scheme) = self.scope_stack.lookup(func_name) {
@@ -1212,8 +1221,37 @@ impl TypeChecker {
 
                 let func_type = func_type_result?;
 
+                if is_debug {
+                    eprintln!("\n=== DEBUG {} ===", func_name);
+                    eprintln!("Instantiated func_type: {}", self.format_type(&func_type));
+                    // Show argument types before apply_two_pass
+                    for (i, arg) in args.iter().enumerate() {
+                        // Peek at the type without re-inferring (look in type_table if available)
+                        if let Some(ty) = self.type_table.get(&arg.h.id) {
+                            eprintln!("  arg[{}] (cached): {}", i, self.format_type(ty));
+                        }
+                    }
+                }
+
                 // Use two-pass application for better lambda inference
-                self.apply_two_pass(func_type, args)
+                let result = self.apply_two_pass(func_type, args)?;
+
+                if is_debug {
+                    eprintln!("Result type: {}", self.format_type(&result));
+                    // Show relevant context substitutions
+                    let result_applied = result.apply(&self.context);
+                    eprintln!("Result type after apply: {}", self.format_type(&result_applied));
+                    // Show argument types after unification
+                    for (i, arg) in args.iter().enumerate() {
+                        if let Some(ty) = self.type_table.get(&arg.h.id) {
+                            let applied = ty.apply(&self.context);
+                            eprintln!("  arg[{}] after apply: {}", i, self.format_type(&applied));
+                        }
+                    }
+                    eprintln!("=== END DEBUG ===\n");
+                }
+
+                Ok(result)
             }
             ExprKind::Tuple(elements) => {
                 let elem_types: Result<Vec<Type>> =
