@@ -35,6 +35,30 @@ fn defunctionalize_program(input: &str) -> Program {
     defunc.defunctionalize_program(&program).expect("Defunctionalization failed")
 }
 
+/// Helper to parse, defunctionalize, and type check source code
+fn typecheck_defunctionalized(input: &str) {
+    let tokens = tokenize(input).expect("Tokenization failed");
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().expect("Parsing failed");
+    let node_counter = parser.take_node_counter();
+
+    let type_context = polytype::Context::default();
+    let mut defunc = Defunctionalizer::new_with_counter(node_counter, type_context);
+    let defunc_program = defunc.defunctionalize_program(&program).expect("Defunctionalization failed");
+    let (type_context, ascription_variables) = defunc.take();
+
+    let mut type_checker = crate::type_checker::TypeChecker::new_with_context(type_context, ascription_variables);
+    type_checker.load_builtins().expect("Loading builtins failed");
+    let result = type_checker.check_program(&defunc_program);
+
+    if let Err(e) = &result {
+        eprintln!("\n=== TYPE CHECK ERROR ===");
+        eprintln!("{:?}", e);
+    }
+
+    result.expect("Type checking should succeed");
+}
+
 /// Helper to parse, defunctionalize, and type-check a program
 /// Takes an assertion function that can inspect the defunctionalized program
 /// If the assertion fails or type checking fails, prints the defunctionalized program
@@ -403,165 +427,21 @@ mod tests {
 }
 #[test]
 fn test_direct_closure_application_typechecks() {
-    let input = r#"
+    typecheck_defunctionalized(r#"
         def test : i32 =
             let x = 5 in
             let f = \y -> x + y in
             f 10
-    "#;
-
-    // Parse
-    let tokens = crate::lexer::tokenize(input).expect("Tokenization failed");
-    let mut parser = crate::parser::Parser::new(tokens);
-    let program = parser.parse().expect("Parsing failed");
-    let node_counter = parser.take_node_counter();
-
-    // Print original program
-    eprintln!("\n=== ORIGINAL PROGRAM ===");
-    for (i, decl) in program.declarations.iter().enumerate() {
-        match decl {
-            crate::ast::Declaration::Decl(d) => {
-                eprintln!("Decl {}: {}", i, d.name);
-                if d.name == "test" {
-                    eprintln!("  Original test body: {:#?}", d.body.kind);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    // Defunctionalize
-    let type_context = polytype::Context::default();
-    let mut defunc =
-        crate::defunctionalization::Defunctionalizer::new_with_counter(node_counter, type_context);
-    let defunc_program = defunc.defunctionalize_program(&program).expect("Defunctionalization failed");
-    let (type_context, ascription_variables) = defunc.take();
-
-    // Print the defunctionalized program structure
-    eprintln!("\n=== DEFUNCTIONALIZED PROGRAM ===");
-    for (i, decl) in defunc_program.declarations.iter().enumerate() {
-        match decl {
-            crate::ast::Declaration::Decl(d) => {
-                eprintln!("Decl {}: {} with {} params", i, d.name, d.params.len());
-                eprintln!("  Body kind: {:?}", std::mem::discriminant(&d.body.kind));
-
-                // For the test declaration, print the actual expression structure
-                if d.name == "test" {
-                    eprintln!("  Test body details: {:#?}", d.body.kind);
-                }
-            }
-            _ => eprintln!("Decl {}: Other", i),
-        }
-    }
-
-    // Type check
-    let mut type_checker = crate::type_checker::TypeChecker::new_with_context(type_context, ascription_variables);
-    type_checker.load_builtins().expect("Loading builtins failed");
-    let result = type_checker.check_program(&defunc_program);
-
-    if let Err(e) = &result {
-        eprintln!("\n=== TYPE CHECK ERROR ===");
-        eprintln!("{:?}", e);
-    }
-
-    result.expect("Type checking should succeed");
+    "#);
 }
 
 #[test]
 fn test_map_with_closure_typechecks() {
-    let input = r#"
+    typecheck_defunctionalized(r#"
         def test : [3]i32 =
             let x = 5 in
             map (\y -> x + y) [1, 2, 3]
-    "#;
-
-    // Parse
-    let tokens = crate::lexer::tokenize(input).expect("Tokenization failed");
-    let mut parser = crate::parser::Parser::new(tokens);
-    let program = parser.parse().expect("Parsing failed");
-    let node_counter = parser.take_node_counter();
-
-    // Defunctionalize
-    let type_context = polytype::Context::default();
-    let mut defunc =
-        crate::defunctionalization::Defunctionalizer::new_with_counter(node_counter, type_context);
-    let defunc_program = defunc.defunctionalize_program(&program).expect("Defunctionalization failed");
-    let (type_context, ascription_variables) = defunc.take();
-
-    // Print the defunctionalized program structure
-    eprintln!("\n=== MAP CLOSURE TEST - DEFUNCTIONALIZED PROGRAM ===");
-    for (i, decl) in defunc_program.declarations.iter().enumerate() {
-        match decl {
-            crate::ast::Declaration::Decl(d) => {
-                eprintln!("Decl {}: {} with {} params", i, d.name, d.params.len());
-
-                // Print details of the test function body
-                if d.name == "test" {
-                    eprintln!("  Test body structure:");
-                    print_expr_structure(&d.body, 2);
-                }
-            }
-            _ => eprintln!("Decl {}: Other", i),
-        }
-    }
-
-    // Type check
-    let mut type_checker = crate::type_checker::TypeChecker::new_with_context(type_context, ascription_variables);
-    type_checker.load_builtins().expect("Loading builtins failed");
-    let result = type_checker.check_program(&defunc_program);
-
-    if let Err(e) = &result {
-        eprintln!("\n=== TYPE CHECK ERROR ===");
-        eprintln!("{:?}", e);
-    }
-
-    result.expect("Type checking should succeed");
-}
-
-// Helper function to print expression structure
-fn print_expr_structure(expr: &crate::ast::Expression, indent: usize) {
-    let prefix = " ".repeat(indent);
-    match &expr.kind {
-        crate::ast::ExprKind::LetIn(let_in) => {
-            if let crate::ast::PatternKind::Name(n) = &let_in.pattern.kind {
-                eprintln!("{}let {} = ...", prefix, n);
-            }
-            eprintln!("{}  value:", prefix);
-            print_expr_structure(&let_in.value, indent + 4);
-            eprintln!("{}  body:", prefix);
-            print_expr_structure(&let_in.body, indent + 4);
-        }
-        crate::ast::ExprKind::FunctionCall(name, args) => {
-            eprintln!("{}FunctionCall({}, {} args)", prefix, name, args.len());
-            for (i, arg) in args.iter().enumerate() {
-                eprintln!("{}  arg {}:", prefix, i);
-                print_expr_structure(arg, indent + 4);
-            }
-        }
-        crate::ast::ExprKind::Loop(loop_expr) => {
-            eprintln!("{}Loop", prefix);
-            eprintln!("{}  body:", prefix);
-            print_expr_structure(&loop_expr.body, indent + 4);
-        }
-        crate::ast::ExprKind::Identifier(name) => {
-            eprintln!("{}Identifier({})", prefix, name);
-        }
-        crate::ast::ExprKind::RecordLiteral(fields) => {
-            eprintln!("{}RecordLiteral with {} fields", prefix, fields.len());
-            for (name, _) in fields {
-                eprintln!("{}  field: {}", prefix, name);
-            }
-        }
-        crate::ast::ExprKind::IntLiteral(n) => {
-            eprintln!("{}IntLiteral({})", prefix, n);
-        }
-        crate::ast::ExprKind::ArrayLiteral(elements) => {
-            eprintln!("{}ArrayLiteral({} elements)", prefix, elements.len());
-        }
-        _ => {
-            eprintln!("{}Other({:?})", prefix, std::mem::discriminant(&expr.kind));
-        }
-    }
+    "#);
 }
 
 #[test]
