@@ -581,3 +581,60 @@ def test : f32 =
         // Just checking that defunctionalization and type-checking succeed
     });
 }
+
+#[test]
+fn test_desugar_loop_to_internal_structure() {
+    let input = r#"
+def test : i32 =
+    loop (idx, acc) = (0, 100) while idx < 10 do
+        (idx + 1, acc + idx)
+"#;
+
+    let tokens = tokenize(input).expect("Tokenization failed");
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().expect("Parsing failed");
+    let node_counter = parser.take_node_counter();
+
+    // Run constant folding first
+    let mut folder = crate::constant_folding::ConstantFolder::new();
+    let folded_program = folder.fold_program(&program).expect("Constant folding failed");
+
+    let type_context = polytype::Context::default();
+    let mut defunc = Defunctionalizer::new_with_counter(node_counter, type_context);
+    let defunc_program =
+        defunc.defunctionalize_program(&folded_program).expect("Defunctionalization failed");
+
+    // Find the function body
+    let decl = &defunc_program.declarations[0];
+    let body = match decl {
+        Declaration::Decl(func) => &func.body,
+        _ => panic!("Expected function declaration"),
+    };
+
+    // The body should be a LetIn wrapping an InternalLoop
+    let internal_loop = match &body.kind {
+        ExprKind::LetIn(let_in) => match &let_in.body.kind {
+            ExprKind::InternalLoop(il) => il,
+            _ => panic!("Expected InternalLoop inside LetIn, got {:?}", let_in.body.kind),
+        },
+        _ => panic!("Expected LetIn wrapping InternalLoop, got {:?}", body.kind),
+    };
+
+    // Check phi_vars count - should be 2 (one for idx, one for acc)
+    assert_eq!(internal_loop.phi_vars.len(), 2, "Expected 2 phi_vars");
+
+    // Check loop var names
+    assert_eq!(internal_loop.phi_vars[0].loop_var_name, "idx");
+    assert_eq!(internal_loop.phi_vars[1].loop_var_name, "acc");
+
+    // Check that condition exists
+    assert!(internal_loop.condition.is_some());
+
+    eprintln!("phi_vars:");
+    for (i, phi_var) in internal_loop.phi_vars.iter().enumerate() {
+        eprintln!(
+            "  {}: init_name={}, loop_var_name={}",
+            i, phi_var.init_name, phi_var.loop_var_name
+        );
+    }
+}

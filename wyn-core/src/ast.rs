@@ -609,6 +609,22 @@ pub enum LoopForm {
     While(Box<Expression>),          // while exp
 }
 
+/// A single phi variable in an internal loop.
+/// Groups together the init value, loop variable, and next-iteration extraction.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhiVar {
+    /// Name for the init value (evaluated before loop entry), e.g., "__init_idx"
+    pub init_name: String,
+    /// Expression computing the initial value
+    pub init_expr: Box<Expression>,
+    /// Name of the phi variable used in the loop body, e.g., "idx"
+    pub loop_var_name: String,
+    /// Optional type annotation for the loop variable
+    pub loop_var_type: Option<Type>,
+    /// Expression extracting next iteration value from body result
+    pub next_expr: Expression,
+}
+
 /// Internal loop representation (compiler-generated, not parsed).
 /// Desugared from LoopExpr with complex patterns flattened to simple variables.
 /// Maps directly to SPIR-V loop structure with OpPhi nodes.
@@ -616,28 +632,16 @@ pub enum LoopForm {
 /// - If condition is None: iterator-style loop (implicit condition: index < length)
 #[derive(Debug, Clone, PartialEq)]
 pub struct InternalLoop {
-    // Initial values for phi variables (evaluated before loop entry)
-    // While: [("__init_idx", 0i32), ("__init_acc", base_col)]
-    // ForIn: [("__init_array", arr), ("__init_len", len), ("__init_idx", 0), ("__init_acc", init)]
-    pub init_vars: Vec<(String, Box<Expression>)>,
+    /// Phi variables with their init values, types, and next-iteration expressions
+    pub phi_vars: Vec<PhiVar>,
 
-    // Phi variable(s) - simple names only, updated each iteration
-    // While: [("idx", Some(Int)), ("acc", Some(Vec3))]
-    // ForIn: [("idx", Some(Int)), ("elem", Some(T)), ("acc", Some(U))]
-    pub loop_vars: Vec<(String, Option<Type>)>,
-
-    // Optional loop condition (references loop_vars, must evaluate to bool)
-    // Some: while-style (e.g., idx < 18)
-    // None: iterator-style (implicit: idx < length)
+    /// Optional loop condition (references loop_vars, must evaluate to bool)
+    /// Some: while-style (e.g., idx < 18)
+    /// None: iterator-style (implicit: idx < length)
     pub condition: Option<Box<Expression>>,
 
-    // Loop body (references loop_vars, produces value for next iteration)
+    /// Loop body (references loop_vars, produces value for next iteration)
     pub body: Box<Expression>,
-
-    // Destructuring expressions to extract body result into next loop variables
-    // body_destructuring[i] extracts value for loop_vars[i]_next from body result
-    // Names like "idx_next" generated programmatically from loop_vars
-    pub body_destructuring: Vec<Expression>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

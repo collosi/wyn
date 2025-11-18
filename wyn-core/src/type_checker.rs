@@ -454,11 +454,15 @@ impl TypeChecker {
         }
     }
 
-    /// Substitute UserVars with bound type variables (recursive helper)
+    /// Substitute UserVars and SizeVars with bound type variables (recursive helper)
     fn substitute_type_params_static(ty: &Type, bindings: &HashMap<String, Type>) -> Type {
         match ty {
             Type::Constructed(TypeName::UserVar(name), _) => {
                 // Replace UserVar with the bound type variable
+                bindings.get(name).cloned().unwrap_or_else(|| ty.clone())
+            }
+            Type::Constructed(TypeName::SizeVar(name), _) => {
+                // Replace SizeVar with the bound size variable
                 bindings.get(name).cloned().unwrap_or_else(|| ty.clone())
             }
             Type::Constructed(name, args) => {
@@ -668,6 +672,41 @@ impl TypeChecker {
         };
         self.scope_stack.insert("replicate".to_string(), replicate_scheme);
 
+        // __alloc_array: ∀n t1 t2. [n]t1 -> [n]t2
+        // Allocates an uninitialized array of the same size as the template array
+        // Used by map desugaring to preserve array sizes
+        // The result type t2 can differ from input type t1 (for map f where f: t1 -> t2)
+        let var_n = self.context.new_variable();
+        let var_t1 = self.context.new_variable();
+        let var_t2 = self.context.new_variable();
+        let var_n_id = if let Type::Variable(id) = var_n { id } else { panic!("Expected Type::Variable") };
+        let var_t1_id =
+            if let Type::Variable(id) = var_t1 { id } else { panic!("Expected Type::Variable") };
+        let var_t2_id =
+            if let Type::Variable(id) = var_t2 { id } else { panic!("Expected Type::Variable") };
+
+        let template_array = Type::Constructed(
+            TypeName::Array,
+            vec![Type::Variable(var_n_id), Type::Variable(var_t1_id)],
+        );
+        let result_array = Type::Constructed(
+            TypeName::Array,
+            vec![Type::Variable(var_n_id), Type::Variable(var_t2_id)],
+        );
+        let alloc_array_body = Type::arrow(template_array, result_array);
+
+        let alloc_array_scheme = TypeScheme::Polytype {
+            variable: var_n_id,
+            body: Box::new(TypeScheme::Polytype {
+                variable: var_t1_id,
+                body: Box::new(TypeScheme::Polytype {
+                    variable: var_t2_id,
+                    body: Box::new(TypeScheme::Monotype(alloc_array_body)),
+                }),
+            }),
+        };
+        self.scope_stack.insert("__alloc_array".to_string(), alloc_array_scheme);
+
         // Vector operations
         // dot: ∀a b. a -> a -> b
         // Polymorphic: takes two values of same type, returns a value (likely scalar)
@@ -860,6 +899,14 @@ impl TypeChecker {
         for type_param in &decl.type_params {
             let fresh_var = self.context.new_variable();
             type_param_bindings.insert(type_param.clone(), fresh_var);
+        }
+
+        // Bind size parameters to fresh type variables
+        // Size parameters like [n] in "def f [n] (xs: [n]i32): i32" are treated as type variables
+        // that can unify with concrete sizes (Size(8)) or other size variables
+        for size_param in &decl.size_params {
+            let fresh_var = self.context.new_variable();
+            type_param_bindings.insert(size_param.clone(), fresh_var);
         }
 
         // Note: substitution function defined as static method below
@@ -1533,33 +1580,39 @@ impl TypeChecker {
                 // Push scope for the entire loop construct
                 self.scope_stack.push_scope();
 
-                // Type check and bind init_vars
-                for (var_name, init_expr) in &internal_loop.init_vars {
-                    let init_type = self.infer_expression(init_expr)?;
-                    let type_scheme = TypeScheme::Monotype(init_type);
-                    self.scope_stack.insert(var_name.clone(), type_scheme);
-                }
-
-                // Bind loop_vars (phi variables)
+                // Type check init expressions and bind both init_name and loop_var_name
                 let mut loop_var_types = Vec::new();
-                for (var_name, opt_type) in &internal_loop.loop_vars {
-                    let var_type = if let Some(ty) = opt_type {
-                        ty.clone()
-                    } else {
-                        // If no type annotation, create a fresh type variable
-                        self.context.new_variable()
-                    };
+                for phi_var in &internal_loop.phi_vars {
+                    // Type check init expression
+                    let init_type = self.infer_expression(&phi_var.init_expr)?;
+
+                    // Bind init_name to the init type
+                    let type_scheme = TypeScheme::Monotype(init_type.clone());
+                    self.scope_stack.insert(phi_var.init_name.clone(), type_scheme);
+
+                    // Determine loop variable type (from annotation or init)
+                    let var_type = phi_var.loop_var_type.clone().unwrap_or_else(|| init_type.clone());
+
+                    // Unify loop var type with init type
+                    self.context.unify(&var_type, &init_type).map_err(|e| {
+                        CompilerError::TypeError(
+                            format!(
+                                "Loop variable '{}' type mismatch with init: {:?}",
+                                phi_var.loop_var_name, e
+                            ),
+                            expr.h.span
+                        )
+                    })?;
 
                     // Bind loop variable in scope (not generalized)
                     let type_scheme = TypeScheme::Monotype(var_type.clone());
-                    self.scope_stack.insert(var_name.clone(), type_scheme);
+                    self.scope_stack.insert(phi_var.loop_var_name.clone(), type_scheme);
                     loop_var_types.push(var_type);
                 }
 
                 // Type check condition if present
                 if let Some(cond) = &internal_loop.condition {
                     let cond_type = self.infer_expression(cond)?;
-                    // Condition must be boolean
                     self.context.unify(&cond_type, &types::bool_type()).map_err(|e| {
                         CompilerError::TypeError(
                             format!("Loop condition must be bool: {:?}", e),
@@ -1571,36 +1624,18 @@ impl TypeChecker {
                 // Type check loop body
                 let body_type = self.infer_expression(&internal_loop.body)?;
 
-                // Bind __body_result to the body type so destructuring expressions can reference it
+                // Bind __body_result to the body type so next_expr can reference it
                 let type_scheme = TypeScheme::Monotype(body_type.clone());
                 self.scope_stack.insert("__body_result".to_string(), type_scheme);
 
-                // Type check body_destructuring expressions
-                // These extract components from the body result
-                let mut destructured_types = Vec::new();
-                for destr_expr in &internal_loop.body_destructuring {
-                    let destr_type = self.infer_expression(destr_expr)?;
-                    destructured_types.push(destr_type);
-                }
-
-                // Verify that body_destructuring results match loop_var types
-                if destructured_types.len() != loop_var_types.len() {
-                    return Err(CompilerError::TypeError(
-                        format!(
-                            "Loop body destructuring count mismatch: expected {}, got {}",
-                            loop_var_types.len(),
-                            destructured_types.len()
-                        ),
-                        expr.h.span
-                    ));
-                }
-
-                for (i, (destr_type, loop_var_type)) in destructured_types.iter().zip(&loop_var_types).enumerate() {
-                    self.context.unify(destr_type, loop_var_type).map_err(|e| {
+                // Type check next_exprs and unify with loop_var types
+                for (phi_var, loop_var_type) in internal_loop.phi_vars.iter().zip(&loop_var_types) {
+                    let next_type = self.infer_expression(&phi_var.next_expr)?;
+                    self.context.unify(&next_type, loop_var_type).map_err(|e| {
                         CompilerError::TypeError(
                             format!(
-                                "Loop body destructuring type mismatch at index {}: {:?}",
-                                i, e
+                                "Loop next expression type mismatch for '{}': {:?}",
+                                phi_var.loop_var_name, e
                             ),
                             expr.h.span
                         )
@@ -2647,6 +2682,32 @@ def test : [8]i32 =
         match checker.check_program(&program) {
             Ok(_) => {
                 // Should succeed - helper should be visible in lambda
+            }
+            Err(e) => {
+                panic!("Type checking should succeed but failed with: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_size_parameter_binding() {
+        // Test that size parameters are properly bound and substituted
+        let source = r#"
+def identity [n] (xs: [n]i32): [n]i32 = xs
+
+def test : [5]i32 =
+  let arr = [1, 2, 3, 4, 5] in
+  identity arr
+"#;
+
+        let program = parse_and_defunctionalize(source);
+
+        let mut checker = TypeChecker::new();
+        checker.load_builtins().unwrap();
+
+        match checker.check_program(&program) {
+            Ok(_) => {
+                // Should succeed - identity preserves array size
             }
             Err(e) => {
                 panic!("Type checking should succeed but failed with: {:?}", e);

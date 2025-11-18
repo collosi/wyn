@@ -1292,8 +1292,8 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
 
         // Build ALL leaf nodes first to avoid borrow checker issues
         let xs_ident_for_len = self.node_counter.mk_node(ExprKind::Identifier(xs_var.clone()), span);
-        let len_ident_for_replicate =
-            self.node_counter.mk_node(ExprKind::Identifier(len_var.clone()), span);
+        let xs_ident_for_alloc = self.node_counter.mk_node(ExprKind::Identifier(xs_var.clone()), span);
+        let len_ident_for_loop = self.node_counter.mk_node(ExprKind::Identifier(len_var.clone()), span);
 
         // length xs
         let len_call = self.node_counter.mk_node(
@@ -1301,18 +1301,12 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             span,
         );
 
-        // __uninit() - type-polymorphic uninitialized value
-        let uninit_call =
-            self.node_counter.mk_node(ExprKind::FunctionCall("__uninit".to_string(), vec![]), span);
-
-        // Initialize output array using replicate: replicate len (__uninit())
-        // Uses __uninit instead of a typed zero to work with any element type (i32, f32, bool, records, etc.)
+        // Initialize output array using __alloc_array: __alloc_array xs
+        // This preserves the size of xs in the type system, so map [n]t -> [n]t'
+        // __alloc_array has type ∀n t. [n]t -> [n]t, so it returns an array of the same size
         // SAFETY: Every element will be overwritten in the loop before the array is returned
         let init_out = self.node_counter.mk_node(
-            ExprKind::FunctionCall(
-                "replicate".to_string(),
-                vec![len_ident_for_replicate, uninit_call],
-            ),
+            ExprKind::FunctionCall("__alloc_array".to_string(), vec![xs_ident_for_alloc]),
             span,
         );
 
@@ -1840,22 +1834,20 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                 })?;
                 let (transformed_init, _) = self.defunctionalize_expression(init, scope_stack)?;
 
-                // 3. Create init_vars: evaluate init and bind to temporary, then extract components
-                let mut init_vars = Vec::new();
-                let init_tmp = format!("__loop_init_{}", self.next_syntax_id());
-                init_vars.push((init_tmp.clone(), Box::new(transformed_init)));
+                // 3. Create tuple binding and init_vars for extractions
+                let tuple_name = format!("__loop_init_{}", self.next_syntax_id());
+                let tuple_expr = transformed_init;
 
-                // Add extraction init vars by recreating the extraction expressions with the correct variable
-                // Instead of using expressions from init_bindings (which reference __tmp_0),
-                // create new expressions that reference init_tmp
+                // Create init_vars that extract components from the tuple
+                let mut init_vars = Vec::new();
                 for (idx, (_name, _extraction_expr)) in init_bindings.iter().enumerate() {
                     let init_var_name = format!("__init_{}", self.next_syntax_id());
 
-                    // Create expression: init_tmp.idx (field access)
-                    let init_tmp_expr =
-                        self.node_counter.mk_node(ExprKind::Identifier(init_tmp.clone()), Span::dummy());
+                    // Create expression: tuple_name.idx (field access)
+                    let tuple_ident =
+                        self.node_counter.mk_node(ExprKind::Identifier(tuple_name.clone()), Span::dummy());
                     let extraction = self.node_counter.mk_node(
-                        ExprKind::FieldAccess(Box::new(init_tmp_expr), idx.to_string()),
+                        ExprKind::FieldAccess(Box::new(tuple_ident), idx.to_string()),
                         Span::dummy(),
                     );
 
@@ -1896,18 +1888,48 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                     })
                     .collect();
 
+                // 8. Combine into phi_vars using itertools
+                use crate::ast::PhiVar;
+                use itertools::izip;
+
+                let phi_vars: Vec<PhiVar> = izip!(
+                    init_vars.into_iter(),
+                    loop_vars.into_iter(),
+                    body_destructuring.into_iter()
+                )
+                .map(
+                    |((init_name, init_expr), (loop_var_name, loop_var_type), next_expr)| PhiVar {
+                        init_name,
+                        init_expr,
+                        loop_var_name,
+                        loop_var_type,
+                        next_expr,
+                    },
+                )
+                .collect();
+
                 let internal_loop = InternalLoop {
-                    init_vars,
-                    loop_vars,
+                    phi_vars,
                     condition: Some(Box::new(transformed_condition)),
                     body: Box::new(final_body),
-                    body_destructuring,
                 };
 
-                Ok((
-                    self.node_counter.mk_node(ExprKind::InternalLoop(internal_loop), span),
-                    self.dyn_unknown(),
-                ))
+                let loop_node = self.node_counter.mk_node(ExprKind::InternalLoop(internal_loop), span);
+
+                // Wrap in LetIn to bind the tuple before the loop
+                let tuple_pattern =
+                    self.node_counter.mk_node(crate::ast::PatternKind::Name(tuple_name), Span::dummy());
+                let result = self.node_counter.mk_node(
+                    ExprKind::LetIn(crate::ast::LetInExpr {
+                        pattern: tuple_pattern,
+                        ty: None,
+                        value: Box::new(tuple_expr),
+                        body: Box::new(loop_node),
+                    }),
+                    span,
+                );
+
+                Ok((result, self.dyn_unknown()))
             }
             _ => {
                 // TODO: Handle ForIn and For forms

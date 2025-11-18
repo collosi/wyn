@@ -554,12 +554,19 @@ impl Mirize {
             ExprKind::InternalLoop(internal_loop) => {
                 // Generate MIR for InternalLoop following SPIR-V OpPhi structure
 
-                // 1. Evaluate all init_vars and store in environment
-                let mut init_regs = Vec::new();
-                for (_name, init_expr) in &internal_loop.init_vars {
-                    let init_reg = self.mirize_expression(init_expr)?;
-                    init_regs.push(init_reg);
-                }
+                // 1. Evaluate init expressions and create phi registers
+                let (init_regs, phi_regs): (Vec<_>, Vec<_>) = internal_loop
+                    .phi_vars
+                    .iter()
+                    .map(|phi_var| {
+                        let init_reg = self.mirize_expression(&phi_var.init_expr)?;
+                        let phi_type = phi_var.loop_var_type.clone().unwrap_or_else(|| init_reg.ty.clone());
+                        let phi_reg = self.builder.new_register(phi_type);
+                        Ok((init_reg, phi_reg))
+                    })
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .unzip();
 
                 // 2. Create blocks
                 let header_block = self.builder.create_block();
@@ -568,65 +575,42 @@ impl Mirize {
                 let merge_block = self.builder.create_block();
                 let pre_header_block = self.builder.current_block().unwrap();
 
-                // 3. Create phi registers for each loop variable
-                let mut phi_regs = Vec::new();
-                for (i, (_var_name, opt_type)) in internal_loop.loop_vars.iter().enumerate() {
-                    let phi_type = if let Some(ty) = opt_type {
-                        ty.clone()
-                    } else {
-                        // Use type from corresponding init register
-                        // Note: init_regs[0] is the full init tuple, init_regs[1..] are extracted components
-                        // So loop_vars[i] corresponds to init_regs[i+1]
-                        let init_idx = i + 1;
-                        if init_idx < init_regs.len() {
-                            init_regs[init_idx].ty.clone()
-                        } else {
-                            expr_type.clone()
-                        }
-                    };
-                    let phi_reg = self.builder.new_register(phi_type);
-                    phi_regs.push(phi_reg);
-                }
-
-                // 4. Save environment and bind loop_vars to phi registers
+                // 3. Save environment and bind loop_vars to phi registers
                 let saved_env = self.env.clone();
-                for (i, (var_name, _)) in internal_loop.loop_vars.iter().enumerate() {
-                    self.env.insert(var_name.clone(), phi_regs[i].clone());
+                for (phi_var, phi_reg) in internal_loop.phi_vars.iter().zip(&phi_regs) {
+                    self.env.insert(phi_var.loop_var_name.clone(), phi_reg.clone());
                 }
 
-                // 5. Generate body block
+                // 4. Generate body block
                 self.builder.select_block(body_block);
                 let body_result_reg = self.mirize_expression(&internal_loop.body)?;
 
-                // 6. Bind body result to environment and evaluate body_destructuring
+                // 5. Bind body result to environment and evaluate next_exprs
                 self.env.insert("__body_result".to_string(), body_result_reg.clone());
 
                 let mut next_regs = Vec::new();
-                for destr_expr in &internal_loop.body_destructuring {
-                    let next_reg = self.mirize_expression(destr_expr)?;
+                for phi_var in &internal_loop.phi_vars {
+                    let next_reg = self.mirize_expression(&phi_var.next_expr)?;
                     next_regs.push(next_reg);
                 }
 
                 self.builder.build_branch(continue_block);
 
-                // 7. Generate continue block (back-edge)
+                // 6. Generate continue block (back-edge)
                 self.builder.select_block(continue_block);
                 self.builder.build_branch(header_block);
 
-                // 8. Generate header block with phi nodes and condition
+                // 7. Generate header block with phi nodes and condition
                 self.builder.select_block(header_block);
 
                 // Insert phi instructions for each loop variable
                 for (i, phi_reg) in phi_regs.iter().enumerate() {
-                    // init_regs[0] is the full init tuple, init_regs[1..] are extracted components
-                    // So loop_vars[i] corresponds to init_regs[i+1]
-                    let init_idx = i + 1;
-                    let init_source = init_regs[init_idx].clone();
-                    let next_source = next_regs[i].clone();
-
                     let phi_inst = mir::Instruction::Phi(
                         phi_reg.clone(),
-                        vec![(init_source, pre_header_block), (next_source, continue_block)],
+                        vec![
+                            (init_regs[i].clone(), pre_header_block),
+                            (next_regs[i].clone(), continue_block),
+                        ],
                     );
                     self.builder.insert_instruction_at_start(phi_inst);
                 }
