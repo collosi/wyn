@@ -6,14 +6,15 @@
 
 use crate::ast::*;
 use crate::error::{CompilerError, Result};
-use crate::mir::{self, FunctionId, Instruction, LoopInfo, Register};
+use crate::mir::{self, FunctionId, Instruction, Register};
+use crate::scope::ScopeStack;
 use std::collections::HashMap;
 
 pub struct Mirize {
     builder: mir::Builder,
 
     /// Map from AST variable names to MIR registers in current scope
-    env: HashMap<String, Register>,
+    env: ScopeStack<Register>,
 
     /// Type table from type checker - maps NodeId to inferred Type
     type_table: HashMap<NodeId, Type>,
@@ -26,7 +27,7 @@ impl Mirize {
     pub fn new(type_table: HashMap<NodeId, Type>) -> Self {
         Mirize {
             builder: mir::Builder::new(),
-            env: HashMap::new(),
+            env: ScopeStack::new(),
             type_table,
             entry_points: Vec::new(),
         }
@@ -152,6 +153,9 @@ impl Mirize {
         // Regular decl has no attributed return types (those are only in EntryDecl)
         self.builder.set_function_attributes(param_attrs, vec![], None);
 
+        // Push scope for function body
+        self.env.push_scope();
+
         // Bind parameters in environment
         for (idx, (name, _)) in param_types.iter().enumerate() {
             let param_reg = self
@@ -170,8 +174,8 @@ impl Mirize {
         // Finalize function
         self.builder.end_function();
 
-        // Clear environment for next function
-        self.env.clear();
+        // Pop function scope
+        self.env.pop_scope();
 
         Ok(())
     }
@@ -252,6 +256,9 @@ impl Mirize {
 
         self.builder.set_function_attributes(param_attrs, return_attrs, Some(attributed_return_types));
 
+        // Push scope for function body
+        self.env.push_scope();
+
         // Bind parameters in environment
         for (idx, (name, _)) in param_types.iter().enumerate() {
             let param_reg = self
@@ -270,8 +277,8 @@ impl Mirize {
         // Finalize function
         self.builder.end_function();
 
-        // Clear environment for next function
-        self.env.clear();
+        // Pop function scope
+        self.env.pop_scope();
 
         Ok(())
     }
@@ -307,7 +314,7 @@ impl Mirize {
 
             ExprKind::Identifier(name) => {
                 // Check if this is a variable in scope
-                if let Some(reg) = self.env.get(name) {
+                if let Ok(reg) = self.env.lookup(name) {
                     Ok(reg.clone())
                 } else {
                     // Must be a constant (zero-argument function) - call it
@@ -370,8 +377,8 @@ impl Mirize {
             )),
 
             ExprKind::LetIn(let_in_expr) => {
-                // Save current environment
-                let saved_env = self.env.clone();
+                // Push scope for let bindings
+                self.env.push_scope();
 
                 // Process binding value
                 let value_reg = self.mirize_expression(&let_in_expr.value)?;
@@ -415,8 +422,8 @@ impl Mirize {
                 // Process body
                 let result_reg = self.mirize_expression(&let_in_expr.body)?;
 
-                // Restore environment
-                self.env = saved_env;
+                // Pop scope
+                self.env.pop_scope();
 
                 Ok(result_reg)
             }
@@ -575,8 +582,8 @@ impl Mirize {
                 let merge_block = self.builder.create_block();
                 let pre_header_block = self.builder.current_block().unwrap();
 
-                // 3. Save environment and bind loop_vars to phi registers
-                let saved_env = self.env.clone();
+                // 3. Push scope and bind loop_vars to phi registers
+                self.env.push_scope();
                 for (phi_var, phi_reg) in internal_loop.phi_vars.iter().zip(&phi_regs) {
                     self.env.insert(phi_var.loop_var_name.clone(), phi_reg.clone());
                 }
@@ -666,9 +673,9 @@ impl Mirize {
                 };
                 self.builder.emit_instruction(mir::Instruction::Loop(loop_info));
 
-                // 11. Continue in merge block and restore environment
+                // 11. Continue in merge block and pop scope
                 self.builder.select_block(merge_block);
-                self.env = saved_env;
+                self.env.pop_scope();
 
                 Ok(result_reg)
             }
