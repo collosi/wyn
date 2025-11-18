@@ -1,8 +1,33 @@
 use crate::ast::{Type, TypeName};
+use crate::defunctionalization::Defunctionalizer;
 use crate::error::CompilerError;
 use crate::lexer::tokenize;
 use crate::parser::Parser;
 use crate::type_checker::{TypeChecker, TypeWarning};
+
+/// Helper to parse, defunctionalize, and type check source code
+fn typecheck_defunctionalized(input: &str) {
+    let tokens = tokenize(input).expect("Tokenization failed");
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().expect("Parsing failed");
+    let node_counter = parser.take_node_counter();
+
+    let type_context = polytype::Context::default();
+    let mut defunc = Defunctionalizer::new_with_counter(node_counter, type_context);
+    let defunc_program = defunc.defunctionalize_program(&program).expect("Defunctionalization failed");
+    let (type_context, ascription_variables) = defunc.take();
+
+    let mut type_checker = TypeChecker::new_with_context(type_context, ascription_variables);
+    type_checker.load_builtins().expect("Loading builtins failed");
+    let result = type_checker.check_program(&defunc_program);
+
+    if let Err(e) = &result {
+        eprintln!("\n=== TYPE CHECK ERROR ===");
+        eprintln!("{:?}", e);
+    }
+
+    result.expect("Type checking should succeed");
+}
 
 #[test]
 fn test_type_check_let() {
@@ -839,6 +864,54 @@ def test : [5]i32 =
             panic!("Type checking should succeed but failed with: {:?}", e);
         }
     }
+}
+
+/// Test f32.sum with map over nested arrays (minimal reproduction of de_rasterizer issue)
+#[test]
+fn test_f32_sum_with_map_over_nested_array() {
+    let source = r#"
+def test : f32 =
+    let edges : [3][2]i32 = [[0, 1], [1, 2], [2, 0]] in
+    f32.sum (map (\e -> 1.0f32) edges)
+    "#;
+
+    typecheck_defunctionalized(source);
+}
+
+/// Test f32.sum with map accessing elements of nested array (closer to de_rasterizer)
+#[test]
+fn test_f32_sum_with_map_indexing_nested_array() {
+    let source = r#"
+def test : f32 =
+    let edges : [3][2]i32 = [[0, 1], [1, 2], [2, 0]] in
+    f32.sum (map (\e -> let a = e[0] in let b = e[1] in 1.0f32) edges)
+    "#;
+
+    let tokens = tokenize(source).expect("Tokenization failed");
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().expect("Parsing failed");
+    let node_counter = parser.take_node_counter();
+
+    let type_context = polytype::Context::default();
+    let mut defunc = Defunctionalizer::new_with_counter(node_counter, type_context);
+    let defunc_program = defunc.defunctionalize_program(&program).expect("Defunctionalization failed");
+
+    // Print defunctionalized AST
+    eprintln!("Defunctionalized AST:");
+    eprintln!("{}", crate::diags::AstFormatter::format_program(&defunc_program));
+
+    let (type_context, ascription_variables) = defunc.take();
+
+    let mut type_checker = TypeChecker::new_with_context(type_context, ascription_variables);
+    type_checker.load_builtins().expect("Loading builtins failed");
+    let result = type_checker.check_program(&defunc_program);
+
+    if let Err(e) = &result {
+        eprintln!("\n=== TYPE CHECK ERROR ===");
+        eprintln!("{:?}", e);
+    }
+
+    result.expect("Type checking should succeed");
 }
 
 /// Test that type variables in internal loops get properly resolved through back edges

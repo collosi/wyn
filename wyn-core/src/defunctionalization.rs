@@ -1380,9 +1380,13 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             span,
         );
 
-        // xs[i]
-        let array_index =
+        // xs[i] with type ascription to connect element type to lambda parameter
+        let array_index_raw =
             self.node_counter.mk_node(ExprKind::ArrayIndex(Box::new(xs_ident), Box::new(i_ident2)), span);
+        let array_index = self.node_counter.mk_node(
+            ExprKind::TypeAscription(Box::new(array_index_raw), input_array_elem_type.clone()),
+            span,
+        );
 
         // Try to specialize the callee: if func is a closure record with a known __tag,
         // call the lambda directly instead of using __apply1 dispatcher

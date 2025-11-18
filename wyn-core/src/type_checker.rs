@@ -1201,8 +1201,6 @@ impl TypeChecker {
                 }
             }
             ExprKind::FunctionCall(func_name, args) => {
-                let is_debug = func_name == "__array_update" || func_name == "__alloc_array";
-
                 // Get function type - check scope stack first, then builtin registry
                 let func_type_result: Result<Type> =
                     if let Ok(type_scheme) = self.scope_stack.lookup(func_name) {
@@ -1221,35 +1219,8 @@ impl TypeChecker {
 
                 let func_type = func_type_result?;
 
-                if is_debug {
-                    eprintln!("\n=== DEBUG {} ===", func_name);
-                    eprintln!("Instantiated func_type: {}", self.format_type(&func_type));
-                    // Show argument types before apply_two_pass
-                    for (i, arg) in args.iter().enumerate() {
-                        // Peek at the type without re-inferring (look in type_table if available)
-                        if let Some(ty) = self.type_table.get(&arg.h.id) {
-                            eprintln!("  arg[{}] (cached): {}", i, self.format_type(ty));
-                        }
-                    }
-                }
-
                 // Use two-pass application for better lambda inference
                 let result = self.apply_two_pass(func_type, args)?;
-
-                if is_debug {
-                    eprintln!("Result type: {}", self.format_type(&result));
-                    // Show relevant context substitutions
-                    let result_applied = result.apply(&self.context);
-                    eprintln!("Result type after apply: {}", self.format_type(&result_applied));
-                    // Show argument types after unification
-                    for (i, arg) in args.iter().enumerate() {
-                        if let Some(ty) = self.type_table.get(&arg.h.id) {
-                            let applied = ty.apply(&self.context);
-                            eprintln!("  arg[{}] after apply: {}", i, self.format_type(&applied));
-                        }
-                    }
-                    eprintln!("=== END DEBUG ===\n");
-                }
 
                 Ok(result)
             }
