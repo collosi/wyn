@@ -1,9 +1,10 @@
-//! Diagnostic utilities for AST formatting and display.
+//! Diagnostic utilities for AST and MIR formatting and display.
 //!
-//! Provides a less verbose formatter for AST nodes that outputs
+//! Provides less verbose formatters for AST and MIR nodes that output
 //! something close to Wyn syntax.
 
 use crate::ast::*;
+use crate::mir::{Function, Instruction, Module, Register};
 use std::fmt::Write;
 
 /// Formatter for AST nodes that produces readable output with line numbers.
@@ -515,6 +516,321 @@ impl AstFormatter {
 }
 
 impl Default for AstFormatter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Formatter for MIR diagnostic output
+pub struct MirFormatter {
+    output: String,
+    indent: usize,
+}
+
+impl MirFormatter {
+    pub fn new() -> Self {
+        MirFormatter {
+            output: String::new(),
+            indent: 0,
+        }
+    }
+
+    pub fn format_module(module: &Module) -> String {
+        let mut formatter = MirFormatter::new();
+        for func in &module.functions {
+            formatter.write_function(func);
+            formatter.newline();
+        }
+        formatter.output
+    }
+
+    fn write(&mut self, s: &str) {
+        self.output.push_str(s);
+    }
+
+    fn newline(&mut self) {
+        self.output.push('\n');
+        for _ in 0..self.indent {
+            self.output.push_str("  ");
+        }
+    }
+
+    fn format_type(ty: &Type) -> String {
+        match ty {
+            Type::Variable(id) => format!("?{}", id),
+            Type::Constructed(name, args) if args.is_empty() => format!("{}", name),
+            Type::Constructed(TypeName::Str(s), args) if *s == "fn" && args.len() == 2 => {
+                format!(
+                    "{} -> {}",
+                    Self::format_type(&args[0]),
+                    Self::format_type(&args[1])
+                )
+            }
+            Type::Constructed(name, args) => {
+                let arg_strs: Vec<String> = args.iter().map(Self::format_type).collect();
+                format!("{}[{}]", name, arg_strs.join(", "))
+            }
+        }
+    }
+
+    fn format_register(reg: &Register) -> String {
+        format!("r{}:{}", reg.id, Self::format_type(&reg.ty))
+    }
+
+    fn write_function(&mut self, func: &Function) {
+        self.write(&format!("fn {} (", func.name));
+        for (i, param) in func.params.iter().enumerate() {
+            if i > 0 {
+                self.write(", ");
+            }
+            self.write(&Self::format_register(param));
+        }
+        self.write(&format!(") -> {}", Self::format_type(&func.return_type)));
+        self.write(" {");
+        self.indent += 1;
+
+        for block in &func.blocks {
+            self.newline();
+            self.write(&format!("block {}:", block.id));
+            self.indent += 1;
+            for inst in &block.instructions {
+                self.newline();
+                self.write_instruction(inst);
+            }
+            self.indent -= 1;
+        }
+
+        self.indent -= 1;
+        self.newline();
+        self.write("}");
+        self.newline();
+    }
+
+    fn write_instruction(&mut self, inst: &Instruction) {
+        match inst {
+            Instruction::ConstInt(dest, val) => {
+                self.write(&format!("{} = const {}", Self::format_register(dest), val));
+            }
+            Instruction::ConstFloat(dest, val) => {
+                self.write(&format!("{} = const {}f32", Self::format_register(dest), val));
+            }
+            Instruction::ConstBool(dest, val) => {
+                self.write(&format!("{} = const {}", Self::format_register(dest), val));
+            }
+            Instruction::Neg(dest, src) => {
+                self.write(&format!(
+                    "{} = neg {}",
+                    Self::format_register(dest),
+                    Self::format_register(src)
+                ));
+            }
+            Instruction::Not(dest, src) => {
+                self.write(&format!(
+                    "{} = not {}",
+                    Self::format_register(dest),
+                    Self::format_register(src)
+                ));
+            }
+            Instruction::Add(dest, left, right) => {
+                self.write(&format!(
+                    "{} = add {}, {}",
+                    Self::format_register(dest),
+                    Self::format_register(left),
+                    Self::format_register(right)
+                ));
+            }
+            Instruction::Sub(dest, left, right) => {
+                self.write(&format!(
+                    "{} = sub {}, {}",
+                    Self::format_register(dest),
+                    Self::format_register(left),
+                    Self::format_register(right)
+                ));
+            }
+            Instruction::Mul(dest, left, right) => {
+                self.write(&format!(
+                    "{} = mul {}, {}",
+                    Self::format_register(dest),
+                    Self::format_register(left),
+                    Self::format_register(right)
+                ));
+            }
+            Instruction::Div(dest, left, right) => {
+                self.write(&format!(
+                    "{} = div {}, {}",
+                    Self::format_register(dest),
+                    Self::format_register(left),
+                    Self::format_register(right)
+                ));
+            }
+            Instruction::Eq(dest, left, right) => {
+                self.write(&format!(
+                    "{} = eq {}, {}",
+                    Self::format_register(dest),
+                    Self::format_register(left),
+                    Self::format_register(right)
+                ));
+            }
+            Instruction::Ne(dest, left, right) => {
+                self.write(&format!(
+                    "{} = ne {}, {}",
+                    Self::format_register(dest),
+                    Self::format_register(left),
+                    Self::format_register(right)
+                ));
+            }
+            Instruction::Lt(dest, left, right) => {
+                self.write(&format!(
+                    "{} = lt {}, {}",
+                    Self::format_register(dest),
+                    Self::format_register(left),
+                    Self::format_register(right)
+                ));
+            }
+            Instruction::Le(dest, left, right) => {
+                self.write(&format!(
+                    "{} = le {}, {}",
+                    Self::format_register(dest),
+                    Self::format_register(left),
+                    Self::format_register(right)
+                ));
+            }
+            Instruction::Gt(dest, left, right) => {
+                self.write(&format!(
+                    "{} = gt {}, {}",
+                    Self::format_register(dest),
+                    Self::format_register(left),
+                    Self::format_register(right)
+                ));
+            }
+            Instruction::Ge(dest, left, right) => {
+                self.write(&format!(
+                    "{} = ge {}, {}",
+                    Self::format_register(dest),
+                    Self::format_register(left),
+                    Self::format_register(right)
+                ));
+            }
+            Instruction::Alloca(dest) => {
+                self.write(&format!("{} = alloca", Self::format_register(dest)));
+            }
+            Instruction::Load(dest, src) => {
+                self.write(&format!(
+                    "{} = load {}",
+                    Self::format_register(dest),
+                    Self::format_register(src)
+                ));
+            }
+            Instruction::Store(dest, src) => {
+                self.write(&format!(
+                    "store {}, {}",
+                    Self::format_register(dest),
+                    Self::format_register(src)
+                ));
+            }
+            Instruction::Call(dest, func_id, args) => {
+                let arg_strs: Vec<String> = args.iter().map(Self::format_register).collect();
+                self.write(&format!(
+                    "{} = call {}({})",
+                    Self::format_register(dest),
+                    func_id,
+                    arg_strs.join(", ")
+                ));
+            }
+            Instruction::CallBuiltin(dest, name, args) => {
+                let arg_strs: Vec<String> = args.iter().map(Self::format_register).collect();
+                self.write(&format!(
+                    "{} = call @{}({})",
+                    Self::format_register(dest),
+                    name,
+                    arg_strs.join(", ")
+                ));
+            }
+            Instruction::MakeTuple(dest, elements) => {
+                let elem_strs: Vec<String> = elements.iter().map(Self::format_register).collect();
+                self.write(&format!(
+                    "{} = tuple ({})",
+                    Self::format_register(dest),
+                    elem_strs.join(", ")
+                ));
+            }
+            Instruction::ExtractElement(dest, tuple, index) => {
+                self.write(&format!(
+                    "{} = extract {}.{}",
+                    Self::format_register(dest),
+                    Self::format_register(tuple),
+                    index
+                ));
+            }
+            Instruction::MakeArray(dest, elements) => {
+                let elem_strs: Vec<String> = elements.iter().map(Self::format_register).collect();
+                self.write(&format!(
+                    "{} = array [{}]",
+                    Self::format_register(dest),
+                    elem_strs.join(", ")
+                ));
+            }
+            Instruction::ArrayIndex(dest, array, index) => {
+                self.write(&format!(
+                    "{} = index {}[{}]",
+                    Self::format_register(dest),
+                    Self::format_register(array),
+                    Self::format_register(index)
+                ));
+            }
+            Instruction::Branch(target) => {
+                self.write(&format!("br block {}", target));
+            }
+            Instruction::BranchCond(cond, true_block, false_block, merge_block) => {
+                self.write(&format!(
+                    "br {} ? block {} : block {} -> block {}",
+                    Self::format_register(cond),
+                    true_block,
+                    false_block,
+                    merge_block
+                ));
+            }
+            Instruction::BranchLoop(cond, body, exit, merge, cont) => {
+                self.write(&format!(
+                    "loop {} body {} exit {} merge {} continue {}",
+                    Self::format_register(cond),
+                    body,
+                    exit,
+                    merge,
+                    cont
+                ));
+            }
+            Instruction::Loop(info) => {
+                self.write(&format!(
+                    "loop phi={} init={} body_result={} cond={}",
+                    Self::format_register(&info.phi_reg),
+                    Self::format_register(&info.init_reg),
+                    Self::format_register(&info.body_result_reg),
+                    Self::format_register(&info.cond_reg)
+                ));
+            }
+            Instruction::Phi(dest, sources) => {
+                let source_strs: Vec<String> = sources
+                    .iter()
+                    .map(|(reg, block)| format!("[{}, block {}]", Self::format_register(reg), block))
+                    .collect();
+                self.write(&format!(
+                    "{} = phi {}",
+                    Self::format_register(dest),
+                    source_strs.join(", ")
+                ));
+            }
+            Instruction::Return(reg) => {
+                self.write(&format!("ret {}", Self::format_register(reg)));
+            }
+            Instruction::ReturnVoid => {
+                self.write("ret void");
+            }
+        }
+    }
+}
+
+impl Default for MirFormatter {
     fn default() -> Self {
         Self::new()
     }
