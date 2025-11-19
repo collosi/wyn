@@ -551,7 +551,6 @@ pub enum ExprKind {
     FieldAccess(Box<Expression>, String),     // e.g. v.x, v.y
     If(IfExpr),                               // if-then-else expression
     Loop(LoopExpr),                           // loop expression
-    InternalLoop(InternalLoop),               // internal loop (compiler-generated)
     Match(MatchExpr),                         // match expression
     Range(RangeExpr),                         // range expressions: a..b, a..<b, a..>b, a...b
     Pipe(Box<Expression>, Box<Expression>),   // |> pipe operator
@@ -607,41 +606,6 @@ pub enum LoopForm {
     For(String, Box<Expression>),    // for name < exp
     ForIn(Pattern, Box<Expression>), // for pat in exp
     While(Box<Expression>),          // while exp
-}
-
-/// A single phi variable in an internal loop.
-/// Groups together the init value, loop variable, and next-iteration extraction.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PhiVar {
-    /// Name for the init value (evaluated before loop entry), e.g., "__init_idx"
-    pub init_name: String,
-    /// Expression computing the initial value
-    pub init_expr: Box<Expression>,
-    /// Name of the phi variable used in the loop body, e.g., "idx"
-    pub loop_var_name: String,
-    /// Optional type annotation for the loop variable
-    pub loop_var_type: Option<Type>,
-    /// Expression extracting next iteration value from body result
-    pub next_expr: Expression,
-}
-
-/// Internal loop representation (compiler-generated, not parsed).
-/// Desugared from LoopExpr with complex patterns flattened to simple variables.
-/// Maps directly to SPIR-V loop structure with OpPhi nodes.
-/// - If condition is Some: while-style loop
-/// - If condition is None: iterator-style loop (implicit condition: index < length)
-#[derive(Debug, Clone, PartialEq)]
-pub struct InternalLoop {
-    /// Phi variables with their init values, types, and next-iteration expressions
-    pub phi_vars: Vec<PhiVar>,
-
-    /// Optional loop condition (references loop_vars, must evaluate to bool)
-    /// Some: while-style (e.g., idx < 18)
-    /// None: iterator-style (implicit: idx < length)
-    pub condition: Option<Box<Expression>>,
-
-    /// Loop body (references loop_vars, produces value for next iteration)
-    pub body: Box<Expression>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

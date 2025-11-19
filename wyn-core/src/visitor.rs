@@ -270,7 +270,6 @@ pub fn walk_expression<V: Visitor>(v: &mut V, e: &Expression) -> ControlFlow<V::
         ExprKind::QualifiedName(_, _)
         | ExprKind::UnaryOp(_, _)
         | ExprKind::Loop(_)
-        | ExprKind::InternalLoop(_)
         | ExprKind::Match(_)
         | ExprKind::Range(_)
         | ExprKind::Pipe(_, _)

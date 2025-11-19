@@ -308,37 +308,6 @@ impl AstFormatter {
                 self.write_expression(&loop_expr.body);
                 self.indent -= 1;
             }
-            ExprKind::InternalLoop(il) => {
-                self.write_line("internal_loop");
-                self.indent += 1;
-
-                // Phi vars
-                for phi in &il.phi_vars {
-                    let ty = phi.loop_var_type.as_ref().map(|t| format!(": {}", t)).unwrap_or_default();
-                    let init = self.format_simple_expr(&phi.init_expr);
-                    let next = self.format_simple_expr(&phi.next_expr);
-                    self.write_line(&format!(
-                        "loop_phi {}{} = [init: {}] [next: {}]",
-                        phi.loop_var_name, ty, init, next
-                    ));
-                }
-
-                // Condition
-                if let Some(cond) = &il.condition {
-                    self.write_line("while");
-                    self.indent += 1;
-                    self.write_expression(cond);
-                    self.indent -= 1;
-                }
-
-                // Body
-                self.write_line("body:");
-                self.indent += 1;
-                self.write_expression(&il.body);
-                self.indent -= 1;
-
-                self.indent -= 1;
-            }
             ExprKind::Match(match_expr) => {
                 let scrut = self.format_simple_expr(&match_expr.scrutinee);
                 self.write_line(&format!("match {}", scrut));

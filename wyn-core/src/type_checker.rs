@@ -52,7 +52,7 @@ pub struct TypeChecker {
     context: Context<TypeName>,                    // Polytype unification context
     record_field_map: HashMap<(String, String), Type>, // Map (type_name, field_name) -> field_type
     builtin_registry: crate::builtin_registry::BuiltinRegistry, // Centralized builtin registry
-    type_table: HashMap<crate::ast::NodeId, Type>, // Maps expression NodeId to inferred type
+    type_table: HashMap<crate::ast::NodeId, TypeScheme<TypeName>>, // Maps NodeId to type scheme
     warnings: Vec<TypeWarning>,                    // Collected warnings
     type_holes: Vec<(NodeId, Span)>,               // Track type hole locations for warning emission
     ascription_variables: HashSet<polytype::Variable>, // Type variables that should not be generalized
@@ -287,12 +287,12 @@ impl TypeChecker {
                 };
                 self.scope_stack.insert(name.clone(), type_scheme);
                 // Store resolved type in type_table for mirize
-                self.type_table.insert(pattern.h.id, expected_type.apply(&self.context));
+                self.type_table.insert(pattern.h.id, TypeScheme::Monotype(expected_type.apply(&self.context)));
                 Ok(expected_type.clone())
             }
             PatternKind::Wildcard => {
                 // Wildcard doesn't bind anything
-                self.type_table.insert(pattern.h.id, expected_type.apply(&self.context));
+                self.type_table.insert(pattern.h.id, TypeScheme::Monotype(expected_type.apply(&self.context)));
                 Ok(expected_type.clone())
             }
             PatternKind::Tuple(patterns) => {
@@ -317,7 +317,7 @@ impl TypeChecker {
                             self.bind_pattern(sub_pattern, elem_type, generalize)?;
                         }
 
-                        self.type_table.insert(pattern.h.id, expected_type.apply(&self.context));
+                        self.type_table.insert(pattern.h.id, TypeScheme::Monotype(expected_type.apply(&self.context)));
                         Ok(expected_type.clone())
                     }
                     _ => Err(CompilerError::TypeError(
@@ -344,14 +344,14 @@ impl TypeChecker {
                 // Bind the inner pattern with the annotated type
                 let result = self.bind_pattern(inner_pattern, annotated_type, generalize)?;
                 // Also store type for the outer Typed pattern
-                self.type_table.insert(pattern.h.id, annotated_type.apply(&self.context));
+                self.type_table.insert(pattern.h.id, TypeScheme::Monotype(annotated_type.apply(&self.context)));
                 Ok(result)
             }
             PatternKind::Attributed(_, inner_pattern) => {
                 // Ignore attributes, bind the inner pattern
                 let result = self.bind_pattern(inner_pattern, expected_type, generalize)?;
                 // Also store type for the outer Attributed pattern
-                self.type_table.insert(pattern.h.id, expected_type.apply(&self.context));
+                self.type_table.insert(pattern.h.id, TypeScheme::Monotype(expected_type.apply(&self.context)));
                 Ok(result)
             }
             PatternKind::Unit => {
@@ -366,7 +366,7 @@ impl TypeChecker {
                         pattern.h.span,
                     )
                 })?;
-                self.type_table.insert(pattern.h.id, unit_type.apply(&self.context));
+                self.type_table.insert(pattern.h.id, TypeScheme::Monotype(unit_type.apply(&self.context)));
                 Ok(unit_type)
             }
             _ => {
@@ -779,7 +779,7 @@ impl TypeChecker {
         }
     }
 
-    pub fn check_program(&mut self, program: &Program) -> Result<HashMap<crate::ast::NodeId, Type>> {
+    pub fn check_program(&mut self, program: &Program) -> Result<HashMap<crate::ast::NodeId, TypeScheme<TypeName>>> {
         // Process declarations in order - each can only refer to preceding declarations
         for decl in &program.declarations {
             self.check_declaration(decl)?;
@@ -789,8 +789,23 @@ impl TypeChecker {
         self.emit_hole_warnings();
 
         // Apply the context to all types in the type table to resolve type variables
-        let resolved_table: HashMap<crate::ast::NodeId, Type> =
-            self.type_table.iter().map(|(node_id, ty)| (*node_id, ty.apply(&self.context))).collect();
+        let resolved_table: HashMap<crate::ast::NodeId, TypeScheme<TypeName>> =
+            self.type_table.iter().map(|(node_id, scheme)| {
+                let resolved = match scheme {
+                    TypeScheme::Monotype(ty) => TypeScheme::Monotype(ty.apply(&self.context)),
+                    TypeScheme::Polytype { variable, body } => {
+                        // For polytypes, apply context to the body but preserve quantified variables
+                        TypeScheme::Polytype {
+                            variable: *variable,
+                            body: Box::new(match body.as_ref() {
+                                TypeScheme::Monotype(ty) => TypeScheme::Monotype(ty.apply(&self.context)),
+                                other => other.clone(), // Nested polytypes stay as-is for now
+                            }),
+                        }
+                    }
+                };
+                (*node_id, resolved)
+            }).collect();
 
         Ok(resolved_table)
     }
@@ -800,8 +815,17 @@ impl TypeChecker {
         // Clone the holes list to avoid borrow checker issues
         let holes = self.type_holes.clone();
         for (node_id, span) in holes {
-            if let Some(hole_type) = self.type_table.get(&node_id) {
-                let resolved_type = hole_type.apply(&self.context);
+            if let Some(hole_scheme) = self.type_table.get(&node_id) {
+                let resolved_type = match hole_scheme {
+                    TypeScheme::Monotype(ty) => ty.apply(&self.context),
+                    TypeScheme::Polytype { body, .. } => {
+                        // For polytypes, just show the body type
+                        match body.as_ref() {
+                            TypeScheme::Monotype(ty) => ty.apply(&self.context),
+                            _ => continue, // Skip nested polytypes for now
+                        }
+                    }
+                };
                 self.warnings.push(TypeWarning::TypeHoleFilled {
                     inferred_type: resolved_type,
                     span,
@@ -857,7 +881,7 @@ impl TypeChecker {
 
             // Store resolved type in type_table for mirize
             // Need to insert for the outer pattern node ID
-            self.type_table.insert(param.h.id, param_type.apply(&self.context));
+            self.type_table.insert(param.h.id, TypeScheme::Monotype(param_type.apply(&self.context)));
         }
 
         // Infer body type
@@ -1343,7 +1367,7 @@ impl TypeChecker {
                     if let Ok(scheme) = self.scope_stack.lookup(&mangled) {
                         // Instantiate the type scheme
                         let ty = scheme.instantiate(&mut self.context);
-                        self.type_table.insert(expr.h.id, ty.clone());
+                        self.type_table.insert(expr.h.id, TypeScheme::Monotype(ty.clone()));
                         return Ok(ty);
                     }
 
@@ -1352,7 +1376,7 @@ impl TypeChecker {
                         if let Some(desc) = self.builtin_registry.get(&dotted) {
                             // Instantiate with fresh type variables
                             let ty = self.instantiate_builtin_type(&desc.clone());
-                            self.type_table.insert(expr.h.id, ty.clone());
+                            self.type_table.insert(expr.h.id, TypeScheme::Monotype(ty.clone()));
                             return Ok(ty);
                         }
                     }
@@ -1371,7 +1395,7 @@ impl TypeChecker {
                         // The type checker can't verify this is actually a closure record,
                         // but the defunctionalizer guarantees it. Just return i32.
                         let ty = types::i32();
-                        self.type_table.insert(expr.h.id, ty.clone());
+                        self.type_table.insert(expr.h.id, TypeScheme::Monotype(ty.clone()));
                         return Ok(ty);
                     }
 
@@ -1382,7 +1406,7 @@ impl TypeChecker {
                     // First check if it's a record with the requested field
                     if let Type::Constructed(TypeName::Record(fields), _) = &expr_type {
                         if let Some(field_type) = fields.get(field) {
-                            self.type_table.insert(expr.h.id, field_type.clone());
+                            self.type_table.insert(expr.h.id, TypeScheme::Monotype(field_type.clone()));
                             return Ok(field_type.clone());
                         }
                     }
@@ -1394,7 +1418,7 @@ impl TypeChecker {
                         if let Type::Constructed(TypeName::Str("tuple"), elem_types) = &expr_type {
                             if index < elem_types.len() {
                                 let field_type = elem_types[index].clone();
-                                self.type_table.insert(expr.h.id, field_type.clone());
+                                self.type_table.insert(expr.h.id, TypeScheme::Monotype(field_type.clone()));
                                 return Ok(field_type);
                             } else {
                                 return Err(CompilerError::TypeError(
@@ -1434,7 +1458,7 @@ impl TypeChecker {
 
                         // Return the element type
                         let result_ty = elem_var.apply(&self.context);
-                        self.type_table.insert(expr.h.id, result_ty.clone());
+                        self.type_table.insert(expr.h.id, TypeScheme::Monotype(result_ty.clone()));
                         return Ok(result_ty);
                     }
 
@@ -1472,7 +1496,7 @@ impl TypeChecker {
                             } else if let TypeName::Record(fields) = &type_name {
                                 // Handle Record type specially - look up field in the record's field map
                                 if let Some(field_type) = fields.get(field) {
-                                    self.type_table.insert(expr.h.id, field_type.clone());
+                                    self.type_table.insert(expr.h.id, TypeScheme::Monotype(field_type.clone()));
                                     return Ok(field_type.clone());
                                 }
                                 // Field not found in record
@@ -1600,83 +1624,7 @@ impl TypeChecker {
             }
 
             ExprKind::Loop(_) => {
-                return Err(CompilerError::TypeError(
-                    "Loop should be desugared to InternalLoop before type checking".to_string(),
-                    expr.h.span
-                ));
-            }
-
-            ExprKind::InternalLoop(internal_loop) => {
-                // Push scope for the entire loop construct
-                self.scope_stack.push_scope();
-
-                // Type check init expressions and bind both init_name and loop_var_name
-                let mut loop_var_types = Vec::new();
-                for phi_var in &internal_loop.phi_vars {
-                    // Type check init expression
-                    let init_type = self.infer_expression(&phi_var.init_expr)?;
-
-                    // Bind init_name to the init type
-                    let type_scheme = TypeScheme::Monotype(init_type.clone());
-                    self.scope_stack.insert(phi_var.init_name.clone(), type_scheme);
-
-                    // Determine loop variable type (from annotation or init)
-                    let var_type = phi_var.loop_var_type.clone().unwrap_or_else(|| init_type.clone());
-
-                    // Unify loop var type with init type
-                    self.context.unify(&var_type, &init_type).map_err(|e| {
-                        CompilerError::TypeError(
-                            format!(
-                                "Loop variable '{}' type mismatch with init: {:?}",
-                                phi_var.loop_var_name, e
-                            ),
-                            expr.h.span
-                        )
-                    })?;
-
-                    // Bind loop variable in scope (not generalized)
-                    let type_scheme = TypeScheme::Monotype(var_type.clone());
-                    self.scope_stack.insert(phi_var.loop_var_name.clone(), type_scheme);
-                    loop_var_types.push(var_type);
-                }
-
-                // Type check condition if present
-                if let Some(cond) = &internal_loop.condition {
-                    let cond_type = self.infer_expression(cond)?;
-                    self.context.unify(&cond_type, &types::bool_type()).map_err(|e| {
-                        CompilerError::TypeError(
-                            format!("Loop condition must be bool: {:?}", e),
-                            cond.h.span
-                        )
-                    })?;
-                }
-
-                // Type check loop body
-                let body_type = self.infer_expression(&internal_loop.body)?;
-
-                // Bind __body_result to the body type so next_expr can reference it
-                let type_scheme = TypeScheme::Monotype(body_type.clone());
-                self.scope_stack.insert("__body_result".to_string(), type_scheme);
-
-                // Type check next_exprs and unify with loop_var types
-                for (phi_var, loop_var_type) in internal_loop.phi_vars.iter().zip(&loop_var_types) {
-                    let next_type = self.infer_expression(&phi_var.next_expr)?;
-                    self.context.unify(&next_type, loop_var_type).map_err(|e| {
-                        CompilerError::TypeError(
-                            format!(
-                                "Loop next expression type mismatch for '{}': {:?}",
-                                phi_var.loop_var_name, e
-                            ),
-                            expr.h.span
-                        )
-                    })?;
-                }
-
-                // Pop loop scope
-                self.scope_stack.pop_scope();
-
-                // Loop result type is the body type (which should match the loop vars structure)
-                Ok(body_type)
+                todo!("Loop type checking not yet implemented")
             }
 
             ExprKind::Match(_) => {
@@ -1737,7 +1685,7 @@ impl TypeChecker {
         ?;
 
         // Store the inferred type in the type table
-        self.type_table.insert(expr.h.id, ty.clone());
+        self.type_table.insert(expr.h.id, TypeScheme::Monotype(ty.clone()));
         Ok(ty)
     }
 
