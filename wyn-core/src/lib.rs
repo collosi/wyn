@@ -6,6 +6,7 @@ pub mod error;
 pub mod inference;
 pub mod lexer;
 pub mod parser;
+pub mod pattern;
 pub mod scope;
 pub mod type_checker;
 pub mod visitor;
