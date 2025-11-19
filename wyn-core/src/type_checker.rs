@@ -699,8 +699,7 @@ impl TypeChecker {
         let var_n = self.context.new_variable();
         let var_t = self.context.new_variable();
         let var_n_id = if let Type::Variable(id) = var_n { id } else { panic!("Expected Type::Variable") };
-        let var_t_id =
-            if let Type::Variable(id) = var_t { id } else { panic!("Expected Type::Variable") };
+        let var_t_id = if let Type::Variable(id) = var_t { id } else { panic!("Expected Type::Variable") };
 
         let array_type = Type::Constructed(
             TypeName::Array,
@@ -718,24 +717,24 @@ impl TypeChecker {
         self.scope_stack.insert("__alloc_array".to_string(), alloc_array_scheme);
 
         // Vector operations
-        // dot: ∀a b. a -> a -> b
-        // Polymorphic: takes two values of same type, returns a value (likely scalar)
-        // The SPIR-V validator will ensure the types are actually compatible
-        let var_a = self.context.new_variable();
-        let var_b = self.context.new_variable();
+        // dot: ∀n t. Vec(n, t) -> Vec(n, t) -> t
+        // Takes two vectors of the same size and element type, returns the element type
+        let var_n = self.context.new_variable();
+        let var_t = self.context.new_variable();
 
-        let var_a_id = if let Type::Variable(id) = var_a { id } else { panic!("Expected Type::Variable") };
-        let var_b_id = if let Type::Variable(id) = var_b { id } else { panic!("Expected Type::Variable") };
+        let var_n_id = if let Type::Variable(id) = var_n { id } else { panic!("Expected Type::Variable") };
+        let var_t_id = if let Type::Variable(id) = var_t { id } else { panic!("Expected Type::Variable") };
 
-        let dot_body = Type::arrow(
-            Type::Variable(var_a_id),
-            Type::arrow(Type::Variable(var_a_id), Type::Variable(var_b_id)),
+        let vec_type = Type::Constructed(
+            TypeName::Vec,
+            vec![Type::Variable(var_n_id), Type::Variable(var_t_id)],
         );
+        let dot_body = Type::arrow(vec_type.clone(), Type::arrow(vec_type, Type::Variable(var_t_id)));
 
         let dot_scheme = TypeScheme::Polytype {
-            variable: var_a_id,
+            variable: var_n_id,
             body: Box::new(TypeScheme::Polytype {
-                variable: var_b_id,
+                variable: var_t_id,
                 body: Box::new(TypeScheme::Monotype(dot_body)),
             }),
         };
@@ -779,11 +778,8 @@ impl TypeChecker {
         self.emit_hole_warnings();
 
         // Apply the context to all types in the type table to resolve type variables
-        let resolved_table: HashMap<crate::ast::NodeId, Type> = self
-            .type_table
-            .iter()
-            .map(|(node_id, ty)| (*node_id, ty.apply(&self.context)))
-            .collect();
+        let resolved_table: HashMap<crate::ast::NodeId, Type> =
+            self.type_table.iter().map(|(node_id, ty)| (*node_id, ty.apply(&self.context))).collect();
 
         Ok(resolved_table)
     }
