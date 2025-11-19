@@ -29,7 +29,10 @@ pub enum PatternError {
     /// Pattern expects a tuple but value is not a tuple
     NotATuple,
     /// Tuple pattern has wrong number of elements
-    TupleLengthMismatch { expected: usize, actual: usize },
+    TupleLengthMismatch {
+        expected: usize,
+        actual: usize,
+    },
     /// Pattern kind not supported
     UnsupportedPattern(String),
 }
@@ -107,13 +110,11 @@ fn extract_bindings_inner<T: PatternValue>(
             Ok(())
         }
 
-        PatternKind::Record(_) => {
-            Err(PatternError::UnsupportedPattern("Record patterns".to_string()))
-        }
+        PatternKind::Record(_) => Err(PatternError::UnsupportedPattern("Record patterns".to_string())),
 
-        PatternKind::Constructor(_, _) => {
-            Err(PatternError::UnsupportedPattern("Constructor patterns".to_string()))
-        }
+        PatternKind::Constructor(_, _) => Err(PatternError::UnsupportedPattern(
+            "Constructor patterns".to_string(),
+        )),
     }
 }
 
@@ -190,7 +191,12 @@ mod tests {
         Pattern {
             h: Header {
                 id: NodeId(0),
-                span: Span { start_line: 0, start_col: 0, end_line: 0, end_col: 0 },
+                span: Span {
+                    start_line: 0,
+                    start_col: 0,
+                    end_line: 0,
+                    end_col: 0,
+                },
             },
             kind,
         }
@@ -222,10 +228,7 @@ mod tests {
             mk_pattern(PatternKind::Name("x".to_string())),
             mk_pattern(PatternKind::Name("y".to_string())),
         ]));
-        let value = TestValue::Tuple(vec![
-            TestValue::Scalar(1),
-            TestValue::Scalar(2),
-        ]);
+        let value = TestValue::Tuple(vec![TestValue::Scalar(1), TestValue::Scalar(2)]);
 
         let bindings = extract_bindings(&pattern, value).unwrap();
         assert_eq!(bindings.len(), 2);
@@ -245,10 +248,7 @@ mod tests {
         ]));
         let value = TestValue::Tuple(vec![
             TestValue::Scalar(1),
-            TestValue::Tuple(vec![
-                TestValue::Scalar(2),
-                TestValue::Scalar(3),
-            ]),
+            TestValue::Tuple(vec![TestValue::Scalar(2), TestValue::Scalar(3)]),
         ]);
 
         let bindings = extract_bindings(&pattern, value).unwrap();

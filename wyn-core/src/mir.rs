@@ -1,13 +1,14 @@
 //! MIR (Mid-level Intermediate Representation) for the Wyn compiler.
 //!
 //! This representation assumes:
-//! - Type checking has already occurred; concrete types are stored out-of-band
+//! - Type checking has already occurred; concrete types are stored with expressions
 //! - Patterns have been flattened to simple let bindings
 //! - Lambdas have been lifted to top-level functions
 //! - Imports and namespacing have been resolved
 //! - Range expressions have been desugared
 
-use crate::ast::Span;
+use crate::ast::{Span, TypeName};
+use polytype::Type;
 
 /// A complete MIR program.
 #[derive(Debug, Clone)]
@@ -25,6 +26,8 @@ pub enum Def {
         name: String,
         /// Function parameters with optional uniqueness markers.
         params: Vec<Param>,
+        /// Return type.
+        ret_type: Type<TypeName>,
         /// Attributes attached to this function (e.g., "entry", "inline", "noinline").
         attributes: Vec<Attribute>,
         /// The function body expression.
@@ -36,6 +39,8 @@ pub enum Def {
     Constant {
         /// Constant name.
         name: String,
+        /// The type of this constant.
+        ty: Type<TypeName>,
         /// Attributes attached to this constant.
         attributes: Vec<Attribute>,
         /// The constant value expression.
@@ -50,6 +55,8 @@ pub enum Def {
 pub struct Param {
     /// Parameter name.
     pub name: String,
+    /// Parameter type.
+    pub ty: Type<TypeName>,
     /// Whether this parameter is consumed (unique/in-place update).
     pub is_consumed: bool,
 }
@@ -63,16 +70,17 @@ pub struct Attribute {
     pub args: Vec<String>,
 }
 
-/// The main expression type with source location.
+/// The main expression type with source location and type.
 #[derive(Debug, Clone)]
 pub struct Expr {
+    pub ty: Type<TypeName>,
     pub kind: ExprKind,
     pub span: Span,
 }
 
 impl Expr {
-    pub fn new(kind: ExprKind, span: Span) -> Self {
-        Expr { kind, span }
+    pub fn new(ty: Type<TypeName>, kind: ExprKind, span: Span) -> Self {
+        Expr { ty, kind, span }
     }
 }
 
@@ -209,6 +217,14 @@ pub enum LoopKind {
 mod tests {
     use super::*;
 
+    fn i32_type() -> Type<TypeName> {
+        Type::Constructed(TypeName::Str("i32".into()), vec![])
+    }
+
+    fn f32_type() -> Type<TypeName> {
+        Type::Constructed(TypeName::Str("f32".into()), vec![])
+    }
+
     #[test]
     fn test_simple_function() {
         // Represents: def add(x, y) = x + y
@@ -217,19 +233,23 @@ mod tests {
             params: vec![
                 Param {
                     name: "x".to_string(),
+                    ty: i32_type(),
                     is_consumed: false,
                 },
                 Param {
                     name: "y".to_string(),
+                    ty: i32_type(),
                     is_consumed: false,
                 },
             ],
+            ret_type: i32_type(),
             attributes: vec![],
             body: Expr::new(
+                i32_type(),
                 ExprKind::BinOp {
                     op: "+".to_string(),
-                    lhs: Box::new(Expr::new(ExprKind::Var("x".to_string()), Span::dummy())),
-                    rhs: Box::new(Expr::new(ExprKind::Var("y".to_string()), Span::dummy())),
+                    lhs: Box::new(Expr::new(i32_type(), ExprKind::Var("x".to_string()), Span::dummy())),
+                    rhs: Box::new(Expr::new(i32_type(), ExprKind::Var("y".to_string()), Span::dummy())),
                 },
                 Span::dummy(),
             ),
@@ -250,8 +270,10 @@ mod tests {
         // Represents: def pi = 3.14159
         let pi_const = Def::Constant {
             name: "pi".to_string(),
+            ty: f32_type(),
             attributes: vec![],
             body: Expr::new(
+                f32_type(),
                 ExprKind::Literal(Literal::Float("3.14159".to_string())),
                 Span::dummy(),
             ),

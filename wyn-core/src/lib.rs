@@ -72,10 +72,35 @@ impl Compiler {
         Ok(())
     }
 
-    pub fn compile(&self, _source: &str) -> Result<Vec<u32>> {
-        // Disabled during reorganization
-        Err(error::CompilerError::SpirvError(
-            "compile() disabled during reorganization".to_string(),
-        ))
+    pub fn compile(&self, source: &str) -> Result<Vec<u32>> {
+        // Tokenize
+        let tokens = lexer::tokenize(source).map_err(error::CompilerError::ParseError)?;
+
+        // Parse
+        let mut parser = parser::Parser::new(tokens);
+        let program = parser.parse()?;
+
+        // Type check
+        let mut type_checker = type_checker::TypeChecker::new();
+        type_checker.load_builtins()?;
+        let type_table = type_checker.check_program(&program)?;
+
+        // Print warnings to stderr
+        for warning in type_checker.warnings() {
+            eprintln!(
+                "Warning: {} at {:?}",
+                warning.message(&|t| type_checker.format_type(t)),
+                warning.span()
+            );
+        }
+
+        // Flatten (AST -> MIR with defunctionalization)
+        let mut flattener = flattening::Flattener::new(type_table);
+        let mir = flattener.flatten_program(&program)?;
+
+        // Lower (MIR -> SPIR-V)
+        let spirv = lowering::lower(&mir)?;
+
+        Ok(spirv)
     }
 }

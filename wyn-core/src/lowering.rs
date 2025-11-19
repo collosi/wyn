@@ -3,8 +3,10 @@
 //! This module converts MIR (from flattening) directly to SPIR-V.
 //! It uses a SpvBuilder wrapper that handles variable hoisting automatically.
 
+use crate::ast::TypeName;
 use crate::error::{CompilerError, Result};
 use crate::mir::{self, Def, Expr, ExprKind, Literal, LoopKind};
+use polytype::Type as PolyType;
 use rspirv::binary::Assemble;
 use rspirv::dr::Builder;
 use rspirv::spirv::{self, AddressingModel, Capability, MemoryModel, StorageClass};
@@ -44,6 +46,13 @@ struct SpvBuilder {
 
     // GLSL extended instruction set
     glsl_ext_inst_id: spirv::Word,
+
+    // Value types: value ID -> SPIR-V type ID
+    value_types: HashMap<spirv::Word, spirv::Word>,
+
+    // Type cache: avoid recreating same types
+    vec_type_cache: HashMap<(spirv::Word, u32), spirv::Word>,
+    struct_type_cache: HashMap<Vec<spirv::Word>, spirv::Word>,
 }
 
 impl SpvBuilder {
@@ -75,7 +84,101 @@ impl SpvBuilder {
             env: HashMap::new(),
             functions: HashMap::new(),
             glsl_ext_inst_id,
+            value_types: HashMap::new(),
+            vec_type_cache: HashMap::new(),
+            struct_type_cache: HashMap::new(),
         }
+    }
+
+    /// Convert a polytype Type to a SPIR-V type ID
+    fn ast_type_to_spirv(&mut self, ty: &PolyType<TypeName>) -> spirv::Word {
+        match ty {
+            PolyType::Variable(_) => self.i32_type, // Fallback for unresolved vars
+            PolyType::Constructed(name, args) => {
+                match name {
+                    TypeName::Str(s) if *s == "i32" => self.i32_type,
+                    TypeName::Str(s) if *s == "f32" => self.f32_type,
+                    TypeName::Str(s) if *s == "bool" => self.bool_type,
+                    TypeName::Str(s) if *s == "tuple" => {
+                        // Tuple becomes struct
+                        let field_types: Vec<spirv::Word> = args
+                            .iter()
+                            .map(|a| self.ast_type_to_spirv(a))
+                            .collect();
+                        self.get_or_create_struct_type(field_types)
+                    }
+                    TypeName::Vec => {
+                        // Vector type: args[0] is size, args[1] is element type
+                        if args.len() >= 2 {
+                            // Extract size from args[0]
+                            let size = match &args[0] {
+                                PolyType::Constructed(TypeName::Size(n), _) => *n as u32,
+                                PolyType::Constructed(TypeName::Str(s), _) => {
+                                    s.parse().unwrap_or(4)
+                                }
+                                _ => 4
+                            };
+                            // Get element type from args[1]
+                            let elem_type = self.ast_type_to_spirv(&args[1]);
+                            self.get_or_create_vec_type(elem_type, size)
+                        } else {
+                            // Default to vec4f32
+                            self.get_or_create_vec_type(self.f32_type, 4)
+                        }
+                    }
+                    TypeName::Str(s) if s.starts_with("vec") => {
+                        // vec2f32, vec3f32, vec4f32, vec2i32, etc.
+                        let size = s.chars().nth(3)
+                            .and_then(|c| c.to_digit(10))
+                            .unwrap_or(4) as u32;
+                        let elem_type = if s.contains("f32") || s.ends_with("f32") {
+                            self.f32_type
+                        } else if s.contains("i32") || s.ends_with("i32") {
+                            self.i32_type
+                        } else {
+                            self.f32_type // Default to float
+                        };
+                        self.get_or_create_vec_type(elem_type, size)
+                    }
+                    TypeName::Str(s) if *s == "unknown" => self.i32_type,
+                    _ => {
+                        // Fallback - try to recognize common patterns
+                        self.i32_type
+                    }
+                }
+            }
+        }
+    }
+
+    /// Get or create a vector type
+    fn get_or_create_vec_type(&mut self, elem_type: spirv::Word, size: u32) -> spirv::Word {
+        let key = (elem_type, size);
+        if let Some(&ty) = self.vec_type_cache.get(&key) {
+            return ty;
+        }
+        let ty = self.builder.type_vector(elem_type, size);
+        self.vec_type_cache.insert(key, ty);
+        ty
+    }
+
+    /// Get or create a struct type
+    fn get_or_create_struct_type(&mut self, field_types: Vec<spirv::Word>) -> spirv::Word {
+        if let Some(&ty) = self.struct_type_cache.get(&field_types) {
+            return ty;
+        }
+        let ty = self.builder.type_struct(field_types.clone());
+        self.struct_type_cache.insert(field_types, ty);
+        ty
+    }
+
+    /// Record the type of a value
+    fn set_value_type(&mut self, value: spirv::Word, ty: spirv::Word) {
+        self.value_types.insert(value, ty);
+    }
+
+    /// Get the type of a value
+    fn get_value_type(&self, value: spirv::Word) -> spirv::Word {
+        *self.value_types.get(&value).unwrap_or(&self.i32_type)
     }
 
     /// Begin a new function
@@ -83,12 +186,10 @@ impl SpvBuilder {
         &mut self,
         name: &str,
         param_names: &[&str],
+        param_types: &[spirv::Word],
         return_type: spirv::Word,
     ) -> Result<spirv::Word> {
-        // For now, all params are i32 (we'll need proper type info later)
-        let param_types: Vec<spirv::Word> = param_names.iter().map(|_| self.i32_type).collect();
-
-        let func_type = self.builder.type_function(return_type, param_types.clone());
+        let func_type = self.builder.type_function(return_type, param_types.to_vec());
         let func_id =
             self.builder.begin_function(return_type, None, spirv::FunctionControl::NONE, func_type)?;
 
@@ -372,8 +473,27 @@ impl SpvBuilder {
 pub fn lower(program: &mir::Program) -> Result<Vec<u32>> {
     let mut spv = SpvBuilder::new();
 
+    // Collect entry points
+    let mut entry_points: Vec<(String, spirv::ExecutionModel)> = Vec::new();
+
     for def in &program.defs {
+        if let Def::Function { name, attributes, .. } = def {
+            for attr in attributes {
+                match attr.name.as_str() {
+                    "vertex" => entry_points.push((name.clone(), spirv::ExecutionModel::Vertex)),
+                    "fragment" => entry_points.push((name.clone(), spirv::ExecutionModel::Fragment)),
+                    _ => {}
+                }
+            }
+        }
         lower_def(&mut spv, def)?;
+    }
+
+    // Emit entry points
+    for (name, model) in entry_points {
+        if let Some(&func_id) = spv.functions.get(&name) {
+            spv.builder.entry_point(model, func_id, &name, []);
+        }
     }
 
     Ok(spv.assemble())
@@ -382,19 +502,25 @@ pub fn lower(program: &mir::Program) -> Result<Vec<u32>> {
 fn lower_def(spv: &mut SpvBuilder, def: &Def) -> Result<()> {
     match def {
         Def::Function {
-            name, params, body, ..
+            name, params, ret_type, body, ..
         } => {
             let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
-            spv.begin_function(name, &param_names, spv.i32_type)?;
+            let param_types: Vec<spirv::Word> = params
+                .iter()
+                .map(|p| spv.ast_type_to_spirv(&p.ty))
+                .collect();
+            let return_type = spv.ast_type_to_spirv(ret_type);
+            spv.begin_function(name, &param_names, &param_types, return_type)?;
 
             let result = lower_expr(spv, body)?;
             spv.ret_value(result)?;
 
             spv.end_function()?;
         }
-        Def::Constant { name, body, .. } => {
+        Def::Constant { name, ty, body, .. } => {
             // Constants become zero-argument functions
-            spv.begin_function(name, &[], spv.i32_type)?;
+            let return_type = spv.ast_type_to_spirv(ty);
+            spv.begin_function(name, &[], &[], return_type)?;
 
             let result = lower_expr(spv, body)?;
             spv.ret_value(result)?;
@@ -452,6 +578,9 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
         } => {
             let cond_id = lower_expr(spv, cond)?;
 
+            // Get the result type from the expression
+            let result_type = spv.ast_type_to_spirv(&expr.ty);
+
             // Create blocks
             let then_block = spv.create_block();
             let else_block = spv.create_block();
@@ -475,7 +604,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
             // Merge block with phi
             spv.begin_block(merge_block)?;
             let result = spv.phi(
-                spv.i32_type,
+                result_type,
                 vec![(then_result, then_exit_block), (else_result, else_exit_block)],
             )?;
 
@@ -591,32 +720,47 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
             let arg_ids: Vec<spirv::Word> =
                 args.iter().map(|a| lower_expr(spv, a)).collect::<Result<Vec<_>>>()?;
 
-            // Look up function
-            let func_id = *spv
-                .functions
-                .get(func)
-                .ok_or_else(|| CompilerError::SpirvError(format!("Unknown function: {}", func)))?;
+            // Get the result type from the expression
+            let result_type = spv.ast_type_to_spirv(&expr.ty);
 
-            spv.function_call(spv.i32_type, func_id, arg_ids)
+            // Check for builtin vector constructors
+            match func.as_str() {
+                "vec2" | "vec3" | "vec4" => {
+                    // Use the result type which should be the proper vector type
+                    spv.composite_construct(result_type, arg_ids)
+                }
+                _ => {
+                    // Look up user-defined function
+                    let func_id = *spv
+                        .functions
+                        .get(func)
+                        .ok_or_else(|| CompilerError::SpirvError(format!("Unknown function: {}", func)))?;
+                    spv.function_call(result_type, func_id, arg_ids)
+                }
+            }
         }
 
         ExprKind::Intrinsic { name, args } => {
-            let arg_ids: Vec<spirv::Word> =
-                args.iter().map(|a| lower_expr(spv, a)).collect::<Result<Vec<_>>>()?;
+            // Get the result type from the expression
+            let result_type = spv.ast_type_to_spirv(&expr.ty);
 
             match name.as_str() {
                 "tuple_access" => {
-                    if arg_ids.len() != 2 {
+                    if args.len() != 2 {
                         return Err(CompilerError::SpirvError(
                             "tuple_access requires 2 args".to_string(),
                         ));
                     }
-                    // Second arg should be a constant index
-                    // For now, we'll extract index 0
-                    spv.composite_extract(spv.i32_type, arg_ids[0], 0)
+                    let composite_id = lower_expr(spv, &args[0])?;
+                    // Second arg should be a constant index - extract it from the literal
+                    let index = match &args[1].kind {
+                        ExprKind::Literal(Literal::Int(s)) => s.parse::<u32>().unwrap_or(0),
+                        _ => 0,
+                    };
+                    spv.composite_extract(result_type, composite_id, index)
                 }
                 "index" => {
-                    if arg_ids.len() != 2 {
+                    if args.len() != 2 {
                         return Err(CompilerError::SpirvError("index requires 2 args".to_string()));
                     }
                     // Array indexing - would need OpAccessChain
@@ -626,7 +770,11 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                 }
                 "assert" => {
                     // Assertions are no-ops in release, return body
-                    if arg_ids.len() >= 2 { Ok(arg_ids[1]) } else { Ok(spv.const_i32(0)) }
+                    if args.len() >= 2 {
+                        lower_expr(spv, &args[1])
+                    } else {
+                        Ok(spv.const_i32(0))
+                    }
                 }
                 _ => Err(CompilerError::SpirvError(format!("Unknown intrinsic: {}", name))),
             }
@@ -662,8 +810,11 @@ fn lower_literal(spv: &mut SpvBuilder, lit: &Literal) -> Result<spirv::Word> {
             let elem_ids: Vec<spirv::Word> =
                 elems.iter().map(|e| lower_expr(spv, e)).collect::<Result<Vec<_>>>()?;
 
-            // Create struct type for tuple (all i32 for now)
-            let elem_types: Vec<spirv::Word> = elem_ids.iter().map(|_| spv.i32_type).collect();
+            // Create struct type for tuple from element types
+            let elem_types: Vec<spirv::Word> = elems
+                .iter()
+                .map(|e| spv.ast_type_to_spirv(&e.ty))
+                .collect();
             let tuple_type = spv.type_struct(elem_types);
 
             // Construct the composite
@@ -674,8 +825,13 @@ fn lower_literal(spv: &mut SpvBuilder, lit: &Literal) -> Result<spirv::Word> {
             let elem_ids: Vec<spirv::Word> =
                 elems.iter().map(|e| lower_expr(spv, e)).collect::<Result<Vec<_>>>()?;
 
+            // Get element type from first element (or i32 as fallback)
+            let elem_type = elems.first()
+                .map(|e| spv.ast_type_to_spirv(&e.ty))
+                .unwrap_or(spv.i32_type);
+
             // Create array type
-            let array_type = spv.type_array(spv.i32_type, elem_ids.len() as u32);
+            let array_type = spv.type_array(elem_type, elem_ids.len() as u32);
 
             // Construct the composite
             spv.composite_construct(array_type, elem_ids)
@@ -685,8 +841,11 @@ fn lower_literal(spv: &mut SpvBuilder, lit: &Literal) -> Result<spirv::Word> {
             let field_ids: Vec<spirv::Word> =
                 fields.iter().map(|(_, e)| lower_expr(spv, e)).collect::<Result<Vec<_>>>()?;
 
-            // Create struct type for record
-            let field_types: Vec<spirv::Word> = field_ids.iter().map(|_| spv.i32_type).collect();
+            // Create struct type for record from field types
+            let field_types: Vec<spirv::Word> = fields
+                .iter()
+                .map(|(_, e)| spv.ast_type_to_spirv(&e.ty))
+                .collect();
             let record_type = spv.type_struct(field_types);
 
             // Construct the composite
@@ -707,7 +866,7 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let ast = parser.parse().expect("Parsing failed");
 
-        let mut flattener = Flattener::new();
+        let mut flattener = Flattener::new(std::collections::HashMap::new());
         let mir = flattener.flatten_program(&ast)?;
 
         lower(&mir)

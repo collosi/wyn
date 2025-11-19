@@ -238,7 +238,10 @@ fn generate_annotated_source(
 fn generate_nemo_facts(_source: &str, output_path: &PathBuf, verbose: bool) -> Result<(), DriverError> {
     // Disabled during reorganization
     warn!("Nemo fact generation is disabled during reorganization");
-    fs::write(output_path, "% Nemo fact generation disabled during reorganization\n")?;
+    fs::write(
+        output_path,
+        "% Nemo fact generation disabled during reorganization\n",
+    )?;
 
     if verbose {
         info!("Generated placeholder Nemo facts: {}", output_path.display());

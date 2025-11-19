@@ -60,7 +60,8 @@ fn test_simple_def() {
 fn test_two_length_and_replicate_calls() {
     // Simplified test: two calls to length/replicate with different array element types
     // This tests that type variables don't bleed between the two calls
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : f32 =
     let v4s : [2]vec4f32 = [vec4 1.0f32 2.0f32 3.0f32 4.0f32, vec4 5.0f32 6.0f32 7.0f32 8.0f32] in
     let len1 = length v4s in
@@ -71,7 +72,8 @@ def test : f32 =
     let out2 = replicate len2 (__uninit()) in
 
     42.0f32
-        "#);
+        "#,
+    );
 }
 
 #[test]
@@ -137,19 +139,23 @@ fn test_type_hole_function_arg() {
 fn test_lambda_param_with_annotation() {
     // Test that lambda parameter works with type annotation (Futhark-style)
     // Field projection requires the parameter type to be known
-    typecheck_program("def test : [2]f32 = let arr : [2]vec3f32 = [vec3 1.0f32 2.0f32 3.0f32, vec3 4.0f32 5.0f32 6.0f32] in map (\\(v:vec3f32) -> v.x) arr");
+    typecheck_program(
+        "def test : [2]f32 = let arr : [2]vec3f32 = [vec3 1.0f32 2.0f32 3.0f32, vec3 4.0f32 5.0f32 6.0f32] in map (\\(v:vec3f32) -> v.x) arr",
+    );
 }
 
 #[test]
 fn test_bidirectional_with_concrete_type() {
     // Test bidirectional checking with a CONCRETE expected type
     // This demonstrates where bidirectional checking actually helps
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
             def apply_to_vec (f : vec3f32 -> f32) : f32 =
               f (vec3 1.0f32 2.0f32 3.0f32)
 
             def test : f32 = apply_to_vec (\v -> v.x)
-        "#);
+        "#,
+    );
 }
 
 #[test]
@@ -158,40 +164,48 @@ fn test_bidirectional_explicit_annotation_mismatch() {
     // Two chained maps: vec3f32->vec4f32, then vec4f32->vec3f32
     // The second lambda's parameter annotation (q:vec4f32) is correct (v4s is [1]vec4f32),
     // but bidirectional checking incorrectly rejects it.
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
             def test =
               let arr : [1]vec3f32 = [vec3 1.0f32 2.0f32 3.0f32] in
               let v4s : [1]vec4f32 = map (\(v:vec3f32) -> vec4 v.x v.y v.z 1.0f32) arr in
               map (\(q:vec4f32) -> vec3 q.x q.y q.z) v4s
-        "#);
+        "#,
+    );
 }
 
 #[test]
 fn test_map_with_unannotated_lambda_and_array_index() {
     // Test that bidirectional checking infers lambda parameter type from array type
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
             def test : [12]i32 =
               let edges : [12][2]i32 = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]] in
               map (\e -> e[0]) edges
-        "#);
+        "#,
+    );
 }
 
 #[test]
 fn test_lambda_with_tuple_pattern() {
     // Test that lambdas with tuple patterns work
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
             def test : (i32, i32) -> i32 =
               \(x, y) -> x + y
-        "#);
+        "#,
+    );
 }
 
 #[test]
 fn test_lambda_with_wildcard_in_tuple() {
     // Test that lambdas with wildcard in tuple patterns work
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
             def test : (i32, i32) -> i32 =
               \(_, acc) -> acc
-        "#);
+        "#,
+    );
 }
 
 // Tests for loop type checking will be added once Loop support is implemented
@@ -199,66 +213,78 @@ fn test_lambda_with_wildcard_in_tuple() {
 
 #[test]
 fn test_map_with_array_size_inference() {
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : [8]i32 =
   let arr = [1, 2, 3, 4, 5, 6, 7, 8] in
   map (\x -> x + 1) arr
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_let_polymorphism() {
     // Test that let-bound values are properly generalized
     // Without generalization, this would fail because id would be monomorphic
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
             def test : f32 =
                 let id = \x -> x in
                 let test1 : i32 = id 42 in
                 let test2 : f32 = id 3.14f32 in
                 test2
-        "#);
+        "#,
+    );
 }
 
 #[test]
 fn test_top_level_polymorphism() {
     // Test that top-level let/def declarations are generalized
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
             def id = \x -> x
             def test1 : i32 = id 42
             def test2 : f32 = id 3.14f32
-        "#);
+        "#,
+    );
 }
 
 #[test]
 fn test_polymorphic_id_tuple() {
     // Classic HM polymorphism test: let id = \x -> x in (id 5, id true)
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
             def test =
                 let id = \x -> x in
                 (id 5, id true)
-        "#);
+        "#,
+    );
 }
 
 #[test]
 fn test_qualified_name_sqrt() {
     // Test that qualified names like f32.sqrt type check correctly
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
             def test : f32 = f32.sqrt 4.0f32
-        "#);
+        "#,
+    );
 }
 
 #[test]
 fn test_nested_array_indexing() {
     // Test that nested array indexing type inference works
     // Reproduces the de_rasterizer.wyn issue: e[0] where e : [2]i32
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
             def test =
                 let edges : [3][2]i32 = [[0,1], [1,2], [2,0]] in
                 let verts : [4]f32 = [1.0f32, 2.0f32, 3.0f32, 4.0f32] in
                 let e : [2]i32 = edges[0] in
                 let idx : i32 = e[0] in
                 verts[idx]
-        "#);
+        "#,
+    );
 }
 
 #[test]
@@ -266,75 +292,89 @@ fn test_nested_array_indexing_in_lambda() {
     // Test that nested array indexing works inside a lambda in map
     // This reproduces the actual de_rasterizer.wyn pattern:
     // map (\e -> verts[e[0]]) edges
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
             def test =
                 let edges : [3][2]i32 = [[0,1], [1,2], [2,0]] in
                 let verts : [4]f32 = [1.0f32, 2.0f32, 3.0f32, 4.0f32] in
                 map (\e -> verts[e[0]]) edges
-        "#);
+        "#,
+    );
 }
 
 #[test]
 fn test_nested_array_indexing_with_literal() {
     // Test with array literal directly in map call, without type annotation
     // This is closer to the de_rasterizer pattern
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
             def test =
                 let verts : [4]f32 = [1.0f32, 2.0f32, 3.0f32, 4.0f32] in
                 map (\e -> verts[e[0]]) [[0,1], [1,2], [2,0]]
-        "#);
+        "#,
+    );
 }
 
 #[test]
 fn test_size_parameter_binding() {
     // Test that size parameters are properly bound and substituted
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def identity [n] (xs: [n]i32): [n]i32 = xs
 
 def test : [5]i32 =
   let arr = [1, 2, 3, 4, 5] in
   identity arr
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_f32_sum_with_map_over_nested_array() {
     // Test f32.sum with map over nested arrays
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : f32 =
     let edges : [3][2]i32 = [[0, 1], [1, 2], [2, 0]] in
     f32.sum (map (\e -> 1.0f32) edges)
-    "#);
+    "#,
+    );
 }
 
 #[test]
 fn test_map_lambda_param_type_unification() {
     // Test that lambda parameter type variable gets unified with input array element type
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : [3]f32 =
     let edges : [3][2]i32 = [[0, 1], [1, 2], [2, 0]] in
     map (\e -> let a = e[0] in 1.0f32) edges
-    "#);
+    "#,
+    );
 }
 
 #[test]
 fn test_map_with_capturing_closure() {
     // Test with dot product and f32.min
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def line : f32 =
   let denom = dot (vec2 0.0f32 0.0f32) (vec2 9.0f32 9.0f32) in
   f32.min denom 1.0f32
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_f32_sum_with_map_indexing_nested_array() {
     // Test f32.sum with map accessing elements of nested array
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : f32 =
     let edges : [3][2]i32 = [[0, 1], [1, 2], [2, 0]] in
     f32.sum (map (\e -> let a = e[0] in let b = e[1] in 1.0f32) edges)
-    "#);
+    "#,
+    );
 }
 
 // ===== Lambda/Closure Tests =====
@@ -372,54 +412,63 @@ fn test_lambda_application() {
 #[test]
 fn test_lambda_curried_application() {
     // Curried lambda partially applied
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def add = \x -> \y -> x + y
 def add5 = add 5
 def result : i32 = add5 10
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_lambda_capturing_variable() {
     // Lambda capturing outer variable (closure)
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : i32 =
     let x = 10 in
     let f = \y -> x + y in
     f 5
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_lambda_capturing_multiple_variables() {
     // Lambda capturing multiple outer variables
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : i32 =
     let a = 1 in
     let b = 2 in
     let c = 3 in
     let f = \x -> a + b + c + x in
     f 4
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_lambda_nested() {
     // Nested lambdas
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : i32 =
     let outer = \x ->
         let inner = \y -> x + y in
         inner 10
     in
     outer 5
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_lambda_nested_capture() {
     // Nested lambda capturing from multiple scopes
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : i32 =
     let a = 1 in
     let f = \x ->
@@ -427,36 +476,43 @@ def test : i32 =
         g 3
     in
     f 2
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_lambda_as_argument() {
     // Lambda passed as argument to higher-order function
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def apply (f : i32 -> i32) (x : i32) : i32 = f x
 def result : i32 = apply (\x -> x * 2) 5
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_lambda_returned_from_function() {
     // Function returning a lambda
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def make_adder (n : i32) : i32 -> i32 = \x -> x + n
 def add10 = make_adder 10
 def result : i32 = add10 5
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_lambda_in_let_binding() {
     // Lambda bound in let expression
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : i32 =
     let double = \x -> x * 2 in
     double 21
-"#);
+"#,
+    );
 }
 
 #[test]
@@ -480,98 +536,132 @@ fn test_lambda_with_tuple_destructuring() {
 #[test]
 fn test_lambda_chained_application() {
     // Chained lambda applications
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : i32 =
     let f = \x -> \y -> \z -> x + y + z in
     f 1 2 3
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_lambda_polymorphic_usage() {
     // Lambda used polymorphically (via let generalization)
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test =
     let id = \x -> x in
     let a : i32 = id 5 in
     let b : f32 = id 3.14f32 in
     (a, b)
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_lambda_with_array_operations() {
     // Lambda used with array operations
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : [3]i32 =
     let arr = [1, 2, 3] in
     map (\x -> x * 2) arr
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_lambda_inferred_from_map_context() {
     // Lambda parameter type inferred from map's array element type
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : [2]f32 =
     let vs : [2]vec3f32 = [vec3 1.0f32 2.0f32 3.0f32, vec3 4.0f32 5.0f32 6.0f32] in
     map (\v -> v.x) vs
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_lambda_with_binary_ops() {
     // Lambda with various binary operations
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : i32 =
     let f = \x -> x * 2 + 3 - 1 in
     f 10
-"#);
+"#,
+    );
 }
 
 #[test]
 #[ignore] // Bug: type checker reports "expected bool, got bool"
 fn test_lambda_with_comparison() {
     // Lambda with comparison operation
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def gt10 = \x -> x > 10
 def test : bool = gt10 15
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_lambda_compose() {
     // Function composition with lambdas
-    let checker = try_typecheck_program(r#"
+    let checker = try_typecheck_program(
+        r#"
 def compose (f : i32 -> i32) (g : i32 -> i32) : i32 -> i32 =
     \x -> f (g x)
 def double = \x -> x * 2
 def inc = \x -> x + 1
 def double_then_inc = compose inc double
 def result : i32 = double_then_inc 5
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     // Check inferred types
-    assert_eq!(checker.format_scheme(&checker.lookup("double").unwrap()), "i32 -> i32");
-    assert_eq!(checker.format_scheme(&checker.lookup("inc").unwrap()), "i32 -> i32");
-    assert_eq!(checker.format_scheme(&checker.lookup("double_then_inc").unwrap()), "i32 -> i32");
+    assert_eq!(
+        checker.format_scheme(&checker.lookup("double").unwrap()),
+        "i32 -> i32"
+    );
+    assert_eq!(
+        checker.format_scheme(&checker.lookup("inc").unwrap()),
+        "i32 -> i32"
+    );
+    assert_eq!(
+        checker.format_scheme(&checker.lookup("double_then_inc").unwrap()),
+        "i32 -> i32"
+    );
     assert_eq!(checker.format_scheme(&checker.lookup("result").unwrap()), "i32");
 }
 
 #[test]
 fn test_lambda_type_error_param_mismatch() {
     // Type error: lambda parameter type mismatch
-    assert!(try_typecheck_program(r#"
+    assert!(
+        try_typecheck_program(
+            r#"
 def test : i32 = (\(x:f32) -> x + 1) 5
-"#).is_err());
+"#
+        )
+        .is_err()
+    );
 }
 
 #[test]
 fn test_lambda_type_error_return_mismatch() {
     // Type error: lambda return type mismatch
-    assert!(try_typecheck_program(r#"
+    assert!(
+        try_typecheck_program(
+            r#"
 def test : f32 = (\x -> x + 1) 5
-"#).is_err());
+"#
+        )
+        .is_err()
+    );
 }
 
 // ===== Loop Tests =====
@@ -579,103 +669,130 @@ def test : f32 = (\x -> x + 1) 5
 #[test]
 fn test_loop_while_simple() {
     // Simple while loop that counts
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : i32 =
     loop acc = 0 while acc < 10 do
         acc + 1
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_loop_while_tuple() {
     // While loop with tuple pattern
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : (i32, i32) =
     loop (idx, acc) = (0, 0) while idx < 10 do
         (idx + 1, acc + idx)
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_loop_for_simple() {
     // Simple for loop
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : i32 =
     loop acc = 0 for i < 10 do
         acc + i
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_loop_for_with_array() {
     // For loop building result
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : i32 =
     loop sum = 0 for i < 5 do
         sum + i * 2
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_loop_forin_simple() {
     // For-in loop over array
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : i32 =
     let arr = [1, 2, 3, 4, 5] in
     loop sum = 0 for x in arr do
         sum + x
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_loop_forin_nested_array() {
     // For-in loop over nested array
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : i32 =
     let edges : [3][2]i32 = [[0, 1], [1, 2], [2, 0]] in
     loop sum = 0 for e in edges do
         sum + e[0] + e[1]
-"#);
+"#,
+    );
 }
 
 #[test]
 fn test_loop_return_type_inference() {
     // Loop return type is inferred from init
-    let checker = try_typecheck_program(r#"
+    let checker = try_typecheck_program(
+        r#"
 def test =
     loop acc = 0.0f32 while acc < 10.0f32 do
         acc + 1.0f32
-"#).unwrap();
+"#,
+    )
+    .unwrap();
     assert_eq!(checker.format_scheme(&checker.lookup("test").unwrap()), "f32");
 }
 
 #[test]
 fn test_loop_type_error_body_mismatch() {
     // Type error: body type doesn't match init type
-    assert!(try_typecheck_program(r#"
+    assert!(
+        try_typecheck_program(
+            r#"
 def test : i32 =
     loop acc = 0 while acc < 10 do
         3.14f32
-"#).is_err());
+"#
+        )
+        .is_err()
+    );
 }
 
 #[test]
 fn test_loop_type_error_condition_not_bool() {
     // Type error: while condition must be bool
-    assert!(try_typecheck_program(r#"
+    assert!(
+        try_typecheck_program(
+            r#"
 def test : i32 =
     loop acc = 0 while 42 do
         acc + 1
-"#).is_err());
+"#
+        )
+        .is_err()
+    );
 }
 
 #[test]
 fn test_loop_nested() {
     // Nested loops
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
 def test : i32 =
     loop outer = 0 for i < 3 do
         loop inner = outer for j < 4 do
             inner + i + j
-"#);
+"#,
+    );
 }
