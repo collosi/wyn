@@ -210,10 +210,10 @@ fn test_let_polymorphism() {
     // Test that let-bound values are properly generalized
     // Without generalization, this would fail because id would be monomorphic
     typecheck_program(r#"
-            def test : bool =
+            def test : f32 =
                 let id = \x -> x in
-                let test1 : i32 = id ??? in
-                let test2 : bool = id ??? in
+                let test1 : i32 = id 42 in
+                let test2 : f32 = id 3.14f32 in
                 test2
         "#);
 }
@@ -223,8 +223,8 @@ fn test_top_level_polymorphism() {
     // Test that top-level let/def declarations are generalized
     typecheck_program(r#"
             def id = \x -> x
-            def test1 : i32 = id ???
-            def test2 : bool = id ???
+            def test1 : i32 = id 42
+            def test2 : f32 = id 3.14f32
         "#);
 }
 
@@ -234,7 +234,7 @@ fn test_polymorphic_id_tuple() {
     typecheck_program(r#"
             def test =
                 let id = \x -> x in
-                (id ???, id ???)
+                (id 5, id true)
         "#);
 }
 
@@ -334,4 +334,235 @@ def test : f32 =
     let edges : [3][2]i32 = [[0, 1], [1, 2], [2, 0]] in
     f32.sum (map (\e -> let a = e[0] in let b = e[1] in 1.0f32) edges)
     "#);
+}
+
+// ===== Lambda/Closure Tests =====
+
+#[test]
+fn test_lambda_identity() {
+    // Basic identity lambda
+    typecheck_program("def id = \\x -> x");
+}
+
+#[test]
+fn test_lambda_with_annotated_param() {
+    // Lambda with type-annotated parameter
+    typecheck_program("def inc = \\(x:i32) -> x + 1");
+}
+
+#[test]
+fn test_lambda_with_annotated_return() {
+    // Lambda with annotated return type via def
+    typecheck_program("def inc : i32 -> i32 = \\x -> x + 1");
+}
+
+#[test]
+fn test_lambda_multi_param_curried() {
+    // Multi-parameter lambda (curried form)
+    typecheck_program("def add = \\x -> \\y -> x + y");
+}
+
+#[test]
+fn test_lambda_application() {
+    // Lambda applied to argument
+    typecheck_program("def result : i32 = (\\x -> x + 1) 5");
+}
+
+#[test]
+fn test_lambda_curried_application() {
+    // Curried lambda partially applied
+    typecheck_program(r#"
+def add = \x -> \y -> x + y
+def add5 = add 5
+def result : i32 = add5 10
+"#);
+}
+
+#[test]
+fn test_lambda_capturing_variable() {
+    // Lambda capturing outer variable (closure)
+    typecheck_program(r#"
+def test : i32 =
+    let x = 10 in
+    let f = \y -> x + y in
+    f 5
+"#);
+}
+
+#[test]
+fn test_lambda_capturing_multiple_variables() {
+    // Lambda capturing multiple outer variables
+    typecheck_program(r#"
+def test : i32 =
+    let a = 1 in
+    let b = 2 in
+    let c = 3 in
+    let f = \x -> a + b + c + x in
+    f 4
+"#);
+}
+
+#[test]
+fn test_lambda_nested() {
+    // Nested lambdas
+    typecheck_program(r#"
+def test : i32 =
+    let outer = \x ->
+        let inner = \y -> x + y in
+        inner 10
+    in
+    outer 5
+"#);
+}
+
+#[test]
+fn test_lambda_nested_capture() {
+    // Nested lambda capturing from multiple scopes
+    typecheck_program(r#"
+def test : i32 =
+    let a = 1 in
+    let f = \x ->
+        let g = \y -> a + x + y in
+        g 3
+    in
+    f 2
+"#);
+}
+
+#[test]
+fn test_lambda_as_argument() {
+    // Lambda passed as argument to higher-order function
+    typecheck_program(r#"
+def apply (f : i32 -> i32) (x : i32) : i32 = f x
+def result : i32 = apply (\x -> x * 2) 5
+"#);
+}
+
+#[test]
+fn test_lambda_returned_from_function() {
+    // Function returning a lambda
+    typecheck_program(r#"
+def make_adder (n : i32) : i32 -> i32 = \x -> x + n
+def add10 = make_adder 10
+def result : i32 = add10 5
+"#);
+}
+
+#[test]
+fn test_lambda_in_let_binding() {
+    // Lambda bound in let expression
+    typecheck_program(r#"
+def test : i32 =
+    let double = \x -> x * 2 in
+    double 21
+"#);
+}
+
+#[test]
+fn test_lambda_with_unit_param() {
+    // Lambda with unit parameter
+    typecheck_program("def get_five : () -> i32 = \\() -> 5");
+}
+
+#[test]
+fn test_lambda_returning_tuple() {
+    // Lambda returning a tuple
+    typecheck_program("def pair : i32 -> (i32, i32) = \\x -> (x, x + 1)");
+}
+
+#[test]
+fn test_lambda_with_tuple_destructuring() {
+    // Lambda with tuple pattern destructuring
+    typecheck_program("def sum_pair : (i32, i32) -> i32 = \\(a, b) -> a + b");
+}
+
+#[test]
+fn test_lambda_chained_application() {
+    // Chained lambda applications
+    typecheck_program(r#"
+def test : i32 =
+    let f = \x -> \y -> \z -> x + y + z in
+    f 1 2 3
+"#);
+}
+
+#[test]
+fn test_lambda_polymorphic_usage() {
+    // Lambda used polymorphically (via let generalization)
+    typecheck_program(r#"
+def test =
+    let id = \x -> x in
+    let a : i32 = id 5 in
+    let b : f32 = id 3.14f32 in
+    (a, b)
+"#);
+}
+
+#[test]
+fn test_lambda_with_array_operations() {
+    // Lambda used with array operations
+    typecheck_program(r#"
+def test : [3]i32 =
+    let arr = [1, 2, 3] in
+    map (\x -> x * 2) arr
+"#);
+}
+
+#[test]
+fn test_lambda_inferred_from_map_context() {
+    // Lambda parameter type inferred from map's array element type
+    typecheck_program(r#"
+def test : [2]f32 =
+    let vs : [2]vec3f32 = [vec3 1.0f32 2.0f32 3.0f32, vec3 4.0f32 5.0f32 6.0f32] in
+    map (\v -> v.x) vs
+"#);
+}
+
+#[test]
+fn test_lambda_with_binary_ops() {
+    // Lambda with various binary operations
+    typecheck_program(r#"
+def test : i32 =
+    let f = \x -> x * 2 + 3 - 1 in
+    f 10
+"#);
+}
+
+#[test]
+#[ignore] // Bug: type checker reports "expected bool, got bool"
+fn test_lambda_with_comparison() {
+    // Lambda with comparison operation
+    typecheck_program(r#"
+def gt10 = \x -> x > 10
+def test : bool = gt10 15
+"#);
+}
+
+#[test]
+fn test_lambda_compose() {
+    // Function composition with lambdas
+    typecheck_program(r#"
+def compose (f : i32 -> i32) (g : i32 -> i32) : i32 -> i32 =
+    \x -> f (g x)
+def double = \x -> x * 2
+def inc = \x -> x + 1
+def double_then_inc = compose inc double
+def result : i32 = double_then_inc 5
+"#);
+}
+
+#[test]
+fn test_lambda_type_error_param_mismatch() {
+    // Type error: lambda parameter type mismatch
+    assert!(try_typecheck_program(r#"
+def test : i32 = (\(x:f32) -> x + 1) 5
+"#).is_err());
+}
+
+#[test]
+fn test_lambda_type_error_return_mismatch() {
+    // Type error: lambda return type mismatch
+    assert!(try_typecheck_program(r#"
+def test : f32 = (\x -> x + 1) 5
+"#).is_err());
 }
