@@ -1645,8 +1645,80 @@ impl TypeChecker {
                 }
             }
 
-            ExprKind::Loop(_) => {
-                todo!("Loop type checking not yet implemented")
+            ExprKind::Loop(loop_expr) => {
+                // Push a new scope for loop variables
+                self.scope_stack.push_scope();
+
+                // Get or infer the type of the loop variable from init
+                let loop_var_type = if let Some(init) = &loop_expr.init {
+                    self.infer_expression(init)?
+                } else {
+                    // No init - create a fresh type variable
+                    self.context.new_variable()
+                };
+
+                // Bind pattern to the loop variable type
+                self.bind_pattern(&loop_expr.pattern, &loop_var_type, false)?;
+
+                // Type check the loop form
+                match &loop_expr.form {
+                    LoopForm::While(cond) => {
+                        // Condition must be bool
+                        let cond_type = self.infer_expression(cond)?;
+                        self.context.unify(&cond_type, &types::bool_type()).map_err(|e| {
+                            CompilerError::TypeError(
+                                format!("While condition must be bool: {:?}", e),
+                                cond.h.span,
+                            )
+                        })?;
+                    }
+                    LoopForm::For(var_name, bound) => {
+                        // Iteration variable is i32
+                        self.scope_stack
+                            .insert(var_name.clone(), TypeScheme::Monotype(types::i32()));
+
+                        // Bound must be integer
+                        let bound_type = self.infer_expression(bound)?;
+                        self.context.unify(&bound_type, &types::i32()).map_err(|e| {
+                            CompilerError::TypeError(
+                                format!("Loop bound must be i32: {:?}", e),
+                                bound.h.span,
+                            )
+                        })?;
+                    }
+                    LoopForm::ForIn(pat, arr) => {
+                        // Array must be an array type
+                        let arr_type = self.infer_expression(arr)?;
+                        let elem_type = self.context.new_variable();
+                        let size_type = self.context.new_variable();
+                        let expected_arr = Type::Constructed(TypeName::Array, vec![size_type, elem_type.clone()]);
+
+                        self.context.unify(&arr_type, &expected_arr).map_err(|e| {
+                            CompilerError::TypeError(
+                                format!("for-in requires an array: {:?}", e),
+                                arr.h.span,
+                            )
+                        })?;
+
+                        // Bind pattern to element type
+                        self.bind_pattern(pat, &elem_type, false)?;
+                    }
+                }
+
+                // Type check the body - its type must match the loop variable type
+                let body_type = self.infer_expression(&loop_expr.body)?;
+                self.context.unify(&body_type, &loop_var_type).map_err(|e| {
+                    CompilerError::TypeError(
+                        format!("Loop body type must match loop variable type: {:?}", e),
+                        loop_expr.body.h.span,
+                    )
+                })?;
+
+                // Pop the scope
+                self.scope_stack.pop_scope();
+
+                // The loop returns the loop variable type
+                Ok(loop_var_type)
             }
 
             ExprKind::Match(_) => {

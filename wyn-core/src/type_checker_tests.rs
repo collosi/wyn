@@ -573,3 +573,109 @@ fn test_lambda_type_error_return_mismatch() {
 def test : f32 = (\x -> x + 1) 5
 "#).is_err());
 }
+
+// ===== Loop Tests =====
+
+#[test]
+fn test_loop_while_simple() {
+    // Simple while loop that counts
+    typecheck_program(r#"
+def test : i32 =
+    loop acc = 0 while acc < 10 do
+        acc + 1
+"#);
+}
+
+#[test]
+fn test_loop_while_tuple() {
+    // While loop with tuple pattern
+    typecheck_program(r#"
+def test : (i32, i32) =
+    loop (idx, acc) = (0, 0) while idx < 10 do
+        (idx + 1, acc + idx)
+"#);
+}
+
+#[test]
+fn test_loop_for_simple() {
+    // Simple for loop
+    typecheck_program(r#"
+def test : i32 =
+    loop acc = 0 for i < 10 do
+        acc + i
+"#);
+}
+
+#[test]
+fn test_loop_for_with_array() {
+    // For loop building result
+    typecheck_program(r#"
+def test : i32 =
+    loop sum = 0 for i < 5 do
+        sum + i * 2
+"#);
+}
+
+#[test]
+fn test_loop_forin_simple() {
+    // For-in loop over array
+    typecheck_program(r#"
+def test : i32 =
+    let arr = [1, 2, 3, 4, 5] in
+    loop sum = 0 for x in arr do
+        sum + x
+"#);
+}
+
+#[test]
+fn test_loop_forin_nested_array() {
+    // For-in loop over nested array
+    typecheck_program(r#"
+def test : i32 =
+    let edges : [3][2]i32 = [[0, 1], [1, 2], [2, 0]] in
+    loop sum = 0 for e in edges do
+        sum + e[0] + e[1]
+"#);
+}
+
+#[test]
+fn test_loop_return_type_inference() {
+    // Loop return type is inferred from init
+    let checker = try_typecheck_program(r#"
+def test =
+    loop acc = 0.0f32 while acc < 10.0f32 do
+        acc + 1.0f32
+"#).unwrap();
+    assert_eq!(checker.format_scheme(&checker.lookup("test").unwrap()), "f32");
+}
+
+#[test]
+fn test_loop_type_error_body_mismatch() {
+    // Type error: body type doesn't match init type
+    assert!(try_typecheck_program(r#"
+def test : i32 =
+    loop acc = 0 while acc < 10 do
+        3.14f32
+"#).is_err());
+}
+
+#[test]
+fn test_loop_type_error_condition_not_bool() {
+    // Type error: while condition must be bool
+    assert!(try_typecheck_program(r#"
+def test : i32 =
+    loop acc = 0 while 42 do
+        acc + 1
+"#).is_err());
+}
+
+#[test]
+fn test_loop_nested() {
+    // Nested loops
+    typecheck_program(r#"
+def test : i32 =
+    loop outer = 0 for i < 3 do
+        loop inner = outer for j < 4 do
+            inner + i + j
+"#);
+}
