@@ -5,7 +5,7 @@ use crate::error::{CompilerError, Result};
 use crate::scope::ScopeStack;
 use log::debug;
 use polytype::{Context, TypeScheme};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 
 /// Trait for generating fresh type variables
 pub trait TypeVarGenerator {
@@ -55,7 +55,6 @@ pub struct TypeChecker {
     type_table: HashMap<crate::ast::NodeId, TypeScheme<TypeName>>, // Maps NodeId to type scheme
     warnings: Vec<TypeWarning>,                    // Collected warnings
     type_holes: Vec<(NodeId, Span)>,               // Track type hole locations for warning emission
-    ascription_variables: HashSet<polytype::Variable>, // Type variables that should not be generalized
 }
 
 impl Default for TypeChecker {
@@ -165,12 +164,9 @@ impl TypeChecker {
         // Free vars in environment
         let fv_env = self.env_free_type_vars();
 
-        // vars to quantify = fv(ty) \ fv(env) \ ascription_vars
+        // vars to quantify = fv(ty) \ fv(env)
         for v in fv_env {
             fv_ty.remove(&v);
-        }
-        for v in &self.ascription_variables {
-            fv_ty.remove(v);
         }
 
         // Wrap in nested Polytype quantifiers
@@ -219,26 +215,6 @@ impl TypeChecker {
             type_table: HashMap::new(),
             warnings: Vec::new(),
             type_holes: Vec::new(),
-            ascription_variables: HashSet::new(),
-        }
-    }
-
-    pub fn new_with_context(
-        context: Context<TypeName>,
-        ascription_variables: HashSet<polytype::Variable>,
-    ) -> Self {
-        let mut context = context;
-        let builtin_registry = crate::builtin_registry::BuiltinRegistry::new(&mut context);
-
-        TypeChecker {
-            scope_stack: ScopeStack::new(),
-            context,
-            record_field_map: HashMap::new(),
-            builtin_registry,
-            type_table: HashMap::new(),
-            warnings: Vec::new(),
-            type_holes: Vec::new(),
-            ascription_variables,
         }
     }
 
@@ -287,12 +263,18 @@ impl TypeChecker {
                 };
                 self.scope_stack.insert(name.clone(), type_scheme);
                 // Store resolved type in type_table for mirize
-                self.type_table.insert(pattern.h.id, TypeScheme::Monotype(expected_type.apply(&self.context)));
+                self.type_table.insert(
+                    pattern.h.id,
+                    TypeScheme::Monotype(expected_type.apply(&self.context)),
+                );
                 Ok(expected_type.clone())
             }
             PatternKind::Wildcard => {
                 // Wildcard doesn't bind anything
-                self.type_table.insert(pattern.h.id, TypeScheme::Monotype(expected_type.apply(&self.context)));
+                self.type_table.insert(
+                    pattern.h.id,
+                    TypeScheme::Monotype(expected_type.apply(&self.context)),
+                );
                 Ok(expected_type.clone())
             }
             PatternKind::Tuple(patterns) => {
@@ -317,7 +299,10 @@ impl TypeChecker {
                             self.bind_pattern(sub_pattern, elem_type, generalize)?;
                         }
 
-                        self.type_table.insert(pattern.h.id, TypeScheme::Monotype(expected_type.apply(&self.context)));
+                        self.type_table.insert(
+                            pattern.h.id,
+                            TypeScheme::Monotype(expected_type.apply(&self.context)),
+                        );
                         Ok(expected_type.clone())
                     }
                     _ => Err(CompilerError::TypeError(
@@ -344,14 +329,20 @@ impl TypeChecker {
                 // Bind the inner pattern with the annotated type
                 let result = self.bind_pattern(inner_pattern, annotated_type, generalize)?;
                 // Also store type for the outer Typed pattern
-                self.type_table.insert(pattern.h.id, TypeScheme::Monotype(annotated_type.apply(&self.context)));
+                self.type_table.insert(
+                    pattern.h.id,
+                    TypeScheme::Monotype(annotated_type.apply(&self.context)),
+                );
                 Ok(result)
             }
             PatternKind::Attributed(_, inner_pattern) => {
                 // Ignore attributes, bind the inner pattern
                 let result = self.bind_pattern(inner_pattern, expected_type, generalize)?;
                 // Also store type for the outer Attributed pattern
-                self.type_table.insert(pattern.h.id, TypeScheme::Monotype(expected_type.apply(&self.context)));
+                self.type_table.insert(
+                    pattern.h.id,
+                    TypeScheme::Monotype(expected_type.apply(&self.context)),
+                );
                 Ok(result)
             }
             PatternKind::Unit => {
@@ -779,7 +770,10 @@ impl TypeChecker {
         }
     }
 
-    pub fn check_program(&mut self, program: &Program) -> Result<HashMap<crate::ast::NodeId, TypeScheme<TypeName>>> {
+    pub fn check_program(
+        &mut self,
+        program: &Program,
+    ) -> Result<HashMap<crate::ast::NodeId, TypeScheme<TypeName>>> {
         // Process declarations in order - each can only refer to preceding declarations
         for decl in &program.declarations {
             self.check_declaration(decl)?;
@@ -789,8 +783,10 @@ impl TypeChecker {
         self.emit_hole_warnings();
 
         // Apply the context to all types in the type table to resolve type variables
-        let resolved_table: HashMap<crate::ast::NodeId, TypeScheme<TypeName>> =
-            self.type_table.iter().map(|(node_id, scheme)| {
+        let resolved_table: HashMap<crate::ast::NodeId, TypeScheme<TypeName>> = self
+            .type_table
+            .iter()
+            .map(|(node_id, scheme)| {
                 let resolved = match scheme {
                     TypeScheme::Monotype(ty) => TypeScheme::Monotype(ty.apply(&self.context)),
                     TypeScheme::Polytype { variable, body } => {
@@ -805,7 +801,8 @@ impl TypeChecker {
                     }
                 };
                 (*node_id, resolved)
-            }).collect();
+            })
+            .collect();
 
         Ok(resolved_table)
     }

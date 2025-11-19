@@ -20,7 +20,6 @@ pub mod cfg;
 pub mod cfg_nemo;
 #[cfg(any())]
 pub mod codegen;
-#[cfg(any())]
 pub mod constant_folding;
 #[cfg(any())]
 pub mod flattening;
@@ -37,8 +36,7 @@ pub mod monomorphize;
 #[cfg(any())]
 pub mod nemo_facts;
 
-// Disabled during reorganization - many tests depend on defunctionalization
-#[cfg(any())]
+#[cfg(test)]
 mod type_checker_tests;
 
 // Disabled test modules

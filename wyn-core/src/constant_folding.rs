@@ -333,13 +333,6 @@ impl ConstantFolder {
                 ))
             }
 
-            ExprKind::InternalLoop(_) => {
-                // InternalLoop is generated after constant folding, should never appear here
-                Err(CompilerError::MirError(
-                    "InternalLoop should not appear during constant folding".to_string(),
-                ))
-            }
-
             ExprKind::QualifiedName(_, _) => {
                 // QualifiedName doesn't have subexpressions to fold
                 Ok(expr.clone())
