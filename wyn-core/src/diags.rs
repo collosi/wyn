@@ -489,324 +489,221 @@ impl Default for AstFormatter {
     }
 }
 
-// MIR formatter disabled during reorganization
-#[cfg(any())]
-mod mir_formatter {
-    use crate::ast::*;
-    use crate::lir::{Function, Instruction, Module, Register};
+// MIR Display implementations
+use crate::mir;
+use std::fmt::{self, Display, Formatter};
 
-    /// Formatter for MIR diagnostic output
-    pub struct MirFormatter {
-        output: String,
-        indent: usize,
+impl Display for mir::Program {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        for (i, def) in self.defs.iter().enumerate() {
+            if i > 0 {
+                writeln!(f)?;
+            }
+            write!(f, "{}", def)?;
+        }
+        Ok(())
     }
+}
 
-    impl MirFormatter {
-        pub fn new() -> Self {
-            MirFormatter {
-                output: String::new(),
-                indent: 0,
-            }
-        }
-
-        pub fn format_module(module: &Module) -> String {
-            let mut formatter = MirFormatter::new();
-            for func in &module.functions {
-                formatter.write_function(func);
-                formatter.newline();
-            }
-            formatter.output
-        }
-
-        fn write(&mut self, s: &str) {
-            self.output.push_str(s);
-        }
-
-        fn newline(&mut self) {
-            self.output.push('\n');
-            for _ in 0..self.indent {
-                self.output.push_str("  ");
-            }
-        }
-
-        fn format_type(ty: &Type) -> String {
-            match ty {
-                Type::Variable(id) => format!("?{}", id),
-                Type::Constructed(name, args) if args.is_empty() => format!("{}", name),
-                Type::Constructed(TypeName::Str(s), args) if *s == "fn" && args.len() == 2 => {
-                    format!(
-                        "{} -> {}",
-                        Self::format_type(&args[0]),
-                        Self::format_type(&args[1])
-                    )
+impl Display for mir::Def {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            mir::Def::Function {
+                name,
+                params,
+                attributes,
+                body,
+                ..
+            } => {
+                // Write attributes
+                for attr in attributes {
+                    writeln!(f, "{}", attr)?;
                 }
-                Type::Constructed(name, args) => {
-                    let arg_strs: Vec<String> = args.iter().map(Self::format_type).collect();
-                    format!("{}[{}]", name, arg_strs.join(", "))
+                // Write function signature
+                write!(f, "def {}", name)?;
+                for param in params.iter() {
+                    write!(f, " {}", param)?;
                 }
+                writeln!(f, " =")?;
+                // Write body with indentation
+                write!(f, "  {}", body)
+            }
+            mir::Def::Constant {
+                name,
+                attributes,
+                body,
+                ..
+            } => {
+                // Write attributes
+                for attr in attributes {
+                    writeln!(f, "{}", attr)?;
+                }
+                // Write constant
+                writeln!(f, "def {} =", name)?;
+                write!(f, "  {}", body)
             }
         }
+    }
+}
 
-        fn format_register(reg: &Register) -> String {
-            format!("r{}:{}", reg.id, Self::format_type(&reg.ty))
-        }
+impl Display for mir::Param {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if self.is_consumed { write!(f, "*{}", self.name) } else { write!(f, "{}", self.name) }
+    }
+}
 
-        fn write_function(&mut self, func: &Function) {
-            self.write(&format!("fn {} (", func.name));
-            for (i, param) in func.params.iter().enumerate() {
+impl Display for mir::Attribute {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "#[{}", self.name)?;
+        if !self.args.is_empty() {
+            write!(f, "(")?;
+            for (i, arg) in self.args.iter().enumerate() {
                 if i > 0 {
-                    self.write(", ");
+                    write!(f, ", ")?;
                 }
-                self.write(&Self::format_register(param));
+                write!(f, "{}", arg)?;
             }
-            self.write(&format!(") -> {}", Self::format_type(&func.return_type)));
-            self.write(" {");
-            self.indent += 1;
-
-            for block in &func.blocks {
-                self.newline();
-                self.write(&format!("block {}:", block.id));
-                self.indent += 1;
-                for inst in &block.instructions {
-                    self.newline();
-                    self.write_instruction(inst);
-                }
-                self.indent -= 1;
-            }
-
-            self.indent -= 1;
-            self.newline();
-            self.write("}");
-            self.newline();
+            write!(f, ")")?;
         }
+        write!(f, "]")
+    }
+}
 
-        fn write_instruction(&mut self, inst: &Instruction) {
-            match inst {
-                Instruction::ConstInt(dest, val) => {
-                    self.write(&format!("{} = const {}", Self::format_register(dest), val));
+impl Display for mir::Expr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.kind)
+    }
+}
+
+impl Display for mir::ExprKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            mir::ExprKind::Literal(lit) => write!(f, "{}", lit),
+            mir::ExprKind::Var(name) => write!(f, "{}", name),
+            mir::ExprKind::BinOp { op, lhs, rhs } => {
+                write!(f, "({} {} {})", lhs, op, rhs)
+            }
+            mir::ExprKind::UnaryOp { op, operand } => {
+                write!(f, "({}{})", op, operand)
+            }
+            mir::ExprKind::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                write!(f, "if {} then {} else {}", cond, then_branch, else_branch)
+            }
+            mir::ExprKind::Let { name, value, body } => {
+                write!(f, "let {} = {} in {}", name, value, body)
+            }
+            mir::ExprKind::Loop {
+                init_bindings,
+                kind,
+                body,
+            } => {
+                write!(f, "loop ")?;
+                if init_bindings.len() == 1 {
+                    let (name, init) = &init_bindings[0];
+                    write!(f, "{} = {}", name, init)?;
+                } else {
+                    write!(f, "(")?;
+                    for (i, (name, _)) in init_bindings.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", name)?;
+                    }
+                    write!(f, ") = (")?;
+                    for (i, (_, init)) in init_bindings.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", init)?;
+                    }
+                    write!(f, ")")?;
                 }
-                Instruction::ConstFloat(dest, val) => {
-                    self.write(&format!("{} = const {}f32", Self::format_register(dest), val));
+                write!(f, " {} do {}", kind, body)
+            }
+            mir::ExprKind::Call { func, args } => {
+                write!(f, "{}", func)?;
+                for arg in args.iter() {
+                    write!(f, " {}", arg)?;
                 }
-                Instruction::ConstBool(dest, val) => {
-                    self.write(&format!("{} = const {}", Self::format_register(dest), val));
+                Ok(())
+            }
+            mir::ExprKind::Intrinsic { name, args } => {
+                write!(f, "@{}(", name)?;
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", arg)?;
                 }
-                Instruction::Neg(dest, src) => {
-                    self.write(&format!(
-                        "{} = neg {}",
-                        Self::format_register(dest),
-                        Self::format_register(src)
-                    ));
+                write!(f, ")")
+            }
+            mir::ExprKind::Attributed { attributes, expr } => {
+                for attr in attributes {
+                    write!(f, "{} ", attr)?;
                 }
-                Instruction::Not(dest, src) => {
-                    self.write(&format!(
-                        "{} = not {}",
-                        Self::format_register(dest),
-                        Self::format_register(src)
-                    ));
-                }
-                Instruction::Add(dest, left, right) => {
-                    self.write(&format!(
-                        "{} = add {}, {}",
-                        Self::format_register(dest),
-                        Self::format_register(left),
-                        Self::format_register(right)
-                    ));
-                }
-                Instruction::Sub(dest, left, right) => {
-                    self.write(&format!(
-                        "{} = sub {}, {}",
-                        Self::format_register(dest),
-                        Self::format_register(left),
-                        Self::format_register(right)
-                    ));
-                }
-                Instruction::Mul(dest, left, right) => {
-                    self.write(&format!(
-                        "{} = mul {}, {}",
-                        Self::format_register(dest),
-                        Self::format_register(left),
-                        Self::format_register(right)
-                    ));
-                }
-                Instruction::Div(dest, left, right) => {
-                    self.write(&format!(
-                        "{} = div {}, {}",
-                        Self::format_register(dest),
-                        Self::format_register(left),
-                        Self::format_register(right)
-                    ));
-                }
-                Instruction::Eq(dest, left, right) => {
-                    self.write(&format!(
-                        "{} = eq {}, {}",
-                        Self::format_register(dest),
-                        Self::format_register(left),
-                        Self::format_register(right)
-                    ));
-                }
-                Instruction::Ne(dest, left, right) => {
-                    self.write(&format!(
-                        "{} = ne {}, {}",
-                        Self::format_register(dest),
-                        Self::format_register(left),
-                        Self::format_register(right)
-                    ));
-                }
-                Instruction::Lt(dest, left, right) => {
-                    self.write(&format!(
-                        "{} = lt {}, {}",
-                        Self::format_register(dest),
-                        Self::format_register(left),
-                        Self::format_register(right)
-                    ));
-                }
-                Instruction::Le(dest, left, right) => {
-                    self.write(&format!(
-                        "{} = le {}, {}",
-                        Self::format_register(dest),
-                        Self::format_register(left),
-                        Self::format_register(right)
-                    ));
-                }
-                Instruction::Gt(dest, left, right) => {
-                    self.write(&format!(
-                        "{} = gt {}, {}",
-                        Self::format_register(dest),
-                        Self::format_register(left),
-                        Self::format_register(right)
-                    ));
-                }
-                Instruction::Ge(dest, left, right) => {
-                    self.write(&format!(
-                        "{} = ge {}, {}",
-                        Self::format_register(dest),
-                        Self::format_register(left),
-                        Self::format_register(right)
-                    ));
-                }
-                Instruction::Alloca(dest) => {
-                    self.write(&format!("{} = alloca", Self::format_register(dest)));
-                }
-                Instruction::Load(dest, src) => {
-                    self.write(&format!(
-                        "{} = load {}",
-                        Self::format_register(dest),
-                        Self::format_register(src)
-                    ));
-                }
-                Instruction::Store(dest, src) => {
-                    self.write(&format!(
-                        "store {}, {}",
-                        Self::format_register(dest),
-                        Self::format_register(src)
-                    ));
-                }
-                Instruction::Call(dest, func_id, args) => {
-                    let arg_strs: Vec<String> = args.iter().map(Self::format_register).collect();
-                    self.write(&format!(
-                        "{} = call {}({})",
-                        Self::format_register(dest),
-                        func_id,
-                        arg_strs.join(", ")
-                    ));
-                }
-                Instruction::CallBuiltin(dest, name, args) => {
-                    let arg_strs: Vec<String> = args.iter().map(Self::format_register).collect();
-                    self.write(&format!(
-                        "{} = call @{}({})",
-                        Self::format_register(dest),
-                        name,
-                        arg_strs.join(", ")
-                    ));
-                }
-                Instruction::MakeTuple(dest, elements) => {
-                    let elem_strs: Vec<String> = elements.iter().map(Self::format_register).collect();
-                    self.write(&format!(
-                        "{} = tuple ({})",
-                        Self::format_register(dest),
-                        elem_strs.join(", ")
-                    ));
-                }
-                Instruction::ExtractElement(dest, tuple, index) => {
-                    self.write(&format!(
-                        "{} = extract {}.{}",
-                        Self::format_register(dest),
-                        Self::format_register(tuple),
-                        index
-                    ));
-                }
-                Instruction::MakeArray(dest, elements) => {
-                    let elem_strs: Vec<String> = elements.iter().map(Self::format_register).collect();
-                    self.write(&format!(
-                        "{} = array [{}]",
-                        Self::format_register(dest),
-                        elem_strs.join(", ")
-                    ));
-                }
-                Instruction::ArrayIndex(dest, array, index) => {
-                    self.write(&format!(
-                        "{} = index {}[{}]",
-                        Self::format_register(dest),
-                        Self::format_register(array),
-                        Self::format_register(index)
-                    ));
-                }
-                Instruction::Branch(target) => {
-                    self.write(&format!("br block {}", target));
-                }
-                Instruction::BranchCond(cond, true_block, false_block, merge_block) => {
-                    self.write(&format!(
-                        "br {} ? block {} : block {} -> block {}",
-                        Self::format_register(cond),
-                        true_block,
-                        false_block,
-                        merge_block
-                    ));
-                }
-                Instruction::BranchLoop(cond, body, exit, merge, cont) => {
-                    self.write(&format!(
-                        "loop {} body {} exit {} merge {} continue {}",
-                        Self::format_register(cond),
-                        body,
-                        exit,
-                        merge,
-                        cont
-                    ));
-                }
-                Instruction::Loop(info) => {
-                    self.write(&format!(
-                        "loop phi={} init={} body_result={} cond={}",
-                        Self::format_register(&info.phi_reg),
-                        Self::format_register(&info.init_reg),
-                        Self::format_register(&info.body_result_reg),
-                        Self::format_register(&info.cond_reg)
-                    ));
-                }
-                Instruction::Phi(dest, sources) => {
-                    let source_strs: Vec<String> = sources
-                        .iter()
-                        .map(|(reg, block)| format!("[{}, block {}]", Self::format_register(reg), block))
-                        .collect();
-                    self.write(&format!(
-                        "{} = phi {}",
-                        Self::format_register(dest),
-                        source_strs.join(", ")
-                    ));
-                }
-                Instruction::Return(reg) => {
-                    self.write(&format!("ret {}", Self::format_register(reg)));
-                }
-                Instruction::ReturnVoid => {
-                    self.write("ret void");
-                }
+                write!(f, "{}", expr)
             }
         }
     }
+}
 
-    impl Default for MirFormatter {
-        fn default() -> Self {
-            Self::new()
+impl Display for mir::Literal {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            mir::Literal::Int(s) => write!(f, "{}", s),
+            mir::Literal::Float(s) => write!(f, "{}", s),
+            mir::Literal::Bool(b) => write!(f, "{}", b),
+            mir::Literal::String(s) => write!(f, "\"{}\"", s.escape_default()),
+            mir::Literal::Tuple(exprs) => {
+                write!(f, "(")?;
+                for (i, expr) in exprs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", expr)?;
+                }
+                write!(f, ")")
+            }
+            mir::Literal::Array(exprs) => {
+                write!(f, "[")?;
+                for (i, expr) in exprs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", expr)?;
+                }
+                write!(f, "]")
+            }
+            mir::Literal::Record(fields) => {
+                write!(f, "{{")?;
+                for (i, (name, expr)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}={}", name, expr)?;
+                }
+                write!(f, "}}")
+            }
         }
     }
-} // end mod mir_formatter
+}
+
+impl Display for mir::LoopKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            mir::LoopKind::For { var, iter } => {
+                write!(f, "for {} in {}", var, iter)
+            }
+            mir::LoopKind::ForRange { var, bound } => {
+                write!(f, "for {} < {}", var, bound)
+            }
+            mir::LoopKind::While { cond } => {
+                write!(f, "while {}", cond)
+            }
+        }
+    }
+}

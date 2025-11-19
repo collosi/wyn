@@ -3,8 +3,10 @@ pub mod ast;
 pub mod builtin_registry;
 pub mod diags;
 pub mod error;
+pub mod flattening;
 pub mod inference;
 pub mod lexer;
+pub mod mir;
 pub mod parser;
 pub mod pattern;
 pub mod scope;
@@ -21,8 +23,6 @@ pub mod cfg_nemo;
 #[cfg(any())]
 pub mod codegen;
 pub mod constant_folding;
-#[cfg(any())]
-pub mod flattening;
 #[cfg(any())]
 pub mod lir;
 #[cfg(any())]

@@ -27,6 +27,9 @@ pub enum CompilerError {
     #[error("Defunctionalization error: {0}")]
     DefunctionalizationError(String),
 
+    #[error("Flattening error: {0}")]
+    FlatteningError(String),
+
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 
