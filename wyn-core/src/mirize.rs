@@ -45,22 +45,16 @@ impl Mirize {
 
     /// Convert a top-level constant to a zero-argument function
     fn mirize_constant_as_function(&mut self, decl: &Decl) -> Result<()> {
-        // Get the type of the constant
-        let return_type = if let Some(ty) = &decl.ty {
-            ty.clone()
-        } else {
-            // Use type from type table
-            let node_id = decl.body.h.id;
-            self.type_table
-                .get(&node_id)
-                .ok_or_else(|| {
-                    CompilerError::MirError(format!(
-                        "Type not found for constant '{}' in type table",
-                        decl.name
-                    ))
-                })?
-                .clone()
-        };
+        // Get the type of the constant from type_table
+        let return_type = self.type_table
+            .get(&decl.body.h.id)
+            .ok_or_else(|| {
+                CompilerError::MirError(format!(
+                    "Type not found for constant '{}' in type table",
+                    decl.name
+                ))
+            })?
+            .clone();
 
         // Create a zero-argument function
         self.builder.begin_function(decl.name.clone(), vec![], return_type);
@@ -100,7 +94,7 @@ impl Mirize {
     }
 
     fn mirize_decl(&mut self, decl: &Decl) -> Result<()> {
-        // Extract parameter types (skip Unit patterns)
+        // Extract parameter types from type_table (skip Unit patterns)
         let param_types: Vec<(String, Type)> = decl
             .params
             .iter()
@@ -109,9 +103,10 @@ impl Mirize {
                 let name = p.simple_name().ok_or_else(|| {
                     CompilerError::MirError("Complex patterns not supported in MIR".to_string())
                 })?;
-                let ty = p.pattern_type().ok_or_else(|| {
+                // Look up resolved type from type_table using pattern's node ID
+                let ty = self.type_table.get(&p.h.id).ok_or_else(|| {
                     CompilerError::MirError(format!(
-                        "Function parameter '{}' missing type annotation",
+                        "Type not found for parameter '{}' in type table",
                         name
                     ))
                 })?;
@@ -119,15 +114,13 @@ impl Mirize {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // Get return type from ty
-        let return_type = if let Some(ty) = &decl.ty {
-            ty.clone()
-        } else {
-            return Err(CompilerError::MirError(format!(
-                "Function '{}' missing return type annotation",
+        // Get return type from type_table using body's node ID
+        let return_type = self.type_table.get(&decl.body.h.id).ok_or_else(|| {
+            CompilerError::MirError(format!(
+                "Return type not found for function '{}' in type table",
                 decl.name
-            )));
-        };
+            ))
+        })?.clone();
 
         // Check if this is an entry point
         let is_entry_point =
@@ -181,7 +174,7 @@ impl Mirize {
     }
 
     fn mirize_entry_decl(&mut self, entry: &EntryDecl) -> Result<()> {
-        // Extract parameter types (skip Unit patterns)
+        // Extract parameter types from type_table (skip Unit patterns)
         let param_types: Vec<(String, Type)> = entry
             .params
             .iter()
@@ -190,9 +183,10 @@ impl Mirize {
                 let name = p.simple_name().ok_or_else(|| {
                     CompilerError::MirError("Complex patterns not supported in MIR".to_string())
                 })?;
-                let ty = p.pattern_type().ok_or_else(|| {
+                // Look up resolved type from type_table using pattern's node ID
+                let ty = self.type_table.get(&p.h.id).ok_or_else(|| {
                     CompilerError::MirError(format!(
-                        "Entry point parameter '{}' missing type annotation",
+                        "Type not found for entry parameter '{}' in type table",
                         name
                     ))
                 })?;
@@ -200,13 +194,13 @@ impl Mirize {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // Build return type from parallel arrays
-        let return_type = if entry.return_types.len() == 1 {
-            entry.return_types[0].clone()
-        } else {
-            use crate::ast::TypeName;
-            Type::Constructed(TypeName::Str("tuple"), entry.return_types.clone())
-        };
+        // Get return type from type_table using body's node ID
+        let return_type = self.type_table.get(&entry.body.h.id).ok_or_else(|| {
+            CompilerError::MirError(format!(
+                "Return type not found for entry '{}' in type table",
+                entry.name
+            ))
+        })?.clone();
 
         // Start building the function
         let func_id = self.builder.begin_function(entry.name.clone(), param_types.clone(), return_type);

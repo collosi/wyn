@@ -1190,7 +1190,6 @@ def test : f32 =
     let mut type_checker = TypeChecker::new_with_context(type_context, ascription_variables);
     type_checker.load_builtins().expect("Loading builtins failed");
     let type_table = type_checker.check_program(&defunc_program).expect("Type checking failed");
-    let context = type_checker.take_context();
 
     // Monomorphize
     let monomorphizer = Monomorphizer::new(type_table.clone());
@@ -1198,7 +1197,7 @@ def test : f32 =
         monomorphizer.monomorphize_program(&defunc_program).expect("Monomorphization failed");
 
     // Convert to MIR
-    let mirize = Mirize::new_with_context(type_table, context);
+    let mirize = Mirize::new(type_table);
     let mir_module = mirize.mirize_program(&mono_program).expect("MIR conversion failed");
 
     // Check for unresolved type variables in MIR

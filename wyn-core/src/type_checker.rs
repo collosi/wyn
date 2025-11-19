@@ -286,10 +286,13 @@ impl TypeChecker {
                     TypeScheme::Monotype(expected_type.clone())
                 };
                 self.scope_stack.insert(name.clone(), type_scheme);
+                // Store resolved type in type_table for mirize
+                self.type_table.insert(pattern.h.id, expected_type.apply(&self.context));
                 Ok(expected_type.clone())
             }
             PatternKind::Wildcard => {
                 // Wildcard doesn't bind anything
+                self.type_table.insert(pattern.h.id, expected_type.apply(&self.context));
                 Ok(expected_type.clone())
             }
             PatternKind::Tuple(patterns) => {
@@ -314,6 +317,7 @@ impl TypeChecker {
                             self.bind_pattern(sub_pattern, elem_type, generalize)?;
                         }
 
+                        self.type_table.insert(pattern.h.id, expected_type.apply(&self.context));
                         Ok(expected_type.clone())
                     }
                     _ => Err(CompilerError::TypeError(
@@ -338,11 +342,17 @@ impl TypeChecker {
                     )
                 })?;
                 // Bind the inner pattern with the annotated type
-                self.bind_pattern(inner_pattern, annotated_type, generalize)
+                let result = self.bind_pattern(inner_pattern, annotated_type, generalize)?;
+                // Also store type for the outer Typed pattern
+                self.type_table.insert(pattern.h.id, annotated_type.apply(&self.context));
+                Ok(result)
             }
             PatternKind::Attributed(_, inner_pattern) => {
                 // Ignore attributes, bind the inner pattern
-                self.bind_pattern(inner_pattern, expected_type, generalize)
+                let result = self.bind_pattern(inner_pattern, expected_type, generalize)?;
+                // Also store type for the outer Attributed pattern
+                self.type_table.insert(pattern.h.id, expected_type.apply(&self.context));
+                Ok(result)
             }
             PatternKind::Unit => {
                 // Unit pattern should match unit type
@@ -356,6 +366,7 @@ impl TypeChecker {
                         pattern.h.span,
                     )
                 })?;
+                self.type_table.insert(pattern.h.id, unit_type.apply(&self.context));
                 Ok(unit_type)
             }
             _ => {
@@ -843,6 +854,10 @@ impl TypeChecker {
                 param_name, param_type
             );
             self.scope_stack.insert(param_name, type_scheme);
+
+            // Store resolved type in type_table for mirize
+            // Need to insert for the outer pattern node ID
+            self.type_table.insert(param.h.id, param_type.apply(&self.context));
         }
 
         // Infer body type
