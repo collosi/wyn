@@ -20,31 +20,15 @@ pub mod borrow_checker;
 pub mod cfg;
 #[cfg(any())]
 pub mod cfg_nemo;
-#[cfg(any())]
-pub mod codegen;
 pub mod constant_folding;
-#[cfg(any())]
-pub mod lir;
-#[cfg(any())]
-pub mod lirize;
 pub mod lowering;
 #[cfg(any())]
 pub mod module;
-#[cfg(any())]
-pub mod monomorphize;
 #[cfg(any())]
 pub mod nemo_facts;
 
 #[cfg(test)]
 mod type_checker_tests;
-
-// Disabled test modules
-#[cfg(any())]
-mod defunctionalization_tests;
-#[cfg(any())]
-mod integration_tests;
-#[cfg(any())]
-mod mirize_tests;
 
 use error::Result;
 
