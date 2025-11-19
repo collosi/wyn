@@ -542,7 +542,7 @@ def test : [8]i32 =
         Ok(type_table) => {
             // Check that all types are fully resolved (no Variables)
             for (node_id, ty) in &type_table {
-                if matches!(ty, Type::Variable(_)) || contains_type_variable(ty) {
+                if matches!(ty, Type::Variable(_)) || contains_type_variable(&ty) {
                     panic!(
                         "Type table contains unresolved type variable at {:?}: {:?}",
                         node_id, ty
@@ -1146,7 +1146,7 @@ fn test_internal_loop_type_variable_resolution() {
         Ok(type_table) => {
             // Check that all types are fully resolved
             for (node_id, ty) in &type_table {
-                if matches!(ty, Type::Variable(_)) || contains_type_variable(ty) {
+                if matches!(ty, Type::Variable(_)) || contains_type_variable(&ty) {
                     panic!(
                         "Type table contains unresolved type variable at {:?}: {:?}",
                         node_id, ty
@@ -1157,5 +1157,64 @@ fn test_internal_loop_type_variable_resolution() {
         Err(e) => {
             panic!("Type checking failed: {:?}", e);
         }
+    }
+}
+
+/// Test that lambda return type is inferred from map context when not annotated
+/// This is the core issue: hoisted lambdas need their return types constrained by usage
+#[test]
+fn test_map_lambda_return_type_inference() {
+    use crate::diags::MirFormatter;
+    use crate::mirize::Mirize;
+    use crate::monomorphize::Monomorphizer;
+
+    let source = r#"
+def test : f32 =
+    let edges : [3][2]i32 = [[0, 1], [1, 2], [2, 0]] in
+    f32.sum (map (\e ->
+        let a = e[0] in
+        let b = e[1] in
+        1.0f32) edges)
+    "#;
+
+    let tokens = tokenize(source).expect("Tokenization failed");
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().expect("Parsing failed");
+    let node_counter = parser.take_node_counter();
+
+    let type_context = polytype::Context::default();
+    let mut defunc = Defunctionalizer::new_with_counter(node_counter, type_context);
+    let defunc_program = defunc.defunctionalize_program(&program).expect("Defunctionalization failed");
+    let (type_context, ascription_variables) = defunc.take();
+
+    let mut type_checker = TypeChecker::new_with_context(type_context, ascription_variables);
+    type_checker.load_builtins().expect("Loading builtins failed");
+    let type_table = type_checker.check_program(&defunc_program).expect("Type checking failed");
+    let context = type_checker.take_context();
+
+    // Monomorphize
+    let monomorphizer = Monomorphizer::new(type_table.clone());
+    let mono_program =
+        monomorphizer.monomorphize_program(&defunc_program).expect("Monomorphization failed");
+
+    // Convert to MIR
+    let mirize = Mirize::new_with_context(type_table, context);
+    let mir_module = mirize.mirize_program(&mono_program).expect("MIR conversion failed");
+
+    // Check for unresolved type variables in MIR
+    let mir_str = MirFormatter::format_module(&mir_module);
+    let mut unresolved_lines = Vec::new();
+    for line in mir_str.lines() {
+        if line.contains("?") {
+            unresolved_lines.push(line.to_string());
+        }
+    }
+
+    if !unresolved_lines.is_empty() {
+        eprintln!("\n=== MIR WITH UNRESOLVED TYPE VARIABLES ===");
+        for line in &unresolved_lines {
+            eprintln!("{}", line);
+        }
+        panic!("MIR contains unresolved type variables");
     }
 }
