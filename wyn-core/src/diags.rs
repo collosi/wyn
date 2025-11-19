@@ -10,6 +10,7 @@ use std::fmt::Write;
 pub struct AstFormatter {
     output: String,
     indent: usize,
+    show_node_ids: bool,
 }
 
 impl AstFormatter {
@@ -17,6 +18,15 @@ impl AstFormatter {
         AstFormatter {
             output: String::new(),
             indent: 0,
+            show_node_ids: false,
+        }
+    }
+
+    pub fn with_node_ids() -> Self {
+        AstFormatter {
+            output: String::new(),
+            indent: 0,
+            show_node_ids: true,
         }
     }
 
@@ -30,6 +40,16 @@ impl AstFormatter {
     /// Format a program and return the formatted string.
     pub fn format_program(program: &Program) -> String {
         let mut formatter = AstFormatter::new();
+        for decl in &program.declarations {
+            formatter.write_declaration(decl);
+            formatter.newline();
+        }
+        formatter.output
+    }
+
+    /// Format a program with node IDs and return the formatted string.
+    pub fn format_program_with_ids(program: &Program) -> String {
+        let mut formatter = AstFormatter::with_node_ids();
         for decl in &program.declarations {
             formatter.write_declaration(decl);
             formatter.newline();
@@ -144,6 +164,9 @@ impl AstFormatter {
     }
 
     fn write_expression(&mut self, expr: &Expression) {
+        if self.show_node_ids {
+            let _ = write!(self.output, "/* #{} */ ", expr.h.id.0);
+        }
         match &expr.kind {
             ExprKind::IntLiteral(n) => {
                 self.write_line(&n.to_string());
@@ -158,11 +181,8 @@ impl AstFormatter {
                 self.write_line(name);
             }
             ExprKind::QualifiedName(quals, name) => {
-                let qn = if quals.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{}.{}", quals.join("."), name)
-                };
+                let qn =
+                    if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) };
                 self.write_line(&qn);
             }
             ExprKind::ArrayLiteral(elems) => {
@@ -267,10 +287,20 @@ impl AstFormatter {
             }
             ExprKind::Loop(loop_expr) => {
                 let pat = self.format_pattern(&loop_expr.pattern);
-                let init = loop_expr.init.as_ref().map(|e| format!(" = {}", self.format_simple_expr(e))).unwrap_or_default();
+                let init = loop_expr
+                    .init
+                    .as_ref()
+                    .map(|e| format!(" = {}", self.format_simple_expr(e)))
+                    .unwrap_or_default();
                 let form = match &loop_expr.form {
-                    LoopForm::For(var, bound) => format!("for {} < {}", var, self.format_simple_expr(bound)),
-                    LoopForm::ForIn(pat, iter) => format!("for {} in {}", self.format_pattern(pat), self.format_simple_expr(iter)),
+                    LoopForm::For(var, bound) => {
+                        format!("for {} < {}", var, self.format_simple_expr(bound))
+                    }
+                    LoopForm::ForIn(pat, iter) => format!(
+                        "for {} in {}",
+                        self.format_pattern(pat),
+                        self.format_simple_expr(iter)
+                    ),
                     LoopForm::While(cond) => format!("while {}", self.format_simple_expr(cond)),
                 };
                 self.write_line(&format!("loop {}{} {} do", pat, init, form));
@@ -287,8 +317,10 @@ impl AstFormatter {
                     let ty = phi.loop_var_type.as_ref().map(|t| format!(": {}", t)).unwrap_or_default();
                     let init = self.format_simple_expr(&phi.init_expr);
                     let next = self.format_simple_expr(&phi.next_expr);
-                    self.write_line(&format!("loop_phi {}{} = [init: {}] [next: {}]",
-                        phi.loop_var_name, ty, init, next));
+                    self.write_line(&format!(
+                        "loop_phi {}{} = [init: {}] [next: {}]",
+                        phi.loop_var_name, ty, init, next
+                    ));
                 }
 
                 // Condition
@@ -399,7 +431,12 @@ impl AstFormatter {
                 format!("({})", items.join(", "))
             }
             ExprKind::BinaryOp(op, lhs, rhs) => {
-                format!("({} {} {})", self.format_simple_expr(lhs), op.op, self.format_simple_expr(rhs))
+                format!(
+                    "({} {} {})",
+                    self.format_simple_expr(lhs),
+                    op.op,
+                    self.format_simple_expr(rhs)
+                )
             }
             ExprKind::UnaryOp(op, operand) => {
                 format!("({}{})", op.op, self.format_simple_expr(operand))
@@ -414,10 +451,17 @@ impl AstFormatter {
                 format!("({} {})", func_str, args_str.join(" "))
             }
             ExprKind::ArrayIndex(arr, idx) => {
-                format!("{}[{}]", self.format_simple_expr(arr), self.format_simple_expr(idx))
+                format!(
+                    "{}[{}]",
+                    self.format_simple_expr(arr),
+                    self.format_simple_expr(idx)
+                )
             }
             ExprKind::FieldAccess(obj, field) => {
                 format!("{}.{}", self.format_simple_expr(obj), field)
+            }
+            ExprKind::TypeAscription(inner, ty) => {
+                format!("({}: {})", self.format_simple_expr(inner), ty)
             }
             _ => "<complex>".to_string(),
         }
