@@ -27,7 +27,6 @@ pub mod constant_folding;
 pub mod lir;
 #[cfg(any())]
 pub mod lirize;
-#[cfg(any())]
 pub mod lowering;
 #[cfg(any())]
 pub mod module;
