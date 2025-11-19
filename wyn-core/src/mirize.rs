@@ -692,8 +692,9 @@ impl Mirize {
                 "Pipe operator should have been desugared by defunctionalization".to_string(),
             )),
 
-            ExprKind::TypeAscription(_, _) => {
-                todo!("TypeAscription not yet implemented in MIR")
+            ExprKind::TypeAscription(inner, _) => {
+                // Type ascriptions are only for type checking, just pass through to inner expression
+                self.mirize_expression(inner)
             }
 
             ExprKind::TypeCoercion(_, _) => {

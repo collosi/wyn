@@ -47,7 +47,8 @@ fn typecheck_defunctionalized(input: &str) {
     let defunc_program = defunc.defunctionalize_program(&program).expect("Defunctionalization failed");
     let (type_context, ascription_variables) = defunc.take();
 
-    let mut type_checker = crate::type_checker::TypeChecker::new_with_context(type_context, ascription_variables);
+    let mut type_checker =
+        crate::type_checker::TypeChecker::new_with_context(type_context, ascription_variables);
     type_checker.load_builtins().expect("Loading builtins failed");
     let result = type_checker.check_program(&defunc_program);
 
@@ -85,7 +86,8 @@ where
     std::env::set_var("RUST_LOG", "debug");
     env_logger::try_init().ok();
 
-    let mut type_checker = crate::type_checker::TypeChecker::new_with_context(type_context, ascription_variables);
+    let mut type_checker =
+        crate::type_checker::TypeChecker::new_with_context(type_context, ascription_variables);
     type_checker.load_builtins().expect("Loading builtins failed");
 
     eprintln!("\n=== STARTING TYPE CHECK ===");
@@ -427,21 +429,25 @@ mod tests {
 }
 #[test]
 fn test_direct_closure_application_typechecks() {
-    typecheck_defunctionalized(r#"
+    typecheck_defunctionalized(
+        r#"
         def test : i32 =
             let x = 5 in
             let f = \y -> x + y in
             f 10
-    "#);
+    "#,
+    );
 }
 
 #[test]
 fn test_map_with_closure_typechecks() {
-    typecheck_defunctionalized(r#"
+    typecheck_defunctionalized(
+        r#"
         def test : [3]i32 =
             let x = 5 in
             map (\y -> x + y) [1, 2, 3]
-    "#);
+    "#,
+    );
 }
 
 #[test]

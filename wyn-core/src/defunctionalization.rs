@@ -73,6 +73,8 @@ struct LambdaMeta {
     tag: i32,
     name: String,
     arity: usize,
+    /// Parameter types (excluding closure parameter)
+    param_types: Vec<Type>,
 }
 
 pub struct Defunctionalizer<T: crate::type_checker::TypeVarGenerator> {
@@ -143,6 +145,11 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
     /// Look up the lambda name for a given tag in the current bucket
     fn lambda_name_for_tag(&self, tag: i32) -> Option<&str> {
         self.lambda_registry.iter().find(|m| m.tag == tag).map(|m| m.name.as_str())
+    }
+
+    /// Look up the first parameter type for a lambda by tag
+    fn lambda_first_param_type(&self, tag: i32) -> Option<Type> {
+        self.lambda_registry.iter().find(|m| m.tag == tag).and_then(|m| m.param_types.first().cloned())
     }
 
     /// Extract type from a StaticValue for closure environment fields.
@@ -895,7 +902,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         let mut closure_type_fields = Vec::with_capacity(sorted_free_vars.len() + 1);
         closure_type_fields.push(("__tag".to_string(), crate::ast::types::i32()));
 
-        for var in sorted_free_vars {
+        for var in &sorted_free_vars {
             let sv = scope_stack.lookup(var).map_err(|_| {
                 CompilerError::DefunctionalizationError(format!(
                     "Free variable '{}' not in scope when building closure type",
@@ -903,7 +910,7 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                 ))
             })?;
             let ty = self.env_field_type_from_sv(sv);
-            closure_type_fields.push((var.clone(), ty));
+            closure_type_fields.push(((*var).clone(), ty));
         }
 
         let closure_type = crate::ast::types::record(closure_type_fields);
@@ -917,6 +924,8 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             ty: closure_type.clone(),
         });
 
+        // Extract parameter names and types once
+        let mut param_info: Vec<(String, Type)> = Vec::new();
         for param in &lambda.params {
             let param_name = param
                 .simple_name()
@@ -926,12 +935,16 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
                     )
                 })?
                 .to_string();
-            let param_ty =
-                param.pattern_type().cloned().unwrap_or_else(|| self.type_var_gen.new_variable());
+            let param_ty = param.pattern_type().cloned().unwrap_or_else(|| self.new_ascription_var());
+            param_info.push((param_name, param_ty));
+        }
+
+        // Build func_params from param_info
+        for (param_name, param_ty) in &param_info {
             func_params.push(Parameter {
                 attributes: vec![],
-                name: param_name,
-                ty: param_ty,
+                name: param_name.clone(),
+                ty: param_ty.clone(),
             });
         }
 
@@ -944,18 +957,8 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
 
         // Transform lambda body with parameter scope
         scope_stack.push_scope();
-        for param in &lambda.params {
-            let param_name = param
-                .simple_name()
-                .ok_or_else(|| {
-                    CompilerError::DefunctionalizationError(
-                        "Complex patterns in lambda parameters not yet supported".to_string(),
-                    )
-                })?
-                .to_string();
-            let param_ty =
-                param.pattern_type().cloned().unwrap_or_else(|| self.type_var_gen.new_variable());
-            scope_stack.insert(param_name, StaticValue::Dyn(param_ty));
+        for (param_name, param_ty) in &param_info {
+            scope_stack.insert(param_name.clone(), StaticValue::Dyn(param_ty.clone()));
         }
 
         let (transformed_body, _body_sv) = self.defunctionalize_expression(&rewritten_body, scope_stack)?;
@@ -964,7 +967,8 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         scope_stack.pop_scope();
 
         // Create the generated function and push to current bucket
-        let return_type = lambda.return_type.clone().unwrap_or_else(|| self.type_var_gen.new_variable());
+        // Use ascription variable for return type to prevent generalization during type checking
+        let return_type = lambda.return_type.clone().unwrap_or_else(|| self.new_ascription_var());
         let generated_func = DefunctionalizedFunction {
             name: func_name.clone(),
             params: func_params,
@@ -975,10 +979,13 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
         self.current_bucket.push(generated_func);
 
         // Register lambda in the registry for __applyN generation
+        // Store parameter types (excluding closure) for use at call sites
+        let param_types: Vec<Type> = param_info.iter().map(|(_, ty)| ty.clone()).collect();
         self.lambda_registry.push(LambdaMeta {
             tag,
             name: func_name.clone(),
             arity,
+            param_types,
         });
 
         // Create closure constructor expression - ALWAYS a record with __tag
@@ -1380,22 +1387,27 @@ impl<T: crate::type_checker::TypeVarGenerator> Defunctionalizer<T> {
             span,
         );
 
-        // xs[i] with type ascription to connect element type to lambda parameter
-        let array_index_raw =
-            self.node_counter.mk_node(ExprKind::ArrayIndex(Box::new(xs_ident), Box::new(i_ident2)), span);
-        let array_index = self.node_counter.mk_node(
-            ExprKind::TypeAscription(Box::new(array_index_raw), input_array_elem_type.clone()),
-            span,
-        );
-
         // Try to specialize the callee: if func is a closure record with a known __tag,
         // call the lambda directly instead of using __apply1 dispatcher
         let mut call_callee_is_direct = None;
+        let mut lambda_param_type = None;
         if let Some(tag) = self.extract_closure_tag(func) {
             if let Some(lam_name) = self.lambda_name_for_tag(tag) {
                 call_callee_is_direct = Some(lam_name.to_string());
+                // Get the lambda's parameter type for use in type ascription
+                lambda_param_type = self.lambda_first_param_type(tag);
             }
         }
+
+        // xs[i] with type ascription to connect element type to lambda parameter
+        // Use the lambda's parameter type if available (for direct calls), otherwise use inferred element type
+        let ascription_type = lambda_param_type.clone().unwrap_or(input_array_elem_type.clone());
+        let array_index_raw =
+            self.node_counter.mk_node(ExprKind::ArrayIndex(Box::new(xs_ident), Box::new(i_ident2)), span);
+        let array_index = self.node_counter.mk_node(
+            ExprKind::TypeAscription(Box::new(array_index_raw), ascription_type),
+            span,
+        );
 
         // Build func identifier for call
         let func_ident = self.node_counter.mk_node(ExprKind::Identifier(func_var.clone()), span);

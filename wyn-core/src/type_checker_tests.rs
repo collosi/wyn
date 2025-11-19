@@ -878,6 +878,146 @@ def test : f32 =
     typecheck_defunctionalized(source);
 }
 
+/// Test that lambda parameter type variable gets unified with input array element type
+/// This is the core issue: when we hoist a lambda, its parameter type variable (t299)
+/// is different from the input element type variable (t324) created in build_map_output_type
+#[test]
+fn test_map_lambda_param_type_unification() {
+    let source = r#"
+def test : [3]f32 =
+    let edges : [3][2]i32 = [[0, 1], [1, 2], [2, 0]] in
+    map (\e -> let a = e[0] in 1.0f32) edges
+    "#;
+
+    let tokens = tokenize(source).expect("Tokenization failed");
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().expect("Parsing failed");
+    let node_counter = parser.take_node_counter();
+
+    let type_context = polytype::Context::default();
+    let mut defunc = Defunctionalizer::new_with_counter(node_counter, type_context);
+    let defunc_program = defunc.defunctionalize_program(&program).expect("Defunctionalization failed");
+
+    // Print defunctionalized AST
+    eprintln!("Defunctionalized AST:");
+    eprintln!("{}", crate::diags::AstFormatter::format_program(&defunc_program));
+
+    let (type_context, ascription_variables) = defunc.take();
+
+    let mut type_checker = TypeChecker::new_with_context(type_context, ascription_variables);
+    type_checker.load_builtins().expect("Loading builtins failed");
+    let result = type_checker.check_program(&defunc_program);
+
+    match result {
+        Ok(type_table) => {
+            // Check that all types are fully resolved (no Variables)
+            for (node_id, ty) in &type_table {
+                fn has_variable(t: &Type) -> Option<usize> {
+                    match t {
+                        Type::Variable(id) => Some(*id),
+                        Type::Constructed(_, args) => {
+                            for arg in args {
+                                if let Some(id) = has_variable(arg) {
+                                    return Some(id);
+                                }
+                            }
+                            None
+                        }
+                    }
+                }
+                if let Some(var_id) = has_variable(ty) {
+                    panic!(
+                        "Type table contains unresolved type variable Variable({}) at {:?}: {:?}",
+                        var_id, node_id, ty
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            panic!("Type checking should succeed but failed with: {:?}", e);
+        }
+    }
+}
+
+/// Test f32.sum with three maps inside a loop, matching de_rasterizer's pattern
+/// Third lambda captures multiple variables: verts1, weight, uv, line_width
+#[test]
+fn test_map_with_capturing_closure() {
+    let source = r#"
+def line : f32 =
+  let denom = dot (vec2 0.0f32 0.0f32) (vec2 9.0f32 9.0f32) in
+  f32.min denom 1.0f32
+"#;
+
+    let tokens = tokenize(source).expect("Tokenization failed");
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().expect("Parsing failed");
+    let node_counter = parser.take_node_counter();
+
+    let type_context = polytype::Context::default();
+    let mut defunc = Defunctionalizer::new_with_counter(node_counter, type_context);
+    eprintln!("Starting defunctionalization...");
+    let defunc_program = defunc.defunctionalize_program(&program).expect("Defunctionalization failed");
+    eprintln!("Defunctionalization complete, about to format...");
+
+    // Print defunctionalized AST with node IDs
+    eprintln!("Defunctionalized AST:");
+    eprintln!(
+        "{}",
+        crate::diags::AstFormatter::format_program_with_ids(&defunc_program)
+    );
+    eprintln!("Formatting complete");
+
+    let (type_context, ascription_variables) = defunc.take();
+
+    // Print ascription variables
+    eprintln!("Ascription variables: {:?}", ascription_variables);
+
+    eprintln!("Starting type checking...");
+    let mut type_checker = TypeChecker::new_with_context(type_context, ascription_variables);
+    type_checker.load_builtins().expect("Loading builtins failed");
+    let result = type_checker.check_program(&defunc_program);
+    eprintln!("Type checking complete");
+
+    match result {
+        Ok(type_table) => {
+            // Print all types that contain variables
+            fn has_variable(t: &Type) -> Option<usize> {
+                match t {
+                    Type::Variable(id) => Some(*id),
+                    Type::Constructed(_, args) => {
+                        for arg in args {
+                            if let Some(id) = has_variable(arg) {
+                                return Some(id);
+                            }
+                        }
+                        None
+                    }
+                }
+            }
+            eprintln!("Types containing variables:");
+            for (node_id, ty) in &type_table {
+                if has_variable(ty).is_some() {
+                    eprintln!("  {:?}: {:?}", node_id, ty);
+                }
+            }
+
+            // Check that all types are fully resolved (no Variables)
+            for (node_id, ty) in &type_table {
+                if let Some(var_id) = has_variable(ty) {
+                    panic!(
+                        "Type table contains unresolved type variable Variable({}) at {:?}: {:?}",
+                        var_id, node_id, ty
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            panic!("Type checking should succeed but failed with: {:?}", e);
+        }
+    }
+}
+
 /// Test f32.sum with map accessing elements of nested array (closer to de_rasterizer)
 #[test]
 fn test_f32_sum_with_map_indexing_nested_array() {
@@ -1019,4 +1159,3 @@ fn test_internal_loop_type_variable_resolution() {
         }
     }
 }
-
