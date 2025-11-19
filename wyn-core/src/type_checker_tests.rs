@@ -14,8 +14,8 @@ fn typecheck_program(input: &str) {
     result.expect("Type checking should succeed");
 }
 
-/// Helper to parse and type check source code, returning the result
-fn try_typecheck_program(input: &str) -> Result<(), CompilerError> {
+/// Helper to parse and type check source code, returning the checker or error
+fn try_typecheck_program(input: &str) -> Result<TypeChecker, CompilerError> {
     let tokens = tokenize(input).expect("Tokenization failed");
     let mut parser = Parser::new(tokens);
     let program = parser.parse().expect("Parsing failed");
@@ -23,7 +23,7 @@ fn try_typecheck_program(input: &str) -> Result<(), CompilerError> {
     let mut type_checker = TypeChecker::new();
     type_checker.load_builtins().expect("Loading builtins failed");
     type_checker.check_program(&program)?;
-    Ok(())
+    Ok(type_checker)
 }
 
 #[test]
@@ -33,7 +33,8 @@ fn test_type_check_let() {
 
 #[test]
 fn test_type_mismatch() {
-    assert!(try_typecheck_program("let x: i32 = 3.14f32").is_err());
+    let result = try_typecheck_program("let x: i32 = 3.14f32");
+    assert!(matches!(result, Err(CompilerError::TypeError(_, _))));
 }
 
 #[test]
@@ -44,10 +45,10 @@ fn test_array_type_check() {
 #[test]
 fn test_undefined_variable() {
     let result = try_typecheck_program("let x: i32 = undefined");
-    assert!(matches!(
-        result.unwrap_err(),
-        CompilerError::UndefinedVariable(_, _)
-    ));
+    match result {
+        Err(CompilerError::UndefinedVariable(_, _)) => {}
+        other => panic!("Expected UndefinedVariable error, got {:?}", other.err()),
+    }
 }
 
 #[test]
@@ -541,14 +542,20 @@ def test : bool = gt10 15
 #[test]
 fn test_lambda_compose() {
     // Function composition with lambdas
-    typecheck_program(r#"
+    let checker = try_typecheck_program(r#"
 def compose (f : i32 -> i32) (g : i32 -> i32) : i32 -> i32 =
     \x -> f (g x)
 def double = \x -> x * 2
 def inc = \x -> x + 1
 def double_then_inc = compose inc double
 def result : i32 = double_then_inc 5
-"#);
+"#).unwrap();
+
+    // Check inferred types
+    assert_eq!(checker.format_scheme(&checker.lookup("double").unwrap()), "i32 -> i32");
+    assert_eq!(checker.format_scheme(&checker.lookup("inc").unwrap()), "i32 -> i32");
+    assert_eq!(checker.format_scheme(&checker.lookup("double_then_inc").unwrap()), "i32 -> i32");
+    assert_eq!(checker.format_scheme(&checker.lookup("result").unwrap()), "i32");
 }
 
 #[test]

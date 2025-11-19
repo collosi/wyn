@@ -122,13 +122,38 @@ impl TypeChecker {
     /// Format a type for error messages by applying current substitution
     pub fn format_type(&self, ty: &Type) -> String {
         let applied = ty.apply(&self.context);
-        match applied {
+        match &applied {
+            Type::Constructed(TypeName::Str(s), args) if *s == "->" && args.len() == 2 => {
+                // Special case for arrow types
+                format!("{} -> {}", self.format_type(&args[0]), self.format_type(&args[1]))
+            }
+            Type::Constructed(TypeName::Str(s), args) if *s == "tuple" => {
+                // Special case for tuple types
+                let arg_strs: Vec<String> = args.iter().map(|a| self.format_type(a)).collect();
+                format!("({})", arg_strs.join(", "))
+            }
+            Type::Constructed(TypeName::Str(s), args) if *s == "Array" && args.len() == 2 => {
+                // Special case for array types [size]elem
+                format!("[{}]{}", self.format_type(&args[0]), self.format_type(&args[1]))
+            }
             Type::Constructed(name, args) if args.is_empty() => format!("{}", name),
             Type::Constructed(name, args) => {
                 let arg_strs: Vec<String> = args.iter().map(|a| self.format_type(a)).collect();
                 format!("{}[{}]", name, arg_strs.join(", "))
             }
             Type::Variable(id) => format!("?{}", id),
+        }
+    }
+
+    /// Format a type scheme for error messages
+    pub fn format_scheme(&self, scheme: &TypeScheme<TypeName>) -> String {
+        match scheme {
+            TypeScheme::Monotype(ty) => self.format_type(ty),
+            TypeScheme::Polytype { variable, body } => {
+                // For display, we can show quantified vars or just the body
+                // For now, just show the body
+                format!("∀{}. {}", variable, self.format_scheme(body))
+            }
         }
     }
 
