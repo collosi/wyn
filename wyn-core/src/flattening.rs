@@ -66,9 +66,7 @@ impl Flattener {
             .get(&pat.h.id)
             .and_then(|scheme| self.get_monotype(scheme))
             .cloned()
-            .unwrap_or_else(|| {
-                Type::Constructed(TypeName::Str("unknown".into()), vec![])
-            })
+            .unwrap_or_else(|| Type::Constructed(TypeName::Str("unknown".into()), vec![]))
     }
 
     /// Generate a unique ID
@@ -92,48 +90,40 @@ impl Flattener {
 
         // Look up the type of the object
         let scheme = self.type_table.get(&obj.h.id).ok_or_else(|| {
-            CompilerError::FlatteningError(format!(
-                "No type information for field access target"
-            ))
+            CompilerError::FlatteningError(format!("No type information for field access target"))
         })?;
 
         let obj_type = self.get_monotype(scheme).ok_or_else(|| {
-            CompilerError::FlatteningError(format!(
-                "Could not extract monotype from scheme"
-            ))
+            CompilerError::FlatteningError(format!("Could not extract monotype from scheme"))
         })?;
 
         // Resolve based on type
         match obj_type {
             // Vector types: x=0, y=1, z=2, w=3
-            Type::Constructed(TypeName::Vec, _) => {
-                match field {
-                    "x" => Ok(0),
-                    "y" => Ok(1),
-                    "z" => Ok(2),
-                    "w" => Ok(3),
-                    _ => Err(CompilerError::FlatteningError(format!(
-                        "Unknown vector field: {}", field
-                    ))),
-                }
-            }
+            Type::Constructed(TypeName::Vec, _) => match field {
+                "x" => Ok(0),
+                "y" => Ok(1),
+                "z" => Ok(2),
+                "w" => Ok(3),
+                _ => Err(CompilerError::FlatteningError(format!(
+                    "Unknown vector field: {}",
+                    field
+                ))),
+            },
             // Record types: look up field by name
-            Type::Constructed(TypeName::Record(fields), _) => {
-                fields.keys().enumerate()
-                    .find(|(_, name)| name.as_str() == field)
-                    .map(|(idx, _)| idx)
-                    .ok_or_else(|| CompilerError::FlatteningError(format!(
-                        "Unknown record field: {}", field
-                    )))
-            }
+            Type::Constructed(TypeName::Record(fields), _) => fields
+                .keys()
+                .enumerate()
+                .find(|(_, name)| name.as_str() == field)
+                .map(|(idx, _)| idx)
+                .ok_or_else(|| CompilerError::FlatteningError(format!("Unknown record field: {}", field))),
             // Tuple types: should use numeric access
-            Type::Constructed(TypeName::Str(s), _) if *s == "tuple" => {
-                Err(CompilerError::FlatteningError(format!(
-                    "Tuple access must use numeric index, not '{}'", field
-                )))
-            }
+            Type::Constructed(TypeName::Str(s), _) if *s == "tuple" => Err(CompilerError::FlatteningError(
+                format!("Tuple access must use numeric index, not '{}'", field),
+            )),
             _ => Err(CompilerError::FlatteningError(format!(
-                "Cannot access field '{}' on type {:?}", field, obj_type
+                "Cannot access field '{}' on type {:?}",
+                field, obj_type
             ))),
         }
     }
@@ -161,6 +151,7 @@ impl Flattener {
                     } else {
                         // Function
                         let params = self.flatten_params(&d.params)?;
+                        let param_attrs = self.extract_param_attributes(&d.params);
                         let body = self.flatten_expr(&d.body)?;
                         let ret_type = self.get_expr_type(&d.body);
                         mir::Def::Function {
@@ -168,6 +159,8 @@ impl Flattener {
                             params,
                             ret_type,
                             attributes: self.convert_attributes(&d.attributes),
+                            param_attributes: param_attrs,
+                            return_attributes: vec![],
                             body,
                             span: d.body.h.span,
                         }
@@ -185,6 +178,7 @@ impl Flattener {
                     self.enclosing_decl_stack.push(e.name.clone());
 
                     let params = self.flatten_params(&e.params)?;
+                    let param_attrs = self.extract_param_attributes(&e.params);
                     let body = self.flatten_expr(&e.body)?;
                     let ret_type = self.get_expr_type(&e.body);
                     let entry_kind = if e.entry_type.is_vertex() { "vertex" } else { "fragment" };
@@ -193,11 +187,27 @@ impl Flattener {
                         args: vec![],
                     }];
 
+                    // Extract return attributes from EntryDecl
+                    // Each return value gets its own Vec of attributes
+                    let return_attrs: Vec<Vec<mir::Attribute>> =
+                        e.return_attributes
+                            .iter()
+                            .map(|opt| {
+                                if let Some(attr) = opt {
+                                    vec![self.convert_attribute(attr)]
+                                } else {
+                                    vec![]
+                                }
+                            })
+                            .collect();
+
                     let def = mir::Def::Function {
                         name: e.name.clone(),
                         params,
                         ret_type,
                         attributes: attrs,
+                        param_attributes: param_attrs,
+                        return_attributes: return_attrs,
                         body,
                         span: e.body.h.span,
                     };
@@ -227,31 +237,52 @@ impl Flattener {
 
     /// Convert AST attributes to MIR attributes
     fn convert_attributes(&self, attrs: &[ast::Attribute]) -> Vec<mir::Attribute> {
-        attrs
-            .iter()
-            .map(|a| match a {
-                ast::Attribute::BuiltIn(builtin) => mir::Attribute {
-                    name: "builtin".to_string(),
-                    args: vec![format!("{:?}", builtin)],
-                },
-                ast::Attribute::Location(loc) => mir::Attribute {
-                    name: "location".to_string(),
-                    args: vec![loc.to_string()],
-                },
-                ast::Attribute::Vertex => mir::Attribute {
-                    name: "vertex".to_string(),
-                    args: vec![],
-                },
-                ast::Attribute::Fragment => mir::Attribute {
-                    name: "fragment".to_string(),
-                    args: vec![],
-                },
-                ast::Attribute::Uniform => mir::Attribute {
-                    name: "uniform".to_string(),
-                    args: vec![],
-                },
-            })
-            .collect()
+        attrs.iter().map(|a| self.convert_attribute(a)).collect()
+    }
+
+    /// Convert a single AST attribute to MIR attribute
+    fn convert_attribute(&self, attr: &ast::Attribute) -> mir::Attribute {
+        match attr {
+            ast::Attribute::BuiltIn(builtin) => mir::Attribute {
+                name: "builtin".to_string(),
+                args: vec![format!("{:?}", builtin)],
+            },
+            ast::Attribute::Location(loc) => mir::Attribute {
+                name: "location".to_string(),
+                args: vec![loc.to_string()],
+            },
+            ast::Attribute::Vertex => mir::Attribute {
+                name: "vertex".to_string(),
+                args: vec![],
+            },
+            ast::Attribute::Fragment => mir::Attribute {
+                name: "fragment".to_string(),
+                args: vec![],
+            },
+            ast::Attribute::Uniform => mir::Attribute {
+                name: "uniform".to_string(),
+                args: vec![],
+            },
+        }
+    }
+
+    /// Extract attributes from each parameter pattern
+    fn extract_param_attributes(&self, params: &[ast::Pattern]) -> Vec<Vec<mir::Attribute>> {
+        params.iter().map(|p| self.extract_pattern_attributes(p)).collect()
+    }
+
+    /// Extract attributes from a pattern (handling Attributed and Typed wrappers)
+    fn extract_pattern_attributes(&self, pattern: &ast::Pattern) -> Vec<mir::Attribute> {
+        match &pattern.kind {
+            PatternKind::Attributed(attrs, inner) => {
+                let mut result: Vec<mir::Attribute> =
+                    attrs.iter().map(|a| self.convert_attribute(a)).collect();
+                result.extend(self.extract_pattern_attributes(inner));
+                result
+            }
+            PatternKind::Typed(inner, _) => self.extract_pattern_attributes(inner),
+            _ => vec![],
+        }
     }
 
     /// Flatten function parameters
@@ -367,7 +398,11 @@ impl Flattener {
                     name: "tuple_access".to_string(),
                     args: vec![
                         obj,
-                        Expr::new(i32_type, mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())), span),
+                        Expr::new(
+                            i32_type,
+                            mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
+                            span,
+                        ),
                     ],
                 }
             }
@@ -473,9 +508,7 @@ impl Flattener {
                 // Get the tuple type and element types
                 let tuple_ty = self.get_pattern_type(&let_in.pattern);
                 let elem_types: Vec<Type> = match &tuple_ty {
-                    Type::Constructed(TypeName::Str(s), args) if *s == "tuple" => {
-                        args.clone()
-                    }
+                    Type::Constructed(TypeName::Str(s), args) if *s == "tuple" => args.clone(),
                     _ => {
                         // Fallback: use unknown types
                         patterns.iter().map(|p| self.get_pattern_type(p)).collect()
@@ -505,9 +538,10 @@ impl Flattener {
                         }
                     };
 
-                    let elem_ty = elem_types.get(i).cloned().unwrap_or_else(|| {
-                        Type::Constructed(TypeName::Str("unknown".into()), vec![])
-                    });
+                    let elem_ty = elem_types
+                        .get(i)
+                        .cloned()
+                        .unwrap_or_else(|| Type::Constructed(TypeName::Str("unknown".into()), vec![]));
                     let i32_type = Type::Constructed(TypeName::Str("i32".into()), vec![]);
 
                     let extract = Expr::new(
@@ -516,7 +550,11 @@ impl Flattener {
                             name: "tuple_access".to_string(),
                             args: vec![
                                 Expr::new(tuple_ty.clone(), mir::ExprKind::Var(tmp.clone()), span),
-                                Expr::new(i32_type, mir::ExprKind::Literal(mir::Literal::Int(i.to_string())), span),
+                                Expr::new(
+                                    i32_type,
+                                    mir::ExprKind::Literal(mir::Literal::Int(i.to_string())),
+                                    span,
+                                ),
                             ],
                         },
                         span,
@@ -606,6 +644,8 @@ impl Flattener {
             params,
             ret_type,
             attributes: vec![],
+            param_attributes: vec![],
+            return_attributes: vec![],
             body,
             span,
         };
@@ -615,7 +655,11 @@ impl Flattener {
         let i32_type = Type::Constructed(TypeName::Str("i32".into()), vec![]);
         let mut fields = vec![(
             "__tag".to_string(),
-            Expr::new(i32_type, mir::ExprKind::Literal(mir::Literal::Int(tag.to_string())), span),
+            Expr::new(
+                i32_type,
+                mir::ExprKind::Literal(mir::Literal::Int(tag.to_string())),
+                span,
+            ),
         )];
 
         let mut sorted_vars: Vec<_> = free_vars.iter().collect();
@@ -624,7 +668,10 @@ impl Flattener {
             // TODO: We don't have easy access to the type of free variables here
             // For now, use unknown type
             let var_type = Type::Constructed(TypeName::Str("unknown".into()), vec![]);
-            fields.push(((*var).clone(), Expr::new(var_type, mir::ExprKind::Var((*var).clone()), span)));
+            fields.push((
+                (*var).clone(),
+                Expr::new(var_type, mir::ExprKind::Var((*var).clone()), span),
+            ));
         }
 
         Ok(mir::ExprKind::Literal(mir::Literal::Record(fields)))
@@ -734,12 +781,8 @@ impl Flattener {
 
                 // Get element types from tuple type
                 let elem_types: Vec<Type> = match &tuple_ty {
-                    Type::Constructed(TypeName::Str(s), args) if *s == "tuple" => {
-                        args.clone()
-                    }
-                    _ => {
-                        patterns.iter().map(|p| self.get_pattern_type(p)).collect()
-                    }
+                    Type::Constructed(TypeName::Str(s), args) if *s == "tuple" => args.clone(),
+                    _ => patterns.iter().map(|p| self.get_pattern_type(p)).collect(),
                 };
 
                 let mut bindings = Vec::new();
@@ -761,9 +804,10 @@ impl Flattener {
                         }
                     };
 
-                    let elem_ty = elem_types.get(i).cloned().unwrap_or_else(|| {
-                        Type::Constructed(TypeName::Str("unknown".into()), vec![])
-                    });
+                    let elem_ty = elem_types
+                        .get(i)
+                        .cloned()
+                        .unwrap_or_else(|| Type::Constructed(TypeName::Str("unknown".into()), vec![]));
                     let i32_type = Type::Constructed(TypeName::Str("i32".into()), vec![]);
 
                     let extract = Expr::new(
@@ -772,7 +816,11 @@ impl Flattener {
                             name: "tuple_access".to_string(),
                             args: vec![
                                 Expr::new(tuple_ty.clone(), mir::ExprKind::Var(tmp.clone()), span),
-                                Expr::new(i32_type, mir::ExprKind::Literal(mir::Literal::Int(i.to_string())), span),
+                                Expr::new(
+                                    i32_type,
+                                    mir::ExprKind::Literal(mir::Literal::Int(i.to_string())),
+                                    span,
+                                ),
                             ],
                         },
                         span,

@@ -53,6 +53,13 @@ struct SpvBuilder {
     // Type cache: avoid recreating same types
     vec_type_cache: HashMap<(spirv::Word, u32), spirv::Word>,
     struct_type_cache: HashMap<Vec<spirv::Word>, spirv::Word>,
+    ptr_type_cache: HashMap<(spirv::StorageClass, spirv::Word), spirv::Word>,
+
+    // Entry point interface tracking
+    entry_point_interfaces: HashMap<String, Vec<spirv::Word>>,
+    current_is_entry_point: bool,
+    current_output_vars: Vec<spirv::Word>,
+    current_input_vars: Vec<(spirv::Word, String, spirv::Word)>, // (var_id, param_name, type_id)
 }
 
 impl SpvBuilder {
@@ -87,7 +94,27 @@ impl SpvBuilder {
             value_types: HashMap::new(),
             vec_type_cache: HashMap::new(),
             struct_type_cache: HashMap::new(),
+            ptr_type_cache: HashMap::new(),
+            entry_point_interfaces: HashMap::new(),
+            current_is_entry_point: false,
+            current_output_vars: Vec::new(),
+            current_input_vars: Vec::new(),
         }
+    }
+
+    /// Get or create a pointer type
+    fn get_or_create_ptr_type(
+        &mut self,
+        storage_class: spirv::StorageClass,
+        pointee_id: spirv::Word,
+    ) -> spirv::Word {
+        let key = (storage_class, pointee_id);
+        if let Some(&ty) = self.ptr_type_cache.get(&key) {
+            return ty;
+        }
+        let ty = self.builder.type_pointer(None, storage_class, pointee_id);
+        self.ptr_type_cache.insert(key, ty);
+        ty
     }
 
     /// Convert a polytype Type to a SPIR-V type ID
@@ -101,10 +128,8 @@ impl SpvBuilder {
                     TypeName::Str(s) if *s == "bool" => self.bool_type,
                     TypeName::Str(s) if *s == "tuple" => {
                         // Tuple becomes struct
-                        let field_types: Vec<spirv::Word> = args
-                            .iter()
-                            .map(|a| self.ast_type_to_spirv(a))
-                            .collect();
+                        let field_types: Vec<spirv::Word> =
+                            args.iter().map(|a| self.ast_type_to_spirv(a)).collect();
                         self.get_or_create_struct_type(field_types)
                     }
                     TypeName::Vec => {
@@ -113,10 +138,8 @@ impl SpvBuilder {
                             // Extract size from args[0]
                             let size = match &args[0] {
                                 PolyType::Constructed(TypeName::Size(n), _) => *n as u32,
-                                PolyType::Constructed(TypeName::Str(s), _) => {
-                                    s.parse().unwrap_or(4)
-                                }
-                                _ => 4
+                                PolyType::Constructed(TypeName::Str(s), _) => s.parse().unwrap_or(4),
+                                _ => 4,
                             };
                             // Get element type from args[1]
                             let elem_type = self.ast_type_to_spirv(&args[1]);
@@ -128,9 +151,7 @@ impl SpvBuilder {
                     }
                     TypeName::Str(s) if s.starts_with("vec") => {
                         // vec2f32, vec3f32, vec4f32, vec2i32, etc.
-                        let size = s.chars().nth(3)
-                            .and_then(|c| c.to_digit(10))
-                            .unwrap_or(4) as u32;
+                        let size = s.chars().nth(3).and_then(|c| c.to_digit(10)).unwrap_or(4) as u32;
                         let elem_type = if s.contains("f32") || s.ends_with("f32") {
                             self.f32_type
                         } else if s.contains("i32") || s.ends_with("i32") {
@@ -489,10 +510,16 @@ pub fn lower(program: &mir::Program) -> Result<Vec<u32>> {
         lower_def(&mut spv, def)?;
     }
 
-    // Emit entry points
+    // Emit entry points with interface variables
     for (name, model) in entry_points {
         if let Some(&func_id) = spv.functions.get(&name) {
-            spv.builder.entry_point(model, func_id, &name, []);
+            let interfaces = spv.entry_point_interfaces.get(&name).cloned().unwrap_or_default();
+            spv.builder.entry_point(model, func_id, &name, interfaces);
+
+            // Add execution mode for fragment shaders
+            if model == spirv::ExecutionModel::Fragment {
+                spv.builder.execution_mode(func_id, spirv::ExecutionMode::OriginUpperLeft, []);
+            }
         }
     }
 
@@ -502,20 +529,31 @@ pub fn lower(program: &mir::Program) -> Result<Vec<u32>> {
 fn lower_def(spv: &mut SpvBuilder, def: &Def) -> Result<()> {
     match def {
         Def::Function {
-            name, params, ret_type, body, ..
+            name,
+            params,
+            ret_type,
+            attributes,
+            param_attributes,
+            return_attributes,
+            body,
+            ..
         } => {
-            let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
-            let param_types: Vec<spirv::Word> = params
-                .iter()
-                .map(|p| spv.ast_type_to_spirv(&p.ty))
-                .collect();
-            let return_type = spv.ast_type_to_spirv(ret_type);
-            spv.begin_function(name, &param_names, &param_types, return_type)?;
+            // Check if this is an entry point
+            let is_entry = attributes.iter().any(|a| a.name == "vertex" || a.name == "fragment");
 
-            let result = lower_expr(spv, body)?;
-            spv.ret_value(result)?;
-
-            spv.end_function()?;
+            if is_entry {
+                lower_entry_point(
+                    spv,
+                    name,
+                    params,
+                    ret_type,
+                    param_attributes,
+                    return_attributes,
+                    body,
+                )?;
+            } else {
+                lower_regular_function(spv, name, params, ret_type, body)?;
+            }
         }
         Def::Constant { name, ty, body, .. } => {
             // Constants become zero-argument functions
@@ -530,6 +568,278 @@ fn lower_def(spv: &mut SpvBuilder, def: &Def) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn lower_regular_function(
+    spv: &mut SpvBuilder,
+    name: &str,
+    params: &[mir::Param],
+    ret_type: &PolyType<TypeName>,
+    body: &Expr,
+) -> Result<()> {
+    let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+    let param_types: Vec<spirv::Word> = params.iter().map(|p| spv.ast_type_to_spirv(&p.ty)).collect();
+    let return_type = spv.ast_type_to_spirv(ret_type);
+    spv.begin_function(name, &param_names, &param_types, return_type)?;
+
+    let result = lower_expr(spv, body)?;
+    spv.ret_value(result)?;
+
+    spv.end_function()?;
+    Ok(())
+}
+
+fn lower_entry_point(
+    spv: &mut SpvBuilder,
+    name: &str,
+    params: &[mir::Param],
+    ret_type: &PolyType<TypeName>,
+    param_attributes: &[Vec<mir::Attribute>],
+    return_attributes: &[Vec<mir::Attribute>],
+    body: &Expr,
+) -> Result<()> {
+    spv.current_is_entry_point = true;
+    spv.current_output_vars.clear();
+    spv.current_input_vars.clear();
+
+    let mut interface_vars = Vec::new();
+
+    // Create Input variables for parameters
+    for (i, param) in params.iter().enumerate() {
+        let param_type_id = spv.ast_type_to_spirv(&param.ty);
+        let ptr_type_id = spv.get_or_create_ptr_type(StorageClass::Input, param_type_id);
+        let var_id = spv.builder.variable(ptr_type_id, None, StorageClass::Input, None);
+
+        // Add decorations from attributes
+        if i < param_attributes.len() {
+            for attr in &param_attributes[i] {
+                match attr.name.as_str() {
+                    "location" => {
+                        if let Some(loc_str) = attr.args.first() {
+                            if let Ok(loc) = loc_str.parse::<u32>() {
+                                spv.builder.decorate(
+                                    var_id,
+                                    spirv::Decoration::Location,
+                                    [rspirv::dr::Operand::LiteralBit32(loc)],
+                                );
+                            }
+                        }
+                    }
+                    "builtin" => {
+                        if let Some(builtin_str) = attr.args.first() {
+                            if let Some(builtin) = parse_builtin(builtin_str) {
+                                spv.builder.decorate(
+                                    var_id,
+                                    spirv::Decoration::BuiltIn,
+                                    [rspirv::dr::Operand::BuiltIn(builtin)],
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        interface_vars.push(var_id);
+        spv.current_input_vars.push((var_id, param.name.clone(), param_type_id));
+    }
+
+    // Create Output variables for return values
+    // Get return type components (if tuple, each element gets its own output)
+    let ret_type_id = spv.ast_type_to_spirv(ret_type);
+    let is_void = matches!(ret_type, PolyType::Constructed(TypeName::Str(s), _) if *s == "void");
+
+    if !is_void {
+        // Check if return is a tuple (multiple outputs)
+        if let PolyType::Constructed(TypeName::Str(s), component_types) = ret_type {
+            if *s == "tuple" && !return_attributes.is_empty() {
+                // Multiple outputs - one variable per component
+                for (i, comp_ty) in component_types.iter().enumerate() {
+                    let comp_type_id = spv.ast_type_to_spirv(comp_ty);
+                    let ptr_type_id = spv.get_or_create_ptr_type(StorageClass::Output, comp_type_id);
+                    let var_id = spv.builder.variable(ptr_type_id, None, StorageClass::Output, None);
+
+                    // Add decorations
+                    if i < return_attributes.len() {
+                        for attr in &return_attributes[i] {
+                            match attr.name.as_str() {
+                                "location" => {
+                                    if let Some(loc_str) = attr.args.first() {
+                                        if let Ok(loc) = loc_str.parse::<u32>() {
+                                            spv.builder.decorate(
+                                                var_id,
+                                                spirv::Decoration::Location,
+                                                [rspirv::dr::Operand::LiteralBit32(loc)],
+                                            );
+                                        }
+                                    }
+                                }
+                                "builtin" => {
+                                    if let Some(builtin_str) = attr.args.first() {
+                                        if let Some(builtin) = parse_builtin(builtin_str) {
+                                            spv.builder.decorate(
+                                                var_id,
+                                                spirv::Decoration::BuiltIn,
+                                                [rspirv::dr::Operand::BuiltIn(builtin)],
+                                            );
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    interface_vars.push(var_id);
+                    spv.current_output_vars.push(var_id);
+                }
+            } else {
+                // Single output
+                let ptr_type_id = spv.get_or_create_ptr_type(StorageClass::Output, ret_type_id);
+                let var_id = spv.builder.variable(ptr_type_id, None, StorageClass::Output, None);
+
+                // Add decorations from first return attribute set
+                if let Some(attrs) = return_attributes.first() {
+                    for attr in attrs {
+                        match attr.name.as_str() {
+                            "location" => {
+                                if let Some(loc_str) = attr.args.first() {
+                                    if let Ok(loc) = loc_str.parse::<u32>() {
+                                        spv.builder.decorate(
+                                            var_id,
+                                            spirv::Decoration::Location,
+                                            [rspirv::dr::Operand::LiteralBit32(loc)],
+                                        );
+                                    }
+                                }
+                            }
+                            "builtin" => {
+                                if let Some(builtin_str) = attr.args.first() {
+                                    if let Some(builtin) = parse_builtin(builtin_str) {
+                                        spv.builder.decorate(
+                                            var_id,
+                                            spirv::Decoration::BuiltIn,
+                                            [rspirv::dr::Operand::BuiltIn(builtin)],
+                                        );
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                interface_vars.push(var_id);
+                spv.current_output_vars.push(var_id);
+            }
+        } else {
+            // Single non-tuple output
+            let ptr_type_id = spv.get_or_create_ptr_type(StorageClass::Output, ret_type_id);
+            let var_id = spv.builder.variable(ptr_type_id, None, StorageClass::Output, None);
+
+            if let Some(attrs) = return_attributes.first() {
+                for attr in attrs {
+                    match attr.name.as_str() {
+                        "location" => {
+                            if let Some(loc_str) = attr.args.first() {
+                                if let Ok(loc) = loc_str.parse::<u32>() {
+                                    spv.builder.decorate(
+                                        var_id,
+                                        spirv::Decoration::Location,
+                                        [rspirv::dr::Operand::LiteralBit32(loc)],
+                                    );
+                                }
+                            }
+                        }
+                        "builtin" => {
+                            if let Some(builtin_str) = attr.args.first() {
+                                if let Some(builtin) = parse_builtin(builtin_str) {
+                                    spv.builder.decorate(
+                                        var_id,
+                                        spirv::Decoration::BuiltIn,
+                                        [rspirv::dr::Operand::BuiltIn(builtin)],
+                                    );
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            interface_vars.push(var_id);
+            spv.current_output_vars.push(var_id);
+        }
+    }
+
+    // Store interface variables for entry point declaration
+    spv.entry_point_interfaces.insert(name.to_string(), interface_vars);
+
+    // Create void(void) function for entry point
+    let func_type = spv.builder.type_function(spv.void_type, vec![]);
+    let func_id =
+        spv.builder.begin_function(spv.void_type, None, spirv::FunctionControl::NONE, func_type)?;
+    spv.functions.insert(name.to_string(), func_id);
+
+    // Create entry block
+    let block_id = spv.builder.id();
+    spv.builder.begin_block(Some(block_id))?;
+    spv.current_block = Some(block_id);
+
+    // Load input variables into environment
+    for (var_id, param_name, type_id) in spv.current_input_vars.clone() {
+        let loaded = spv.builder.load(type_id, None, var_id, None, [])?;
+        spv.env.insert(param_name, loaded);
+    }
+
+    // Lower the body
+    let result = lower_expr(spv, body)?;
+
+    // Store result to output variables
+    if !spv.current_output_vars.is_empty() {
+        // Check if result is a tuple that needs to be decomposed
+        if let PolyType::Constructed(TypeName::Str(s), component_types) = ret_type {
+            if *s == "tuple" && spv.current_output_vars.len() > 1 {
+                // Extract each component and store
+                for (i, &output_var) in spv.current_output_vars.clone().iter().enumerate() {
+                    let comp_type_id = spv.ast_type_to_spirv(&component_types[i]);
+                    let component =
+                        spv.builder.composite_extract(comp_type_id, None, result, [i as u32])?;
+                    spv.builder.store(output_var, component, None, [])?;
+                }
+            } else if let Some(&output_var) = spv.current_output_vars.first() {
+                spv.builder.store(output_var, result, None, [])?;
+            }
+        } else if let Some(&output_var) = spv.current_output_vars.first() {
+            spv.builder.store(output_var, result, None, [])?;
+        }
+    }
+
+    // Return void
+    spv.builder.ret()?;
+    spv.builder.end_function()?;
+
+    // Clean up
+    spv.current_is_entry_point = false;
+    spv.env.clear();
+
+    Ok(())
+}
+
+/// Parse a builtin string like "Position" into a SPIR-V BuiltIn
+fn parse_builtin(s: &str) -> Option<spirv::BuiltIn> {
+    match s {
+        "Position" => Some(spirv::BuiltIn::Position),
+        "VertexIndex" => Some(spirv::BuiltIn::VertexIndex),
+        "InstanceIndex" => Some(spirv::BuiltIn::InstanceIndex),
+        "FragCoord" => Some(spirv::BuiltIn::FragCoord),
+        "PointSize" => Some(spirv::BuiltIn::PointSize),
+        "ClipDistance" => Some(spirv::BuiltIn::ClipDistance),
+        "CullDistance" => Some(spirv::BuiltIn::CullDistance),
+        "FragDepth" => Some(spirv::BuiltIn::FragDepth),
+        _ => None,
+    }
 }
 
 fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
@@ -770,11 +1080,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                 }
                 "assert" => {
                     // Assertions are no-ops in release, return body
-                    if args.len() >= 2 {
-                        lower_expr(spv, &args[1])
-                    } else {
-                        Ok(spv.const_i32(0))
-                    }
+                    if args.len() >= 2 { lower_expr(spv, &args[1]) } else { Ok(spv.const_i32(0)) }
                 }
                 _ => Err(CompilerError::SpirvError(format!("Unknown intrinsic: {}", name))),
             }
@@ -811,10 +1117,7 @@ fn lower_literal(spv: &mut SpvBuilder, lit: &Literal) -> Result<spirv::Word> {
                 elems.iter().map(|e| lower_expr(spv, e)).collect::<Result<Vec<_>>>()?;
 
             // Create struct type for tuple from element types
-            let elem_types: Vec<spirv::Word> = elems
-                .iter()
-                .map(|e| spv.ast_type_to_spirv(&e.ty))
-                .collect();
+            let elem_types: Vec<spirv::Word> = elems.iter().map(|e| spv.ast_type_to_spirv(&e.ty)).collect();
             let tuple_type = spv.type_struct(elem_types);
 
             // Construct the composite
@@ -826,9 +1129,7 @@ fn lower_literal(spv: &mut SpvBuilder, lit: &Literal) -> Result<spirv::Word> {
                 elems.iter().map(|e| lower_expr(spv, e)).collect::<Result<Vec<_>>>()?;
 
             // Get element type from first element (or i32 as fallback)
-            let elem_type = elems.first()
-                .map(|e| spv.ast_type_to_spirv(&e.ty))
-                .unwrap_or(spv.i32_type);
+            let elem_type = elems.first().map(|e| spv.ast_type_to_spirv(&e.ty)).unwrap_or(spv.i32_type);
 
             // Create array type
             let array_type = spv.type_array(elem_type, elem_ids.len() as u32);
@@ -842,10 +1143,8 @@ fn lower_literal(spv: &mut SpvBuilder, lit: &Literal) -> Result<spirv::Word> {
                 fields.iter().map(|(_, e)| lower_expr(spv, e)).collect::<Result<Vec<_>>>()?;
 
             // Create struct type for record from field types
-            let field_types: Vec<spirv::Word> = fields
-                .iter()
-                .map(|(_, e)| spv.ast_type_to_spirv(&e.ty))
-                .collect();
+            let field_types: Vec<spirv::Word> =
+                fields.iter().map(|(_, e)| spv.ast_type_to_spirv(&e.ty)).collect();
             let record_type = spv.type_struct(field_types);
 
             // Construct the composite

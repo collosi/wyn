@@ -30,6 +30,11 @@ pub enum Def {
         ret_type: Type<TypeName>,
         /// Attributes attached to this function (e.g., "entry", "inline", "noinline").
         attributes: Vec<Attribute>,
+        /// Attributes for each parameter (for shader I/O decorations).
+        param_attributes: Vec<Vec<Attribute>>,
+        /// Return value attributes (for shader I/O decorations).
+        /// For multiple outputs, each element corresponds to one output.
+        return_attributes: Vec<Vec<Attribute>>,
         /// The function body expression.
         body: Expr,
         /// Source location.
@@ -248,8 +253,16 @@ mod tests {
                 i32_type(),
                 ExprKind::BinOp {
                     op: "+".to_string(),
-                    lhs: Box::new(Expr::new(i32_type(), ExprKind::Var("x".to_string()), Span::dummy())),
-                    rhs: Box::new(Expr::new(i32_type(), ExprKind::Var("y".to_string()), Span::dummy())),
+                    lhs: Box::new(Expr::new(
+                        i32_type(),
+                        ExprKind::Var("x".to_string()),
+                        Span::dummy(),
+                    )),
+                    rhs: Box::new(Expr::new(
+                        i32_type(),
+                        ExprKind::Var("y".to_string()),
+                        Span::dummy(),
+                    )),
                 },
                 Span::dummy(),
             ),
