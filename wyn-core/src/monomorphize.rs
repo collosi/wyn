@@ -2,7 +2,7 @@
 ///
 /// Replaces polymorphic functions with concrete, type-specific versions.
 /// This must run after type checking (so we have concrete types) but before
-/// MIR generation (which needs concrete types for SPIR-V).
+/// lowering (which needs concrete types for SPIR-V).
 ///
 /// Example:
 ///   def identity 'a (x:'a) : 'a = x

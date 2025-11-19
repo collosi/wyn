@@ -1,12 +1,10 @@
 use clap::{Parser, Subcommand};
-use log::{error, info};
+use log::{error, info, warn};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use thiserror::Error;
-use wyn_core::{
-    Compiler, borrow_checker::BorrowChecker, cfg_nemo::CfgNemoExtractor, lexer, parser::Parser as WynParser,
-};
+use wyn_core::{Compiler, lexer, parser::Parser as WynParser};
 
 #[derive(Parser)]
 #[command(name = "wyn")]
@@ -237,42 +235,24 @@ fn generate_annotated_source(
     Ok(())
 }
 
-fn generate_nemo_facts(source: &str, output_path: &PathBuf, verbose: bool) -> Result<(), DriverError> {
-    // Parse the source to get the AST
-    let tokens = lexer::tokenize(source).map_err(wyn_core::error::CompilerError::ParseError)?;
-    let mut parser = WynParser::new(tokens);
-    let program = parser.parse()?;
-
-    // Generate Nemo facts
-    let mut file = fs::File::create(output_path)?;
-    let extractor = CfgNemoExtractor::new(&mut file, verbose);
-    extractor.extract_cfg(&program)?;
+fn generate_nemo_facts(_source: &str, output_path: &PathBuf, verbose: bool) -> Result<(), DriverError> {
+    // Disabled during reorganization
+    warn!("Nemo fact generation is disabled during reorganization");
+    fs::write(output_path, "% Nemo fact generation disabled during reorganization\n")?;
 
     if verbose {
-        info!("Generated Nemo facts: {}", output_path.display());
+        info!("Generated placeholder Nemo facts: {}", output_path.display());
     }
 
     Ok(())
 }
 
-fn run_borrow_checking(source: &str, verbose: bool) -> Result<(), DriverError> {
-    // Parse the source to get the AST
-    let tokens = lexer::tokenize(source).map_err(wyn_core::error::CompilerError::ParseError)?;
-    let mut parser = WynParser::new(tokens);
-    let program = parser.parse()?;
+fn run_borrow_checking(_source: &str, verbose: bool) -> Result<(), DriverError> {
+    // Disabled during reorganization
+    warn!("Borrow checking is disabled during reorganization");
 
-    // Run borrow checking
-    let mut checker = BorrowChecker::new(verbose);
-    let result = checker.check_program(&program)?;
-
-    if result.has_errors() {
-        error!("Borrow check errors found:");
-        result.print_errors();
-        return Err(DriverError::CompilationError(
-            wyn_core::error::CompilerError::SpirvError("Borrow check failed".to_string()),
-        ));
-    } else if verbose {
-        info!("✓ Borrow checking passed");
+    if verbose {
+        info!("Skipped borrow checking (disabled)");
     }
 
     Ok(())
