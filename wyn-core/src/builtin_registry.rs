@@ -226,6 +226,18 @@ impl BuiltinRegistry {
         self.builtins.contains_key(name) || self.poly_builtins.contains_key(name)
     }
 
+    /// Get all builtin names as a HashSet (for use in flattening to exclude from capture)
+    pub fn all_names(&self) -> std::collections::HashSet<String> {
+        let mut names = std::collections::HashSet::new();
+        for name in self.builtins.keys() {
+            names.insert(name.clone());
+        }
+        for name in self.poly_builtins.keys() {
+            names.insert(name.clone());
+        }
+        names
+    }
+
     /// Get monomorphic builtin descriptor
     pub fn get(&self, name: &str) -> Option<&BuiltinDescriptor> {
         self.builtins.get(name)

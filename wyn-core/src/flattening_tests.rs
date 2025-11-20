@@ -12,7 +12,8 @@ fn flatten_program(input: &str) -> mir::Program {
     let mut parser = Parser::new(tokens);
     let ast = parser.parse().expect("Parsing failed");
     let type_table = HashMap::new(); // Empty - tests don't use field access
-    let mut flattener = Flattener::new(type_table);
+    let builtins = std::collections::HashSet::new(); // Empty for basic tests
+    let mut flattener = Flattener::new(type_table, builtins);
     flattener.flatten_program(&ast).expect("Flattening failed")
 }
 
@@ -26,7 +27,8 @@ fn flatten_with_types(input: &str) -> mir::Program {
     type_checker.load_builtins().expect("Failed to load builtins");
     let type_table = type_checker.check_program(&ast).expect("Type checking failed");
 
-    let mut flattener = Flattener::new(type_table);
+    let builtins = crate::builtin_registry::BuiltinRegistry::default().all_names();
+    let mut flattener = Flattener::new(type_table, builtins);
     flattener.flatten_program(&ast).expect("Flattening failed")
 }
 
@@ -299,4 +301,24 @@ def test : (i32 -> i32) =
     let result = type_checker.check_program(&ast);
 
     assert!(result.is_err(), "Should reject function as loop parameter");
+}
+
+#[test]
+fn test_lambda_calling_builtin_constructor() {
+    // This test reproduces an issue where vec4 inside a lambda is incorrectly
+    // captured as a free variable and rewritten to __closure.vec4
+    let mir = flatten_with_types(
+        r#"
+def test (v:vec3f32) : vec4f32 =
+    let f = \(x:vec3f32) -> vec4 x.x x.y x.z 1.0f32 in
+    f v
+"#,
+    );
+    let mir_str = format!("{}", mir);
+    println!("MIR output:\n{}", mir_str);
+
+    // Should call vec4 directly, not __closure.vec4
+    assert!(mir_str.contains("vec4"));
+    // vec4 should NOT be accessed through closure
+    assert!(!mir_str.contains("__closure.vec4"));
 }

@@ -45,10 +45,12 @@ pub struct Flattener {
     type_table: HashMap<NodeId, TypeScheme<TypeName>>,
     /// Scope stack for tracking static values of variables
     static_values: ScopeStack<StaticValue>,
+    /// Set of builtin names to exclude from free variable capture
+    builtins: HashSet<String>,
 }
 
 impl Flattener {
-    pub fn new(type_table: HashMap<NodeId, TypeScheme<TypeName>>) -> Self {
+    pub fn new(type_table: HashMap<NodeId, TypeScheme<TypeName>>, builtins: HashSet<String>) -> Self {
         Flattener {
             next_id: 0,
             generated_functions: Vec::new(),
@@ -56,6 +58,7 @@ impl Flattener {
             lambda_registry: Vec::new(),
             type_table,
             static_values: ScopeStack::new(),
+            builtins,
         }
     }
 
@@ -161,6 +164,8 @@ impl Flattener {
         for decl in &program.declarations {
             match decl {
                 ast::Declaration::Decl(d) => {
+                    // Add this function name to builtins so it won't be captured in lambdas
+                    self.builtins.insert(d.name.clone());
                     self.enclosing_decl_stack.push(d.name.clone());
 
                     let def = if d.params.is_empty() {
@@ -871,9 +876,11 @@ impl Flattener {
                         StaticValue::Dyn,
                     ))
                 } else {
-                    Err(CompilerError::FlatteningError(
-                        "Cannot call closure with unknown static value.".to_string(),
-                    ))
+                    Err(CompilerError::FlatteningError(format!(
+                        "Cannot call closure with unknown static value (field access). \
+                         Function expression: {:?}",
+                        func.kind
+                    )))
                 }
             }
             _ => {
@@ -891,12 +898,11 @@ impl Flattener {
                     ))
                 } else {
                     // Unknown closure - this should not happen with proper function value restrictions
-                    Err(CompilerError::FlatteningError(
+                    Err(CompilerError::FlatteningError(format!(
                         "Cannot call closure with unknown static value. \
-                         Functions cannot be returned from if expressions, \
-                         stored in arrays, or used as loop parameters."
-                            .to_string(),
-                    ))
+                         Function expression: {:?}",
+                        func.kind
+                    )))
                 }
             }
         }
@@ -1047,7 +1053,7 @@ impl Flattener {
     fn collect_free_vars(&self, expr: &Expression, bound: &HashSet<String>, free: &mut HashSet<String>) {
         match &expr.kind {
             ExprKind::Identifier(name) => {
-                if !bound.contains(name) {
+                if !bound.contains(name) && !self.builtins.contains(name) {
                     free.insert(name.clone());
                 }
             }

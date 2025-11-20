@@ -1289,7 +1289,8 @@ mod tests {
         let mut parser = Parser::new(tokens);
         let ast = parser.parse().expect("Parsing failed");
 
-        let mut flattener = Flattener::new(std::collections::HashMap::new());
+        let mut flattener =
+            Flattener::new(std::collections::HashMap::new(), std::collections::HashSet::new());
         let mir = flattener.flatten_program(&ast)?;
 
         lower(&mir)

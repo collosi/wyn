@@ -97,7 +97,8 @@ impl Compiler {
         }
 
         // Flatten (AST -> MIR with defunctionalization)
-        let mut flattener = flattening::Flattener::new(type_table);
+        let builtins = builtin_registry::BuiltinRegistry::default().all_names();
+        let mut flattener = flattening::Flattener::new(type_table, builtins);
         let mir = flattener.flatten_program(&program)?;
 
         // Lower (MIR -> SPIR-V)
