@@ -796,3 +796,14 @@ def test : i32 =
 "#,
     );
 }
+
+#[test]
+fn test_qualified_builtin_f32_sqrt() {
+    // Test that qualified builtins like f32.sqrt work correctly
+    typecheck_program(
+        r#"
+def length2 (v:vec2f32) : f32 =
+    f32.sqrt (v.x * v.x + v.y * v.y)
+"#,
+    );
+}

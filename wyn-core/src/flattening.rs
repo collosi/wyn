@@ -386,6 +386,38 @@ impl Flattener {
                 }
             }
             ExprKind::FieldAccess(obj_expr, field) => {
+                // Check for special cases when obj is an identifier
+                if let ExprKind::Identifier(name) = &obj_expr.kind {
+                    // Special case: __closure field access (from lambda free var rewriting)
+                    if name == "__closure" {
+                        let closure_type = Type::Constructed(TypeName::Str("closure".into()), vec![]);
+                        let obj =
+                            Expr::new(closure_type, mir::ExprKind::Var("__closure".to_string()), span);
+                        return Ok(Expr::new(
+                            ty,
+                            mir::ExprKind::Intrinsic {
+                                name: "record_access".to_string(),
+                                args: vec![
+                                    obj,
+                                    Expr::new(
+                                        Type::Constructed(TypeName::Str("string".into()), vec![]),
+                                        mir::ExprKind::Literal(mir::Literal::String(field.clone())),
+                                        span,
+                                    ),
+                                ],
+                            },
+                            span,
+                        ));
+                    }
+
+                    // Check if identifier has a type (i.e., it's a variable)
+                    // If not, it's a qualified name like f32.sqrt
+                    if self.type_table.get(&obj_expr.h.id).is_none() {
+                        let full_name = format!("{}.{}", name, field);
+                        return Ok(Expr::new(ty, mir::ExprKind::Var(full_name), span));
+                    }
+                }
+
                 let obj = self.flatten_expr(obj_expr)?;
 
                 // Resolve field name to index using type information
@@ -1083,12 +1115,27 @@ mod tests {
     use super::*;
     use crate::lexer::tokenize;
     use crate::parser::Parser;
+    use crate::type_checker::TypeChecker;
 
     fn flatten_program(input: &str) -> mir::Program {
         let tokens = tokenize(input).expect("Tokenization failed");
         let mut parser = Parser::new(tokens);
         let ast = parser.parse().expect("Parsing failed");
         let type_table = HashMap::new(); // Empty - tests don't use field access
+        let mut flattener = Flattener::new(type_table);
+        flattener.flatten_program(&ast).expect("Flattening failed")
+    }
+
+    /// Flatten with type checking (required for tests that use field access or captures)
+    fn flatten_with_types(input: &str) -> mir::Program {
+        let tokens = tokenize(input).expect("Tokenization failed");
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse().expect("Parsing failed");
+
+        let mut type_checker = TypeChecker::new();
+        type_checker.load_builtins().expect("Failed to load builtins");
+        let type_table = type_checker.check_program(&ast).expect("Type checking failed");
+
         let mut flattener = Flattener::new(type_table);
         flattener.flatten_program(&ast).expect("Flattening failed")
     }
@@ -1226,5 +1273,38 @@ def f =
         );
         // Should have original + 2 lambdas
         assert!(mir.defs.len() >= 3);
+    }
+
+    #[test]
+    fn test_lambda_captures_typed_variable() {
+        // This test reproduces an issue where a lambda captures a typed variable (like an array),
+        // and the free variable rewriting creates __closure.mat, which then fails when trying
+        // to resolve 'mat' as a field access on the closure.
+        let mir = flatten_with_types(
+            r#"
+def test_capture (arr:[4]i32) : i32 =
+    let result = map (\(i:i32) -> arr[i]) [0, 1, 2, 3] in
+    result[0]
+"#,
+        );
+        let mir_str = format!("{}", mir);
+        // Lambda should capture arr and access it via closure
+        assert!(mir_str.contains("__closure") || mir_str.contains("record_access"));
+    }
+
+    #[test]
+    fn test_qualified_name_f32_sqrt() {
+        // This test reproduces an issue where f32.sqrt is treated as field access
+        // instead of a qualified builtin name. The identifier 'f32' has no type in
+        // the type_table because it's a type name, not a variable.
+        let mir = flatten_with_types(
+            r#"
+def length2 (v:vec2f32) : f32 =
+    f32.sqrt (v.x * v.x + v.y * v.y)
+"#,
+        );
+        let mir_str = format!("{}", mir);
+        // Should contain f32.sqrt as a qualified name/call, not a field access error
+        assert!(mir_str.contains("f32.sqrt"));
     }
 }

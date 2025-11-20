@@ -249,6 +249,8 @@ mod tests {
             ],
             ret_type: i32_type(),
             attributes: vec![],
+            param_attributes: vec![],
+            return_attributes: vec![],
             body: Expr::new(
                 i32_type(),
                 ExprKind::BinOp {
