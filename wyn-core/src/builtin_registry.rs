@@ -478,6 +478,10 @@ impl BuiltinRegistry {
     }
 
     fn register_real_ops(&mut self, ty_name: &'static str) {
+        // TODO: These should come from a prelude module (e.g., f32.sqrt from the f32 module)
+        // rather than being hardcoded in the builtin registry. For now, we register them
+        // here so they're available for type checking and code generation.
+
         // Transcendental functions
         self.register_unop(ty_name, "sin", BuiltinImpl::GlslExt(13));
         self.register_unop(ty_name, "cos", BuiltinImpl::GlslExt(14));

@@ -4,11 +4,13 @@
 //! It uses a SpvBuilder wrapper that handles variable hoisting automatically.
 
 use crate::ast::TypeName;
+use crate::builtin_registry::{BuiltinImpl, BuiltinRegistry, SpirvOp};
 use crate::error::{CompilerError, Result};
 use crate::mir::{self, Def, Expr, ExprKind, Literal, LoopKind};
 use polytype::Type as PolyType;
 use rspirv::binary::Assemble;
 use rspirv::dr::Builder;
+use rspirv::dr::Operand;
 use rspirv::spirv::{self, AddressingModel, Capability, MemoryModel, StorageClass};
 use std::collections::HashMap;
 
@@ -68,6 +70,9 @@ struct SpvBuilder {
 
     // Lambda registry: tag index -> (function_name, arity)
     lambda_registry: Vec<(String, usize)>,
+
+    // Builtin function registry
+    builtin_registry: BuiltinRegistry,
 }
 
 impl SpvBuilder {
@@ -110,6 +115,7 @@ impl SpvBuilder {
             global_constants: HashMap::new(),
             pending_constant_inits: Vec::new(),
             lambda_registry: Vec::new(),
+            builtin_registry: BuiltinRegistry::default(),
         }
     }
 
@@ -1152,12 +1158,51 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                     spv.composite_construct(result_type, result_elements)
                 }
                 _ => {
-                    // Look up user-defined function
-                    let func_id = *spv
-                        .functions
-                        .get(func)
-                        .ok_or_else(|| CompilerError::SpirvError(format!("Unknown function: {}", func)))?;
-                    spv.function_call(result_type, func_id, arg_ids)
+                    // Check if it's a builtin function
+                    if let Some(builtin) = spv.builtin_registry.get(func) {
+                        match &builtin.implementation {
+                            BuiltinImpl::GlslExt(ext_op) => {
+                                // Call GLSL extended instruction
+                                let glsl_id = spv.glsl_ext_inst_id;
+                                let operands: Vec<Operand> =
+                                    arg_ids.iter().map(|&id| Operand::IdRef(id)).collect();
+                                Ok(spv.builder.ext_inst(result_type, None, glsl_id, *ext_op, operands)?)
+                            }
+                            BuiltinImpl::SpirvOp(spirv_op) => {
+                                // Handle core SPIR-V operations
+                                match spirv_op {
+                                    SpirvOp::Dot => {
+                                        if arg_ids.len() != 2 {
+                                            return Err(CompilerError::SpirvError(
+                                                "dot requires 2 args".to_string(),
+                                            ));
+                                        }
+                                        Ok(spv.builder.dot(result_type, None, arg_ids[0], arg_ids[1])?)
+                                    }
+                                    _ => {
+                                        // TODO: Handle other SpirvOp variants
+                                        Err(CompilerError::SpirvError(format!(
+                                            "Unsupported SpirvOp for: {}",
+                                            func
+                                        )))
+                                    }
+                                }
+                            }
+                            BuiltinImpl::Custom(_) => {
+                                // TODO: Handle custom builtin implementations
+                                Err(CompilerError::SpirvError(format!(
+                                    "Custom builtin not yet supported: {}",
+                                    func
+                                )))
+                            }
+                        }
+                    } else {
+                        // Look up user-defined function
+                        let func_id = *spv.functions.get(func).ok_or_else(|| {
+                            CompilerError::SpirvError(format!("Unknown function: {}", func))
+                        })?;
+                        spv.function_call(result_type, func_id, arg_ids)
+                    }
                 }
             }
         }
