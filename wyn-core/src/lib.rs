@@ -28,6 +28,8 @@ pub mod module;
 pub mod nemo_facts;
 
 #[cfg(test)]
+mod flattening_tests;
+#[cfg(test)]
 mod type_checker_tests;
 
 use error::Result;

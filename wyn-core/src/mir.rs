@@ -15,6 +15,10 @@ use polytype::Type;
 pub struct Program {
     /// All top-level definitions in the program.
     pub defs: Vec<Def>,
+    /// Lambda registry: maps tag -> (function_name, arity).
+    /// Used for closure dispatch in higher-order builtins like map.
+    /// Tags are assigned in order during flattening.
+    pub lambda_registry: Vec<(String, usize)>,
 }
 
 /// A top-level definition (function or constant).
@@ -271,7 +275,10 @@ mod tests {
             span: Span::dummy(),
         };
 
-        let program = Program { defs: vec![add_fn] };
+        let program = Program {
+            defs: vec![add_fn],
+            lambda_registry: vec![],
+        };
 
         assert_eq!(program.defs.len(), 1);
         match &program.defs[0] {

@@ -65,6 +65,9 @@ struct SpvBuilder {
     global_constants: HashMap<String, (spirv::Word, spirv::Word)>,
     // Pending constant initializations: (var_id, body_expr)
     pending_constant_inits: Vec<(spirv::Word, Expr)>,
+
+    // Lambda registry: tag index -> (function_name, arity)
+    lambda_registry: Vec<(String, usize)>,
 }
 
 impl SpvBuilder {
@@ -106,6 +109,7 @@ impl SpvBuilder {
             current_input_vars: Vec::new(),
             global_constants: HashMap::new(),
             pending_constant_inits: Vec::new(),
+            lambda_registry: Vec::new(),
         }
     }
 
@@ -500,6 +504,9 @@ impl SpvBuilder {
 /// Lower a MIR program to SPIR-V
 pub fn lower(program: &mir::Program) -> Result<Vec<u32>> {
     let mut spv = SpvBuilder::new();
+
+    // Copy lambda registry for closure dispatch
+    spv.lambda_registry = program.lambda_registry.clone();
 
     // Collect entry points
     let mut entry_points: Vec<(String, spirv::ExecutionModel)> = Vec::new();
@@ -1074,11 +1081,75 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
             // Get the result type from the expression
             let result_type = spv.ast_type_to_spirv(&expr.ty);
 
-            // Check for builtin vector constructors
+            // Check for builtin vector constructors and higher-order functions
             match func.as_str() {
                 "vec2" | "vec3" | "vec4" => {
                     // Use the result type which should be the proper vector type
                     spv.composite_construct(result_type, arg_ids)
+                }
+                "map" => {
+                    // map closure array -> array
+                    // args[0] is closure record {__tag=N, ...}
+                    // args[1] is input array
+                    if args.len() != 2 {
+                        return Err(CompilerError::SpirvError("map requires 2 args".to_string()));
+                    }
+
+                    let closure_val = arg_ids[0];
+                    let array_val = arg_ids[1];
+
+                    // Get array info from MIR types
+                    let (array_size, elem_mir_type) = match &expr.ty {
+                        PolyType::Constructed(TypeName::Array, type_args) if type_args.len() == 2 => {
+                            let size = match &type_args[0] {
+                                PolyType::Constructed(TypeName::Size(n), _) => *n as u32,
+                                _ => {
+                                    return Err(CompilerError::SpirvError(
+                                        "Invalid array size type".to_string(),
+                                    ));
+                                }
+                            };
+                            (size, &type_args[1])
+                        }
+                        _ => {
+                            return Err(CompilerError::SpirvError(
+                                "map result must be array type".to_string(),
+                            ));
+                        }
+                    };
+
+                    let elem_type = spv.ast_type_to_spirv(elem_mir_type);
+
+                    // Build result array by calling lambda for each element
+                    let mut result_elements = Vec::new();
+                    for i in 0..array_size {
+                        // Extract element from input array
+                        let input_elem = spv.builder.composite_extract(elem_type, None, array_val, [i])?;
+
+                        // Call the lambda function
+                        // For now, we only support single-lambda case (tag 0)
+                        // TODO: Add switch for multiple lambdas based on tag
+                        if let Some((func_name, _arity)) = spv.lambda_registry.first() {
+                            let lambda_func_id = *spv.functions.get(func_name).ok_or_else(|| {
+                                CompilerError::SpirvError(format!(
+                                    "Lambda function not found: {}",
+                                    func_name
+                                ))
+                            })?;
+                            // Call lambda with closure and element
+                            let result_elem = spv.function_call(
+                                elem_type,
+                                lambda_func_id,
+                                vec![closure_val, input_elem],
+                            )?;
+                            result_elements.push(result_elem);
+                        } else {
+                            return Err(CompilerError::SpirvError("No lambda in registry".to_string()));
+                        }
+                    }
+
+                    // Construct result array
+                    spv.composite_construct(result_type, result_elements)
                 }
                 _ => {
                     // Look up user-defined function
