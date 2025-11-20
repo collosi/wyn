@@ -199,15 +199,6 @@ impl ConstantFolder {
                 Ok(self.node_counter.mk_node(ExprKind::Tuple(folded_elements), span))
             }
 
-            // Handle function calls - fold arguments
-            ExprKind::FunctionCall(name, args) => {
-                let mut folded_args = Vec::new();
-                for arg in args {
-                    folded_args.push(self.fold_expression(arg)?);
-                }
-                Ok(self.node_counter.mk_node(ExprKind::FunctionCall(name.clone(), folded_args), span))
-            }
-
             // Handle if-then-else - fold all branches
             ExprKind::If(if_expr) => {
                 let folded_condition = self.fold_expression(&if_expr.condition)?;

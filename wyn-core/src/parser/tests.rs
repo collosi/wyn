@@ -593,12 +593,9 @@ fn test_parse_lambda_application_with_literal() {
     // Test function application: (lambda) arg with literal
     let decl = single_decl(r#"def apply = (\x:i32 -> x + 1i32) 5i32"#);
 
-    // Should be a function application (either FunctionCall or Application)
+    // Should be a function application (eitherApplication)
     match &decl.body.kind {
         ExprKind::Application(func, args) => {
-            assert!(!args.is_empty(), "Should have at least one argument");
-        }
-        ExprKind::FunctionCall(_name, args) => {
             assert!(!args.is_empty(), "Should have at least one argument");
         }
         _ => panic!("Expected function application, got {:?}", decl.body.kind),
@@ -610,12 +607,9 @@ fn test_parse_lambda_application_with_type_hole() {
     // Test function application: (lambda) arg
     let decl = single_decl(r#"def apply = (\x:i32 -> x + 1i32) ???"#);
 
-    // Should be a function application (either FunctionCall or Application)
+    // Should be a function application (either Application)
     match &decl.body.kind {
         ExprKind::Application(_func, args) => {
-            assert!(!args.is_empty(), "Should have at least one argument");
-        }
-        ExprKind::FunctionCall(_name, args) => {
             assert!(!args.is_empty(), "Should have at least one argument");
         }
         _ => panic!("Expected function application, got {:?}", decl.body.kind),
@@ -718,7 +712,7 @@ fn test_vector_field_access_file() {
     };
     assert_eq!(decl1.name, "v");
     assert!(
-        matches!(&decl1.body.kind, ExprKind::FunctionCall(func_name, args) if func_name == "vec3" && args.len() == 3)
+        matches!(&decl1.body.kind, ExprKind::Application(func, args) if matches!(&func.kind, ExprKind::Identifier(name) if name == "vec3") && args.len() == 3)
     );
 
     // Check second declaration: def x: f32 = v.x
@@ -994,8 +988,8 @@ fn test_parse_function_application_with_array_literal() {
     assert_eq!(decl.name, "test");
     assert!(matches!(
         &decl.body.kind,
-        ExprKind::FunctionCall(name, args)
-            if name == "to_vec4"
+        ExprKind::Application(func, args)
+            if matches!(&func.kind, ExprKind::Identifier(name) if name == "to_vec4")
             && args.len() == 1
             && matches!(&args[0].kind, ExprKind::ArrayLiteral(elements) if elements.len() == 4)
     ));
@@ -1675,8 +1669,8 @@ fn test_ambiguity_array_index_with_space_is_function_call() {
     // f [x] with space should parse as function call with array argument
     let decl = single_decl("def test(): i32 = f [1, 2, 3]");
 
-    assert!(matches!(&decl.body.kind, ExprKind::FunctionCall(name, args)
-        if name == "f" && args.len() == 1 && matches!(&args[0].kind, ExprKind::ArrayLiteral(_))));
+    assert!(matches!(&decl.body.kind, ExprKind::Application(func, args)
+        if matches!(&func.kind, ExprKind::Identifier(name) if name == "f") && args.len() == 1 && matches!(&args[0].kind, ExprKind::ArrayLiteral(_))));
 }
 
 #[test]
@@ -1712,7 +1706,7 @@ fn test_ambiguity_function_application_binds_tighter() {
     let decl = single_decl("def test(): i32 = f x + y");
 
     assert!(matches!(&decl.body.kind, ExprKind::BinaryOp(op, left, _)
-        if op.op == "+" && matches!(&left.kind, ExprKind::FunctionCall(_, args) if args.len() == 1)));
+        if op.op == "+" && matches!(&left.kind, ExprKind::Application(_, args) if args.len() == 1)));
 }
 
 #[test]
@@ -1767,7 +1761,7 @@ fn test_function_call_with_and_without_parens() {
     let mut parser2 = Parser::new(tokens2);
     let program2 = parser2.parse().unwrap();
 
-    // Both should produce a FunctionCall, not Applications
+    // Both should produce Applications with the same structure
     let decl1 = &program1.declarations[0];
     let decl2 = &program2.declarations[0];
 
@@ -1776,24 +1770,17 @@ fn test_function_call_with_and_without_parens() {
             eprintln!("Without parens: {:?}", d1.body.kind);
             eprintln!("With parens: {:?}", d2.body.kind);
 
-            // Check that both are FunctionCall
+            // Check that both are Applications with the same structure
             match (&d1.body.kind, &d2.body.kind) {
-                (ExprKind::FunctionCall(name1, args1), ExprKind::FunctionCall(name2, args2)) => {
-                    assert_eq!(name1, name2);
-                    assert_eq!(args1.len(), args2.len());
-                    assert_eq!(args1.len(), 3, "Should have 3 arguments");
-                }
-                (ExprKind::FunctionCall(_, _), ExprKind::Application(_, _)) => {
-                    panic!("Parenthesized arguments created Application instead of FunctionCall");
-                }
-                (ExprKind::Application(_, _), ExprKind::FunctionCall(_, _)) => {
-                    panic!("Non-parenthesized arguments created Application (unexpected)");
-                }
-                (ExprKind::Application(_, _), ExprKind::Application(_, _)) => {
-                    panic!("Both created Application - neither created FunctionCall");
+                (ExprKind::Application(func1, args1), ExprKind::Application(func2, args2)) => {
+                    // Both should call vec3 with 3 arguments
+                    assert!(matches!(&func1.kind, ExprKind::Identifier(name) if name == "vec3"));
+                    assert!(matches!(&func2.kind, ExprKind::Identifier(name) if name == "vec3"));
+                    assert_eq!(args1.len(), 3);
+                    assert_eq!(args2.len(), 3);
                 }
                 (kind1, kind2) => {
-                    panic!("Unexpected expression kinds: {:?} and {:?}", kind1, kind2);
+                    panic!("Expected both to be Application, got {:?} and {:?}", kind1, kind2);
                 }
             }
         }
@@ -1991,8 +1978,8 @@ def test : f32 = myfunc arg1 arg2 (x + y)
 
     // The body should be a function call
     match &decl.body.kind {
-        ExprKind::FunctionCall(func_name, args) => {
-            assert_eq!(func_name, "myfunc");
+        ExprKind::Application(func, args) => {
+            assert!(matches!(&func.kind, ExprKind::Identifier(name) if name == "myfunc"));
             assert_eq!(args.len(), 3, "Expected 3 arguments to myfunc");
 
             // First arg: arg1 (identifier)
@@ -2004,7 +1991,7 @@ def test : f32 = myfunc arg1 arg2 (x + y)
             // Third arg: (x + y) (binary operation)
             assert!(matches!(args[2].kind, ExprKind::BinaryOp(_, _, _)));
         }
-        other => panic!("Expected FunctionCall, got {:?}", other),
+        other => panic!("Expected Application, got {:?}", other),
     }
 }
 
@@ -2028,8 +2015,8 @@ def test (t:f32) : vec3f32 = mix3v a b (t*2.0f32 - 1.0f32)
 
     // The body should be: mix3v a b (t*2.0f32 - 1.0f32)
     match &test_decl.body.kind {
-        ExprKind::FunctionCall(func_name, args) => {
-            assert_eq!(func_name, "mix3v");
+        ExprKind::Application(func, args) => {
+            assert!(matches!(&func.kind, ExprKind::Identifier(name) if name == "mix3v"));
             assert_eq!(args.len(), 3, "Expected 3 arguments to mix3v");
 
             // Third argument should be a binary op expression
@@ -2039,7 +2026,7 @@ def test (t:f32) : vec3f32 = mix3v a b (t*2.0f32 - 1.0f32)
                 args[2].kind
             );
         }
-        other => panic!("Expected FunctionCall, got {:?}", other),
+        other => panic!("Expected Application, got {:?}", other),
     }
 }
 
@@ -2065,8 +2052,8 @@ def test : [12]i32 =
         ExprKind::LetIn(let_in) => {
             // The body of the let should be: map (\e -> e[0]) edges
             match &let_in.body.kind {
-                ExprKind::FunctionCall(func_name, args) => {
-                    assert_eq!(func_name, "map");
+                ExprKind::Application(func, args) => {
+                    assert!(matches!(&func.kind, ExprKind::Identifier(name) if name == "map"));
                     assert_eq!(args.len(), 2, "map should have 2 arguments");
 
                     // First argument should be a lambda
@@ -2101,7 +2088,7 @@ def test : [12]i32 =
                         other => panic!("Expected Identifier as second argument, got {:?}", other),
                     }
                 }
-                other => panic!("Expected FunctionCall in let body, got {:?}", other),
+                other => panic!("Expected Application in let body, got {:?}", other),
             }
         }
         other => panic!("Expected LetIn, got {:?}", other),

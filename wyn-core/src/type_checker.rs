@@ -1257,30 +1257,6 @@ impl TypeChecker {
                     )),
                 }
             }
-            ExprKind::FunctionCall(func_name, args) => {
-                // Get function type - check scope stack first, then builtin registry
-                let func_type_result: Result<Type> =
-                    if let Ok(type_scheme) = self.scope_stack.lookup(func_name) {
-                        let instantiated = type_scheme.instantiate(&mut self.context);
-                        Ok(instantiated)
-                    } else if self.builtin_registry.is_builtin(func_name) {
-                        // Get type from builtin registry
-                        if let Some(desc) = self.builtin_registry.get(func_name) {
-                            Ok(self.instantiate_builtin_type(&desc.clone()))
-                        } else {
-                            Err(CompilerError::UndefinedVariable(func_name.clone(), expr.h.span))
-                        }
-                    } else {
-                        Err(CompilerError::UndefinedVariable(func_name.clone(), expr.h.span))
-                    };
-
-                let func_type = func_type_result?;
-
-                // Use two-pass application for better lambda inference
-                let result = self.apply_two_pass(func_type, args)?;
-
-                Ok(result)
-            }
             ExprKind::Tuple(elements) => {
                 let elem_types: Result<Vec<Type>> =
                     elements.iter().map(|e| self.infer_expression(e)).collect();

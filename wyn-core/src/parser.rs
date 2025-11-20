@@ -1104,20 +1104,16 @@ impl Parser {
 
             let arg = self.parse_postfix_expression()?;
 
-            // Convert to FunctionCall or Application with span
+            // Convert to Application with span
             let span = expr.h.span.merge(&arg.h.span);
-            match expr.kind {
-                ExprKind::Identifier(name) => {
-                    // First argument: convert identifier to function call
-                    expr = self.node_counter.mk_node(ExprKind::FunctionCall(name, vec![arg]), span);
-                }
-                ExprKind::FunctionCall(name, mut args) => {
-                    // Additional arguments: extend existing function call
+            match &mut expr.kind {
+                ExprKind::Application(_, args) => {
+                    // Additional arguments: extend existing application
                     args.push(arg);
-                    expr = self.node_counter.mk_node(ExprKind::FunctionCall(name, args), span);
+                    expr.h.span = span;
                 }
                 _ => {
-                    // Higher-order function application: use Application node
+                    // First argument: create new Application node
                     expr =
                         self.node_counter.mk_node(ExprKind::Application(Box::new(expr), vec![arg]), span);
                 }

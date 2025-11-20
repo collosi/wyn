@@ -43,6 +43,8 @@ pub struct Flattener {
     lambda_registry: Vec<(String, usize)>,
     /// Type table from type checking - maps NodeId to TypeScheme
     type_table: HashMap<NodeId, TypeScheme<TypeName>>,
+    /// Scope stack for tracking static values of variables
+    static_values: ScopeStack<StaticValue>,
 }
 
 impl Flattener {
@@ -53,6 +55,7 @@ impl Flattener {
             enclosing_decl_stack: Vec::new(),
             lambda_registry: Vec::new(),
             type_table,
+            static_values: ScopeStack::new(),
         }
     }
 
@@ -162,7 +165,7 @@ impl Flattener {
 
                     let def = if d.params.is_empty() {
                         // Constant
-                        let body = self.flatten_expr(&d.body)?;
+                        let (body, _) = self.flatten_expr(&d.body)?;
                         let ty = self.get_expr_type(&d.body);
                         mir::Def::Constant {
                             name: d.name.clone(),
@@ -175,7 +178,7 @@ impl Flattener {
                         // Function
                         let params = self.flatten_params(&d.params)?;
                         let param_attrs = self.extract_param_attributes(&d.params);
-                        let body = self.flatten_expr(&d.body)?;
+                        let (body, _) = self.flatten_expr(&d.body)?;
                         let ret_type = self.get_expr_type(&d.body);
                         mir::Def::Function {
                             name: d.name.clone(),
@@ -200,7 +203,7 @@ impl Flattener {
 
                     let params = self.flatten_params(&e.params)?;
                     let param_attrs = self.extract_param_attributes(&e.params);
-                    let body = self.flatten_expr(&e.body)?;
+                    let (body, _) = self.flatten_expr(&e.body)?;
                     let ret_type = self.get_expr_type(&e.body);
                     let entry_kind = if e.entry_type.is_vertex() { "vertex" } else { "fragment" };
                     let attrs = vec![mir::Attribute {
@@ -334,78 +337,104 @@ impl Flattener {
         }
     }
 
-    /// Flatten an expression
-    fn flatten_expr(&mut self, expr: &Expression) -> Result<Expr> {
+    /// Flatten an expression, returning the MIR expression and its static value
+    fn flatten_expr(&mut self, expr: &Expression) -> Result<(Expr, StaticValue)> {
         let span = expr.h.span;
         let ty = self.get_expr_type(expr);
-        let kind = match &expr.kind {
-            ExprKind::IntLiteral(n) => mir::ExprKind::Literal(mir::Literal::Int(n.to_string())),
-            ExprKind::FloatLiteral(f) => mir::ExprKind::Literal(mir::Literal::Float(f.to_string())),
-            ExprKind::BoolLiteral(b) => mir::ExprKind::Literal(mir::Literal::Bool(*b)),
-            ExprKind::Identifier(name) => mir::ExprKind::Var(name.clone()),
+        let (kind, sv) = match &expr.kind {
+            ExprKind::IntLiteral(n) => (
+                mir::ExprKind::Literal(mir::Literal::Int(n.to_string())),
+                StaticValue::Dyn,
+            ),
+            ExprKind::FloatLiteral(f) => (
+                mir::ExprKind::Literal(mir::Literal::Float(f.to_string())),
+                StaticValue::Dyn,
+            ),
+            ExprKind::BoolLiteral(b) => (mir::ExprKind::Literal(mir::Literal::Bool(*b)), StaticValue::Dyn),
+            ExprKind::Identifier(name) => {
+                // Look up static value for this variable
+                let sv = self.static_values.lookup(name).ok().cloned().unwrap_or(StaticValue::Dyn);
+                (mir::ExprKind::Var(name.clone()), sv)
+            }
             ExprKind::QualifiedName(quals, name) => {
                 let full_name =
                     if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) };
-                mir::ExprKind::Var(full_name)
+                (mir::ExprKind::Var(full_name), StaticValue::Dyn)
             }
             ExprKind::BinaryOp(op, lhs, rhs) => {
-                let lhs = self.flatten_expr(lhs)?;
-                let rhs = self.flatten_expr(rhs)?;
-                mir::ExprKind::BinOp {
-                    op: op.op.clone(),
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                }
+                let (lhs, _) = self.flatten_expr(lhs)?;
+                let (rhs, _) = self.flatten_expr(rhs)?;
+                (
+                    mir::ExprKind::BinOp {
+                        op: op.op.clone(),
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                    StaticValue::Dyn,
+                )
             }
             ExprKind::UnaryOp(op, operand) => {
-                let operand = self.flatten_expr(operand)?;
-                mir::ExprKind::UnaryOp {
-                    op: op.op.clone(),
-                    operand: Box::new(operand),
-                }
+                let (operand, _) = self.flatten_expr(operand)?;
+                (
+                    mir::ExprKind::UnaryOp {
+                        op: op.op.clone(),
+                        operand: Box::new(operand),
+                    },
+                    StaticValue::Dyn,
+                )
             }
             ExprKind::If(if_expr) => {
-                let cond = self.flatten_expr(&if_expr.condition)?;
-                let then_branch = self.flatten_expr(&if_expr.then_branch)?;
-                let else_branch = self.flatten_expr(&if_expr.else_branch)?;
-                mir::ExprKind::If {
-                    cond: Box::new(cond),
-                    then_branch: Box::new(then_branch),
-                    else_branch: Box::new(else_branch),
-                }
+                let (cond, _) = self.flatten_expr(&if_expr.condition)?;
+                let (then_branch, _) = self.flatten_expr(&if_expr.then_branch)?;
+                let (else_branch, _) = self.flatten_expr(&if_expr.else_branch)?;
+                (
+                    mir::ExprKind::If {
+                        cond: Box::new(cond),
+                        then_branch: Box::new(then_branch),
+                        else_branch: Box::new(else_branch),
+                    },
+                    StaticValue::Dyn,
+                )
             }
             ExprKind::LetIn(let_in) => self.flatten_let_in(let_in, span)?,
             ExprKind::Lambda(lambda) => self.flatten_lambda(lambda, span)?,
             ExprKind::Application(func, args) => self.flatten_application(func, args, span)?,
-            ExprKind::FunctionCall(name, args) => {
-                let args: Result<Vec<_>> = args.iter().map(|a| self.flatten_expr(a)).collect();
-                mir::ExprKind::Call {
-                    func: name.clone(),
-                    args: args?,
-                }
-            }
             ExprKind::Tuple(elems) => {
-                let elems: Result<Vec<_>> = elems.iter().map(|e| self.flatten_expr(e)).collect();
-                mir::ExprKind::Literal(mir::Literal::Tuple(elems?))
+                let elems: Result<Vec<_>> =
+                    elems.iter().map(|e| self.flatten_expr(e).map(|(e, _)| e)).collect();
+                (
+                    mir::ExprKind::Literal(mir::Literal::Tuple(elems?)),
+                    StaticValue::Dyn,
+                )
             }
             ExprKind::ArrayLiteral(elems) => {
-                let elems: Result<Vec<_>> = elems.iter().map(|e| self.flatten_expr(e)).collect();
-                mir::ExprKind::Literal(mir::Literal::Array(elems?))
+                let elems: Result<Vec<_>> =
+                    elems.iter().map(|e| self.flatten_expr(e).map(|(e, _)| e)).collect();
+                (
+                    mir::ExprKind::Literal(mir::Literal::Array(elems?)),
+                    StaticValue::Dyn,
+                )
             }
             ExprKind::RecordLiteral(fields) => {
                 let fields: Result<Vec<_>> = fields
                     .iter()
-                    .map(|(name, expr)| Ok((name.clone(), self.flatten_expr(expr)?)))
+                    .map(|(name, expr)| Ok((name.clone(), self.flatten_expr(expr)?.0)))
                     .collect();
-                mir::ExprKind::Literal(mir::Literal::Record(fields?))
+                (
+                    mir::ExprKind::Literal(mir::Literal::Record(fields?)),
+                    StaticValue::Dyn,
+                )
             }
             ExprKind::ArrayIndex(arr, idx) => {
-                let arr = self.flatten_expr(arr)?;
-                let idx = self.flatten_expr(idx)?;
-                mir::ExprKind::Intrinsic {
-                    name: "index".to_string(),
-                    args: vec![arr, idx],
-                }
+                let (arr, _) = self.flatten_expr(arr)?;
+                let (idx, _) = self.flatten_expr(idx)?;
+                (
+                    mir::ExprKind::Intrinsic {
+                        name: "index".to_string(),
+                        args: vec![arr, idx],
+                    },
+                    StaticValue::Dyn,
+                )
             }
             ExprKind::FieldAccess(obj_expr, field) => {
                 // Check for special cases when obj is an identifier
@@ -415,20 +444,23 @@ impl Flattener {
                         let closure_type = Type::Constructed(TypeName::Str("closure".into()), vec![]);
                         let obj =
                             Expr::new(closure_type, mir::ExprKind::Var("__closure".to_string()), span);
-                        return Ok(Expr::new(
-                            ty,
-                            mir::ExprKind::Intrinsic {
-                                name: "record_access".to_string(),
-                                args: vec![
-                                    obj,
-                                    Expr::new(
-                                        Type::Constructed(TypeName::Str("string".into()), vec![]),
-                                        mir::ExprKind::Literal(mir::Literal::String(field.clone())),
-                                        span,
-                                    ),
-                                ],
-                            },
-                            span,
+                        return Ok((
+                            Expr::new(
+                                ty,
+                                mir::ExprKind::Intrinsic {
+                                    name: "record_access".to_string(),
+                                    args: vec![
+                                        obj,
+                                        Expr::new(
+                                            Type::Constructed(TypeName::Str("string".into()), vec![]),
+                                            mir::ExprKind::Literal(mir::Literal::String(field.clone())),
+                                            span,
+                                        ),
+                                    ],
+                                },
+                                span,
+                            ),
+                            StaticValue::Dyn,
                         ));
                     }
 
@@ -436,11 +468,14 @@ impl Flattener {
                     // If not, it's a qualified name like f32.sqrt
                     if self.type_table.get(&obj_expr.h.id).is_none() {
                         let full_name = format!("{}.{}", name, field);
-                        return Ok(Expr::new(ty, mir::ExprKind::Var(full_name), span));
+                        return Ok((
+                            Expr::new(ty, mir::ExprKind::Var(full_name), span),
+                            StaticValue::Dyn,
+                        ));
                     }
                 }
 
-                let obj = self.flatten_expr(obj_expr)?;
+                let (obj, _) = self.flatten_expr(obj_expr)?;
 
                 // Resolve field name to index using type information
                 let idx = self.resolve_field_index(obj_expr, field)?;
@@ -448,31 +483,37 @@ impl Flattener {
                 // Create i32 type for the index literal
                 let i32_type = Type::Constructed(TypeName::Str("i32".into()), vec![]);
 
-                mir::ExprKind::Intrinsic {
-                    name: "tuple_access".to_string(),
-                    args: vec![
-                        obj,
-                        Expr::new(
-                            i32_type,
-                            mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
-                            span,
-                        ),
-                    ],
-                }
+                (
+                    mir::ExprKind::Intrinsic {
+                        name: "tuple_access".to_string(),
+                        args: vec![
+                            obj,
+                            Expr::new(
+                                i32_type,
+                                mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
+                                span,
+                            ),
+                        ],
+                    },
+                    StaticValue::Dyn,
+                )
             }
             ExprKind::Loop(loop_expr) => self.flatten_loop(loop_expr, span)?,
             ExprKind::Pipe(lhs, rhs) => {
                 // a |> f  =>  f(a)
-                let lhs_flat = self.flatten_expr(lhs)?;
+                let (lhs_flat, _) = self.flatten_expr(lhs)?;
                 // Treat rhs as a function to apply to lhs
                 match &rhs.kind {
-                    ExprKind::Identifier(name) => mir::ExprKind::Call {
-                        func: name.clone(),
-                        args: vec![lhs_flat],
-                    },
+                    ExprKind::Identifier(name) => (
+                        mir::ExprKind::Call {
+                            func: name.clone(),
+                            args: vec![lhs_flat],
+                        },
+                        StaticValue::Dyn,
+                    ),
                     _ => {
                         // General case: application
-                        let rhs_flat = self.flatten_expr(rhs)?;
+                        let (_rhs_flat, _) = self.flatten_expr(rhs)?;
                         // This would need closure calling, simplified for now
                         return Err(CompilerError::FlatteningError(
                             "Complex pipe expressions not yet supported".to_string(),
@@ -485,22 +526,28 @@ impl Flattener {
                 return self.flatten_expr(inner);
             }
             ExprKind::Unsafe(inner) => {
-                let inner = self.flatten_expr(inner)?;
-                mir::ExprKind::Attributed {
-                    attributes: vec![mir::Attribute {
-                        name: "unsafe".to_string(),
-                        args: vec![],
-                    }],
-                    expr: Box::new(inner),
-                }
+                let (inner, _) = self.flatten_expr(inner)?;
+                (
+                    mir::ExprKind::Attributed {
+                        attributes: vec![mir::Attribute {
+                            name: "unsafe".to_string(),
+                            args: vec![],
+                        }],
+                        expr: Box::new(inner),
+                    },
+                    StaticValue::Dyn,
+                )
             }
             ExprKind::Assert(cond, body) => {
-                let cond = self.flatten_expr(cond)?;
-                let body = self.flatten_expr(body)?;
-                mir::ExprKind::Intrinsic {
-                    name: "assert".to_string(),
-                    args: vec![cond, body],
-                }
+                let (cond, _) = self.flatten_expr(cond)?;
+                let (body, _) = self.flatten_expr(body)?;
+                (
+                    mir::ExprKind::Intrinsic {
+                        name: "assert".to_string(),
+                        args: vec![cond, body],
+                    },
+                    StaticValue::Dyn,
+                )
             }
             ExprKind::TypeHole => {
                 return Err(CompilerError::FlatteningError(
@@ -519,22 +566,36 @@ impl Flattener {
             }
         };
 
-        Ok(Expr::new(ty, kind, span))
+        Ok((Expr::new(ty, kind, span), sv))
     }
 
     /// Flatten a let-in expression, handling pattern destructuring
-    fn flatten_let_in(&mut self, let_in: &ast::LetInExpr, span: Span) -> Result<mir::ExprKind> {
-        let value = self.flatten_expr(&let_in.value)?;
+    fn flatten_let_in(
+        &mut self,
+        let_in: &ast::LetInExpr,
+        span: Span,
+    ) -> Result<(mir::ExprKind, StaticValue)> {
+        let (value, value_sv) = self.flatten_expr(&let_in.value)?;
 
         // Check if pattern is simple (just a name)
         match &let_in.pattern.kind {
             PatternKind::Name(name) => {
-                let body = self.flatten_expr(&let_in.body)?;
-                Ok(mir::ExprKind::Let {
-                    name: name.clone(),
-                    value: Box::new(value),
-                    body: Box::new(body),
-                })
+                // Track the static value of this binding
+                self.static_values.push_scope();
+                self.static_values.insert(name.clone(), value_sv);
+
+                let (body, body_sv) = self.flatten_expr(&let_in.body)?;
+
+                self.static_values.pop_scope();
+
+                Ok((
+                    mir::ExprKind::Let {
+                        name: name.clone(),
+                        value: Box::new(value),
+                        body: Box::new(body),
+                    },
+                    body_sv,
+                ))
             }
             PatternKind::Typed(inner, _) => {
                 // Recursively handle typed pattern
@@ -548,12 +609,15 @@ impl Flattener {
             }
             PatternKind::Wildcard => {
                 // Bind to ignored variable, just for side effects
-                let body = self.flatten_expr(&let_in.body)?;
-                Ok(mir::ExprKind::Let {
-                    name: self.fresh_name("ignored"),
-                    value: Box::new(value),
-                    body: Box::new(body),
-                })
+                let (body, body_sv) = self.flatten_expr(&let_in.body)?;
+                Ok((
+                    mir::ExprKind::Let {
+                        name: self.fresh_name("ignored"),
+                        value: Box::new(value),
+                        body: Box::new(body),
+                    },
+                    body_sv,
+                ))
             }
             PatternKind::Tuple(patterns) => {
                 // Generate a temp name for the tuple value
@@ -570,7 +634,7 @@ impl Flattener {
                 };
 
                 // Build nested lets from inside out
-                let mut body = self.flatten_expr(&let_in.body)?;
+                let (mut body, body_sv) = self.flatten_expr(&let_in.body)?;
 
                 // Extract each element
                 for (i, pat) in patterns.iter().enumerate().rev() {
@@ -626,11 +690,14 @@ impl Flattener {
                 }
 
                 // Wrap with the tuple binding
-                Ok(mir::ExprKind::Let {
-                    name: tmp,
-                    value: Box::new(value),
-                    body: Box::new(body),
-                })
+                Ok((
+                    mir::ExprKind::Let {
+                        name: tmp,
+                        value: Box::new(value),
+                        body: Box::new(body),
+                    },
+                    body_sv,
+                ))
             }
             _ => Err(CompilerError::FlatteningError(format!(
                 "Pattern kind {:?} not yet supported in let",
@@ -640,7 +707,11 @@ impl Flattener {
     }
 
     /// Flatten a lambda expression (defunctionalization)
-    fn flatten_lambda(&mut self, lambda: &ast::LambdaExpr, span: Span) -> Result<mir::ExprKind> {
+    fn flatten_lambda(
+        &mut self,
+        lambda: &ast::LambdaExpr,
+        span: Span,
+    ) -> Result<(mir::ExprKind, StaticValue)> {
         // Find free variables
         let mut bound = HashSet::new();
         for param in &lambda.params {
@@ -687,7 +758,7 @@ impl Flattener {
 
         // Rewrite body to access free variables from closure
         let rewritten_body = self.rewrite_free_vars(&lambda.body, &free_vars)?;
-        let body = self.flatten_expr(&rewritten_body)?;
+        let (body, _) = self.flatten_expr(&rewritten_body)?;
         let ret_type = body.ty.clone();
 
         // Create the generated function
@@ -726,7 +797,14 @@ impl Flattener {
             ));
         }
 
-        Ok(mir::ExprKind::Literal(mir::Literal::Record(fields)))
+        // Return the closure record along with the static value indicating it's a known closure
+        let sv = StaticValue::Closure {
+            tag,
+            lam_name: func_name,
+            arity,
+        };
+
+        Ok((mir::ExprKind::Literal(mir::Literal::Record(fields)), sv))
     }
 
     /// Flatten an application expression
@@ -734,38 +812,102 @@ impl Flattener {
         &mut self,
         func: &Expression,
         args: &[Expression],
-        span: Span,
-    ) -> Result<mir::ExprKind> {
-        let func_flat = self.flatten_expr(func)?;
-        let args_flat: Result<Vec<_>> = args.iter().map(|a| self.flatten_expr(a)).collect();
+        _span: Span,
+    ) -> Result<(mir::ExprKind, StaticValue)> {
+        let (func_flat, func_sv) = self.flatten_expr(func)?;
+        let args_flat: Result<Vec<_>> = args.iter().map(|a| self.flatten_expr(a).map(|(e, _)| e)).collect();
         let args_flat = args_flat?;
 
         // Check if this is applying a known function name
         match &func.kind {
             ExprKind::Identifier(name) => {
-                // Direct function call
-                Ok(mir::ExprKind::Call {
-                    func: name.clone(),
-                    args: args_flat,
-                })
+                // Check if the identifier is bound to a known closure
+                if let StaticValue::Closure { lam_name, .. } = func_sv {
+                    // Direct call to the lambda function with closure as first argument
+                    let mut all_args = vec![func_flat];
+                    all_args.extend(args_flat);
+                    Ok((
+                        mir::ExprKind::Call {
+                            func: lam_name,
+                            args: all_args,
+                        },
+                        StaticValue::Dyn,
+                    ))
+                } else {
+                    // Direct function call (not a closure)
+                    Ok((
+                        mir::ExprKind::Call {
+                            func: name.clone(),
+                            args: args_flat,
+                        },
+                        StaticValue::Dyn,
+                    ))
+                }
+            }
+            // Handle qualified names like f32.sqrt
+            ExprKind::FieldAccess(obj, field) => {
+                if let ExprKind::Identifier(module) = &obj.kind {
+                    // Check if this is a qualified name (no type in type_table means it's a type/module name)
+                    if self.type_table.get(&obj.h.id).is_none() {
+                        let full_name = format!("{}.{}", module, field);
+                        return Ok((
+                            mir::ExprKind::Call {
+                                func: full_name,
+                                args: args_flat,
+                            },
+                            StaticValue::Dyn,
+                        ));
+                    }
+                }
+                // Not a qualified name, fall through to closure handling
+                if let StaticValue::Closure { lam_name, .. } = func_sv {
+                    let mut all_args = vec![func_flat];
+                    all_args.extend(args_flat);
+                    Ok((
+                        mir::ExprKind::Call {
+                            func: lam_name,
+                            args: all_args,
+                        },
+                        StaticValue::Dyn,
+                    ))
+                } else {
+                    Err(CompilerError::FlatteningError(
+                        "Cannot call closure with unknown static value.".to_string(),
+                    ))
+                }
             }
             _ => {
-                // Closure call: need to call __applyN or direct lambda call
-                // For simplicity, use intrinsic for now
-                let arity = args_flat.len();
-                let mut all_args = vec![func_flat];
-                all_args.extend(args_flat);
-
-                Ok(mir::ExprKind::Intrinsic {
-                    name: format!("apply{}", arity),
-                    args: all_args,
-                })
+                // Closure call: check if we know the static value
+                if let StaticValue::Closure { lam_name, .. } = func_sv {
+                    // Direct call to the lambda function with closure as first argument
+                    let mut all_args = vec![func_flat];
+                    all_args.extend(args_flat);
+                    Ok((
+                        mir::ExprKind::Call {
+                            func: lam_name,
+                            args: all_args,
+                        },
+                        StaticValue::Dyn,
+                    ))
+                } else {
+                    // Unknown closure - this should not happen with proper function value restrictions
+                    Err(CompilerError::FlatteningError(
+                        "Cannot call closure with unknown static value. \
+                         Functions cannot be returned from if expressions, \
+                         stored in arrays, or used as loop parameters."
+                            .to_string(),
+                    ))
+                }
             }
         }
     }
 
     /// Flatten a loop expression
-    fn flatten_loop(&mut self, loop_expr: &ast::LoopExpr, span: Span) -> Result<mir::ExprKind> {
+    fn flatten_loop(
+        &mut self,
+        loop_expr: &ast::LoopExpr,
+        span: Span,
+    ) -> Result<(mir::ExprKind, StaticValue)> {
         // Extract init bindings from pattern
         let init_bindings =
             self.extract_loop_bindings(&loop_expr.pattern, loop_expr.init.as_deref(), span)?;
@@ -773,11 +915,11 @@ impl Flattener {
         // Flatten loop kind
         let kind = match &loop_expr.form {
             ast::LoopForm::While(cond) => {
-                let cond = self.flatten_expr(cond)?;
+                let (cond, _) = self.flatten_expr(cond)?;
                 mir::LoopKind::While { cond: Box::new(cond) }
             }
             ast::LoopForm::For(var, bound) => {
-                let bound = self.flatten_expr(bound)?;
+                let (bound, _) = self.flatten_expr(bound)?;
                 mir::LoopKind::ForRange {
                     var: var.clone(),
                     bound: Box::new(bound),
@@ -792,7 +934,7 @@ impl Flattener {
                         ));
                     }
                 };
-                let iter = self.flatten_expr(iter)?;
+                let (iter, _) = self.flatten_expr(iter)?;
                 mir::LoopKind::For {
                     var,
                     iter: Box::new(iter),
@@ -800,13 +942,16 @@ impl Flattener {
             }
         };
 
-        let body = self.flatten_expr(&loop_expr.body)?;
+        let (body, _) = self.flatten_expr(&loop_expr.body)?;
 
-        Ok(mir::ExprKind::Loop {
-            init_bindings,
-            kind,
-            body: Box::new(body),
-        })
+        Ok((
+            mir::ExprKind::Loop {
+                init_bindings,
+                kind,
+                body: Box::new(body),
+            },
+            StaticValue::Dyn,
+        ))
     }
 
     /// Extract loop init bindings from pattern and init expression
@@ -821,13 +966,13 @@ impl Flattener {
 
         match &pattern.kind {
             PatternKind::Name(name) => {
-                let init_flat = self.flatten_expr(init_expr)?;
+                let (init_flat, _) = self.flatten_expr(init_expr)?;
                 Ok(vec![(name.clone(), init_flat)])
             }
             PatternKind::Typed(inner, _) => self.extract_loop_bindings(inner, init, span),
             PatternKind::Tuple(patterns) => {
                 // Init should also be a tuple
-                let init_flat = self.flatten_expr(init_expr)?;
+                let (init_flat, _) = self.flatten_expr(init_expr)?;
                 let tuple_ty = init_flat.ty.clone();
                 let tmp = self.fresh_name("init");
 
@@ -942,11 +1087,6 @@ impl Flattener {
             }
             ExprKind::Application(func, args) => {
                 self.collect_free_vars(func, bound, free);
-                for arg in args {
-                    self.collect_free_vars(arg, bound, free);
-                }
-            }
-            ExprKind::FunctionCall(_, args) => {
                 for arg in args {
                     self.collect_free_vars(arg, bound, free);
                 }
@@ -1081,11 +1221,6 @@ impl Flattener {
                     value: Box::new(value),
                     body: Box::new(body),
                 })
-            }
-            ExprKind::FunctionCall(name, args) => {
-                let args: Result<Vec<_>> =
-                    args.iter().map(|a| self.rewrite_free_vars(a, free_vars)).collect();
-                ExprKind::FunctionCall(name.clone(), args?)
             }
             ExprKind::Application(func, args) => {
                 let func = self.rewrite_free_vars(func, free_vars)?;

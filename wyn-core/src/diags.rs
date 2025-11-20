@@ -215,21 +215,6 @@ impl AstFormatter {
                 let operand_str = self.format_simple_expr(operand);
                 self.write_line(&format!("{}{}", op.op, operand_str));
             }
-            ExprKind::FunctionCall(name, args) => {
-                // Check if any args are complex (not simple expressions)
-                let has_complex_args = args.iter().any(|a| !self.is_simple_expr(a));
-                if has_complex_args && args.len() == 1 {
-                    // Single complex argument - show it expanded
-                    self.write_line(&format!("{}(", name));
-                    self.indent += 1;
-                    self.write_expression(&args[0]);
-                    self.indent -= 1;
-                    self.write_line(")");
-                } else {
-                    let args_str: Vec<String> = args.iter().map(|a| self.format_simple_expr(a)).collect();
-                    self.write_line(&format!("{}({})", name, args_str.join(", ")));
-                }
-            }
             ExprKind::Tuple(elems) => {
                 let items: Vec<String> = elems.iter().map(|e| self.format_simple_expr(e)).collect();
                 self.write_line(&format!("({})", items.join(", ")));
@@ -409,10 +394,6 @@ impl AstFormatter {
             }
             ExprKind::UnaryOp(op, operand) => {
                 format!("({}{})", op.op, self.format_simple_expr(operand))
-            }
-            ExprKind::FunctionCall(name, args) => {
-                let args_str: Vec<String> = args.iter().map(|a| self.format_simple_expr(a)).collect();
-                format!("{}({})", name, args_str.join(", "))
             }
             ExprKind::Application(func, args) => {
                 let func_str = self.format_simple_expr(func);

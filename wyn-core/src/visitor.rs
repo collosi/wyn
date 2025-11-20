@@ -258,7 +258,6 @@ pub fn walk_expression<V: Visitor>(v: &mut V, e: &Expression) -> ControlFlow<V::
         ExprKind::ArrayLiteral(elements) => v.visit_expr_array_literal(elements),
         ExprKind::ArrayIndex(array, index) => v.visit_expr_array_index(array, index),
         ExprKind::BinaryOp(op, left, right) => v.visit_expr_binary_op(op, left, right),
-        ExprKind::FunctionCall(name, args) => v.visit_expr_function_call(name, args),
         ExprKind::Tuple(elements) => v.visit_expr_tuple(elements),
         ExprKind::Lambda(lambda) => v.visit_expr_lambda(lambda),
         ExprKind::Application(func, args) => v.visit_expr_application(func, args),

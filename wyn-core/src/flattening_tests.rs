@@ -224,7 +224,7 @@ def test_map (arr:[4]i32) : [4]i32 =
 
 #[test]
 fn test_direct_closure_call() {
-    // This test checks that directly calling a closure generates apply1 intrinsic
+    // This test checks that directly calling a closure generates a direct lambda call
     let mir = flatten_with_types(
         r#"
 def test_apply (x:i32) : i32 =
@@ -236,6 +236,67 @@ def test_apply (x:i32) : i32 =
     println!("MIR output:\n{}", mir_str);
     println!("Lambda registry: {:?}", mir.lambda_registry);
 
-    // Should have apply1 intrinsic for direct closure call
-    assert!(mir_str.contains("apply1"));
+    // Should generate a direct call to __lam_test_apply_0 with the closure as first argument
+    assert!(mir_str.contains("__lam_test_apply_0 f 10"));
+    // Should NOT generate apply1 intrinsic
+    assert!(!mir_str.contains("apply1"));
+}
+
+// Tests for function value restrictions (Futhark-style defunctionalization constraints)
+
+#[test]
+fn test_error_array_of_functions() {
+    // Arrays of functions are not permitted
+    let input = r#"
+def test : [2](i32 -> i32) =
+    [\(x:i32) -> x + 1, \(x:i32) -> x * 2]
+"#;
+    let tokens = tokenize(input).expect("Tokenization failed");
+    let mut parser = Parser::new(tokens);
+    let ast = parser.parse().expect("Parsing failed");
+
+    let mut type_checker = TypeChecker::new();
+    type_checker.load_builtins().expect("Failed to load builtins");
+    let result = type_checker.check_program(&ast);
+
+    assert!(result.is_err(), "Should reject arrays of functions");
+}
+
+#[test]
+fn test_error_function_from_if() {
+    // A function cannot be returned from an if expression
+    let input = r#"
+def choose (b:bool) : (i32 -> i32) =
+    if b then \(x:i32) -> x + 1 else \(x:i32) -> x * 2
+"#;
+    let tokens = tokenize(input).expect("Tokenization failed");
+    let mut parser = Parser::new(tokens);
+    let ast = parser.parse().expect("Parsing failed");
+
+    let mut type_checker = TypeChecker::new();
+    type_checker.load_builtins().expect("Failed to load builtins");
+    let result = type_checker.check_program(&ast);
+
+    assert!(
+        result.is_err(),
+        "Should reject function returned from if expression"
+    );
+}
+
+#[test]
+fn test_error_loop_parameter_function() {
+    // A loop parameter cannot be a function
+    let input = r#"
+def test : (i32 -> i32) =
+    loop f = \(x:i32) -> x while false do f
+"#;
+    let tokens = tokenize(input).expect("Tokenization failed");
+    let mut parser = Parser::new(tokens);
+    let ast = parser.parse().expect("Parsing failed");
+
+    let mut type_checker = TypeChecker::new();
+    type_checker.load_builtins().expect("Failed to load builtins");
+    let result = type_checker.check_program(&ast);
+
+    assert!(result.is_err(), "Should reject function as loop parameter");
 }

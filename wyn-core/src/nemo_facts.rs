@@ -199,7 +199,6 @@ pub fn expr_type_name(expr: &Expression) -> &'static str {
         ExprKind::ArrayLiteral(_) => "array_literal",
         ExprKind::ArrayIndex(..) => "array_index",
         ExprKind::BinaryOp(..) => "binary_op",
-        ExprKind::FunctionCall(..) => "function_call",
         ExprKind::Application(..) => "application",
         ExprKind::Tuple(_) => "tuple",
         ExprKind::Lambda(_) => "lambda",
