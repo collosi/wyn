@@ -60,6 +60,11 @@ struct SpvBuilder {
     current_is_entry_point: bool,
     current_output_vars: Vec<spirv::Word>,
     current_input_vars: Vec<(spirv::Word, String, spirv::Word)>, // (var_id, param_name, type_id)
+
+    // Global constants: name -> (var_id, type_id)
+    global_constants: HashMap<String, (spirv::Word, spirv::Word)>,
+    // Pending constant initializations: (var_id, body_expr)
+    pending_constant_inits: Vec<(spirv::Word, Expr)>,
 }
 
 impl SpvBuilder {
@@ -99,6 +104,8 @@ impl SpvBuilder {
             current_is_entry_point: false,
             current_output_vars: Vec::new(),
             current_input_vars: Vec::new(),
+            global_constants: HashMap::new(),
+            pending_constant_inits: Vec::new(),
         }
     }
 
@@ -510,6 +517,11 @@ pub fn lower(program: &mir::Program) -> Result<Vec<u32>> {
         lower_def(&mut spv, def)?;
     }
 
+    // Generate _init function to initialize global constants
+    if !spv.pending_constant_inits.is_empty() {
+        generate_init_function(&mut spv)?;
+    }
+
     // Emit entry points with interface variables
     for (name, model) in entry_points {
         if let Some(&func_id) = spv.functions.get(&name) {
@@ -556,16 +568,34 @@ fn lower_def(spv: &mut SpvBuilder, def: &Def) -> Result<()> {
             }
         }
         Def::Constant { name, ty, body, .. } => {
-            // Constants become zero-argument functions
-            let return_type = spv.ast_type_to_spirv(ty);
-            spv.begin_function(name, &[], &[], return_type)?;
+            // Create global variable for constant (Private storage class)
+            let value_type = spv.ast_type_to_spirv(ty);
+            let ptr_type = spv.get_or_create_ptr_type(StorageClass::Private, value_type);
+            let var_id = spv.builder.variable(ptr_type, None, StorageClass::Private, None);
 
-            let result = lower_expr(spv, body)?;
-            spv.ret_value(result)?;
-
-            spv.end_function()?;
+            // Store for later initialization and lookup
+            spv.global_constants.insert(name.clone(), (var_id, value_type));
+            spv.pending_constant_inits.push((var_id, body.clone()));
         }
     }
+
+    Ok(())
+}
+
+/// Generate _init function that initializes all global constants
+fn generate_init_function(spv: &mut SpvBuilder) -> Result<()> {
+    // Take pending inits to avoid borrow issues
+    let inits = std::mem::take(&mut spv.pending_constant_inits);
+
+    spv.begin_function("_init", &[], &[], spv.void_type)?;
+
+    for (var_id, body) in inits {
+        let value = lower_expr(spv, &body)?;
+        spv.builder.store(var_id, value, None, [])?;
+    }
+
+    spv.builder.ret()?;
+    spv.end_function()?;
 
     Ok(())
 }
@@ -787,6 +817,11 @@ fn lower_entry_point(
     spv.builder.begin_block(Some(block_id))?;
     spv.current_block = Some(block_id);
 
+    // Call _init to initialize global constants
+    if let Some(&init_func_id) = spv.functions.get("_init") {
+        spv.builder.function_call(spv.void_type, None, init_func_id, [])?;
+    }
+
     // Load input variables into environment
     for (var_id, param_name, type_id) in spv.current_input_vars.clone() {
         let loaded = spv.builder.load(type_id, None, var_id, None, [])?;
@@ -846,11 +881,17 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
     match &expr.kind {
         ExprKind::Literal(lit) => lower_literal(spv, lit),
 
-        ExprKind::Var(name) => spv
-            .env
-            .get(name)
-            .copied()
-            .ok_or_else(|| CompilerError::SpirvError(format!("Undefined variable: {}", name))),
+        ExprKind::Var(name) => {
+            // First check local environment
+            if let Some(&id) = spv.env.get(name) {
+                return Ok(id);
+            }
+            // Then check global constants (load from global variable)
+            if let Some(&(var_id, type_id)) = spv.global_constants.get(name) {
+                return Ok(spv.builder.load(type_id, None, var_id, None, [])?);
+            }
+            Err(CompilerError::SpirvError(format!("Undefined variable: {}", name)))
+        }
 
         ExprKind::BinOp { op, lhs, rhs } => {
             let lhs_id = lower_expr(spv, lhs)?;
@@ -1073,10 +1114,22 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                     if args.len() != 2 {
                         return Err(CompilerError::SpirvError("index requires 2 args".to_string()));
                     }
-                    // Array indexing - would need OpAccessChain
-                    Err(CompilerError::SpirvError(
-                        "Array indexing not yet fully implemented".to_string(),
-                    ))
+                    // Array indexing with OpAccessChain + OpLoad
+                    let array_val = lower_expr(spv, &args[0])?;
+                    let index_val = lower_expr(spv, &args[1])?;
+
+                    // Store array in a variable to get a pointer
+                    let array_type = spv.ast_type_to_spirv(&args[0].ty);
+                    let ptr_type = spv.builder.type_pointer(None, StorageClass::Function, array_type);
+                    let array_var = spv.builder.variable(ptr_type, None, StorageClass::Function, None);
+                    spv.builder.store(array_var, array_val, None, [])?;
+
+                    // Use OpAccessChain to get pointer to element
+                    let elem_ptr_type = spv.builder.type_pointer(None, StorageClass::Function, result_type);
+                    let elem_ptr = spv.builder.access_chain(elem_ptr_type, None, array_var, [index_val])?;
+
+                    // Load the element
+                    Ok(spv.builder.load(result_type, None, elem_ptr, None, [])?)
                 }
                 "assert" => {
                     // Assertions are no-ops in release, return body
