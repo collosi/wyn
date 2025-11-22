@@ -1,6 +1,7 @@
 // pub mod annotator;
 pub mod ast;
 pub mod builtin_registry;
+pub mod desugar;
 pub mod diags;
 pub mod error;
 pub mod flattening;
@@ -80,7 +81,7 @@ impl Compiler {
 
         // Parse
         let mut parser = parser::Parser::new(tokens);
-        let program = parser.parse()?;
+        let mut program = parser.parse()?;
 
         // Type check
         let mut type_checker = type_checker::TypeChecker::new();
@@ -95,6 +96,9 @@ impl Compiler {
                 warning.span()
             );
         }
+
+        // Desugar overloaded surface syntax (e.g., mul -> mul_mat_mat/mul_mat_vec/mul_vec_mat)
+        desugar::desugar_program(&mut program, &type_table)?;
 
         // Flatten (AST -> MIR with defunctionalization)
         let builtins = builtin_registry::BuiltinRegistry::default().all_names();

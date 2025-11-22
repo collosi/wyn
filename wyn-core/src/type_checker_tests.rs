@@ -82,12 +82,12 @@ fn test_zip_arrays() {
 }
 
 #[test]
-fn test_mmul_concrete_matrix_types() {
-    // This test verifies that polymorphic mmul works with concrete matrix types
+fn test_mul_concrete_matrix_types() {
+    // This test verifies that polymorphic mul works with concrete matrix types
     typecheck_program(
         r#"
-def test_mmul (mat1:[4]vec4f32) (mat2:[4]vec4f32) : [4]vec4f32 =
-    mmul mat1 mat2
+def test_mul (mat1:[4]vec4f32) (mat2:[4]vec4f32) : [4]vec4f32 =
+    mul mat1 mat2
         "#,
     );
 }

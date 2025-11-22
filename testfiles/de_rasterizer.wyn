@@ -48,7 +48,7 @@ def circle (weight:f32) (p:vec2f32) (c:vec2f32) (r:f32) (w:f32) : f32 =
   f32.min (s*s) 1.0f32
 
 -- Matrices
-def getRotMatrix (a:vec3f32) : [4]vec4f32 =
+def getRotMatrix (a:vec3f32) : mat4f32 =
   let s = [ f32.sin a.x, f32.sin a.y, f32.sin a.z ] in
   let c = [ f32.cos a.x, f32.cos a.y, f32.cos a.z ] in
   -- Columns ret[0..3], matching GLSL code:
@@ -58,7 +58,7 @@ def getRotMatrix (a:vec3f32) : [4]vec4f32 =
   let c3 : vec4f32 = vec4 0.0f32 0.0f32 0.0f32 1.0f32 in
   [c0,c1,c2,c3]
 
-def getPosMatrix (p:vec3f32) : [4]vec4f32 =
+def getPosMatrix (p:vec3f32) : mat4f32 =
   let c0 : vec4f32 = vec4 1.0f32 0.0f32 0.0f32 p.x in
   let c1 : vec4f32 = vec4 0.0f32 1.0f32 0.0f32 p.y in
   let c2 : vec4f32 = vec4 0.0f32 0.0f32 1.0f32 p.z in
@@ -127,7 +127,7 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
     loop (idx, acc) = (0i32, base_col) while idx < 18 do
       let inst = instA[idx] in
       let pos  = getPosMatrix (vec3 (inst.x * 4.0f32) (inst.y * 4.0f32) (inst.z * 4.0f32)) in
-      let mat  : [4]vec4f32 = mmul (mmul pos rot) cam in
+      let mat  : mat4f32 = mul (mul pos rot) cam in
 
       -- 8 cube corners in object space
       let verts0 : [8]vec3f32 =
@@ -141,7 +141,7 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
           vec3 1.0f32 (-1.0f32) (-1.0f32) ] in
 
       -- Transform & perspective
-      let v4s : [8]vec4f32 = map (\(v:vec3f32) -> mmul (vec4 v.x v.y v.z 1.0f32) mat) verts0 in
+      let v4s : [8]vec4f32 = map (\(v:vec3f32) -> mul (vec4 v.x v.y v.z 1.0f32) mat) verts0 in
       let verts1 : [8]vec3f32 =
         map (\(q:vec4f32) ->
                   let zinv = 1.0f32 / q.z in
@@ -183,8 +183,8 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
     loop (idx, acc) = (0i32, c_box) while idx < 8 do
       let inst = instB[idx] in
       let pos = getPosMatrix (vec3 (inst.x * 4.0f32) (inst.y * 4.0f32) (inst.z * 4.0f32)) in
-      let mat : [4]vec4f32 = mmul (mmul pos rot) cam in
-      let v4  : vec4f32 = mmul (vec4 0.0f32 0.0f32 0.0f32 1.0f32) mat in
+      let mat : mat4f32 = mul (mul pos rot) cam in
+      let v4  : vec4f32 = mul (vec4 0.0f32 0.0f32 0.0f32 1.0f32) mat in
       let zinv = 1.0f32 / v4.z in
       let vert : vec3f32 = vec3 (v4.x*zinv) (v4.y*zinv) zinv in
       let sh  = fragment vert iTime in

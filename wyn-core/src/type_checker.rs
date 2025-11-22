@@ -1472,6 +1472,7 @@ impl TypeChecker {
                                     TypeName::Array => "array".to_string(),
                                     TypeName::Unsized => "unsized".to_string(),
                                     TypeName::Vec => "vec".to_string(),
+                                    TypeName::Mat => "mat".to_string(),
                                     TypeName::Size(n) => n.to_string(),
                                     TypeName::SizeVar(name) => name.clone(),
                                     TypeName::UserVar(name) => format!("'{}", name),

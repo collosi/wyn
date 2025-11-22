@@ -2,11 +2,24 @@ use crate::ast::*;
 use crate::error::{CompilerError, Result};
 use crate::lexer::{LocatedToken, Token};
 use log::trace;
+use std::sync::OnceLock;
 
 mod module;
 mod pattern;
 #[cfg(test)]
 mod tests;
+
+// Lazily initialized type constructor maps
+static VECTOR_TYPES: OnceLock<std::collections::HashMap<String, Type>> = OnceLock::new();
+static MATRIX_TYPES: OnceLock<std::collections::HashMap<String, Type>> = OnceLock::new();
+
+fn get_vector_types() -> &'static std::collections::HashMap<String, Type> {
+    VECTOR_TYPES.get_or_init(|| types::vector_type_constructors())
+}
+
+fn get_matrix_types() -> &'static std::collections::HashMap<String, Type> {
+    MATRIX_TYPES.get_or_init(|| types::matrix_type_constructors())
+}
 
 pub struct Parser {
     tokens: Vec<LocatedToken>,
@@ -682,6 +695,20 @@ impl Parser {
 
     fn parse_base_type(&mut self) -> Result<Type> {
         trace!("parse_base_type: next token = {:?}", self.peek());
+
+        // Check for vector/matrix types first to avoid borrow issues
+        if let Some(Token::Identifier(name)) = self.peek() {
+            let name_str = name.clone();
+            if let Some(ty) = get_vector_types().get(&name_str) {
+                self.advance();
+                return Ok(ty.clone());
+            }
+            if let Some(ty) = get_matrix_types().get(&name_str) {
+                self.advance();
+                return Ok(ty.clone());
+            }
+        }
+
         match self.peek() {
             Some(Token::Identifier(name)) if name == "i32" => {
                 self.advance();
@@ -690,68 +717,6 @@ impl Parser {
             Some(Token::Identifier(name)) if name == "f32" => {
                 self.advance();
                 Ok(types::f32())
-            }
-            // Concrete vector types with element type suffix
-            Some(Token::Identifier(name)) if name == "vec2f32" => {
-                self.advance();
-                Ok(types::vec(2, types::f32()))
-            }
-            Some(Token::Identifier(name)) if name == "vec3f32" => {
-                self.advance();
-                Ok(types::vec(3, types::f32()))
-            }
-            Some(Token::Identifier(name)) if name == "vec4f32" => {
-                self.advance();
-                Ok(types::vec(4, types::f32()))
-            }
-            Some(Token::Identifier(name)) if name == "vec2i32" => {
-                self.advance();
-                Ok(types::vec(2, types::i32()))
-            }
-            Some(Token::Identifier(name)) if name == "vec3i32" => {
-                self.advance();
-                Ok(types::vec(3, types::i32()))
-            }
-            Some(Token::Identifier(name)) if name == "vec4i32" => {
-                self.advance();
-                Ok(types::vec(4, types::i32()))
-            }
-            // Matrix types
-            Some(Token::Identifier(name)) if name == "mat2" => {
-                self.advance();
-                Ok(types::mat2())
-            }
-            Some(Token::Identifier(name)) if name == "mat3" => {
-                self.advance();
-                Ok(types::mat3())
-            }
-            Some(Token::Identifier(name)) if name == "mat4" => {
-                self.advance();
-                Ok(types::mat4())
-            }
-            Some(Token::Identifier(name)) if name == "mat2x3" => {
-                self.advance();
-                Ok(types::mat2x3())
-            }
-            Some(Token::Identifier(name)) if name == "mat2x4" => {
-                self.advance();
-                Ok(types::mat2x4())
-            }
-            Some(Token::Identifier(name)) if name == "mat3x2" => {
-                self.advance();
-                Ok(types::mat3x2())
-            }
-            Some(Token::Identifier(name)) if name == "mat3x4" => {
-                self.advance();
-                Ok(types::mat3x4())
-            }
-            Some(Token::Identifier(name)) if name == "mat4x2" => {
-                self.advance();
-                Ok(types::mat4x2())
-            }
-            Some(Token::Identifier(name)) if name == "mat4x3" => {
-                self.advance();
-                Ok(types::mat4x3())
             }
             Some(Token::Identifier(name)) if name.starts_with('\'') => {
                 // Type variable like 't, 'a, 'b

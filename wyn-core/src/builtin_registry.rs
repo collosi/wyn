@@ -642,36 +642,91 @@ impl BuiltinRegistry {
             BuiltinImpl::SpirvOp(SpirvOp::OuterProduct),
         );
 
-        // Matrix/vector multiplication: mmul
-        // Polymorphic over element type and size (like dot)
-        let size_var = ctx.new_variable();
-        let elem_var = ctx.new_variable();
+        // Internal multiplication variants (desugared from surface "mul")
+        // Surface code uses "mul", which is desugared to these based on argument shapes
 
-        let vec_t = Type::Constructed(TypeName::Vec, vec![size_var.clone(), elem_var.clone()]);
-        let mat_t = Type::Constructed(TypeName::Array, vec![size_var, vec_t.clone()]);
-
-        // mmul for matrix × matrix
+        // mul_mat_mat : ∀n m a. mat<n,m,a> -> mat<m,p,a> -> mat<n,p,a>
+        // For square matrices: mat<n,n,a> -> mat<n,n,a> -> mat<n,n,a>
+        let n = ctx.new_variable();
+        let m = ctx.new_variable();
+        let a = ctx.new_variable();
+        let mat_n_m_a = Type::Constructed(TypeName::Mat, vec![n.clone(), m.clone(), a.clone()]);
         self.register_poly(
-            "mmul",
-            vec![mat_t.clone(), mat_t.clone()],
-            mat_t.clone(),
+            "mul_mat_mat",
+            vec![mat_n_m_a.clone(), mat_n_m_a.clone()],
+            mat_n_m_a,
             BuiltinImpl::SpirvOp(SpirvOp::MatrixTimesMatrix),
         );
 
-        // mmul for matrix × vector
+        // mul_mat_vec : ∀n m a. mat<n,m,a> -> vec<m,a> -> vec<n,a>
+        let n = ctx.new_variable();
+        let m = ctx.new_variable();
+        let a = ctx.new_variable();
+        let vec_m_a = Type::Constructed(TypeName::Vec, vec![m.clone(), a.clone()]);
+        let vec_n_a = Type::Constructed(TypeName::Vec, vec![n.clone(), a.clone()]);
+        let mat_n_m = Type::Constructed(TypeName::Mat, vec![n, m, a.clone()]);
         self.register_poly(
-            "mmul",
-            vec![mat_t.clone(), vec_t.clone()],
-            vec_t.clone(),
+            "mul_mat_vec",
+            vec![mat_n_m, vec_m_a],
+            vec_n_a,
             BuiltinImpl::SpirvOp(SpirvOp::MatrixTimesVector),
         );
 
-        // mmul for vector × matrix (row vector × matrix)
+        // mul_vec_mat : ∀n m a. vec<n,a> -> mat<n,m,a> -> vec<m,a>
+        let n = ctx.new_variable();
+        let m = ctx.new_variable();
+        let a = ctx.new_variable();
+        let vec_n_a = Type::Constructed(TypeName::Vec, vec![n.clone(), a.clone()]);
+        let vec_m_a = Type::Constructed(TypeName::Vec, vec![m.clone(), a.clone()]);
+        let mat_n_m = Type::Constructed(TypeName::Mat, vec![n, m, a]);
         self.register_poly(
-            "mmul",
-            vec![vec_t.clone(), mat_t],
-            vec_t,
+            "mul_vec_mat",
+            vec![vec_n_a, mat_n_m],
+            vec_m_a,
             BuiltinImpl::SpirvOp(SpirvOp::VectorTimesMatrix),
+        );
+
+        // Surface "mul" overloads (will be desugared to the above variants)
+        // These are registered for type checking; desugaring rewrites them before lowering
+
+        // mul : ∀n m a. mat<n,m,a> -> mat<n,m,a> -> mat<n,m,a>
+        let n = ctx.new_variable();
+        let m = ctx.new_variable();
+        let a = ctx.new_variable();
+        let mat_n_m_a = Type::Constructed(TypeName::Mat, vec![n.clone(), m.clone(), a.clone()]);
+        self.register_poly(
+            "mul",
+            vec![mat_n_m_a.clone(), mat_n_m_a.clone()],
+            mat_n_m_a,
+            BuiltinImpl::Custom(CustomImpl::Placeholder), // Will be desugared
+        );
+
+        // mul : ∀n m a. mat<n,m,a> -> vec<m,a> -> vec<n,a>
+        let n = ctx.new_variable();
+        let m = ctx.new_variable();
+        let a = ctx.new_variable();
+        let vec_m_a = Type::Constructed(TypeName::Vec, vec![m.clone(), a.clone()]);
+        let vec_n_a = Type::Constructed(TypeName::Vec, vec![n.clone(), a.clone()]);
+        let mat_n_m = Type::Constructed(TypeName::Mat, vec![n, m, a.clone()]);
+        self.register_poly(
+            "mul",
+            vec![mat_n_m, vec_m_a],
+            vec_n_a,
+            BuiltinImpl::Custom(CustomImpl::Placeholder), // Will be desugared
+        );
+
+        // mul : ∀n m a. vec<n,a> -> mat<n,m,a> -> vec<m,a>
+        let n = ctx.new_variable();
+        let m = ctx.new_variable();
+        let a = ctx.new_variable();
+        let vec_n_a = Type::Constructed(TypeName::Vec, vec![n.clone(), a.clone()]);
+        let vec_m_a = Type::Constructed(TypeName::Vec, vec![m.clone(), a.clone()]);
+        let mat_n_m = Type::Constructed(TypeName::Mat, vec![n, m, a]);
+        self.register_poly(
+            "mul",
+            vec![vec_n_a, mat_n_m],
+            vec_m_a,
+            BuiltinImpl::Custom(CustomImpl::Placeholder), // Will be desugared
         );
     }
 

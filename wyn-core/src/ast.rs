@@ -1,3 +1,4 @@
+use itertools::Itertools;
 pub use spirv;
 
 // Type aliases for polytype types specialized to our TypeName
@@ -227,6 +228,9 @@ pub enum TypeName {
     Unsized,
     /// Vector type constructor (takes size and element type)
     Vec,
+    /// Matrix type constructor (takes rows, columns, and element type)
+    /// Corresponds to SPIR-V matrix types
+    Mat,
     /// Array size literal
     Size(usize),
     /// Size variable: [n]
@@ -255,6 +259,7 @@ impl std::fmt::Display for TypeName {
             TypeName::Array => write!(f, "Array"),
             TypeName::Unsized => write!(f, ""),
             TypeName::Vec => write!(f, "Vec"),
+            TypeName::Mat => write!(f, "Mat"),
             TypeName::Size(n) => write!(f, "{}", n),
             TypeName::SizeVar(name) => write!(f, "{}", name),
             TypeName::UserVar(name) => write!(f, "'{}", name),
@@ -308,6 +313,7 @@ impl polytype::Name for TypeName {
             TypeName::Array => "Array".to_string(),
             TypeName::Unsized => "".to_string(),
             TypeName::Vec => "Vec".to_string(),
+            TypeName::Mat => "Mat".to_string(),
             TypeName::Size(n) => format!("Size({})", n),
             TypeName::SizeVar(v) => format!("[{}]", v),
             TypeName::UserVar(v) => format!("'{}", v),
@@ -730,6 +736,24 @@ pub mod types {
         Type::Constructed(TypeName::Str("bool"), vec![])
     }
 
+    /// All valid SPIR-V scalar element types for vectors and matrices
+    fn spirv_element_types() -> Vec<(&'static str, Type)> {
+        vec![
+            ("i8", Type::Constructed(TypeName::Str("i8"), vec![])),
+            ("i16", Type::Constructed(TypeName::Str("i16"), vec![])),
+            ("i32", Type::Constructed(TypeName::Str("i32"), vec![])),
+            ("i64", Type::Constructed(TypeName::Str("i64"), vec![])),
+            ("u8", Type::Constructed(TypeName::Str("u8"), vec![])),
+            ("u16", Type::Constructed(TypeName::Str("u16"), vec![])),
+            ("u32", Type::Constructed(TypeName::Str("u32"), vec![])),
+            ("u64", Type::Constructed(TypeName::Str("u64"), vec![])),
+            ("f16", Type::Constructed(TypeName::Str("f16"), vec![])),
+            ("f32", Type::Constructed(TypeName::Str("f32"), vec![])),
+            ("f64", Type::Constructed(TypeName::Str("f64"), vec![])),
+            ("bool", Type::Constructed(TypeName::Str("bool"), vec![])),
+        ]
+    }
+
     // Vector types
     /// Create a vector type: Vec(size, element_type)
     /// Example: vec(2, f32()) creates Vec(Size(2), f32) for vec2
@@ -740,41 +764,72 @@ pub mod types {
         )
     }
 
-    // Matrix types (f32) - column-major, CxR naming
-    pub fn mat2() -> Type {
-        Type::Constructed(TypeName::Str("mat2"), vec![])
+    /// Generate all vector type constructors using cartesian product of sizes and element types
+    /// Returns a HashMap mapping names like "vec2f32", "vec3i32", "vec4bool" to their Type representations
+    pub fn vector_type_constructors() -> std::collections::HashMap<String, Type> {
+        use itertools::Itertools;
+
+        let sizes = [2, 3, 4];
+        let elem_types = spirv_element_types();
+
+        sizes
+            .iter()
+            .cartesian_product(elem_types.iter())
+            .map(|(size, (elem_name, elem_type))| {
+                let name = format!("vec{}{}", size, elem_name);
+                let vec_type = Type::Constructed(
+                    TypeName::Vec,
+                    vec![
+                        Type::Constructed(TypeName::Size(*size), vec![]),
+                        elem_type.clone(),
+                    ],
+                );
+                (name, vec_type)
+            })
+            .collect()
     }
 
-    pub fn mat3() -> Type {
-        Type::Constructed(TypeName::Str("mat3"), vec![])
+    // Matrix types - column-major, CxR naming
+    /// Create a matrix type: mat<rows, cols, elem_type>
+    pub fn mat(rows: usize, cols: usize, elem_type: Type) -> Type {
+        Type::Constructed(
+            TypeName::Mat,
+            vec![
+                Type::Constructed(TypeName::Size(rows), vec![]),
+                Type::Constructed(TypeName::Size(cols), vec![]),
+                elem_type,
+            ],
+        )
     }
 
-    pub fn mat4() -> Type {
-        Type::Constructed(TypeName::Str("mat4"), vec![])
-    }
+    /// Generate all matrix type constructors using cartesian product of dimensions and element types
+    /// Returns a HashMap mapping names like "mat2f32", "mat3x4i32" to their Type representations
+    pub fn matrix_type_constructors() -> std::collections::HashMap<String, Type> {
+        use itertools::Itertools;
 
-    pub fn mat2x3() -> Type {
-        Type::Constructed(TypeName::Str("mat2x3"), vec![])
-    }
+        let dims = [2, 3, 4];
+        let elem_types = spirv_element_types();
 
-    pub fn mat2x4() -> Type {
-        Type::Constructed(TypeName::Str("mat2x4"), vec![])
-    }
-
-    pub fn mat3x2() -> Type {
-        Type::Constructed(TypeName::Str("mat3x2"), vec![])
-    }
-
-    pub fn mat3x4() -> Type {
-        Type::Constructed(TypeName::Str("mat3x4"), vec![])
-    }
-
-    pub fn mat4x2() -> Type {
-        Type::Constructed(TypeName::Str("mat4x2"), vec![])
-    }
-
-    pub fn mat4x3() -> Type {
-        Type::Constructed(TypeName::Str("mat4x3"), vec![])
+        dims.iter()
+            .cartesian_product(dims.iter())
+            .cartesian_product(elem_types.iter())
+            .map(|((rows, cols), (elem_name, elem_type))| {
+                let name = if rows == cols {
+                    format!("mat{}{}", rows, elem_name)
+                } else {
+                    format!("mat{}x{}{}", rows, cols, elem_name)
+                };
+                let matrix_type = Type::Constructed(
+                    TypeName::Mat,
+                    vec![
+                        Type::Constructed(TypeName::Size(*rows), vec![]),
+                        Type::Constructed(TypeName::Size(*cols), vec![]),
+                        elem_type.clone(),
+                    ],
+                );
+                (name, matrix_type)
+            })
+            .collect()
     }
 
     pub fn sized_array(size: usize, elem_type: Type) -> Type {
