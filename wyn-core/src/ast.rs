@@ -1,5 +1,8 @@
-pub use polytype::TypeScheme;
 pub use spirv;
+
+// Type aliases for polytype types specialized to our TypeName
+pub type Type = polytype::Type<TypeName>;
+pub type TypeScheme = polytype::TypeScheme<TypeName>;
 
 /// Qualified name representing a path through modules to a name
 /// E.g., M.N.x is represented as QualName { qualifiers: ["M", "N"], name: "x" }
@@ -344,8 +347,6 @@ impl From<&'static str> for TypeName {
         TypeName::Str(s)
     }
 }
-
-pub type Type = polytype::Type<TypeName>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {

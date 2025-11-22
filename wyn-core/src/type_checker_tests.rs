@@ -81,6 +81,17 @@ fn test_zip_arrays() {
     typecheck_program("def zip_arrays xs ys = zip xs ys");
 }
 
+#[test]
+fn test_mmul_concrete_matrix_types() {
+    // This test verifies that polymorphic mmul works with concrete matrix types
+    typecheck_program(
+        r#"
+def test_mmul (mat1:[4]vec4f32) (mat2:[4]vec4f32) : [4]vec4f32 =
+    mmul mat1 mat2
+        "#,
+    );
+}
+
 /// Helper function to check a program with a type hole and return the inferred type
 fn check_type_hole(source: &str) -> Type {
     use crate::lexer;

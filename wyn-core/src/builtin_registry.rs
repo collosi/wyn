@@ -123,34 +123,16 @@ impl PolyImpl {
     }
 }
 
-/// Builtin function descriptor (monomorphic)
+/// Unified builtin entry with TypeScheme
+/// Used for both monomorphic and polymorphic builtins
 #[derive(Debug, Clone)]
-pub struct BuiltinDescriptor {
-    /// Fully qualified name (e.g., "f32.sin", "i32.+")
-    pub name: String,
-
-    /// Parameter types
-    pub param_types: Vec<Type>,
-
-    /// Return type
-    pub return_type: Type,
+pub struct BuiltinEntry {
+    /// Type scheme (e.g., "forall a. a -> a")
+    /// For monomorphic builtins, this is TypeScheme::Monotype
+    pub scheme: TypeScheme,
 
     /// Code generation implementation
     pub implementation: BuiltinImpl,
-}
-
-/// Polymorphic builtin descriptor
-/// Represents a family of related functions across multiple types
-#[derive(Debug, Clone)]
-pub struct PolyBuiltinDescriptor {
-    /// Base name without module qualifier (e.g., "abs", "cos", "+")
-    pub name: String,
-
-    /// Type scheme (e.g., "forall a. a -> a")
-    pub type_scheme: TypeScheme,
-
-    /// Implementation dispatcher
-    pub implementation: PolyImpl,
 }
 
 impl PolyImpl {
@@ -194,18 +176,15 @@ impl PolyImpl {
 
 /// Central registry for all builtin functions
 pub struct BuiltinRegistry {
-    /// Monomorphic builtins (fully qualified names like "f32.sin")
-    builtins: HashMap<String, BuiltinDescriptor>,
-
-    /// Polymorphic builtins (base names like "abs", indexed by module.name)
-    poly_builtins: HashMap<String, PolyBuiltinDescriptor>,
+    /// All builtins: maps name to list of overloads
+    /// Each name can have multiple entries with different type schemes (for overloading)
+    builtins: HashMap<String, Vec<BuiltinEntry>>,
 }
 
 impl BuiltinRegistry {
     pub fn new(ctx: &mut impl TypeVarGenerator) -> Self {
         let mut registry = BuiltinRegistry {
             builtins: HashMap::new(),
-            poly_builtins: HashMap::new(),
         };
 
         registry.register_from_prim_module();
@@ -221,36 +200,24 @@ impl BuiltinRegistry {
         registry
     }
 
-    /// Check if a name is a registered builtin (monomorphic or polymorphic)
+    /// Check if a name is a registered builtin
     pub fn is_builtin(&self, name: &str) -> bool {
-        self.builtins.contains_key(name) || self.poly_builtins.contains_key(name)
+        self.builtins.contains_key(name)
     }
 
     /// Get all builtin names as a HashSet (for use in flattening to exclude from capture)
     pub fn all_names(&self) -> std::collections::HashSet<String> {
-        let mut names = std::collections::HashSet::new();
-        for name in self.builtins.keys() {
-            names.insert(name.clone());
-        }
-        for name in self.poly_builtins.keys() {
-            names.insert(name.clone());
-        }
-        names
+        self.builtins.keys().cloned().collect()
     }
 
-    /// Get monomorphic builtin descriptor
-    pub fn get(&self, name: &str) -> Option<&BuiltinDescriptor> {
-        self.builtins.get(name)
+    /// Get all overloads for a builtin name
+    pub fn get_overloads(&self, name: &str) -> Option<&[BuiltinEntry]> {
+        self.builtins.get(name).map(|v| v.as_slice())
     }
 
-    /// Get polymorphic builtin descriptor
-    pub fn get_poly(&self, name: &str) -> Option<&PolyBuiltinDescriptor> {
-        self.poly_builtins.get(name)
-    }
-
-    /// Register a polymorphic builtin
-    fn register_poly(&mut self, desc: PolyBuiltinDescriptor) {
-        self.poly_builtins.insert(desc.name.clone(), desc);
+    /// Add an overload for a builtin
+    fn add_overload(&mut self, name: String, entry: BuiltinEntry) {
+        self.builtins.entry(name).or_insert_with(Vec::new).push(entry);
     }
 
     /// Get the type of a field on a given type (e.g., vec3.x returns f32)
@@ -270,9 +237,62 @@ impl BuiltinRegistry {
         }
     }
 
-    /// Register a builtin function
-    fn register(&mut self, desc: BuiltinDescriptor) {
-        self.builtins.insert(desc.name.clone(), desc);
+    /// Register a builtin function (legacy method - converts to TypeScheme::Monotype)
+    /// This builds a function type from param_types -> return_type and wraps in Monotype
+    fn register(
+        &mut self,
+        name: &str,
+        param_types: Vec<Type>,
+        return_type: Type,
+        implementation: BuiltinImpl,
+    ) {
+        // Build function type: param1 -> param2 -> ... -> return_type
+        let mut func_type = return_type;
+        for param_type in param_types.iter().rev() {
+            func_type = Type::arrow(param_type.clone(), func_type);
+        }
+
+        let entry = BuiltinEntry {
+            scheme: TypeScheme::Monotype(func_type),
+            implementation,
+        };
+
+        self.add_overload(name.to_string(), entry);
+    }
+
+    /// Register a polymorphic builtin with type variables
+    /// Automatically wraps type variables in forall quantifiers
+    fn register_poly(
+        &mut self,
+        name: &str,
+        param_types: Vec<Type>,
+        return_type: Type,
+        implementation: BuiltinImpl,
+    ) {
+        // Build function type: param1 -> param2 -> ... -> return_type
+        let mut func_type = return_type;
+        for param_type in param_types.iter().rev() {
+            func_type = Type::arrow(param_type.clone(), func_type);
+        }
+
+        // Collect all type variables in the function type
+        let type_vars = func_type.vars();
+
+        // Wrap in forall quantifiers
+        let mut scheme = TypeScheme::Monotype(func_type);
+        for var in type_vars.into_iter().rev() {
+            scheme = TypeScheme::Polytype {
+                variable: var,
+                body: Box::new(scheme),
+            };
+        }
+
+        let entry = BuiltinEntry {
+            scheme,
+            implementation,
+        };
+
+        self.add_overload(name.to_string(), entry);
     }
 
     /// Helper to create a type from a static string
@@ -304,34 +324,22 @@ impl BuiltinRegistry {
     /// Helper to register a binary operation
     fn register_binop(&mut self, ty_name: &'static str, op: &str, impl_: BuiltinImpl) {
         let t = Self::ty(ty_name);
-        self.register(BuiltinDescriptor {
-            name: format!("{}.{}", ty_name, op),
-            param_types: vec![t.clone(), t.clone()],
-            return_type: t,
-            implementation: impl_,
-        });
+        let name = format!("{}.{}", ty_name, op);
+        self.register(&name, vec![t.clone(), t.clone()], t, impl_);
     }
 
     /// Helper to register a comparison operation
     fn register_cmp(&mut self, ty_name: &'static str, op: &str, impl_: BuiltinImpl) {
         let t = Self::ty(ty_name);
-        self.register(BuiltinDescriptor {
-            name: format!("{}.{}", ty_name, op),
-            param_types: vec![t.clone(), t.clone()],
-            return_type: Self::ty("bool"),
-            implementation: impl_,
-        });
+        let name = format!("{}.{}", ty_name, op);
+        self.register(&name, vec![t.clone(), t.clone()], Self::ty("bool"), impl_);
     }
 
     /// Helper to register a unary operation
     fn register_unop(&mut self, ty_name: &'static str, op: &str, impl_: BuiltinImpl) {
         let t = Self::ty(ty_name);
-        self.register(BuiltinDescriptor {
-            name: format!("{}.{}", ty_name, op),
-            param_types: vec![t.clone()],
-            return_type: t,
-            implementation: impl_,
-        });
+        let name = format!("{}.{}", ty_name, op);
+        self.register(&name, vec![t.clone()], t, impl_);
     }
 
     fn register_numeric_ops(&mut self, ty_name: &'static str) {
@@ -458,23 +466,15 @@ impl BuiltinRegistry {
     /// Helper to register a ternary operation
     fn register_ternop(&mut self, ty_name: &'static str, op: &str, impl_: BuiltinImpl) {
         let t = Self::ty(ty_name);
-        self.register(BuiltinDescriptor {
-            name: format!("{}.{}", ty_name, op),
-            param_types: vec![t.clone(), t.clone(), t.clone()],
-            return_type: t,
-            implementation: impl_,
-        });
+        let name = format!("{}.{}", ty_name, op);
+        self.register(&name, vec![t.clone(), t.clone(), t.clone()], t, impl_);
     }
 
     /// Helper to register a unary operation with bool return
     fn register_bool_unop(&mut self, ty_name: &'static str, op: &str, impl_: BuiltinImpl) {
         let t = Self::ty(ty_name);
-        self.register(BuiltinDescriptor {
-            name: format!("{}.{}", ty_name, op),
-            param_types: vec![t],
-            return_type: Self::ty("bool"),
-            implementation: impl_,
-        });
+        let name = format!("{}.{}", ty_name, op);
+        self.register(&name, vec![t], Self::ty("bool"), impl_);
     }
 
     fn register_real_ops(&mut self, ty_name: &'static str) {
@@ -529,22 +529,22 @@ impl BuiltinRegistry {
         let arr_size_var = ctx.new_variable();
         let arr_elem_var = ctx.new_variable();
         let arr_t = Type::Constructed(TypeName::Array, vec![arr_size_var, arr_elem_var]);
-        self.register(BuiltinDescriptor {
-            name: "length".to_string(),
-            param_types: vec![arr_t],
-            return_type: Self::ty("i32"), // TODO: Should this return the size type instead?
-            implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
-        });
+        self.register_poly(
+            "length",
+            vec![arr_t],
+            Self::ty("i32"),
+            BuiltinImpl::Custom(CustomImpl::Placeholder),
+        );
 
         // __uninit: ∀t. t
         // Returns uninitialized/poison value (must be overwritten before reading)
         let uninit_type_var = ctx.new_variable();
-        self.register(BuiltinDescriptor {
-            name: "__uninit".to_string(),
-            param_types: vec![],
-            return_type: uninit_type_var,
-            implementation: BuiltinImpl::Custom(CustomImpl::Uninit),
-        });
+        self.register_poly(
+            "__uninit",
+            vec![],
+            uninit_type_var,
+            BuiltinImpl::Custom(CustomImpl::Uninit),
+        );
 
         // replicate: ∀t. i32 -> t -> []t
         // Creates array of unknown length filled with a value (length-agnostic)
@@ -553,12 +553,12 @@ impl BuiltinRegistry {
             TypeName::Array,
             vec![ctx.new_variable(), replicate_elem_var.clone()],
         );
-        self.register(BuiltinDescriptor {
-            name: "replicate".to_string(),
-            param_types: vec![Self::ty("i32"), replicate_elem_var],
-            return_type: replicate_result_type,
-            implementation: BuiltinImpl::Custom(CustomImpl::Replicate),
-        });
+        self.register_poly(
+            "replicate",
+            vec![Self::ty("i32"), replicate_elem_var],
+            replicate_result_type,
+            BuiltinImpl::Custom(CustomImpl::Replicate),
+        );
 
         // __array_update: ∀n t. [n]t -> i32 -> t -> [n]t
         // Functional array update (immutable copy-with-update)
@@ -566,54 +566,54 @@ impl BuiltinRegistry {
         let update_elem_var = ctx.new_variable();
         let update_arr_type =
             Type::Constructed(TypeName::Array, vec![update_size_var, update_elem_var.clone()]);
-        self.register(BuiltinDescriptor {
-            name: "__array_update".to_string(),
-            param_types: vec![update_arr_type.clone(), Self::ty("i32"), update_elem_var],
-            return_type: update_arr_type,
-            implementation: BuiltinImpl::Custom(CustomImpl::ArrayUpdate),
-        });
+        self.register_poly(
+            "__array_update",
+            vec![update_arr_type.clone(), Self::ty("i32"), update_elem_var],
+            update_arr_type,
+            BuiltinImpl::Custom(CustomImpl::ArrayUpdate),
+        );
 
-        self.register(BuiltinDescriptor {
-            name: "normalize".to_string(),
-            param_types: vec![vec_t.clone()],
-            return_type: vec_t.clone(), // returns Vec[n, T]
-            implementation: BuiltinImpl::GlslExt(69),
-        });
+        self.register_poly(
+            "normalize",
+            vec![vec_t.clone()],
+            vec_t.clone(),
+            BuiltinImpl::GlslExt(69),
+        );
 
-        self.register(BuiltinDescriptor {
-            name: "dot".to_string(),
-            param_types: vec![vec_t.clone(), vec_t.clone()],
-            return_type: elem_var.clone(), // returns T
-            implementation: BuiltinImpl::SpirvOp(SpirvOp::Dot),
-        });
+        self.register_poly(
+            "dot",
+            vec![vec_t.clone(), vec_t.clone()],
+            elem_var.clone(),
+            BuiltinImpl::SpirvOp(SpirvOp::Dot),
+        );
 
-        self.register(BuiltinDescriptor {
-            name: "cross".to_string(),
-            param_types: vec![vec_t.clone(), vec_t.clone()],
-            return_type: vec_t.clone(), // returns Vec[n, T] (only works for Vec[3, T])
-            implementation: BuiltinImpl::GlslExt(68),
-        });
+        self.register_poly(
+            "cross",
+            vec![vec_t.clone(), vec_t.clone()],
+            vec_t.clone(),
+            BuiltinImpl::GlslExt(68),
+        );
 
-        self.register(BuiltinDescriptor {
-            name: "distance".to_string(),
-            param_types: vec![vec_t.clone(), vec_t.clone()],
-            return_type: elem_var.clone(), // returns T
-            implementation: BuiltinImpl::GlslExt(67),
-        });
+        self.register_poly(
+            "distance",
+            vec![vec_t.clone(), vec_t.clone()],
+            elem_var.clone(),
+            BuiltinImpl::GlslExt(67),
+        );
 
-        self.register(BuiltinDescriptor {
-            name: "reflect".to_string(),
-            param_types: vec![vec_t.clone(), vec_t.clone()],
-            return_type: vec_t.clone(),
-            implementation: BuiltinImpl::GlslExt(71),
-        });
+        self.register_poly(
+            "reflect",
+            vec![vec_t.clone(), vec_t.clone()],
+            vec_t.clone(),
+            BuiltinImpl::GlslExt(71),
+        );
 
-        self.register(BuiltinDescriptor {
-            name: "refract".to_string(),
-            param_types: vec![vec_t.clone(), vec_t.clone(), elem_var.clone()],
-            return_type: vec_t.clone(),
-            implementation: BuiltinImpl::GlslExt(72),
-        });
+        self.register_poly(
+            "refract",
+            vec![vec_t.clone(), vec_t.clone(), elem_var.clone()],
+            vec_t.clone(),
+            BuiltinImpl::GlslExt(72),
+        );
     }
 
     /// Register matrix operations
@@ -621,26 +621,26 @@ impl BuiltinRegistry {
         let mat_t = Self::ty("mat"); // Placeholder
         let vec_t = Self::ty("vec");
 
-        self.register(BuiltinDescriptor {
-            name: "determinant".to_string(),
-            param_types: vec![mat_t.clone()],
-            return_type: Self::ty("f32"),
-            implementation: BuiltinImpl::GlslExt(33),
-        });
+        self.register(
+            "determinant",
+            vec![mat_t.clone()],
+            Self::ty("f32"),
+            BuiltinImpl::GlslExt(33),
+        );
 
-        self.register(BuiltinDescriptor {
-            name: "inverse".to_string(),
-            param_types: vec![mat_t.clone()],
-            return_type: mat_t.clone(),
-            implementation: BuiltinImpl::GlslExt(34),
-        });
+        self.register(
+            "inverse",
+            vec![mat_t.clone()],
+            mat_t.clone(),
+            BuiltinImpl::GlslExt(34),
+        );
 
-        self.register(BuiltinDescriptor {
-            name: "outer".to_string(),
-            param_types: vec![vec_t.clone(), vec_t],
-            return_type: mat_t,
-            implementation: BuiltinImpl::SpirvOp(SpirvOp::OuterProduct),
-        });
+        self.register(
+            "outer",
+            vec![vec_t.clone(), vec_t],
+            mat_t,
+            BuiltinImpl::SpirvOp(SpirvOp::OuterProduct),
+        );
 
         // Matrix/vector multiplication: mmul
         // Polymorphic over element type and size (like dot)
@@ -651,28 +651,28 @@ impl BuiltinRegistry {
         let mat_t = Type::Constructed(TypeName::Array, vec![size_var, vec_t.clone()]);
 
         // mmul for matrix × matrix
-        self.register(BuiltinDescriptor {
-            name: "mmul".to_string(),
-            param_types: vec![mat_t.clone(), mat_t.clone()],
-            return_type: mat_t.clone(),
-            implementation: BuiltinImpl::SpirvOp(SpirvOp::MatrixTimesMatrix),
-        });
+        self.register_poly(
+            "mmul",
+            vec![mat_t.clone(), mat_t.clone()],
+            mat_t.clone(),
+            BuiltinImpl::SpirvOp(SpirvOp::MatrixTimesMatrix),
+        );
 
         // mmul for matrix × vector
-        self.register(BuiltinDescriptor {
-            name: "mmul".to_string(),
-            param_types: vec![mat_t.clone(), vec_t.clone()],
-            return_type: vec_t.clone(),
-            implementation: BuiltinImpl::SpirvOp(SpirvOp::MatrixTimesVector),
-        });
+        self.register_poly(
+            "mmul",
+            vec![mat_t.clone(), vec_t.clone()],
+            vec_t.clone(),
+            BuiltinImpl::SpirvOp(SpirvOp::MatrixTimesVector),
+        );
 
         // mmul for vector × matrix (row vector × matrix)
-        self.register(BuiltinDescriptor {
-            name: "mmul".to_string(),
-            param_types: vec![vec_t.clone(), mat_t],
-            return_type: vec_t,
-            implementation: BuiltinImpl::SpirvOp(SpirvOp::VectorTimesMatrix),
-        });
+        self.register_poly(
+            "mmul",
+            vec![vec_t.clone(), mat_t],
+            vec_t,
+            BuiltinImpl::SpirvOp(SpirvOp::VectorTimesMatrix),
+        );
     }
 
     /// Helper to register a vector constructor
@@ -683,12 +683,12 @@ impl BuiltinRegistry {
             TypeName::Vec,
             vec![Type::Constructed(TypeName::Size(arity), vec![]), elem_t.clone()],
         );
-        self.register(BuiltinDescriptor {
-            name: vec_name.to_string(),
-            param_types: vec![elem_t; arity],
+        self.register(
+            vec_name,
+            vec![elem_t; arity],
             return_type,
-            implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
-        });
+            BuiltinImpl::Custom(CustomImpl::Placeholder),
+        );
     }
 
     /// Register vector constructor functions
@@ -707,26 +707,17 @@ impl BuiltinRegistry {
     /// Register higher-order functions and array operations
     fn register_higher_order_functions(&mut self, ctx: &mut impl TypeVarGenerator) {
         // f32.sum: [n]f32 -> f32 (sum of array elements)
-        // For now, we just support fixed f32 arrays, not polymorphic
         let size_var = ctx.new_variable();
         let arr_t = Type::Constructed(TypeName::Array, vec![size_var, Self::ty("f32")]);
-        self.register(BuiltinDescriptor {
-            name: "f32.sum".to_string(),
-            param_types: vec![arr_t],
-            return_type: Self::ty("f32"),
-            implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
-        });
+        self.register_poly(
+            "f32.sum",
+            vec![arr_t],
+            Self::ty("f32"),
+            BuiltinImpl::Custom(CustomImpl::Placeholder),
+        );
 
-        // TODO: Implement polymorphic function registration
-        // These functions need special type handling with type variables:
-        // - length: ∀a. [a] -> int
-        // - map: ∀a b. (a -> b) -> [a] -> [b]
-        // - zip: ∀a b. [a] -> [b] -> [(a, b)]
-        //
-        // Current type system uses polytype for polymorphism but BuiltinDescriptor
-        // uses monomorphic Type. Need to either:
-        // 1. Add TypeScheme support to BuiltinDescriptor, or
-        // 2. Keep polymorphic builtins separate in type checker
+        // TODO: map and zip are registered manually in TypeChecker::load_builtins
+        // because they involve function types which need more careful handling
     }
 }
 

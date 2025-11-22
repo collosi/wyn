@@ -1,6 +1,6 @@
 use crate::ast::TypeName;
 use crate::ast::*;
-use crate::builtin_registry::BuiltinDescriptor;
+use crate::builtin_registry::{BuiltinEntry, BuiltinImpl};
 use crate::error::{CompilerError, Result};
 use crate::scope::ScopeStack;
 use log::debug;
@@ -520,51 +520,6 @@ impl TypeChecker {
             }
             Type::Variable(_) => ty.clone(),
         }
-    }
-
-    /// Instantiate a builtin function type with fresh type variables
-    fn instantiate_builtin_type(&mut self, desc: &BuiltinDescriptor) -> Type {
-        use std::collections::HashMap;
-
-        // Collect all type variables used in the builtin signature
-        let mut var_map: HashMap<usize, Type> = HashMap::new();
-
-        fn instantiate_with_map(
-            ty: &Type,
-            var_map: &mut HashMap<usize, Type>,
-            context: &mut Context<TypeName>,
-        ) -> Type {
-            match ty {
-                Type::Variable(n) => {
-                    // Get or create a fresh variable for this type variable
-                    var_map.entry(*n).or_insert_with(|| context.new_variable()).clone()
-                }
-                Type::Constructed(name, args) => {
-                    let new_args =
-                        args.iter().map(|arg| instantiate_with_map(arg, var_map, context)).collect();
-                    Type::Constructed(name.clone(), new_args)
-                }
-            }
-        }
-
-        // Instantiate the return type and all parameter types
-        let return_type = instantiate_with_map(&desc.return_type, &mut var_map, &mut self.context);
-        let param_types: Vec<Type> = desc
-            .param_types
-            .iter()
-            .map(|pt| instantiate_with_map(pt, &mut var_map, &mut self.context))
-            .collect();
-
-        // Build the function type: param1 -> param2 -> ... -> return
-        let func_type = param_types.iter().rev().fold(return_type.clone(), |acc, param_ty| {
-            Type::arrow(param_ty.clone(), acc)
-        });
-
-        // NOTE: We do NOT call .apply(&self.context) here!
-        // That would substitute variables that were unified in previous calls,
-        // causing type variable sharing across different call sites.
-        // Each instantiation should get truly fresh, independent type variables.
-        func_type
     }
 
     // TODO: Polymorphic builtins (map, zip, length) need special handling
@@ -1145,9 +1100,11 @@ impl TypeChecker {
                 } else if self.builtin_registry.is_builtin(name) {
                     // Then check builtin registry for builtin functions/constructors
                     debug!("'{}' is a builtin", name);
-                    if let Some(desc) = self.builtin_registry.get(name) {
-                        // Instantiate with fresh type variables
-                        let func_type = self.instantiate_builtin_type(&desc.clone());
+                    if let Some(overloads) = self.builtin_registry.get_overloads(name) {
+                        // TODO: Implement proper overload resolution with backtracking
+                        // For now, just use the first overload
+                        let entry = &overloads[0];
+                        let func_type = entry.scheme.instantiate(&mut self.context);
                         debug!("Built function type for builtin '{}': {:?}", name, func_type);
                         Ok(func_type)
                     } else {
@@ -1371,9 +1328,11 @@ impl TypeChecker {
 
                     // Check if this is a builtin function (e.g., f32.sin)
                     if self.builtin_registry.is_builtin(&dotted) {
-                        if let Some(desc) = self.builtin_registry.get(&dotted) {
-                            // Instantiate with fresh type variables
-                            let ty = self.instantiate_builtin_type(&desc.clone());
+                        if let Some(overloads) = self.builtin_registry.get_overloads(&dotted) {
+                            // TODO: Implement proper overload resolution
+                            // For now, just use the first overload
+                            let entry = &overloads[0];
+                            let ty = entry.scheme.instantiate(&mut self.context);
                             self.type_table.insert(expr.h.id, TypeScheme::Monotype(ty.clone()));
                             return Ok(ty);
                         }

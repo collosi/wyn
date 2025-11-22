@@ -1159,7 +1159,10 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                 }
                 _ => {
                     // Check if it's a builtin function
-                    if let Some(builtin) = spv.builtin_registry.get(func) {
+                    if let Some(overloads) = spv.builtin_registry.get_overloads(func) {
+                        // TODO: Use the selected overload from type checking
+                        // For now, just use the first overload
+                        let builtin = &overloads[0];
                         match &builtin.implementation {
                             BuiltinImpl::GlslExt(ext_op) => {
                                 // Call GLSL extended instruction
