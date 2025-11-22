@@ -1179,6 +1179,45 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                         }
                                         Ok(spv.builder.dot(result_type, None, arg_ids[0], arg_ids[1])?)
                                     }
+                                    SpirvOp::MatrixTimesMatrix => {
+                                        if arg_ids.len() != 2 {
+                                            return Err(CompilerError::SpirvError(
+                                                "matrix × matrix requires 2 args".to_string(),
+                                            ));
+                                        }
+                                        Ok(spv.builder.matrix_times_matrix(
+                                            result_type,
+                                            None,
+                                            arg_ids[0],
+                                            arg_ids[1],
+                                        )?)
+                                    }
+                                    SpirvOp::MatrixTimesVector => {
+                                        if arg_ids.len() != 2 {
+                                            return Err(CompilerError::SpirvError(
+                                                "matrix × vector requires 2 args".to_string(),
+                                            ));
+                                        }
+                                        Ok(spv.builder.matrix_times_vector(
+                                            result_type,
+                                            None,
+                                            arg_ids[0],
+                                            arg_ids[1],
+                                        )?)
+                                    }
+                                    SpirvOp::VectorTimesMatrix => {
+                                        if arg_ids.len() != 2 {
+                                            return Err(CompilerError::SpirvError(
+                                                "vector × matrix requires 2 args".to_string(),
+                                            ));
+                                        }
+                                        Ok(spv.builder.vector_times_matrix(
+                                            result_type,
+                                            None,
+                                            arg_ids[0],
+                                            arg_ids[1],
+                                        )?)
+                                    }
                                     _ => {
                                         // TODO: Handle other SpirvOp variants
                                         Err(CompilerError::SpirvError(format!(

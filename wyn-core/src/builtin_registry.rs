@@ -214,7 +214,7 @@ impl BuiltinRegistry {
         registry.register_real_modules();
         registry.register_float_modules();
         registry.register_vector_operations(ctx);
-        registry.register_matrix_operations();
+        registry.register_matrix_operations(ctx);
         registry.register_vector_constructors();
         registry.register_higher_order_functions(ctx);
 
@@ -617,7 +617,7 @@ impl BuiltinRegistry {
     }
 
     /// Register matrix operations
-    fn register_matrix_operations(&mut self) {
+    fn register_matrix_operations(&mut self, ctx: &mut impl TypeVarGenerator) {
         let mat_t = Self::ty("mat"); // Placeholder
         let vec_t = Self::ty("vec");
 
@@ -642,30 +642,36 @@ impl BuiltinRegistry {
             implementation: BuiltinImpl::SpirvOp(SpirvOp::OuterProduct),
         });
 
-        // Matrix operations for [4]vec4f32 representation
-        let vec4f32 = Type::Constructed(
-            TypeName::Vec,
-            vec![Type::Constructed(TypeName::Size(4), vec![]), Self::ty("f32")],
-        );
-        let mat4 = Type::Constructed(
-            TypeName::Array,
-            vec![Type::Constructed(TypeName::Size(4), vec![]), vec4f32.clone()],
-        );
+        // Matrix/vector multiplication: mmul
+        // Polymorphic over element type and size (like dot)
+        let size_var = ctx.new_variable();
+        let elem_var = ctx.new_variable();
 
-        // mul_mat4: [4]vec4f32 -> [4]vec4f32 -> [4]vec4f32
+        let vec_t = Type::Constructed(TypeName::Vec, vec![size_var.clone(), elem_var.clone()]);
+        let mat_t = Type::Constructed(TypeName::Array, vec![size_var, vec_t.clone()]);
+
+        // mmul for matrix × matrix
         self.register(BuiltinDescriptor {
-            name: "mul_mat4".to_string(),
-            param_types: vec![mat4.clone(), mat4.clone()],
-            return_type: mat4.clone(),
-            implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
+            name: "mmul".to_string(),
+            param_types: vec![mat_t.clone(), mat_t.clone()],
+            return_type: mat_t.clone(),
+            implementation: BuiltinImpl::SpirvOp(SpirvOp::MatrixTimesMatrix),
         });
 
-        // mul_rowvec_mat4: vec4f32 -> [4]vec4f32 -> vec4f32
+        // mmul for matrix × vector
         self.register(BuiltinDescriptor {
-            name: "mul_rowvec_mat4".to_string(),
-            param_types: vec![vec4f32.clone(), mat4],
-            return_type: vec4f32,
-            implementation: BuiltinImpl::Custom(CustomImpl::Placeholder),
+            name: "mmul".to_string(),
+            param_types: vec![mat_t.clone(), vec_t.clone()],
+            return_type: vec_t.clone(),
+            implementation: BuiltinImpl::SpirvOp(SpirvOp::MatrixTimesVector),
+        });
+
+        // mmul for vector × matrix (row vector × matrix)
+        self.register(BuiltinDescriptor {
+            name: "mmul".to_string(),
+            param_types: vec![vec_t.clone(), mat_t],
+            return_type: vec_t,
+            implementation: BuiltinImpl::SpirvOp(SpirvOp::VectorTimesMatrix),
         });
     }
 

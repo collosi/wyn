@@ -127,7 +127,7 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
     loop (idx, acc) = (0i32, base_col) while idx < 18 do
       let inst = instA[idx] in
       let pos  = getPosMatrix (vec3 (inst.x * 4.0f32) (inst.y * 4.0f32) (inst.z * 4.0f32)) in
-      let mat  : [4]vec4f32 = mul_mat4 (mul_mat4 pos rot) cam in
+      let mat  : [4]vec4f32 = mmul (mmul pos rot) cam in
 
       -- 8 cube corners in object space
       let verts0 : [8]vec3f32 =
@@ -141,7 +141,7 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
           vec3 1.0f32 (-1.0f32) (-1.0f32) ] in
 
       -- Transform & perspective
-      let v4s : [8]vec4f32 = map (\(v:vec3f32) -> mul_rowvec_mat4 (vec4 v.x v.y v.z 1.0f32) mat) verts0 in
+      let v4s : [8]vec4f32 = map (\(v:vec3f32) -> mmul (vec4 v.x v.y v.z 1.0f32) mat) verts0 in
       let verts1 : [8]vec3f32 =
         map (\(q:vec4f32) ->
                   let zinv = 1.0f32 / q.z in
@@ -183,8 +183,8 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
     loop (idx, acc) = (0i32, c_box) while idx < 8 do
       let inst = instB[idx] in
       let pos = getPosMatrix (vec3 (inst.x * 4.0f32) (inst.y * 4.0f32) (inst.z * 4.0f32)) in
-      let mat : [4]vec4f32 = mul_mat4 (mul_mat4 pos rot) cam in
-      let v4  : vec4f32 = mul_rowvec_mat4 (vec4 0.0f32 0.0f32 0.0f32 1.0f32) mat in
+      let mat : [4]vec4f32 = mmul (mmul pos rot) cam in
+      let v4  : vec4f32 = mmul (vec4 0.0f32 0.0f32 0.0f32 1.0f32) mat in
       let zinv = 1.0f32 / v4.z in
       let vert : vec3f32 = vec3 (v4.x*zinv) (v4.y*zinv) zinv in
       let sh  = fragment vert iTime in
