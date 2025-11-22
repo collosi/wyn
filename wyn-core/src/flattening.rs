@@ -11,7 +11,7 @@ use crate::mir::{self, Expr};
 use crate::pattern;
 use crate::scope::ScopeStack;
 use polytype::TypeScheme;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Static values for defunctionalization (Futhark TFP'18 approach).
 /// Tracks what each expression evaluates to at compile time.
@@ -47,6 +47,8 @@ pub struct Flattener {
     static_values: ScopeStack<StaticValue>,
     /// Set of builtin names to exclude from free variable capture
     builtins: HashSet<String>,
+    /// Stack of closure types (for nested lambdas)
+    closure_type_stack: Vec<Type>,
 }
 
 impl Flattener {
@@ -59,6 +61,7 @@ impl Flattener {
             type_table,
             static_values: ScopeStack::new(),
             builtins,
+            closure_type_stack: Vec::new(),
         }
     }
 
@@ -446,7 +449,12 @@ impl Flattener {
                 if let ExprKind::Identifier(name) = &obj_expr.kind {
                     // Special case: __closure field access (from lambda free var rewriting)
                     if name == "__closure" {
-                        let closure_type = Type::Constructed(TypeName::Str("closure".into()), vec![]);
+                        // Use the current closure type from the stack (most recent lambda)
+                        let closure_type = self.closure_type_stack.last().cloned().ok_or_else(|| {
+                            CompilerError::FlatteningError(
+                                "Internal error: __closure accessed outside of lambda body".to_string(),
+                            )
+                        })?;
                         let obj =
                             Expr::new(closure_type, mir::ExprKind::Var("__closure".to_string()), span);
                         return Ok((
@@ -735,12 +743,42 @@ impl Flattener {
         let arity = lambda.params.len();
         let tag = self.add_lambda(func_name.clone(), arity);
 
+        // Build the closure record fields first so we can construct the type
+        let i32_type = Type::Constructed(TypeName::Str("i32".into()), vec![]);
+        let mut record_fields = vec![(
+            "__tag".to_string(),
+            Expr::new(
+                i32_type.clone(),
+                mir::ExprKind::Literal(mir::Literal::Int(tag.to_string())),
+                span,
+            ),
+        )];
+
+        let mut sorted_vars: Vec<_> = free_vars.iter().collect();
+        sorted_vars.sort();
+        for var in &sorted_vars {
+            // Look up the type of the free variable from the lambda body
+            // We need to find an Identifier node with this name and get its type
+            let var_type = self
+                .find_var_type_in_expr(&lambda.body, var)
+                .unwrap_or_else(|| Type::Constructed(TypeName::Str("unknown".into()), vec![]));
+            record_fields.push((
+                (*var).clone(),
+                Expr::new(var_type, mir::ExprKind::Var((*var).clone()), span),
+            ));
+        }
+
+        // Build the record type from the fields
+        let mut type_fields = BTreeMap::new();
+        for (name, expr) in &record_fields {
+            type_fields.insert(name.clone(), expr.ty.clone());
+        }
+        let closure_type = Type::Constructed(TypeName::Record(type_fields), vec![]);
+
         // Build parameters: closure first, then lambda params
-        // Use a placeholder type for closure (it's a record, but we don't track its structure here)
-        let closure_type = Type::Constructed(TypeName::Str("closure".into()), vec![]);
         let mut params = vec![mir::Param {
             name: "__closure".to_string(),
-            ty: closure_type,
+            ty: closure_type.clone(),
             is_consumed: false,
         }];
 
@@ -763,7 +801,12 @@ impl Flattener {
 
         // Rewrite body to access free variables from closure
         let rewritten_body = self.rewrite_free_vars(&lambda.body, &free_vars)?;
+
+        // Push closure type onto stack before flattening body (for nested lambdas)
+        self.closure_type_stack.push(closure_type.clone());
         let (body, _) = self.flatten_expr(&rewritten_body)?;
+        self.closure_type_stack.pop();
+
         let ret_type = body.ty.clone();
 
         // Create the generated function
@@ -779,29 +822,6 @@ impl Flattener {
         };
         self.generated_functions.push(func);
 
-        // Create closure record: { __tag: tag, var1: var1, var2: var2, ... }
-        let i32_type = Type::Constructed(TypeName::Str("i32".into()), vec![]);
-        let mut fields = vec![(
-            "__tag".to_string(),
-            Expr::new(
-                i32_type,
-                mir::ExprKind::Literal(mir::Literal::Int(tag.to_string())),
-                span,
-            ),
-        )];
-
-        let mut sorted_vars: Vec<_> = free_vars.iter().collect();
-        sorted_vars.sort();
-        for var in &sorted_vars {
-            // TODO: We don't have easy access to the type of free variables here
-            // For now, use unknown type
-            let var_type = Type::Constructed(TypeName::Str("unknown".into()), vec![]);
-            fields.push((
-                (*var).clone(),
-                Expr::new(var_type, mir::ExprKind::Var((*var).clone()), span),
-            ));
-        }
-
         // Return the closure record along with the static value indicating it's a known closure
         let sv = StaticValue::Closure {
             tag,
@@ -809,7 +829,40 @@ impl Flattener {
             arity,
         };
 
-        Ok((mir::ExprKind::Literal(mir::Literal::Record(fields)), sv))
+        Ok((mir::ExprKind::Literal(mir::Literal::Record(record_fields)), sv))
+    }
+
+    /// Find the type of a variable by searching for its use in an expression
+    fn find_var_type_in_expr(&self, expr: &Expression, var_name: &str) -> Option<Type> {
+        match &expr.kind {
+            ExprKind::Identifier(name) if name == var_name => Some(self.get_expr_type(expr)),
+            ExprKind::BinaryOp(_, lhs, rhs) => self
+                .find_var_type_in_expr(lhs, var_name)
+                .or_else(|| self.find_var_type_in_expr(rhs, var_name)),
+            ExprKind::UnaryOp(_, operand) => self.find_var_type_in_expr(operand, var_name),
+            ExprKind::If(if_expr) => self
+                .find_var_type_in_expr(&if_expr.condition, var_name)
+                .or_else(|| self.find_var_type_in_expr(&if_expr.then_branch, var_name))
+                .or_else(|| self.find_var_type_in_expr(&if_expr.else_branch, var_name)),
+            ExprKind::LetIn(let_in) => self
+                .find_var_type_in_expr(&let_in.value, var_name)
+                .or_else(|| self.find_var_type_in_expr(&let_in.body, var_name)),
+            ExprKind::Application(func, args) => self
+                .find_var_type_in_expr(func, var_name)
+                .or_else(|| args.iter().find_map(|a| self.find_var_type_in_expr(a, var_name))),
+            ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => {
+                elems.iter().find_map(|e| self.find_var_type_in_expr(e, var_name))
+            }
+            ExprKind::ArrayIndex(arr, idx) => self
+                .find_var_type_in_expr(arr, var_name)
+                .or_else(|| self.find_var_type_in_expr(idx, var_name)),
+            ExprKind::FieldAccess(obj, _) => self.find_var_type_in_expr(obj, var_name),
+            ExprKind::RecordLiteral(fields) => {
+                fields.iter().find_map(|(_, e)| self.find_var_type_in_expr(e, var_name))
+            }
+            ExprKind::Lambda(lambda) => self.find_var_type_in_expr(&lambda.body, var_name),
+            _ => None,
+        }
     }
 
     /// Flatten an application expression

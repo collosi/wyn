@@ -1247,6 +1247,47 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                     // Load the element
                     Ok(spv.builder.load(result_type, None, elem_ptr, None, [])?)
                 }
+                "record_access" => {
+                    // Record field access by name
+                    // args[0] is the record, args[1] is a string literal with field name
+                    if args.len() != 2 {
+                        return Err(CompilerError::SpirvError(
+                            "record_access requires 2 args".to_string(),
+                        ));
+                    }
+                    let composite_id = lower_expr(spv, &args[0])?;
+
+                    // Get field name from string literal
+                    let field_name = match &args[1].kind {
+                        ExprKind::Literal(Literal::String(s)) => s.clone(),
+                        _ => {
+                            return Err(CompilerError::SpirvError(
+                                "record_access field must be string literal".to_string(),
+                            ));
+                        }
+                    };
+
+                    // Look up the field index from the record type
+                    let record_type = &args[0].ty;
+                    let index = match record_type {
+                        PolyType::Constructed(TypeName::Record(fields), _) => fields
+                            .keys()
+                            .enumerate()
+                            .find(|(_, name)| name.as_str() == field_name)
+                            .map(|(idx, _)| idx as u32)
+                            .ok_or_else(|| {
+                                CompilerError::SpirvError(format!("Unknown record field: {}", field_name))
+                            })?,
+                        _ => {
+                            return Err(CompilerError::SpirvError(format!(
+                                "record_access on non-record type: {:?}",
+                                record_type
+                            )));
+                        }
+                    };
+
+                    spv.composite_extract(result_type, composite_id, index)
+                }
                 "assert" => {
                     // Assertions are no-ops in release, return body
                     if args.len() >= 2 { lower_expr(spv, &args[1]) } else { Ok(spv.const_i32(0)) }
@@ -1328,6 +1369,7 @@ mod tests {
     use crate::flattening::Flattener;
     use crate::lexer::tokenize;
     use crate::parser::Parser;
+    use crate::type_checker::TypeChecker;
 
     fn compile_to_spirv(source: &str) -> Result<Vec<u32>> {
         let tokens = tokenize(source).expect("Tokenization failed");
@@ -1336,6 +1378,22 @@ mod tests {
 
         let mut flattener =
             Flattener::new(std::collections::HashMap::new(), std::collections::HashSet::new());
+        let mir = flattener.flatten_program(&ast)?;
+
+        lower(&mir)
+    }
+
+    fn compile_to_spirv_with_types(source: &str) -> Result<Vec<u32>> {
+        let tokens = tokenize(source).expect("Tokenization failed");
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse().expect("Parsing failed");
+
+        let mut type_checker = TypeChecker::new();
+        type_checker.load_builtins().expect("Failed to load builtins");
+        let type_table = type_checker.check_program(&ast).expect("Type checking failed");
+
+        let builtins = crate::builtin_registry::BuiltinRegistry::default().all_names();
+        let mut flattener = Flattener::new(type_table, builtins);
         let mir = flattener.flatten_program(&ast)?;
 
         lower(&mir)
@@ -1408,6 +1466,33 @@ mod tests {
     #[test]
     fn test_unary_negation() {
         let spirv = compile_to_spirv("def f x = -x").unwrap();
+        assert!(!spirv.is_empty());
+        assert_eq!(spirv[0], 0x07230203);
+    }
+
+    #[test]
+    fn test_record_field_access() {
+        let spirv = compile_to_spirv_with_types(
+            r#"
+def get_x (r:{x:i32, y:i32}) : i32 = r.x
+"#,
+        )
+        .unwrap();
+        assert!(!spirv.is_empty());
+        assert_eq!(spirv[0], 0x07230203);
+    }
+
+    #[test]
+    fn test_closure_capture_access() {
+        // This test requires record_access intrinsic for closure field access
+        let spirv = compile_to_spirv_with_types(
+            r#"
+def test (x:i32) : i32 =
+    let f = \(y:i32) -> x + y in
+    f 10
+"#,
+        )
+        .unwrap();
         assert!(!spirv.is_empty());
         assert_eq!(spirv[0], 0x07230203);
     }
