@@ -86,7 +86,7 @@ fn test_mul_concrete_matrix_types() {
     // This test verifies that polymorphic mul works with concrete matrix types
     typecheck_program(
         r#"
-def test_mul (mat1:[4]vec4f32) (mat2:[4]vec4f32) : [4]vec4f32 =
+def test_mul (mat1:mat4f32) (mat2:mat4f32) : mat4f32 =
     mul mat1 mat2
         "#,
     );
@@ -815,6 +815,29 @@ fn test_qualified_builtin_f32_sqrt() {
         r#"
 def length2 (v:vec2f32) : f32 =
     f32.sqrt (v.x * v.x + v.y * v.y)
+"#,
+    );
+}
+
+#[test]
+fn test_mul_mat_vec_application() {
+    // Test that mul with mat and vec arguments type checks correctly
+    // mul : mat<n,m,a> -> vec<m,a> -> vec<n,a>
+    typecheck_program(
+        r#"
+def test (mat:mat4f32) : vec4f32 =
+    mul mat (vec4 1.0f32 2.0f32 3.0f32 4.0f32)
+"#,
+    );
+}
+
+#[test]
+fn test_mul_mat_vec_in_lambda() {
+    // Test mul mat vec inside a lambda with captured matrix
+    typecheck_program(
+        r#"
+def test (mat:mat4f32) (verts:[3]vec3f32) : [3]vec4f32 =
+    map (\v -> mul mat (vec4 v.x v.y v.z 1.0f32)) verts
 "#,
     );
 }

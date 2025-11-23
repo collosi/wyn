@@ -2236,3 +2236,51 @@ fn test_parse_record_literal_multiple_fields() {
         other => panic!("Expected RecordLiteral, got {:?}", other),
     }
 }
+
+#[test]
+fn test_parse_mul_mat_vec_application() {
+    // Test that `mul mat (vec4 ...)` parses as a two-argument application
+    let input = r#"def test (mat:mat4f32) : vec4f32 = mul mat (vec4 1.0f32 2.0f32 3.0f32 4.0f32)"#;
+    let decl = single_decl(input);
+
+    // The body should be an Application of mul to two args
+    match &decl.body.kind {
+        ExprKind::Application(func, args) => {
+            // func should be "mul"
+            if let ExprKind::Identifier(name) = &func.kind {
+                assert_eq!(name, "mul", "Expected function to be 'mul'");
+            } else {
+                panic!("Expected Identifier, got {:?}", func.kind);
+            }
+
+            // Should have exactly 2 args: mat and (vec4 ...)
+            assert_eq!(args.len(), 2, "Expected 2 arguments to mul");
+
+            // First arg should be identifier "mat"
+            if let ExprKind::Identifier(name) = &args[0].kind {
+                assert_eq!(name, "mat", "First arg should be 'mat'");
+            } else {
+                panic!(
+                    "Expected first arg to be identifier 'mat', got {:?}",
+                    args[0].kind
+                );
+            }
+
+            // Second arg should be an Application of vec4 to 4 args
+            if let ExprKind::Application(vec_func, vec_args) = &args[1].kind {
+                if let ExprKind::Identifier(vec_name) = &vec_func.kind {
+                    assert_eq!(vec_name, "vec4", "Expected vec4 constructor");
+                    assert_eq!(vec_args.len(), 4, "vec4 should have 4 arguments");
+                } else {
+                    panic!("Expected vec4 identifier");
+                }
+            } else {
+                panic!(
+                    "Expected second arg to be vec4 application, got {:?}",
+                    args[1].kind
+                );
+            }
+        }
+        _ => panic!("Expected Application, got {:?}", decl.body.kind),
+    }
+}

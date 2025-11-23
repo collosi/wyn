@@ -1230,12 +1230,30 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                     }
                                 }
                             }
-                            BuiltinImpl::Custom(_) => {
-                                // TODO: Handle custom builtin implementations
-                                Err(CompilerError::SpirvError(format!(
-                                    "Custom builtin not yet supported: {}",
-                                    func
-                                )))
+                            BuiltinImpl::Custom(custom_impl) => {
+                                use crate::builtin_registry::CustomImpl;
+                                match custom_impl {
+                                    CustomImpl::MatrixFromVectors => {
+                                        // Matrix from array of vectors: In SPIR-V, matrices ARE arrays of column vectors
+                                        // So this is essentially a no-op/identity at the SPIR-V level
+                                        // Just return the array as-is, but with matrix type
+                                        if arg_ids.len() != 1 {
+                                            return Err(CompilerError::SpirvError(
+                                                "matav expects exactly 1 argument".to_string(),
+                                            ));
+                                        }
+                                        // The array of vectors is already in the correct format for a SPIR-V matrix
+                                        // Just return it with the matrix type
+                                        Ok(arg_ids[0])
+                                    }
+                                    _ => {
+                                        // TODO: Handle other custom implementations
+                                        Err(CompilerError::SpirvError(format!(
+                                            "Custom builtin not yet supported: {}",
+                                            func
+                                        )))
+                                    }
+                                }
                             }
                         }
                     } else {

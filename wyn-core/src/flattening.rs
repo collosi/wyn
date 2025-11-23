@@ -13,6 +13,14 @@ use crate::scope::ScopeStack;
 use polytype::TypeScheme;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+/// Shape classification for desugaring decisions
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArgShape {
+    Matrix, // mat<n,m,a>
+    Vector, // Vec<n,a>
+    Other,
+}
+
 /// Static values for defunctionalization (Futhark TFP'18 approach).
 /// Tracks what each expression evaluates to at compile time.
 #[derive(Debug, Clone)]
@@ -90,6 +98,95 @@ impl Flattener {
                 // Fallback to a placeholder type if not found
                 Type::Constructed(TypeName::Str("unknown".into()), vec![])
             })
+    }
+
+    /// Desugar overloaded function names based on argument types
+    /// - mul -> mul_mat_mat, mul_mat_vec, mul_vec_mat
+    /// - matav -> matav_n_m
+    fn desugar_function_name(&self, name: &str, args: &[Expression]) -> Result<String> {
+        match name {
+            "mul" => self.desugar_mul(args),
+            "matav" => self.desugar_matav(args),
+            _ => Ok(name.to_string()),
+        }
+    }
+
+    /// Desugar mul based on argument shapes
+    fn desugar_mul(&self, args: &[Expression]) -> Result<String> {
+        if args.len() != 2 {
+            return Ok("mul".to_string()); // Let type checker handle the error
+        }
+
+        let arg1_ty = self.get_expr_type(&args[0]);
+        let arg2_ty = self.get_expr_type(&args[1]);
+
+        let shape1 = Self::classify_shape(&arg1_ty);
+        let shape2 = Self::classify_shape(&arg2_ty);
+
+        let variant = match (shape1, shape2) {
+            (ArgShape::Matrix, ArgShape::Matrix) => "mul_mat_mat",
+            (ArgShape::Matrix, ArgShape::Vector) => "mul_mat_vec",
+            (ArgShape::Vector, ArgShape::Matrix) => "mul_vec_mat",
+            _ => "mul", // Fall back to original name
+        };
+
+        Ok(variant.to_string())
+    }
+
+    /// Desugar matav based on array and vector dimensions
+    fn desugar_matav(&self, args: &[Expression]) -> Result<String> {
+        if args.len() != 1 {
+            return Ok("matav".to_string()); // Let type checker handle the error
+        }
+
+        let arg_ty = self.get_expr_type(&args[0]);
+
+        // Extract array size n, vector size m, and element type a from [n]vec<m,a>
+        if let Type::Constructed(TypeName::Array, array_args) = &arg_ty {
+            if array_args.len() >= 2 {
+                if let Type::Constructed(TypeName::Vec, vec_args) = &array_args[1] {
+                    if vec_args.len() >= 2 {
+                        if let (Some(n), Some(m)) = (
+                            Self::extract_size(&array_args[0]),
+                            Self::extract_size(&vec_args[0]),
+                        ) {
+                            // Extract element type
+                            let elem_type_str = Self::type_to_string(&vec_args[1]);
+                            return Ok(format!("matav_{}_{}_{}", n, m, elem_type_str));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok("matav".to_string()) // Fall back to original name
+    }
+
+    /// Classify argument shape for desugaring
+    fn classify_shape(ty: &Type) -> ArgShape {
+        match ty {
+            Type::Constructed(TypeName::Mat, _) => ArgShape::Matrix,
+            Type::Constructed(TypeName::Vec, _) => ArgShape::Vector,
+            _ => ArgShape::Other,
+        }
+    }
+
+    /// Extract concrete size from a type
+    fn extract_size(ty: &Type) -> Option<usize> {
+        match ty {
+            Type::Constructed(TypeName::Size(n), _) => Some(*n),
+            _ => None,
+        }
+    }
+
+    /// Convert a type to a string for name mangling
+    fn type_to_string(ty: &Type) -> String {
+        match ty {
+            Type::Constructed(TypeName::Str(s), _) => s.to_string(),
+            Type::Constructed(TypeName::Named(s), _) => s.clone(),
+            Type::Constructed(TypeName::Size(n), _) => n.to_string(),
+            _ => "unknown".to_string(),
+        }
     }
 
     /// Get the type of an AST pattern from the type table
@@ -892,10 +989,13 @@ impl Flattener {
                         StaticValue::Dyn,
                     ))
                 } else {
+                    // Desugar overloaded functions based on argument types
+                    let desugared_name = self.desugar_function_name(name, args)?;
+
                     // Direct function call (not a closure)
                     Ok((
                         mir::ExprKind::Call {
-                            func: name.clone(),
+                            func: desugared_name,
                             args: args_flat,
                         },
                         StaticValue::Dyn,

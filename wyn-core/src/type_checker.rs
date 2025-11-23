@@ -398,6 +398,108 @@ impl TypeChecker {
         }
     }
 
+    /// Resolve an overloaded builtin function application by trying each overload
+    fn resolve_overloaded_application(
+        &mut self,
+        expr: &Expression,
+        func_name: &str,
+        overloads: &[crate::builtin_registry::BuiltinEntry],
+        args: &[Expression],
+    ) -> Result<Type> {
+        // Infer argument types
+        let mut arg_types = Vec::new();
+        for arg in args {
+            arg_types.push(self.infer_expression(arg)?);
+        }
+
+        // Try each overload
+        let mut successful: Option<(usize, Type)> = None;
+
+        for (i, entry) in overloads.iter().enumerate() {
+            // Save the current unification context by cloning
+            let saved_context = self.context.clone();
+
+            // Instantiate this overload with fresh type variables
+            let func_type = entry.scheme.instantiate(&mut self.context);
+
+            // Try to unify this overload's parameter types with the argument types
+            match self.try_unify_overload(&func_type, &arg_types, expr.h.span) {
+                Ok(return_type) => {
+                    if successful.is_some() {
+                        // Ambiguous: multiple overloads match
+                        return Err(CompilerError::TypeError(
+                            format!(
+                                "Ambiguous call to '{}': multiple overloads match argument types {}",
+                                func_name,
+                                arg_types
+                                    .iter()
+                                    .map(|t| self.format_type(t))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
+                            expr.h.span,
+                        ));
+                    }
+                    successful = Some((i, return_type));
+                    // Don't restore context - keep the successful unifications
+                }
+                Err(_e) => {
+                    // This overload doesn't match, restore the context and try the next one
+                    self.context = saved_context;
+                }
+            }
+        }
+
+        match successful {
+            Some((_overload_index, return_type)) => {
+                // TODO: Store overload_index for desugaring phase
+                self.type_table.insert(expr.h.id, TypeScheme::Monotype(return_type.clone()));
+                Ok(return_type)
+            }
+            None => {
+                // No overload matched
+                Err(CompilerError::TypeError(
+                    format!(
+                        "No matching overload for '{}' with argument types: {}",
+                        func_name,
+                        arg_types.iter().map(|t| self.format_type(t)).collect::<Vec<_>>().join(", ")
+                    ),
+                    expr.h.span,
+                ))
+            }
+        }
+    }
+
+    /// Try to unify an overload's function type with the given argument types
+    /// Returns the return type if successful
+    fn try_unify_overload(&mut self, func_type: &Type, arg_types: &[Type], span: Span) -> Result<Type> {
+        let mut current_type = func_type.clone();
+
+        for arg_type in arg_types {
+            // Decompose the function type: should be param_ty -> rest
+            let param_ty = self.context.new_variable();
+            let rest_ty = self.context.new_variable();
+            let expected_arrow = Type::arrow(param_ty.clone(), rest_ty.clone());
+
+            // Unify current function type with the expected arrow type
+            self.context.unify(&current_type, &expected_arrow).map_err(|e| {
+                CompilerError::TypeError(format!("Function argument type mismatch: {:?}", e), span)
+            })?;
+
+            // Unify the parameter type with the argument type
+            let param_ty = param_ty.apply(&self.context);
+            self.context.unify(&param_ty, arg_type).map_err(|e| {
+                CompilerError::TypeError(format!("Function argument type mismatch: {:?}", e), span)
+            })?;
+
+            // Continue with the rest of the function type
+            current_type = rest_ty.apply(&self.context);
+        }
+
+        // After processing all arguments, current_type should be the return type
+        Ok(current_type)
+    }
+
     /// Check an expression against an expected type (bidirectional checking mode)
     /// Returns the actual type (which should unify with expected_type)
     fn check_expression(&mut self, expr: &Expression, expected_type: &Type) -> Result<Type> {
@@ -1305,6 +1407,23 @@ impl TypeChecker {
                 Ok(body_type)
             }
             ExprKind::Application(func, args) => {
+                // Check if the function is an overloaded builtin identifier
+                // If so, perform overload resolution based on argument types
+                if let ExprKind::Identifier(name) = &func.kind {
+                    if self.builtin_registry.is_builtin(name) {
+                        if let Some(overloads) = self.builtin_registry.get_overloads(name) {
+                            if overloads.len() > 1 {
+                                // Clone the overloads to avoid borrow checker issues
+                                let overloads_vec = overloads.to_vec();
+                                let name_owned = name.clone();
+                                // Overloaded builtin - perform overload resolution
+                                return self.resolve_overloaded_application(expr, &name_owned, &overloads_vec, args);
+                            }
+                        }
+                    }
+                }
+
+                // Not an overloaded builtin, use standard application
                 let func_type = self.infer_expression(func)?;
 
                 // Use two-pass application for better lambda inference

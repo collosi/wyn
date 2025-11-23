@@ -1,7 +1,6 @@
 // pub mod annotator;
 pub mod ast;
 pub mod builtin_registry;
-pub mod desugar;
 pub mod diags;
 pub mod error;
 pub mod flattening;
@@ -97,10 +96,7 @@ impl Compiler {
             );
         }
 
-        // Desugar overloaded surface syntax (e.g., mul -> mul_mat_mat/mul_mat_vec/mul_vec_mat)
-        desugar::desugar_program(&mut program, &type_table)?;
-
-        // Flatten (AST -> MIR with defunctionalization)
+        // Flatten (AST -> MIR with defunctionalization and desugaring)
         let builtins = builtin_registry::BuiltinRegistry::default().all_names();
         let mut flattener = flattening::Flattener::new(type_table, builtins);
         let mir = flattener.flatten_program(&program)?;

@@ -81,6 +81,8 @@ pub enum CustomImpl {
     Replicate,
     /// Functional array update: immutable copy-with-update
     ArrayUpdate,
+    /// Matrix construction from array of column vectors
+    MatrixFromVectors,
 }
 
 /// Polymorphic implementation dispatcher
@@ -196,6 +198,7 @@ impl BuiltinRegistry {
         registry.register_matrix_operations(ctx);
         registry.register_vector_constructors();
         registry.register_higher_order_functions(ctx);
+        registry.register_matav_variants();
 
         registry
     }
@@ -220,21 +223,29 @@ impl BuiltinRegistry {
         self.builtins.entry(name).or_insert_with(Vec::new).push(entry);
     }
 
-    /// Get the type of a field on a given type (e.g., vec3.x returns f32)
+    /// Get the type of a field on a given type (e.g., vec3f32.x returns f32)
     pub fn get_field_type(&self, type_name: &str, field_name: &str) -> Option<Type> {
-        match (type_name, field_name) {
-            // f32 vectors
-            ("vec2", "x" | "y") => Some(Self::ty("f32")),
-            ("vec3", "x" | "y" | "z") => Some(Self::ty("f32")),
-            ("vec4", "x" | "y" | "z" | "w") => Some(Self::ty("f32")),
+        // Parse vector types like vec2f32, vec3i32, vec4bool
+        if type_name.starts_with("vec") {
+            // Extract size: vec2f32 -> 2, vec3i32 -> 3, vec4bool -> 4
+            let size = type_name.chars().nth(3)?.to_digit(10)? as usize;
 
-            // i32 vectors
-            ("ivec2", "x" | "y") => Some(Self::ty("i32")),
-            ("ivec3", "x" | "y" | "z") => Some(Self::ty("i32")),
-            ("ivec4", "x" | "y" | "z" | "w") => Some(Self::ty("i32")),
+            // Check if field is valid for this vector size
+            let valid_field = match (size, field_name) {
+                (2, "x" | "y") => true,
+                (3, "x" | "y" | "z") => true,
+                (4, "x" | "y" | "z" | "w") => true,
+                _ => false,
+            };
 
-            _ => None,
+            if valid_field {
+                // Extract element type: vec2f32 -> f32, vec3i32 -> i32
+                let elem_type = type_name[4..].to_string();
+                return Some(Type::Constructed(TypeName::Named(elem_type), vec![]));
+            }
         }
+
+        None
     }
 
     /// Register a builtin function (legacy method - converts to TypeScheme::Monotype)
@@ -728,6 +739,25 @@ impl BuiltinRegistry {
             vec_m_a,
             BuiltinImpl::Custom(CustomImpl::Placeholder), // Will be desugared
         );
+
+        // Matrix construction from array of vectors
+        // Surface matav: ∀n m a. [n]vec<m,a> -> mat<n,m,a>
+        let n = ctx.new_variable();
+        let m = ctx.new_variable();
+        let a = ctx.new_variable();
+        let vec_m_a = Type::Constructed(TypeName::Vec, vec![m.clone(), a.clone()]);
+        let array_n_vec = Type::Constructed(TypeName::Array, vec![n.clone(), vec_m_a]);
+        let mat_n_m_a = Type::Constructed(TypeName::Mat, vec![n, m, a]);
+        self.register_poly(
+            "matav",
+            vec![array_n_vec],
+            mat_n_m_a.clone(),
+            BuiltinImpl::Custom(CustomImpl::Placeholder), // Will be desugared
+        );
+
+        // Internal matav variants (still polymorphic in element type, but concrete in dimensions)
+        // These are what the surface matav desugars to
+        // We'll generate these on-demand during desugaring, similar to how we handle mul
     }
 
     /// Helper to register a vector constructor
@@ -773,6 +803,42 @@ impl BuiltinRegistry {
 
         // TODO: map and zip are registered manually in TypeChecker::load_builtins
         // because they involve function types which need more careful handling
+    }
+
+    /// Register concrete matav variants (matrix from array of vectors)
+    /// matav_n_m_elem : [n]vec<m,elem> -> mat<n,m,elem>
+    fn register_matav_variants(&mut self) {
+        let sizes = [2, 3, 4];
+        let elem_types = ["f32", "i32"];
+
+        for &n in &sizes {
+            for &m in &sizes {
+                for &elem_ty in &elem_types {
+                    let vec_type = Type::Constructed(
+                        TypeName::Vec,
+                        vec![Type::Constructed(TypeName::Size(m), vec![]), Self::ty(elem_ty)],
+                    );
+                    let array_type = Type::Constructed(
+                        TypeName::Array,
+                        vec![Type::Constructed(TypeName::Size(n), vec![]), vec_type],
+                    );
+                    let mat_type = Type::Constructed(
+                        TypeName::Mat,
+                        vec![
+                            Type::Constructed(TypeName::Size(n), vec![]),
+                            Type::Constructed(TypeName::Size(m), vec![]),
+                            Self::ty(elem_ty),
+                        ],
+                    );
+                    self.register(
+                        &format!("matav_{}_{}_{}", n, m, elem_ty),
+                        vec![array_type],
+                        mat_type,
+                        BuiltinImpl::Custom(CustomImpl::MatrixFromVectors),
+                    );
+                }
+            }
+        }
     }
 }
 

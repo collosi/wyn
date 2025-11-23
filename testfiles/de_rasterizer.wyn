@@ -56,14 +56,14 @@ def getRotMatrix (a:vec3f32) : mat4f32 =
   let c1 : vec4f32 = vec4 (s[0]*s[1]*c[2]-c[0]*s[2]) (s[0]*s[1]*s[2]+c[0]*c[2]) (s[0]*c[1]) 0.0f32 in
   let c2 : vec4f32 = vec4 (c[0]*s[1]*c[2]+s[0]*s[2]) (c[0]*s[1]*s[2]-s[0]*c[2]) (c[0]*c[1]) 0.0f32 in
   let c3 : vec4f32 = vec4 0.0f32 0.0f32 0.0f32 1.0f32 in
-  [c0,c1,c2,c3]
+  matav [c0,c1,c2,c3]
 
 def getPosMatrix (p:vec3f32) : mat4f32 =
   let c0 : vec4f32 = vec4 1.0f32 0.0f32 0.0f32 p.x in
   let c1 : vec4f32 = vec4 0.0f32 1.0f32 0.0f32 p.y in
   let c2 : vec4f32 = vec4 0.0f32 0.0f32 1.0f32 p.z in
   let c3 : vec4f32 = vec4 0.0f32 0.0f32 0.0f32 1.0f32 in
-  [c0,c1,c2,c3]
+  matav [c0,c1,c2,c3]
 
 -- utils
 def mix3 (a:vec3f32) (b:vec3f32) (c:vec3f32) (t:f32) : vec3f32 =
@@ -141,7 +141,7 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
           vec3 1.0f32 (-1.0f32) (-1.0f32) ] in
 
       -- Transform & perspective
-      let v4s : [8]vec4f32 = map (\(v:vec3f32) -> mul (vec4 v.x v.y v.z 1.0f32) mat) verts0 in
+      let v4s : [8]vec4f32 = map (\(v:vec3f32) -> mul mat (vec4 v.x v.y v.z 1.0f32)) verts0 in
       let verts1 : [8]vec3f32 =
         map (\(q:vec4f32) ->
                   let zinv = 1.0f32 / q.z in
@@ -184,7 +184,7 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
       let inst = instB[idx] in
       let pos = getPosMatrix (vec3 (inst.x * 4.0f32) (inst.y * 4.0f32) (inst.z * 4.0f32)) in
       let mat : mat4f32 = mul (mul pos rot) cam in
-      let v4  : vec4f32 = mul (vec4 0.0f32 0.0f32 0.0f32 1.0f32) mat in
+      let v4  : vec4f32 = mul mat (vec4 0.0f32 0.0f32 0.0f32 1.0f32) in
       let zinv = 1.0f32 / v4.z in
       let vert : vec3f32 = vec3 (v4.x*zinv) (v4.y*zinv) zinv in
       let sh  = fragment vert iTime in
