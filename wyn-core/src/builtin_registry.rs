@@ -6,21 +6,34 @@ use crate::type_checker::TypeVarGenerator;
 use std::collections::HashMap;
 
 /// Implementation strategy for a builtin function
+///
+/// Builtins are organized into three semantic categories:
+/// 1. Library-level (CoreFn): Can be written in the language itself
+/// 2. Core primitives (PrimOp): Map fairly directly to backend operations
+/// 3. Genuine intrinsics (Intrinsic): Require backend-specific lowering
 #[derive(Debug, Clone, PartialEq)]
 pub enum BuiltinImpl {
-    /// GLSL.std.450 extended instruction
-    GlslExt(u32),
+    /// Library-level builtin: implemented as normal function in prelude/core IR
+    /// These can be written in the language itself (or lowered to core IR once)
+    /// Examples: f32.sum, replicate, filter
+    CoreFn(String), // Function name in the core IR
 
-    /// Core SPIR-V instruction (e.g., OpDot, OpOuterProduct)
-    SpirvOp(SpirvOp),
+    /// Core primitive operation: maps fairly directly to SPIR-V/backend ops
+    /// Examples: f32.add, i32.mul, dot, matrix multiply
+    PrimOp(PrimOp),
 
-    /// Custom assembly/implementation
-    Custom(CustomImpl),
+    /// Genuine intrinsic: needs backend-specific lowering, can't be written in language
+    /// Examples: atomics, barriers, subgroup ops, uninit/poison
+    Intrinsic(Intrinsic),
 }
 
-/// Core SPIR-V operations
+/// Core primitive operations that map fairly directly to SPIR-V/backend ops
 #[derive(Debug, Clone, PartialEq)]
-pub enum SpirvOp {
+pub enum PrimOp {
+    // GLSL.std.450 extended instructions
+    GlslExt(u32),
+
+    // Core SPIR-V operations
     Dot,
     OuterProduct,
     MatrixTimesMatrix,
@@ -69,60 +82,23 @@ pub enum SpirvOp {
     ShiftRightLogical,
 }
 
-/// Custom implementation (for complex builtins that need special handling)
+/// Genuine intrinsics that need backend-specific lowering
+/// These cannot be written in the language itself
 #[derive(Debug, Clone, PartialEq)]
-pub enum CustomImpl {
-    /// Placeholder for future custom implementations
+pub enum Intrinsic {
+    /// Placeholder for future implementations (will be desugared or moved)
     Placeholder,
     /// Uninitialized/poison value for allocation bootstrapping
     /// SAFETY: Must be fully overwritten before being read
     Uninit,
+    /// Matrix construction from array of column vectors (identity in SPIR-V)
+    MatrixFromVectors,
     /// Array replication: creates array filled with a value
+    /// TODO: Move to prelude as normal function once we have reduce/fold
     Replicate,
     /// Functional array update: immutable copy-with-update
+    /// TODO: Move to prelude as normal function
     ArrayUpdate,
-    /// Matrix construction from array of column vectors
-    MatrixFromVectors,
-}
-
-/// Polymorphic implementation dispatcher
-/// Dispatches to concrete implementations based on resolved types
-#[derive(Debug, Clone, PartialEq)]
-pub enum PolyImpl {
-    /// Dispatch based on whether type is float or integer
-    NumericDispatch {
-        float_impl: BuiltinImpl,
-        int_impl: BuiltinImpl,
-    },
-
-    /// Dispatch based on whether integer is signed or unsigned
-    IntegralDispatch {
-        signed_impl: BuiltinImpl,
-        unsigned_impl: BuiltinImpl,
-    },
-
-    /// Real number operations (floats only)
-    RealOp(BuiltinImpl),
-}
-
-impl PolyImpl {
-    fn type_name(ty: &Type) -> Option<&str> {
-        match ty {
-            Type::Constructed(TypeName::Str(name), _) => Some(name),
-            _ => None,
-        }
-    }
-
-    fn is_real(ty: &Type) -> bool {
-        matches!(Self::type_name(ty), Some("f16" | "f32" | "f64"))
-    }
-
-    fn is_integral(ty: &Type) -> bool {
-        matches!(
-            Self::type_name(ty),
-            Some("i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64")
-        )
-    }
 }
 
 /// Unified builtin entry with TypeScheme
@@ -135,45 +111,6 @@ pub struct BuiltinEntry {
 
     /// Code generation implementation
     pub implementation: BuiltinImpl,
-}
-
-impl PolyImpl {
-    /// Resolve to concrete implementation for a given type
-    pub fn resolve(&self, ty: &Type) -> Option<BuiltinImpl> {
-        match self {
-            PolyImpl::NumericDispatch { float_impl, int_impl } => {
-                if Self::is_real(ty) {
-                    Some(float_impl.clone())
-                } else if Self::is_integral(ty) {
-                    Some(int_impl.clone())
-                } else {
-                    None
-                }
-            }
-            PolyImpl::IntegralDispatch {
-                signed_impl,
-                unsigned_impl,
-            } => {
-                let is_signed = matches!(Self::type_name(ty), Some("i8" | "i16" | "i32" | "i64"));
-                let is_unsigned = matches!(Self::type_name(ty), Some("u8" | "u16" | "u32" | "u64"));
-
-                if is_signed {
-                    Some(signed_impl.clone())
-                } else if is_unsigned {
-                    Some(unsigned_impl.clone())
-                } else {
-                    None
-                }
-            }
-            PolyImpl::RealOp(impl_) => {
-                if Self::is_real(ty) {
-                    Some(impl_.clone())
-                } else {
-                    None
-                }
-            }
-        }
-    }
 }
 
 /// Central registry for all builtin functions
@@ -361,39 +298,27 @@ impl BuiltinRegistry {
         self.register_binop(
             ty_name,
             "+",
-            if is_float {
-                BuiltinImpl::SpirvOp(SpirvOp::FAdd)
-            } else {
-                BuiltinImpl::SpirvOp(SpirvOp::IAdd)
-            },
+            if is_float { BuiltinImpl::PrimOp(PrimOp::FAdd) } else { BuiltinImpl::PrimOp(PrimOp::IAdd) },
         );
         self.register_binop(
             ty_name,
             "-",
-            if is_float {
-                BuiltinImpl::SpirvOp(SpirvOp::FSub)
-            } else {
-                BuiltinImpl::SpirvOp(SpirvOp::ISub)
-            },
+            if is_float { BuiltinImpl::PrimOp(PrimOp::FSub) } else { BuiltinImpl::PrimOp(PrimOp::ISub) },
         );
         self.register_binop(
             ty_name,
             "*",
-            if is_float {
-                BuiltinImpl::SpirvOp(SpirvOp::FMul)
-            } else {
-                BuiltinImpl::SpirvOp(SpirvOp::IMul)
-            },
+            if is_float { BuiltinImpl::PrimOp(PrimOp::FMul) } else { BuiltinImpl::PrimOp(PrimOp::IMul) },
         );
         self.register_binop(
             ty_name,
             "/",
             if is_float {
-                BuiltinImpl::SpirvOp(SpirvOp::FDiv)
+                BuiltinImpl::PrimOp(PrimOp::FDiv)
             } else if is_signed {
-                BuiltinImpl::SpirvOp(SpirvOp::SDiv)
+                BuiltinImpl::PrimOp(PrimOp::SDiv)
             } else {
-                BuiltinImpl::SpirvOp(SpirvOp::UDiv)
+                BuiltinImpl::PrimOp(PrimOp::UDiv)
             },
         );
 
@@ -402,40 +327,48 @@ impl BuiltinRegistry {
             ty_name,
             "<",
             if is_float {
-                BuiltinImpl::SpirvOp(SpirvOp::FOrdLessThan)
+                BuiltinImpl::PrimOp(PrimOp::FOrdLessThan)
             } else if is_signed {
-                BuiltinImpl::SpirvOp(SpirvOp::SLessThan)
+                BuiltinImpl::PrimOp(PrimOp::SLessThan)
             } else {
-                BuiltinImpl::SpirvOp(SpirvOp::ULessThan)
+                BuiltinImpl::PrimOp(PrimOp::ULessThan)
             },
         );
         self.register_cmp(
             ty_name,
             "==",
             if is_float {
-                BuiltinImpl::SpirvOp(SpirvOp::FOrdEqual)
+                BuiltinImpl::PrimOp(PrimOp::FOrdEqual)
             } else {
-                BuiltinImpl::SpirvOp(SpirvOp::IEqual)
+                BuiltinImpl::PrimOp(PrimOp::IEqual)
             },
         );
 
         // min, max, abs functions
         if is_float {
-            self.register_binop(ty_name, "min", BuiltinImpl::GlslExt(37)); // FMin
-            self.register_binop(ty_name, "max", BuiltinImpl::GlslExt(40)); // FMax
-            self.register_unop(ty_name, "abs", BuiltinImpl::GlslExt(4)); // FAbs
+            self.register_binop(ty_name, "min", BuiltinImpl::PrimOp(PrimOp::GlslExt(37))); // FMin
+            self.register_binop(ty_name, "max", BuiltinImpl::PrimOp(PrimOp::GlslExt(40))); // FMax
+            self.register_unop(ty_name, "abs", BuiltinImpl::PrimOp(PrimOp::GlslExt(4))); // FAbs
         } else {
             self.register_binop(
                 ty_name,
                 "min",
-                if is_signed { BuiltinImpl::GlslExt(39) } else { BuiltinImpl::GlslExt(38) },
+                if is_signed {
+                    BuiltinImpl::PrimOp(PrimOp::GlslExt(39))
+                } else {
+                    BuiltinImpl::PrimOp(PrimOp::GlslExt(38))
+                },
             );
             self.register_binop(
                 ty_name,
                 "max",
-                if is_signed { BuiltinImpl::GlslExt(42) } else { BuiltinImpl::GlslExt(41) },
+                if is_signed {
+                    BuiltinImpl::PrimOp(PrimOp::GlslExt(42))
+                } else {
+                    BuiltinImpl::PrimOp(PrimOp::GlslExt(41))
+                },
             );
-            self.register_unop(ty_name, "abs", BuiltinImpl::GlslExt(5)); // SAbs
+            self.register_unop(ty_name, "abs", BuiltinImpl::PrimOp(PrimOp::GlslExt(5))); // SAbs
         }
     }
 
@@ -452,17 +385,17 @@ impl BuiltinRegistry {
     }
 
     fn register_integral_ops(&mut self, ty_name: &'static str) {
-        self.register_binop(ty_name, "&", BuiltinImpl::SpirvOp(SpirvOp::BitwiseAnd));
-        self.register_binop(ty_name, "|", BuiltinImpl::SpirvOp(SpirvOp::BitwiseOr));
-        self.register_binop(ty_name, "^", BuiltinImpl::SpirvOp(SpirvOp::BitwiseXor));
-        self.register_binop(ty_name, "<<", BuiltinImpl::SpirvOp(SpirvOp::ShiftLeftLogical));
+        self.register_binop(ty_name, "&", BuiltinImpl::PrimOp(PrimOp::BitwiseAnd));
+        self.register_binop(ty_name, "|", BuiltinImpl::PrimOp(PrimOp::BitwiseOr));
+        self.register_binop(ty_name, "^", BuiltinImpl::PrimOp(PrimOp::BitwiseXor));
+        self.register_binop(ty_name, "<<", BuiltinImpl::PrimOp(PrimOp::ShiftLeftLogical));
         self.register_binop(
             ty_name,
             ">>",
             if ty_name.starts_with('i') {
-                BuiltinImpl::SpirvOp(SpirvOp::ShiftRightArithmetic)
+                BuiltinImpl::PrimOp(PrimOp::ShiftRightArithmetic)
             } else {
-                BuiltinImpl::SpirvOp(SpirvOp::ShiftRightLogical)
+                BuiltinImpl::PrimOp(PrimOp::ShiftRightLogical)
             },
         );
     }
@@ -494,25 +427,25 @@ impl BuiltinRegistry {
         // here so they're available for type checking and code generation.
 
         // Transcendental functions
-        self.register_unop(ty_name, "sin", BuiltinImpl::GlslExt(13));
-        self.register_unop(ty_name, "cos", BuiltinImpl::GlslExt(14));
-        self.register_unop(ty_name, "tan", BuiltinImpl::GlslExt(15));
-        self.register_unop(ty_name, "asin", BuiltinImpl::GlslExt(16));
-        self.register_unop(ty_name, "acos", BuiltinImpl::GlslExt(17));
-        self.register_unop(ty_name, "atan", BuiltinImpl::GlslExt(18));
-        self.register_unop(ty_name, "sqrt", BuiltinImpl::GlslExt(31));
-        self.register_unop(ty_name, "exp", BuiltinImpl::GlslExt(27));
-        self.register_unop(ty_name, "log", BuiltinImpl::GlslExt(28));
-        self.register_binop(ty_name, "pow", BuiltinImpl::GlslExt(26));
-        self.register_unop(ty_name, "floor", BuiltinImpl::GlslExt(8));
-        self.register_unop(ty_name, "ceil", BuiltinImpl::GlslExt(9));
-        self.register_unop(ty_name, "round", BuiltinImpl::GlslExt(1));
-        self.register_unop(ty_name, "trunc", BuiltinImpl::GlslExt(3));
-        self.register_ternop(ty_name, "clamp", BuiltinImpl::GlslExt(43));
+        self.register_unop(ty_name, "sin", BuiltinImpl::PrimOp(PrimOp::GlslExt(13)));
+        self.register_unop(ty_name, "cos", BuiltinImpl::PrimOp(PrimOp::GlslExt(14)));
+        self.register_unop(ty_name, "tan", BuiltinImpl::PrimOp(PrimOp::GlslExt(15)));
+        self.register_unop(ty_name, "asin", BuiltinImpl::PrimOp(PrimOp::GlslExt(16)));
+        self.register_unop(ty_name, "acos", BuiltinImpl::PrimOp(PrimOp::GlslExt(17)));
+        self.register_unop(ty_name, "atan", BuiltinImpl::PrimOp(PrimOp::GlslExt(18)));
+        self.register_unop(ty_name, "sqrt", BuiltinImpl::PrimOp(PrimOp::GlslExt(31)));
+        self.register_unop(ty_name, "exp", BuiltinImpl::PrimOp(PrimOp::GlslExt(27)));
+        self.register_unop(ty_name, "log", BuiltinImpl::PrimOp(PrimOp::GlslExt(28)));
+        self.register_binop(ty_name, "pow", BuiltinImpl::PrimOp(PrimOp::GlslExt(26)));
+        self.register_unop(ty_name, "floor", BuiltinImpl::PrimOp(PrimOp::GlslExt(8)));
+        self.register_unop(ty_name, "ceil", BuiltinImpl::PrimOp(PrimOp::GlslExt(9)));
+        self.register_unop(ty_name, "round", BuiltinImpl::PrimOp(PrimOp::GlslExt(1)));
+        self.register_unop(ty_name, "trunc", BuiltinImpl::PrimOp(PrimOp::GlslExt(3)));
+        self.register_ternop(ty_name, "clamp", BuiltinImpl::PrimOp(PrimOp::GlslExt(43)));
 
         // isnan, isinf
-        self.register_bool_unop(ty_name, "isnan", BuiltinImpl::GlslExt(66));
-        self.register_bool_unop(ty_name, "isinf", BuiltinImpl::GlslExt(67));
+        self.register_bool_unop(ty_name, "isnan", BuiltinImpl::PrimOp(PrimOp::GlslExt(66)));
+        self.register_bool_unop(ty_name, "isinf", BuiltinImpl::PrimOp(PrimOp::GlslExt(67)));
     }
 
     /// Register float-specific module functions
@@ -533,7 +466,7 @@ impl BuiltinRegistry {
         //     name: "length".to_string(),
         //     param_types: vec![vec_t.clone()],
         //     return_type: elem_var.clone(),  // returns T
-        //     implementation: BuiltinImpl::GlslExt(66),
+        //     implementation: BuiltinImpl::PrimOp(PrimOp::GlslExt(66)),
         // });
 
         // Array length: returns the size as i32
@@ -544,7 +477,7 @@ impl BuiltinRegistry {
             "length",
             vec![arr_t],
             Self::ty("i32"),
-            BuiltinImpl::Custom(CustomImpl::Placeholder),
+            BuiltinImpl::Intrinsic(Intrinsic::Placeholder),
         );
 
         // __uninit: ∀t. t
@@ -554,7 +487,7 @@ impl BuiltinRegistry {
             "__uninit",
             vec![],
             uninit_type_var,
-            BuiltinImpl::Custom(CustomImpl::Uninit),
+            BuiltinImpl::Intrinsic(Intrinsic::Uninit),
         );
 
         // replicate: ∀t. i32 -> t -> []t
@@ -568,7 +501,7 @@ impl BuiltinRegistry {
             "replicate",
             vec![Self::ty("i32"), replicate_elem_var],
             replicate_result_type,
-            BuiltinImpl::Custom(CustomImpl::Replicate),
+            BuiltinImpl::Intrinsic(Intrinsic::Replicate),
         );
 
         // __array_update: ∀n t. [n]t -> i32 -> t -> [n]t
@@ -581,49 +514,49 @@ impl BuiltinRegistry {
             "__array_update",
             vec![update_arr_type.clone(), Self::ty("i32"), update_elem_var],
             update_arr_type,
-            BuiltinImpl::Custom(CustomImpl::ArrayUpdate),
+            BuiltinImpl::Intrinsic(Intrinsic::ArrayUpdate),
         );
 
         self.register_poly(
             "normalize",
             vec![vec_t.clone()],
             vec_t.clone(),
-            BuiltinImpl::GlslExt(69),
+            BuiltinImpl::PrimOp(PrimOp::GlslExt(69)),
         );
 
         self.register_poly(
             "dot",
             vec![vec_t.clone(), vec_t.clone()],
             elem_var.clone(),
-            BuiltinImpl::SpirvOp(SpirvOp::Dot),
+            BuiltinImpl::PrimOp(PrimOp::Dot),
         );
 
         self.register_poly(
             "cross",
             vec![vec_t.clone(), vec_t.clone()],
             vec_t.clone(),
-            BuiltinImpl::GlslExt(68),
+            BuiltinImpl::PrimOp(PrimOp::GlslExt(68)),
         );
 
         self.register_poly(
             "distance",
             vec![vec_t.clone(), vec_t.clone()],
             elem_var.clone(),
-            BuiltinImpl::GlslExt(67),
+            BuiltinImpl::PrimOp(PrimOp::GlslExt(67)),
         );
 
         self.register_poly(
             "reflect",
             vec![vec_t.clone(), vec_t.clone()],
             vec_t.clone(),
-            BuiltinImpl::GlslExt(71),
+            BuiltinImpl::PrimOp(PrimOp::GlslExt(71)),
         );
 
         self.register_poly(
             "refract",
             vec![vec_t.clone(), vec_t.clone(), elem_var.clone()],
             vec_t.clone(),
-            BuiltinImpl::GlslExt(72),
+            BuiltinImpl::PrimOp(PrimOp::GlslExt(72)),
         );
     }
 
@@ -636,21 +569,21 @@ impl BuiltinRegistry {
             "determinant",
             vec![mat_t.clone()],
             Self::ty("f32"),
-            BuiltinImpl::GlslExt(33),
+            BuiltinImpl::PrimOp(PrimOp::GlslExt(33)),
         );
 
         self.register(
             "inverse",
             vec![mat_t.clone()],
             mat_t.clone(),
-            BuiltinImpl::GlslExt(34),
+            BuiltinImpl::PrimOp(PrimOp::GlslExt(34)),
         );
 
         self.register(
             "outer",
             vec![vec_t.clone(), vec_t],
             mat_t,
-            BuiltinImpl::SpirvOp(SpirvOp::OuterProduct),
+            BuiltinImpl::PrimOp(PrimOp::OuterProduct),
         );
 
         // Internal multiplication variants (desugared from surface "mul")
@@ -666,7 +599,7 @@ impl BuiltinRegistry {
             "mul_mat_mat",
             vec![mat_n_m_a.clone(), mat_n_m_a.clone()],
             mat_n_m_a,
-            BuiltinImpl::SpirvOp(SpirvOp::MatrixTimesMatrix),
+            BuiltinImpl::PrimOp(PrimOp::MatrixTimesMatrix),
         );
 
         // mul_mat_vec : ∀n m a. mat<n,m,a> -> vec<m,a> -> vec<n,a>
@@ -680,7 +613,7 @@ impl BuiltinRegistry {
             "mul_mat_vec",
             vec![mat_n_m, vec_m_a],
             vec_n_a,
-            BuiltinImpl::SpirvOp(SpirvOp::MatrixTimesVector),
+            BuiltinImpl::PrimOp(PrimOp::MatrixTimesVector),
         );
 
         // mul_vec_mat : ∀n m a. vec<n,a> -> mat<n,m,a> -> vec<m,a>
@@ -694,7 +627,7 @@ impl BuiltinRegistry {
             "mul_vec_mat",
             vec![vec_n_a, mat_n_m],
             vec_m_a,
-            BuiltinImpl::SpirvOp(SpirvOp::VectorTimesMatrix),
+            BuiltinImpl::PrimOp(PrimOp::VectorTimesMatrix),
         );
 
         // Surface "mul" overloads (will be desugared to the above variants)
@@ -709,7 +642,7 @@ impl BuiltinRegistry {
             "mul",
             vec![mat_n_m_a.clone(), mat_n_m_a.clone()],
             mat_n_m_a,
-            BuiltinImpl::Custom(CustomImpl::Placeholder), // Will be desugared
+            BuiltinImpl::Intrinsic(Intrinsic::Placeholder), // Will be desugared
         );
 
         // mul : ∀n m a. mat<n,m,a> -> vec<m,a> -> vec<n,a>
@@ -723,7 +656,7 @@ impl BuiltinRegistry {
             "mul",
             vec![mat_n_m, vec_m_a],
             vec_n_a,
-            BuiltinImpl::Custom(CustomImpl::Placeholder), // Will be desugared
+            BuiltinImpl::Intrinsic(Intrinsic::Placeholder), // Will be desugared
         );
 
         // mul : ∀n m a. vec<n,a> -> mat<n,m,a> -> vec<m,a>
@@ -737,7 +670,7 @@ impl BuiltinRegistry {
             "mul",
             vec![vec_n_a, mat_n_m],
             vec_m_a,
-            BuiltinImpl::Custom(CustomImpl::Placeholder), // Will be desugared
+            BuiltinImpl::Intrinsic(Intrinsic::Placeholder), // Will be desugared
         );
 
         // Matrix construction from array of vectors
@@ -752,7 +685,7 @@ impl BuiltinRegistry {
             "matav",
             vec![array_n_vec],
             mat_n_m_a.clone(),
-            BuiltinImpl::Custom(CustomImpl::Placeholder), // Will be desugared
+            BuiltinImpl::Intrinsic(Intrinsic::Placeholder), // Will be desugared
         );
 
         // Internal matav variants (still polymorphic in element type, but concrete in dimensions)
@@ -772,7 +705,7 @@ impl BuiltinRegistry {
             vec_name,
             vec![elem_t; arity],
             return_type,
-            BuiltinImpl::Custom(CustomImpl::Placeholder),
+            BuiltinImpl::Intrinsic(Intrinsic::Placeholder),
         );
     }
 
@@ -798,7 +731,7 @@ impl BuiltinRegistry {
             "f32.sum",
             vec![arr_t],
             Self::ty("f32"),
-            BuiltinImpl::Custom(CustomImpl::Placeholder),
+            BuiltinImpl::Intrinsic(Intrinsic::Placeholder),
         );
 
         // TODO: map and zip are registered manually in TypeChecker::load_builtins
@@ -834,7 +767,7 @@ impl BuiltinRegistry {
                         &format!("matav_{}_{}_{}", n, m, elem_ty),
                         vec![array_type],
                         mat_type,
-                        BuiltinImpl::Custom(CustomImpl::MatrixFromVectors),
+                        BuiltinImpl::Intrinsic(Intrinsic::MatrixFromVectors),
                     );
                 }
             }

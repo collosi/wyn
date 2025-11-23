@@ -4,7 +4,7 @@
 //! It uses a SpvBuilder wrapper that handles variable hoisting automatically.
 
 use crate::ast::TypeName;
-use crate::builtin_registry::{BuiltinImpl, BuiltinRegistry, SpirvOp};
+use crate::builtin_registry::{BuiltinImpl, BuiltinRegistry, PrimOp};
 use crate::error::{CompilerError, Result};
 use crate::mir::{self, Def, Expr, ExprKind, Literal, LoopKind};
 use polytype::Type as PolyType;
@@ -1168,17 +1168,23 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                         // For now, just use the first overload
                         let builtin = &overloads[0];
                         match &builtin.implementation {
-                            BuiltinImpl::GlslExt(ext_op) => {
-                                // Call GLSL extended instruction
-                                let glsl_id = spv.glsl_ext_inst_id;
-                                let operands: Vec<Operand> =
-                                    arg_ids.iter().map(|&id| Operand::IdRef(id)).collect();
-                                Ok(spv.builder.ext_inst(result_type, None, glsl_id, *ext_op, operands)?)
-                            }
-                            BuiltinImpl::SpirvOp(spirv_op) => {
+                            BuiltinImpl::PrimOp(spirv_op) => {
                                 // Handle core SPIR-V operations
                                 match spirv_op {
-                                    SpirvOp::Dot => {
+                                    PrimOp::GlslExt(ext_op) => {
+                                        // Call GLSL extended instruction
+                                        let glsl_id = spv.glsl_ext_inst_id;
+                                        let operands: Vec<Operand> =
+                                            arg_ids.iter().map(|&id| Operand::IdRef(id)).collect();
+                                        Ok(spv.builder.ext_inst(
+                                            result_type,
+                                            None,
+                                            glsl_id,
+                                            *ext_op,
+                                            operands,
+                                        )?)
+                                    }
+                                    PrimOp::Dot => {
                                         if arg_ids.len() != 2 {
                                             return Err(CompilerError::SpirvError(
                                                 "dot requires 2 args".to_string(),
@@ -1186,7 +1192,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                         }
                                         Ok(spv.builder.dot(result_type, None, arg_ids[0], arg_ids[1])?)
                                     }
-                                    SpirvOp::MatrixTimesMatrix => {
+                                    PrimOp::MatrixTimesMatrix => {
                                         if arg_ids.len() != 2 {
                                             return Err(CompilerError::SpirvError(
                                                 "matrix × matrix requires 2 args".to_string(),
@@ -1199,7 +1205,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                             arg_ids[1],
                                         )?)
                                     }
-                                    SpirvOp::MatrixTimesVector => {
+                                    PrimOp::MatrixTimesVector => {
                                         if arg_ids.len() != 2 {
                                             return Err(CompilerError::SpirvError(
                                                 "matrix × vector requires 2 args".to_string(),
@@ -1212,7 +1218,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                             arg_ids[1],
                                         )?)
                                     }
-                                    SpirvOp::VectorTimesMatrix => {
+                                    PrimOp::VectorTimesMatrix => {
                                         if arg_ids.len() != 2 {
                                             return Err(CompilerError::SpirvError(
                                                 "vector × matrix requires 2 args".to_string(),
@@ -1226,18 +1232,18 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                         )?)
                                     }
                                     _ => {
-                                        // TODO: Handle other SpirvOp variants
+                                        // TODO: Handle other PrimOp variants
                                         Err(CompilerError::SpirvError(format!(
-                                            "Unsupported SpirvOp for: {}",
+                                            "Unsupported PrimOp for: {}",
                                             func
                                         )))
                                     }
                                 }
                             }
-                            BuiltinImpl::Custom(custom_impl) => {
-                                use crate::builtin_registry::CustomImpl;
+                            BuiltinImpl::Intrinsic(custom_impl) => {
+                                use crate::builtin_registry::Intrinsic;
                                 match custom_impl {
-                                    CustomImpl::MatrixFromVectors => {
+                                    Intrinsic::MatrixFromVectors => {
                                         // Matrix from array of vectors: In SPIR-V, matrices ARE arrays of column vectors
                                         // So this is essentially a no-op/identity at the SPIR-V level
                                         // Just return the array as-is, but with matrix type
@@ -1251,13 +1257,21 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                         Ok(arg_ids[0])
                                     }
                                     _ => {
-                                        // TODO: Handle other custom implementations
+                                        // TODO: Handle other intrinsic implementations
                                         Err(CompilerError::SpirvError(format!(
-                                            "Custom builtin not yet supported: {}",
+                                            "Intrinsic builtin not yet supported: {}",
                                             func
                                         )))
                                     }
                                 }
+                            }
+                            BuiltinImpl::CoreFn(core_fn_name) => {
+                                // Library-level builtins implemented as normal functions in prelude
+                                // Look up the function and call it
+                                let func_id = *spv.functions.get(core_fn_name).ok_or_else(|| {
+                                    CompilerError::SpirvError(format!("CoreFn not found: {}", core_fn_name))
+                                })?;
+                                spv.function_call(result_type, func_id, arg_ids)
                             }
                         }
                     } else {
