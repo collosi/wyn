@@ -994,10 +994,14 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
             let continue_block = spv.create_block();
             let merge_block = spv.create_block();
 
-            // Evaluate init expressions
+            // Evaluate init expressions in order, adding each to environment
+            // This is necessary because later init expressions may reference earlier ones
+            // (e.g., tuple destructuring creates a temp var that subsequent extractions reference)
             let mut init_values = Vec::new();
             for (name, init_expr) in init_bindings {
                 let init_val = lower_expr(spv, init_expr)?;
+                // Add to environment immediately so subsequent init expressions can reference it
+                spv.env.insert(name.clone(), init_val);
                 init_values.push((name.clone(), init_val));
             }
             let pre_header_block = spv.current_block.unwrap();
