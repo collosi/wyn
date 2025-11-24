@@ -365,7 +365,8 @@ def test : f32 =
         .and_then(|t| t.flatten())
         .and_then(|f| f.monomorphize())
         .map(|m| m.filter_reachable())
-        .and_then(|r| r.lower());
+        .and_then(|r| r.fold_constants())
+        .and_then(|f| f.lower());
     assert!(result.is_ok(), "Compilation failed: {:?}", result.err());
 }
 

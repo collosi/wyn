@@ -31,6 +31,8 @@ pub mod monomorphization;
 pub mod nemo_facts;
 
 #[cfg(test)]
+mod constant_folding_tests;
+#[cfg(test)]
 mod flattening_tests;
 #[cfg(test)]
 mod type_checker_tests;
@@ -61,6 +63,7 @@ pub type TypeTable = HashMap<NodeId, TypeScheme<TypeName>>;
 //       -> .flatten()    -> Flattened
 //       -> .monomorphize() -> Monomorphized
 //       -> .filter_reachable() -> Reachable
+//       -> .fold_constants() -> Folded
 //       -> .lower()      -> Lowered (contains MIR + SPIR-V)
 
 /// Entry point for the compiler. Use `Compiler::parse()` to start the pipeline.
@@ -195,6 +198,19 @@ pub struct Reachable {
 }
 
 impl Reachable {
+    /// Fold constants: evaluate constant expressions at compile time
+    pub fn fold_constants(self) -> Result<Folded> {
+        let mir = constant_folding::fold_constants(self.mir)?;
+        Ok(Folded { mir })
+    }
+}
+
+/// Stage 8: Constants have been folded
+pub struct Folded {
+    pub mir: mir::Program,
+}
+
+impl Folded {
     /// Lower MIR to SPIR-V
     pub fn lower(self) -> Result<Lowered> {
         let spirv = lowering::lower(&self.mir)?;
@@ -202,7 +218,7 @@ impl Reachable {
     }
 }
 
-/// Stage 8: Final stage - contains MIR and SPIR-V bytecode
+/// Stage 9: Final stage - contains MIR and SPIR-V bytecode
 pub struct Lowered {
     pub mir: mir::Program,
     pub spirv: Vec<u32>,

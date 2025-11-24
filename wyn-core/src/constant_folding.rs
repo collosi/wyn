@@ -1,10 +1,13 @@
-use crate::ast::*;
-use crate::error::{CompilerError, Result};
+//! Constant folding pass for MIR.
+//!
+//! This pass evaluates constant expressions at compile time, reducing
+//! operations on literals to their computed values.
 
-/// Constant folder that performs compile-time evaluation of constant expressions
-pub struct ConstantFolder {
-    node_counter: NodeCounter,
-}
+use crate::error::{CompilerError, Result};
+use crate::mir::{Def, Expr, ExprKind, Literal, LoopKind, Program};
+
+/// Constant folder that performs compile-time evaluation of constant expressions.
+pub struct ConstantFolder;
 
 impl Default for ConstantFolder {
     fn default() -> Self {
@@ -14,446 +17,437 @@ impl Default for ConstantFolder {
 
 impl ConstantFolder {
     pub fn new() -> Self {
-        ConstantFolder {
-            node_counter: NodeCounter::new(),
-        }
+        ConstantFolder
     }
 
-    pub fn new_with_counter(node_counter: NodeCounter) -> Self {
-        ConstantFolder { node_counter }
-    }
-
-    pub fn take_node_counter(self) -> NodeCounter {
-        self.node_counter
-    }
-
-    /// Fold constants in an entire program
+    /// Fold constants in an entire MIR program.
     pub fn fold_program(&mut self, program: &Program) -> Result<Program> {
-        let mut folded_declarations = Vec::new();
+        let mut folded_defs = Vec::new();
 
-        for decl in &program.declarations {
-            let folded_decl = self.fold_declaration(decl)?;
-            folded_declarations.push(folded_decl);
+        for def in &program.defs {
+            let folded_def = self.fold_def(def)?;
+            folded_defs.push(folded_def);
         }
 
         Ok(Program {
-            declarations: folded_declarations,
-            library_declarations: program.library_declarations.clone(),
+            defs: folded_defs,
+            lambda_registry: program.lambda_registry.clone(),
         })
     }
 
-    /// Fold constants in a declaration
-    fn fold_declaration(&mut self, decl: &Declaration) -> Result<Declaration> {
-        match decl {
-            Declaration::Decl(d) => {
-                let folded_body = self.fold_expression(&d.body)?;
-                Ok(Declaration::Decl(Decl {
-                    keyword: d.keyword,
-                    name: d.name.clone(),
-                    size_params: d.size_params.clone(),
-                    type_params: d.type_params.clone(),
-                    params: d.params.clone(), // Parameters don't need folding
-                    ty: d.ty.clone(),
+    /// Fold constants in a definition.
+    fn fold_def(&mut self, def: &Def) -> Result<Def> {
+        match def {
+            Def::Function {
+                name,
+                params,
+                ret_type,
+                attributes,
+                param_attributes,
+                return_attributes,
+                body,
+                span,
+            } => {
+                let folded_body = self.fold_expr(body)?;
+                Ok(Def::Function {
+                    name: name.clone(),
+                    params: params.clone(),
+                    ret_type: ret_type.clone(),
+                    attributes: attributes.clone(),
+                    param_attributes: param_attributes.clone(),
+                    return_attributes: return_attributes.clone(),
                     body: folded_body,
-                    attributes: d.attributes.clone(),
-                }))
+                    span: *span,
+                })
             }
-            Declaration::Entry(e) => {
-                let folded_body = self.fold_expression(&e.body)?;
-                Ok(Declaration::Entry(EntryDecl {
-                    entry_type: e.entry_type.clone(),
-                    name: e.name.clone(),
-                    params: e.params.clone(),
-                    return_types: e.return_types.clone(),
-                    return_attributes: e.return_attributes.clone(),
+            Def::Constant {
+                name,
+                ty,
+                attributes,
+                body,
+                span,
+            } => {
+                let folded_body = self.fold_expr(body)?;
+                Ok(Def::Constant {
+                    name: name.clone(),
+                    ty: ty.clone(),
+                    attributes: attributes.clone(),
                     body: folded_body,
-                }))
-            }
-            Declaration::Uniform(u) => {
-                // Uniform declarations don't have expressions to fold
-                Ok(Declaration::Uniform(u.clone()))
-            }
-            Declaration::Val(v) => {
-                // Val declarations don't have expressions to fold
-                Ok(Declaration::Val(v.clone()))
-            }
-            Declaration::TypeBind(_) => {
-                unimplemented!("Type bindings are not yet supported in constant folding")
-            }
-            Declaration::ModuleBind(_) => {
-                unimplemented!("Module bindings are not yet supported in constant folding")
-            }
-            Declaration::ModuleTypeBind(_) => {
-                unimplemented!("Module type bindings are not yet supported in constant folding")
-            }
-            Declaration::Open(_) => {
-                unimplemented!("Open declarations are not yet supported in constant folding")
-            }
-            Declaration::Import(_) => {
-                unimplemented!("Import declarations are not yet supported in constant folding")
-            }
-            Declaration::Local(_) => {
-                unimplemented!("Local declarations are not yet supported in constant folding")
+                    span: *span,
+                })
             }
         }
     }
 
-    /// Fold constants in an expression (recursive)
-    fn fold_expression(&mut self, expr: &Expression) -> Result<Expression> {
-        let span = expr.h.span;
-        match &expr.kind {
-            ExprKind::RecordLiteral(fields) => {
-                let folded_fields = fields
+    /// Fold constants in an expression (recursive).
+    pub fn fold_expr(&mut self, expr: &Expr) -> Result<Expr> {
+        let span = expr.span;
+        let ty = expr.ty.clone();
+
+        let kind = match &expr.kind {
+            // Binary operations - try to evaluate if both sides are literals
+            ExprKind::BinOp { op, lhs, rhs } => {
+                let folded_lhs = self.fold_expr(lhs)?;
+                let folded_rhs = self.fold_expr(rhs)?;
+
+                // Try to fold if both are literals
+                if let Some(folded) = self.try_fold_binop(op, &folded_lhs, &folded_rhs, &ty, span)? {
+                    return Ok(folded);
+                }
+
+                // Can't fold, return with folded children
+                ExprKind::BinOp {
+                    op: op.clone(),
+                    lhs: Box::new(folded_lhs),
+                    rhs: Box::new(folded_rhs),
+                }
+            }
+
+            // Unary operations - try to evaluate if operand is a literal
+            ExprKind::UnaryOp { op, operand } => {
+                let folded_operand = self.fold_expr(operand)?;
+
+                // Try to fold if operand is a literal
+                if let Some(folded) = self.try_fold_unaryop(op, &folded_operand, &ty, span)? {
+                    return Ok(folded);
+                }
+
+                ExprKind::UnaryOp {
+                    op: op.clone(),
+                    operand: Box::new(folded_operand),
+                }
+            }
+
+            // If expression - fold all branches, and simplify if condition is constant
+            ExprKind::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                let folded_cond = self.fold_expr(cond)?;
+                let folded_then = self.fold_expr(then_branch)?;
+                let folded_else = self.fold_expr(else_branch)?;
+
+                // If condition is a constant bool, return the appropriate branch
+                if let ExprKind::Literal(Literal::Bool(b)) = &folded_cond.kind {
+                    return Ok(if *b { folded_then } else { folded_else });
+                }
+
+                ExprKind::If {
+                    cond: Box::new(folded_cond),
+                    then_branch: Box::new(folded_then),
+                    else_branch: Box::new(folded_else),
+                }
+            }
+
+            // Let binding - fold value and body
+            ExprKind::Let { name, value, body } => {
+                let folded_value = self.fold_expr(value)?;
+                let folded_body = self.fold_expr(body)?;
+
+                ExprKind::Let {
+                    name: name.clone(),
+                    value: Box::new(folded_value),
+                    body: Box::new(folded_body),
+                }
+            }
+
+            // Loop - fold init bindings, loop condition/iter, and body
+            ExprKind::Loop {
+                init_bindings,
+                kind,
+                body,
+            } => {
+                let folded_bindings: Result<Vec<_>> = init_bindings
                     .iter()
-                    .map(|(name, expr)| Ok((name.clone(), self.fold_expression(expr)?)))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(self.node_counter.mk_node(ExprKind::RecordLiteral(folded_fields), expr.h.span))
-            }
-            // Handle binary operations - this is where the magic happens
-            ExprKind::BinaryOp(op, left, right) => {
-                let folded_left = self.fold_expression(left)?;
-                let folded_right = self.fold_expression(right)?;
+                    .map(|(name, expr)| Ok((name.clone(), self.fold_expr(expr)?)))
+                    .collect();
+                let folded_bindings = folded_bindings?;
 
-                // Try to evaluate if both sides are literals
-                match (&folded_left.kind, &folded_right.kind) {
-                    (ExprKind::FloatLiteral(l), ExprKind::FloatLiteral(r)) => {
-                        match op.op.as_str() {
-                            "+" => Ok(self.node_counter.mk_node(ExprKind::FloatLiteral(l + r), span)),
-                            "-" => Ok(self.node_counter.mk_node(ExprKind::FloatLiteral(l - r), span)),
-                            "*" => Ok(self.node_counter.mk_node(ExprKind::FloatLiteral(l * r), span)),
-                            "/" => {
-                                if *r == 0.0 {
-                                    Err(CompilerError::TypeError(
-                                        "Division by zero in constant expression".to_string(),
-                                        span,
-                                    ))
-                                } else {
-                                    Ok(self.node_counter.mk_node(ExprKind::FloatLiteral(l / r), span))
-                                }
-                            }
-                            _ => {
-                                // Non-arithmetic operations, keep as binary op
-                                Ok(self.node_counter.mk_node(
-                                    ExprKind::BinaryOp(
-                                        op.clone(),
-                                        Box::new(folded_left),
-                                        Box::new(folded_right),
-                                    ),
-                                    span,
-                                ))
-                            }
-                        }
-                    }
-                    (ExprKind::IntLiteral(l), ExprKind::IntLiteral(r)) => {
-                        match op.op.as_str() {
-                            "+" => Ok(self.node_counter.mk_node(ExprKind::IntLiteral(l + r), span)),
-                            "-" => Ok(self.node_counter.mk_node(ExprKind::IntLiteral(l - r), span)),
-                            "*" => Ok(self.node_counter.mk_node(ExprKind::IntLiteral(l * r), span)),
-                            "/" => {
-                                if *r == 0 {
-                                    Err(CompilerError::TypeError(
-                                        "Division by zero in constant expression".to_string(),
-                                        span,
-                                    ))
-                                } else {
-                                    Ok(self.node_counter.mk_node(ExprKind::IntLiteral(l / r), span))
-                                }
-                            }
-                            _ => {
-                                // Non-arithmetic operations, keep as binary op
-                                Ok(self.node_counter.mk_node(
-                                    ExprKind::BinaryOp(
-                                        op.clone(),
-                                        Box::new(folded_left),
-                                        Box::new(folded_right),
-                                    ),
-                                    span,
-                                ))
-                            }
-                        }
-                    }
-                    _ => {
-                        // Can't fold, but use folded children
-                        Ok(self.node_counter.mk_node(
-                            ExprKind::BinaryOp(op.clone(), Box::new(folded_left), Box::new(folded_right)),
-                            span,
-                        ))
-                    }
-                }
-            }
-
-            // Handle array literals - fold each element
-            ExprKind::ArrayLiteral(elements) => {
-                let mut folded_elements = Vec::new();
-                for elem in elements {
-                    folded_elements.push(self.fold_expression(elem)?);
-                }
-                Ok(self.node_counter.mk_node(ExprKind::ArrayLiteral(folded_elements), span))
-            }
-
-            // Handle tuples - fold each element
-            ExprKind::Tuple(elements) => {
-                let mut folded_elements = Vec::new();
-                for elem in elements {
-                    folded_elements.push(self.fold_expression(elem)?);
-                }
-                Ok(self.node_counter.mk_node(ExprKind::Tuple(folded_elements), span))
-            }
-
-            // Handle if-then-else - fold all branches
-            ExprKind::If(if_expr) => {
-                let folded_condition = self.fold_expression(&if_expr.condition)?;
-                let folded_then = self.fold_expression(&if_expr.then_branch)?;
-                let folded_else = self.fold_expression(&if_expr.else_branch)?;
-
-                Ok(self.node_counter.mk_node(
-                    ExprKind::If(IfExpr {
-                        condition: Box::new(folded_condition),
-                        then_branch: Box::new(folded_then),
-                        else_branch: Box::new(folded_else),
-                    }),
-                    span,
-                ))
-            }
-
-            // Handle let-in expressions
-            ExprKind::LetIn(let_in) => {
-                let folded_value = self.fold_expression(&let_in.value)?;
-                let folded_body = self.fold_expression(&let_in.body)?;
-
-                Ok(self.node_counter.mk_node(
-                    ExprKind::LetIn(LetInExpr {
-                        pattern: let_in.pattern.clone(),
-                        ty: let_in.ty.clone(),
-                        value: Box::new(folded_value),
-                        body: Box::new(folded_body),
-                    }),
-                    span,
-                ))
-            }
-
-            // Handle lambdas - fold body
-            ExprKind::Lambda(lambda) => {
-                let folded_body = self.fold_expression(&lambda.body)?;
-
-                Ok(self.node_counter.mk_node(
-                    ExprKind::Lambda(LambdaExpr {
-                        params: lambda.params.clone(),
-                        return_type: lambda.return_type.clone(),
-                        body: Box::new(folded_body),
-                    }),
-                    span,
-                ))
-            }
-
-            // Handle application - fold function and arguments
-            ExprKind::Application(func, args) => {
-                let folded_func = self.fold_expression(func)?;
-                let mut folded_args = Vec::new();
-                for arg in args {
-                    folded_args.push(self.fold_expression(arg)?);
-                }
-                Ok(self
-                    .node_counter
-                    .mk_node(ExprKind::Application(Box::new(folded_func), folded_args), span))
-            }
-
-            // Handle array indexing - fold array and index
-            ExprKind::ArrayIndex(array, index) => {
-                let folded_array = self.fold_expression(array)?;
-                let folded_index = self.fold_expression(index)?;
-                Ok(self.node_counter.mk_node(
-                    ExprKind::ArrayIndex(Box::new(folded_array), Box::new(folded_index)),
-                    span,
-                ))
-            }
-
-            // Handle field access - fold the object
-            ExprKind::FieldAccess(obj, field) => {
-                let folded_obj = self.fold_expression(obj)?;
-                Ok(self
-                    .node_counter
-                    .mk_node(ExprKind::FieldAccess(Box::new(folded_obj), field.clone()), span))
-            }
-
-            // Literals and identifiers don't need folding
-            ExprKind::Identifier(_)
-            | ExprKind::IntLiteral(_)
-            | ExprKind::FloatLiteral(_)
-            | ExprKind::BoolLiteral(_)
-            | ExprKind::OperatorSection(_)
-            | ExprKind::TypeHole => Ok(expr.clone()),
-
-            ExprKind::Pipe(left, right) => {
-                let folded_left = self.fold_expression(left)?;
-                let folded_right = self.fold_expression(right)?;
-                Ok(self.node_counter.mk_node(
-                    ExprKind::Pipe(Box::new(folded_left), Box::new(folded_right)),
-                    span,
-                ))
-            }
-
-            ExprKind::Loop(loop_expr) => {
-                // Fold the init expression if present
-                let folded_init = if let Some(init) = &loop_expr.init {
-                    Some(Box::new(self.fold_expression(init)?))
-                } else {
-                    None
+                let folded_kind = match kind {
+                    LoopKind::For { var, iter } => LoopKind::For {
+                        var: var.clone(),
+                        iter: Box::new(self.fold_expr(iter)?),
+                    },
+                    LoopKind::ForRange { var, bound } => LoopKind::ForRange {
+                        var: var.clone(),
+                        bound: Box::new(self.fold_expr(bound)?),
+                    },
+                    LoopKind::While { cond } => LoopKind::While {
+                        cond: Box::new(self.fold_expr(cond)?),
+                    },
                 };
 
-                // Fold the loop form's expression(s)
-                let folded_form = match &loop_expr.form {
-                    LoopForm::For(name, expr) => {
-                        LoopForm::For(name.clone(), Box::new(self.fold_expression(expr)?))
-                    }
-                    LoopForm::ForIn(pattern, expr) => {
-                        LoopForm::ForIn(pattern.clone(), Box::new(self.fold_expression(expr)?))
-                    }
-                    LoopForm::While(expr) => LoopForm::While(Box::new(self.fold_expression(expr)?)),
-                };
+                let folded_body = self.fold_expr(body)?;
 
-                // Fold the loop body
-                let folded_body = Box::new(self.fold_expression(&loop_expr.body)?);
-
-                Ok(self.node_counter.mk_node(
-                    ExprKind::Loop(LoopExpr {
-                        pattern: loop_expr.pattern.clone(),
-                        init: folded_init,
-                        form: folded_form,
-                        body: folded_body,
-                    }),
-                    span,
-                ))
-            }
-
-            ExprKind::QualifiedName(_, _) => {
-                // QualifiedName doesn't have subexpressions to fold
-                Ok(expr.clone())
-            }
-
-            ExprKind::UnaryOp(op, operand) => {
-                let folded_operand = self.fold_expression(operand)?;
-
-                // Try to evaluate if operand is a literal
-                match (op.op.as_str(), &folded_operand.kind) {
-                    ("-", ExprKind::IntLiteral(val)) => {
-                        Ok(self.node_counter.mk_node(ExprKind::IntLiteral(-val), span))
-                    }
-                    ("-", ExprKind::FloatLiteral(val)) => {
-                        Ok(self.node_counter.mk_node(ExprKind::FloatLiteral(-val), span))
-                    }
-                    ("!", ExprKind::BoolLiteral(val)) => {
-                        Ok(self.node_counter.mk_node(ExprKind::BoolLiteral(!val), span))
-                    }
-                    _ => {
-                        // Can't fold, but use folded operand
-                        Ok(self
-                            .node_counter
-                            .mk_node(ExprKind::UnaryOp(op.clone(), Box::new(folded_operand)), span))
-                    }
+                ExprKind::Loop {
+                    init_bindings: folded_bindings,
+                    kind: folded_kind,
+                    body: Box::new(folded_body),
                 }
             }
 
-            ExprKind::Match(_)
-            | ExprKind::Range(_)
-            | ExprKind::TypeAscription(_, _)
-            | ExprKind::TypeCoercion(_, _)
-            | ExprKind::Unsafe(_)
-            | ExprKind::Assert(_, _) => {
-                todo!(
-                    "New expression kinds not yet implemented in constant folding: {:?}",
-                    expr.kind
-                )
+            // Call - fold arguments
+            ExprKind::Call { func, args } => {
+                let folded_args: Result<Vec<_>> = args.iter().map(|arg| self.fold_expr(arg)).collect();
+
+                ExprKind::Call {
+                    func: func.clone(),
+                    args: folded_args?,
+                }
             }
-        } // NEWCASESHERE - add new cases before this closing brace
+
+            // Intrinsic - fold arguments
+            ExprKind::Intrinsic { name, args } => {
+                let folded_args: Result<Vec<_>> = args.iter().map(|arg| self.fold_expr(arg)).collect();
+
+                ExprKind::Intrinsic {
+                    name: name.clone(),
+                    args: folded_args?,
+                }
+            }
+
+            // Attributed - fold inner expression
+            ExprKind::Attributed { attributes, expr } => {
+                let folded_expr = self.fold_expr(expr)?;
+
+                ExprKind::Attributed {
+                    attributes: attributes.clone(),
+                    expr: Box::new(folded_expr),
+                }
+            }
+
+            // Literals - fold nested expressions in compound literals
+            ExprKind::Literal(lit) => {
+                let folded_lit = self.fold_literal(lit)?;
+                ExprKind::Literal(folded_lit)
+            }
+
+            // Variables - nothing to fold
+            ExprKind::Var(_) => expr.kind.clone(),
+        };
+
+        Ok(Expr::new(ty, kind, span))
+    }
+
+    /// Fold constants in a literal (for compound literals like arrays, tuples, records).
+    fn fold_literal(&mut self, lit: &Literal) -> Result<Literal> {
+        match lit {
+            Literal::Tuple(exprs) => {
+                let folded: Result<Vec<_>> = exprs.iter().map(|e| self.fold_expr(e)).collect();
+                Ok(Literal::Tuple(folded?))
+            }
+            Literal::Array(exprs) => {
+                let folded: Result<Vec<_>> = exprs.iter().map(|e| self.fold_expr(e)).collect();
+                Ok(Literal::Array(folded?))
+            }
+            Literal::Record(fields) => {
+                let folded: Result<Vec<_>> =
+                    fields.iter().map(|(name, expr)| Ok((name.clone(), self.fold_expr(expr)?))).collect();
+                Ok(Literal::Record(folded?))
+            }
+            // Simple literals don't need folding
+            Literal::Int(_) | Literal::Float(_) | Literal::Bool(_) | Literal::String(_) => Ok(lit.clone()),
+        }
+    }
+
+    /// Try to fold a binary operation on two literals.
+    fn try_fold_binop(
+        &self,
+        op: &str,
+        lhs: &Expr,
+        rhs: &Expr,
+        result_ty: &polytype::Type<crate::ast::TypeName>,
+        span: crate::ast::Span,
+    ) -> Result<Option<Expr>> {
+        match (&lhs.kind, &rhs.kind) {
+            // Float operations
+            (ExprKind::Literal(Literal::Float(l)), ExprKind::Literal(Literal::Float(r))) => {
+                let l: f64 = l
+                    .parse()
+                    .map_err(|_| CompilerError::TypeError("Invalid float literal".to_string(), span))?;
+                let r: f64 = r
+                    .parse()
+                    .map_err(|_| CompilerError::TypeError("Invalid float literal".to_string(), span))?;
+
+                let result = match op {
+                    "+" => Some(l + r),
+                    "-" => Some(l - r),
+                    "*" => Some(l * r),
+                    "/" => {
+                        if r == 0.0 {
+                            return Err(CompilerError::TypeError(
+                                "Division by zero in constant expression".to_string(),
+                                span,
+                            ));
+                        }
+                        Some(l / r)
+                    }
+                    _ => None,
+                };
+
+                if let Some(val) = result {
+                    return Ok(Some(Expr::new(
+                        lhs.ty.clone(),
+                        ExprKind::Literal(Literal::Float(val.to_string())),
+                        span,
+                    )));
+                }
+
+                // Boolean comparison operations on floats
+                let bool_result = match op {
+                    "==" => Some(l == r),
+                    "!=" => Some(l != r),
+                    "<" => Some(l < r),
+                    "<=" => Some(l <= r),
+                    ">" => Some(l > r),
+                    ">=" => Some(l >= r),
+                    _ => None,
+                };
+
+                if let Some(val) = bool_result {
+                    return Ok(Some(Expr::new(
+                        result_ty.clone(),
+                        ExprKind::Literal(Literal::Bool(val)),
+                        span,
+                    )));
+                }
+            }
+
+            // Integer operations
+            (ExprKind::Literal(Literal::Int(l)), ExprKind::Literal(Literal::Int(r))) => {
+                let l: i64 = l
+                    .parse()
+                    .map_err(|_| CompilerError::TypeError("Invalid integer literal".to_string(), span))?;
+                let r: i64 = r
+                    .parse()
+                    .map_err(|_| CompilerError::TypeError("Invalid integer literal".to_string(), span))?;
+
+                let result = match op {
+                    "+" => Some(l + r),
+                    "-" => Some(l - r),
+                    "*" => Some(l * r),
+                    "/" => {
+                        if r == 0 {
+                            return Err(CompilerError::TypeError(
+                                "Division by zero in constant expression".to_string(),
+                                span,
+                            ));
+                        }
+                        Some(l / r)
+                    }
+                    "%" => {
+                        if r == 0 {
+                            return Err(CompilerError::TypeError(
+                                "Modulo by zero in constant expression".to_string(),
+                                span,
+                            ));
+                        }
+                        Some(l % r)
+                    }
+                    _ => None,
+                };
+
+                if let Some(val) = result {
+                    return Ok(Some(Expr::new(
+                        lhs.ty.clone(),
+                        ExprKind::Literal(Literal::Int(val.to_string())),
+                        span,
+                    )));
+                }
+
+                // Boolean comparison operations on integers
+                let bool_result = match op {
+                    "==" => Some(l == r),
+                    "!=" => Some(l != r),
+                    "<" => Some(l < r),
+                    "<=" => Some(l <= r),
+                    ">" => Some(l > r),
+                    ">=" => Some(l >= r),
+                    _ => None,
+                };
+
+                if let Some(val) = bool_result {
+                    return Ok(Some(Expr::new(
+                        result_ty.clone(),
+                        ExprKind::Literal(Literal::Bool(val)),
+                        span,
+                    )));
+                }
+            }
+
+            // Boolean operations
+            (ExprKind::Literal(Literal::Bool(l)), ExprKind::Literal(Literal::Bool(r))) => {
+                let result = match op {
+                    "&&" => Some(*l && *r),
+                    "||" => Some(*l || *r),
+                    "==" => Some(l == r),
+                    "!=" => Some(l != r),
+                    _ => None,
+                };
+
+                if let Some(val) = result {
+                    return Ok(Some(Expr::new(
+                        result_ty.clone(),
+                        ExprKind::Literal(Literal::Bool(val)),
+                        span,
+                    )));
+                }
+            }
+
+            _ => {}
+        }
+
+        Ok(None)
+    }
+
+    /// Try to fold a unary operation on a literal.
+    fn try_fold_unaryop(
+        &self,
+        op: &str,
+        operand: &Expr,
+        result_ty: &polytype::Type<crate::ast::TypeName>,
+        span: crate::ast::Span,
+    ) -> Result<Option<Expr>> {
+        match (op, &operand.kind) {
+            // Negation of float
+            ("-", ExprKind::Literal(Literal::Float(val))) => {
+                let v: f64 = val
+                    .parse()
+                    .map_err(|_| CompilerError::TypeError("Invalid float literal".to_string(), span))?;
+                Ok(Some(Expr::new(
+                    result_ty.clone(),
+                    ExprKind::Literal(Literal::Float((-v).to_string())),
+                    span,
+                )))
+            }
+
+            // Negation of integer
+            ("-", ExprKind::Literal(Literal::Int(val))) => {
+                let v: i64 = val
+                    .parse()
+                    .map_err(|_| CompilerError::TypeError("Invalid integer literal".to_string(), span))?;
+                Ok(Some(Expr::new(
+                    result_ty.clone(),
+                    ExprKind::Literal(Literal::Int((-v).to_string())),
+                    span,
+                )))
+            }
+
+            // Boolean not
+            ("!", ExprKind::Literal(Literal::Bool(val))) => Ok(Some(Expr::new(
+                result_ty.clone(),
+                ExprKind::Literal(Literal::Bool(!val)),
+                span,
+            ))),
+
+            _ => Ok(None),
+        }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_float_division_folding() {
-        let mut folder = ConstantFolder::new();
-        let mut counter = NodeCounter::new();
-
-        // Test 135f32 / 255f32
-        let left = counter.mk_node_dummy(ExprKind::FloatLiteral(135.0));
-        let right = counter.mk_node_dummy(ExprKind::FloatLiteral(255.0));
-        let expr = counter.mk_node_dummy(ExprKind::BinaryOp(
-            BinaryOp { op: "/".to_string() },
-            Box::new(left),
-            Box::new(right),
-        ));
-
-        let result = folder.fold_expression(&expr).unwrap();
-
-        match result.kind {
-            ExprKind::FloatLiteral(val) => {
-                // Should be approximately 0.529411765
-                assert!((val - 0.529411765).abs() < 0.000001);
-            }
-            _ => panic!("Expected folded float literal, got {:?}", result),
-        }
-    }
-
-    #[test]
-    fn test_array_with_division_folding() {
-        let mut folder = ConstantFolder::new();
-        let mut counter = NodeCounter::new();
-
-        // Test [135f32/255f32, 206f32/255f32, 1.0f32]
-        let left1 = counter.mk_node_dummy(ExprKind::FloatLiteral(135.0));
-        let right1 = counter.mk_node_dummy(ExprKind::FloatLiteral(255.0));
-        let elem1 = counter.mk_node_dummy(ExprKind::BinaryOp(
-            BinaryOp { op: "/".to_string() },
-            Box::new(left1),
-            Box::new(right1),
-        ));
-
-        let left2 = counter.mk_node_dummy(ExprKind::FloatLiteral(206.0));
-        let right2 = counter.mk_node_dummy(ExprKind::FloatLiteral(255.0));
-        let elem2 = counter.mk_node_dummy(ExprKind::BinaryOp(
-            BinaryOp { op: "/".to_string() },
-            Box::new(left2),
-            Box::new(right2),
-        ));
-        let elem3 = counter.mk_node_dummy(ExprKind::FloatLiteral(1.0));
-
-        let expr = counter.mk_node_dummy(ExprKind::ArrayLiteral(vec![elem1, elem2, elem3]));
-
-        let result = folder.fold_expression(&expr).unwrap();
-
-        match result.kind {
-            ExprKind::ArrayLiteral(elements) => {
-                assert_eq!(elements.len(), 3);
-
-                // First element should be folded
-                match &elements[0].kind {
-                    ExprKind::FloatLiteral(val) => {
-                        assert!((val - 0.529411765).abs() < 0.000001);
-                    }
-                    _ => panic!("Expected folded float literal"),
-                }
-
-                // Second element should be folded
-                match &elements[1].kind {
-                    ExprKind::FloatLiteral(val) => {
-                        assert!((val - 0.807843137).abs() < 0.000001);
-                    }
-                    _ => panic!("Expected folded float literal"),
-                }
-
-                // Third element should remain unchanged
-                match &elements[2].kind {
-                    ExprKind::FloatLiteral(val) => {
-                        assert_eq!(*val, 1.0);
-                    }
-                    _ => panic!("Expected unchanged float literal"),
-                }
-            }
-            _ => panic!("Expected array literal, got {:?}", result),
-        }
-    }
+/// Fold constants in a MIR program (convenience function).
+pub fn fold_constants(program: Program) -> Result<Program> {
+    let mut folder = ConstantFolder::new();
+    folder.fold_program(&program)
 }

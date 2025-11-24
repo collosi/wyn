@@ -159,7 +159,7 @@ fn compile_file(
     // Write MIR if requested (before further passes that might fail)
     write_mir_if_requested(&flattened, &output_mir, verbose)?;
 
-    let lowered = flattened.monomorphize()?.filter_reachable().lower()?;
+    let lowered = flattened.monomorphize()?.filter_reachable().fold_constants()?.lower()?;
 
     // Determine output path
     let output_path = output.unwrap_or_else(|| {
