@@ -501,7 +501,10 @@ impl Flattener {
                         (param1.clone(), ret.clone())
                     } else {
                         return Err(CompilerError::TypeError(
-                            format!("Operator section has unexpected type structure: expected a -> a -> b, got {:?}", op_type),
+                            format!(
+                                "Operator section has unexpected type structure: expected a -> a -> b, got {:?}",
+                                op_type
+                            ),
                             span,
                         ));
                     }
@@ -548,16 +551,8 @@ impl Flattener {
                 ];
 
                 // Build the body: x <op> y
-                let x_var = Expr::new(
-                    param_type.clone(),
-                    mir::ExprKind::Var("x".to_string()),
-                    span,
-                );
-                let y_var = Expr::new(
-                    param_type.clone(),
-                    mir::ExprKind::Var("y".to_string()),
-                    span,
-                );
+                let x_var = Expr::new(param_type.clone(), mir::ExprKind::Var("x".to_string()), span);
+                let y_var = Expr::new(param_type.clone(), mir::ExprKind::Var("y".to_string()), span);
                 let body = Expr::new(
                     ret_type.clone(),
                     mir::ExprKind::BinOp {

@@ -2340,3 +2340,13 @@ fn test_operator_section_direct_application() {
         other => panic!("Expected application, got {:?}", other),
     }
 }
+
+#[test]
+fn test_operator_definition() {
+    // def (+) should parse as a function definition with name "(+)"
+    let input = "def (+) (x: i32) (y: i32): i32 = x + y";
+    let decl = single_decl(input);
+
+    assert_eq!(decl.name, "(+)");
+    assert_eq!(decl.params.len(), 2);
+}

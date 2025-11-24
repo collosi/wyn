@@ -194,16 +194,12 @@ impl ModuleElaborator {
 
                 Ok(specs)
             }
-            ModuleTypeExpression::Arrow(..) => {
-                Err(CompilerError::ModuleError(
-                    "Parameterized module types (T -> ...) not yet implemented in type resolution".to_string(),
-                ))
-            }
-            ModuleTypeExpression::FunctorType(..) => {
-                Err(CompilerError::ModuleError(
-                    "Functor types (mod_type -> mod_type) not yet implemented in type resolution".to_string(),
-                ))
-            }
+            ModuleTypeExpression::Arrow(..) => Err(CompilerError::ModuleError(
+                "Parameterized module types (T -> ...) not yet implemented in type resolution".to_string(),
+            )),
+            ModuleTypeExpression::FunctorType(..) => Err(CompilerError::ModuleError(
+                "Functor types (mod_type -> mod_type) not yet implemented in type resolution".to_string(),
+            )),
         }
     }
 
@@ -450,68 +446,78 @@ impl ModuleElaborator {
 
         {
             let specs = &specs;
-                let mut result = Vec::new();
+            let mut result = Vec::new();
 
-                // For each spec in the signature, find the matching declaration
-                for spec in specs {
-                    match spec {
-                        Spec::Val(name, _type_params, _ty) => {
-                            // Find the value declaration with this name
-                            let matching_decl = decls.iter().find(|d| match d {
-                                Declaration::Decl(decl) => decl.name.ends_with(name),
-                                Declaration::Val(val) => val.name.ends_with(name),
-                                _ => false,
-                            });
+            // For each spec in the signature, find the matching declaration
+            for spec in specs {
+                match spec {
+                    Spec::Val(name, _type_params, _ty) => {
+                        // Find the value declaration with this name
+                        let matching_decl = decls.iter().find(|d| match d {
+                            Declaration::Decl(decl) => decl.name.ends_with(name),
+                            Declaration::Val(val) => val.name.ends_with(name),
+                            _ => false,
+                        });
 
-                            if let Some(decl) = matching_decl {
-                                result.push(decl.clone());
-                                // TODO: Check that the type matches
-                            } else {
-                                return Err(CompilerError::ModuleError(format!(
-                                    "Module does not provide value '{}' required by signature",
-                                    name
-                                )));
-                            }
+                        if let Some(decl) = matching_decl {
+                            result.push(decl.clone());
+                        } else {
+                            return Err(CompilerError::ModuleError(format!(
+                                "Module does not provide value '{}' required by signature",
+                                name
+                            )));
                         }
-                        Spec::Type(_kind, name, _type_params, _def) => {
-                            // Find the type declaration with this name
-                            let matching_decl = decls.iter().find(|d| match d {
-                                Declaration::TypeBind(tb) => tb.name.ends_with(name),
-                                _ => false,
-                            });
+                    }
+                    Spec::Type(_kind, name, _type_params, _def) => {
+                        // Find the type declaration with this name
+                        let matching_decl = decls.iter().find(|d| match d {
+                            Declaration::TypeBind(tb) => tb.name.ends_with(name),
+                            _ => false,
+                        });
 
-                            if let Some(decl) = matching_decl {
-                                result.push(decl.clone());
-                                // TODO: Check constraints and make abstract if needed
-                            } else {
-                                return Err(CompilerError::ModuleError(format!(
-                                    "Module does not provide type '{}' required by signature",
-                                    name
-                                )));
-                            }
+                        if let Some(decl) = matching_decl {
+                            result.push(decl.clone());
+                        } else {
+                            return Err(CompilerError::ModuleError(format!(
+                                "Module does not provide type '{}' required by signature",
+                                name
+                            )));
                         }
-                        Spec::Module(_name, _sig) => {
-                            // TODO: Handle nested modules
-                            return Err(CompilerError::ModuleError(
-                                "Nested modules in signatures not yet implemented".to_string(),
-                            ));
-                        }
-                        Spec::Include(_) => {
-                            // TODO: Handle includes
-                            return Err(CompilerError::ModuleError(
-                                "Include in signatures not yet implemented".to_string(),
-                            ));
-                        }
-                        Spec::ValOp(_op, _ty) => {
-                            // TODO: Handle operator specs
-                            return Err(CompilerError::ModuleError(
-                                "Operator specs not yet implemented".to_string(),
-                            ));
+                    }
+                    Spec::Module(_name, _sig) => {
+                        // TODO: Handle nested modules
+                        return Err(CompilerError::ModuleError(
+                            "Nested modules in signatures not yet implemented".to_string(),
+                        ));
+                    }
+                    Spec::Include(_) => {
+                        // TODO: Handle includes
+                        return Err(CompilerError::ModuleError(
+                            "Include in signatures not yet implemented".to_string(),
+                        ));
+                    }
+                    Spec::ValOp(op, _ty) => {
+                        // Operator specs like val (+): t -> t -> t
+                        // The definition will have name "(+)" for operator "+"
+                        let op_name = format!("({})", op);
+                        let matching_decl = decls.iter().find(|d| match d {
+                            Declaration::Decl(decl) => decl.name.ends_with(&op_name),
+                            _ => false,
+                        });
+
+                        if let Some(decl) = matching_decl {
+                            result.push(decl.clone());
+                        } else {
+                            return Err(CompilerError::ModuleError(format!(
+                                "Module does not provide operator '{}' required by signature",
+                                op
+                            )));
                         }
                     }
                 }
+            }
 
-                Ok(result)
+            Ok(result)
         }
     }
 }

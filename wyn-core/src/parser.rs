@@ -213,7 +213,27 @@ impl Parser {
                 _ => return Err(CompilerError::ParseError(format!("Invalid keyword: {}", keyword))),
             }
 
-            let name = self.expect_identifier()?;
+            // Parse name - either an identifier or an operator in parentheses like (+)
+            let name = if self.peek() == Some(&Token::LeftParen) {
+                self.advance(); // consume (
+                let op = match self.peek() {
+                    Some(Token::BinOp(op)) => {
+                        let op = op.clone();
+                        self.advance();
+                        op
+                    }
+                    _ => {
+                        return Err(CompilerError::ParseError(format!(
+                            "Expected operator after ( in definition at {}",
+                            self.current_span()
+                        )));
+                    }
+                };
+                self.expect(Token::RightParen)?;
+                format!("({})", op)
+            } else {
+                self.expect_identifier()?
+            };
 
             // Parse size parameters: [n] [m] ...
             let mut size_params = Vec::new();
@@ -1241,10 +1261,7 @@ impl Parser {
                     self.advance(); // consume )
                     let end_span = self.previous_span();
                     let span = start_span.merge(&end_span);
-                    return Ok(self.node_counter.mk_node(
-                        ExprKind::OperatorSection(op),
-                        span,
-                    ));
+                    return Ok(self.node_counter.mk_node(ExprKind::OperatorSection(op), span));
                 }
 
                 // Parse first expression

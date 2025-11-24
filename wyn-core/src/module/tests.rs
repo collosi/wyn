@@ -388,9 +388,7 @@ fn test_module_with_function_body() {
             )));
 
             // Check that we have a function declaration
-            assert!(elaborated.declarations.iter().any(|d| matches!(d,
-                crate::ast::Declaration::Decl(_)
-            )));
+            assert!(elaborated.declarations.iter().any(|d| matches!(d, crate::ast::Declaration::Decl(_))));
         }
         Err(e) => panic!("Elaboration failed: {}", e),
     }
@@ -440,5 +438,40 @@ fn test_parse_module_type_with_operators() {
             }
         }
         other => panic!("Expected ModuleTypeBind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_module_with_operator_definition() {
+    let source = r#"
+        module type numeric = {
+            type t
+            val (+): t -> t -> t
+        }
+
+        module i32m: (numeric with t = i32) = {
+            type t = i32
+            def (+) (x: t) (y: t): t = x + y
+        }
+    "#;
+
+    let tokens = crate::lexer::tokenize(source).unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().unwrap();
+
+    let mut elaborator = ModuleElaborator::new();
+    let result = elaborator.elaborate(program);
+
+    match result {
+        Ok(elaborated) => {
+            // Should have the operator definition
+            assert!(
+                elaborated.declarations.iter().any(|d| matches!(d,
+                    crate::ast::Declaration::Decl(decl) if decl.name.ends_with("(+)")
+                )),
+                "Expected operator definition (+)"
+            );
+        }
+        Err(e) => panic!("Elaboration failed: {}", e),
     }
 }

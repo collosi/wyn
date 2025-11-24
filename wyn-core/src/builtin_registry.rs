@@ -495,55 +495,135 @@ impl BuiltinRegistry {
         let f32_ty = Self::ty("f32");
 
         // Conversions from signed integers to f32
-        self.register("__builtin_f32_from_i8", vec![Self::ty("i8")], f32_ty.clone(),
-            BuiltinImpl::PrimOp(PrimOp::SIToFP));
-        self.register("__builtin_f32_from_i16", vec![Self::ty("i16")], f32_ty.clone(),
-            BuiltinImpl::PrimOp(PrimOp::SIToFP));
-        self.register("__builtin_f32_from_i32", vec![Self::ty("i32")], f32_ty.clone(),
-            BuiltinImpl::PrimOp(PrimOp::SIToFP));
-        self.register("__builtin_f32_from_i64", vec![Self::ty("i64")], f32_ty.clone(),
-            BuiltinImpl::PrimOp(PrimOp::SIToFP));
+        self.register(
+            "__builtin_f32_from_i8",
+            vec![Self::ty("i8")],
+            f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::SIToFP),
+        );
+        self.register(
+            "__builtin_f32_from_i16",
+            vec![Self::ty("i16")],
+            f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::SIToFP),
+        );
+        self.register(
+            "__builtin_f32_from_i32",
+            vec![Self::ty("i32")],
+            f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::SIToFP),
+        );
+        self.register(
+            "__builtin_f32_from_i64",
+            vec![Self::ty("i64")],
+            f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::SIToFP),
+        );
 
         // Conversions from unsigned integers to f32
-        self.register("__builtin_f32_from_u8", vec![Self::ty("u8")], f32_ty.clone(),
-            BuiltinImpl::PrimOp(PrimOp::UIToFP));
-        self.register("__builtin_f32_from_u16", vec![Self::ty("u16")], f32_ty.clone(),
-            BuiltinImpl::PrimOp(PrimOp::UIToFP));
-        self.register("__builtin_f32_from_u32", vec![Self::ty("u32")], f32_ty.clone(),
-            BuiltinImpl::PrimOp(PrimOp::UIToFP));
-        self.register("__builtin_f32_from_u64", vec![Self::ty("u64")], f32_ty.clone(),
-            BuiltinImpl::PrimOp(PrimOp::UIToFP));
+        self.register(
+            "__builtin_f32_from_u8",
+            vec![Self::ty("u8")],
+            f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::UIToFP),
+        );
+        self.register(
+            "__builtin_f32_from_u16",
+            vec![Self::ty("u16")],
+            f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::UIToFP),
+        );
+        self.register(
+            "__builtin_f32_from_u32",
+            vec![Self::ty("u32")],
+            f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::UIToFP),
+        );
+        self.register(
+            "__builtin_f32_from_u64",
+            vec![Self::ty("u64")],
+            f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::UIToFP),
+        );
 
         // Conversions from other floats to f32
-        self.register("__builtin_f32_from_f16", vec![Self::ty("f16")], f32_ty.clone(),
-            BuiltinImpl::PrimOp(PrimOp::FPConvert));
-        self.register("__builtin_f32_from_f64", vec![Self::ty("f64")], f32_ty.clone(),
-            BuiltinImpl::PrimOp(PrimOp::FPConvert));
+        self.register(
+            "__builtin_f32_from_f16",
+            vec![Self::ty("f16")],
+            f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::FPConvert),
+        );
+        self.register(
+            "__builtin_f32_from_f64",
+            vec![Self::ty("f64")],
+            f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::FPConvert),
+        );
 
         // Conversions from f32 to integers
-        self.register("__builtin_f32_to_i8", vec![f32_ty.clone()], Self::ty("i8"),
-            BuiltinImpl::PrimOp(PrimOp::FPToSI));
-        self.register("__builtin_f32_to_i16", vec![f32_ty.clone()], Self::ty("i16"),
-            BuiltinImpl::PrimOp(PrimOp::FPToSI));
-        self.register("__builtin_f32_to_i32", vec![f32_ty.clone()], Self::ty("i32"),
-            BuiltinImpl::PrimOp(PrimOp::FPToSI));
-        self.register("__builtin_f32_to_i64", vec![f32_ty.clone()], Self::ty("i64"),
-            BuiltinImpl::PrimOp(PrimOp::FPToSI));
+        self.register(
+            "__builtin_f32_to_i8",
+            vec![f32_ty.clone()],
+            Self::ty("i8"),
+            BuiltinImpl::PrimOp(PrimOp::FPToSI),
+        );
+        self.register(
+            "__builtin_f32_to_i16",
+            vec![f32_ty.clone()],
+            Self::ty("i16"),
+            BuiltinImpl::PrimOp(PrimOp::FPToSI),
+        );
+        self.register(
+            "__builtin_f32_to_i32",
+            vec![f32_ty.clone()],
+            Self::ty("i32"),
+            BuiltinImpl::PrimOp(PrimOp::FPToSI),
+        );
+        self.register(
+            "__builtin_f32_to_i64",
+            vec![f32_ty.clone()],
+            Self::ty("i64"),
+            BuiltinImpl::PrimOp(PrimOp::FPToSI),
+        );
 
-        self.register("__builtin_f32_to_u8", vec![f32_ty.clone()], Self::ty("u8"),
-            BuiltinImpl::PrimOp(PrimOp::FPToUI));
-        self.register("__builtin_f32_to_u16", vec![f32_ty.clone()], Self::ty("u16"),
-            BuiltinImpl::PrimOp(PrimOp::FPToUI));
-        self.register("__builtin_f32_to_u32", vec![f32_ty.clone()], Self::ty("u32"),
-            BuiltinImpl::PrimOp(PrimOp::FPToUI));
-        self.register("__builtin_f32_to_u64", vec![f32_ty.clone()], Self::ty("u64"),
-            BuiltinImpl::PrimOp(PrimOp::FPToUI));
+        self.register(
+            "__builtin_f32_to_u8",
+            vec![f32_ty.clone()],
+            Self::ty("u8"),
+            BuiltinImpl::PrimOp(PrimOp::FPToUI),
+        );
+        self.register(
+            "__builtin_f32_to_u16",
+            vec![f32_ty.clone()],
+            Self::ty("u16"),
+            BuiltinImpl::PrimOp(PrimOp::FPToUI),
+        );
+        self.register(
+            "__builtin_f32_to_u32",
+            vec![f32_ty.clone()],
+            Self::ty("u32"),
+            BuiltinImpl::PrimOp(PrimOp::FPToUI),
+        );
+        self.register(
+            "__builtin_f32_to_u64",
+            vec![f32_ty.clone()],
+            Self::ty("u64"),
+            BuiltinImpl::PrimOp(PrimOp::FPToUI),
+        );
 
         // Bit manipulation: reinterpret bits without conversion
-        self.register("__builtin_f32_from_bits", vec![Self::ty("u32")], f32_ty.clone(),
-            BuiltinImpl::PrimOp(PrimOp::Bitcast));
-        self.register("__builtin_f32_to_bits", vec![f32_ty.clone()], Self::ty("u32"),
-            BuiltinImpl::PrimOp(PrimOp::Bitcast));
+        self.register(
+            "__builtin_f32_from_bits",
+            vec![Self::ty("u32")],
+            f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::Bitcast),
+        );
+        self.register(
+            "__builtin_f32_to_bits",
+            vec![f32_ty.clone()],
+            Self::ty("u32"),
+            BuiltinImpl::PrimOp(PrimOp::Bitcast),
+        );
     }
 
     /// Register vector operations (length, normalize, dot, cross, etc.)
