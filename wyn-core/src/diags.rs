@@ -4,7 +4,131 @@
 //! something close to Wyn syntax.
 
 use crate::ast::*;
+use polytype::Type as PolyType;
 use std::fmt::Write;
+
+/// Pretty-print a polytype Type to a human-readable string.
+///
+/// Converts `Constructed(Str("f32"), [])` to `"f32"`,
+/// `Constructed(Array, [Size(3), Str("f32")])` to `"[3]f32"`, etc.
+pub fn format_type(ty: &PolyType<TypeName>) -> String {
+    match ty {
+        PolyType::Variable(id) => format!("?{}", id),
+        PolyType::Constructed(name, args) => format_constructed_type(name, args),
+    }
+}
+
+fn format_constructed_type(name: &TypeName, args: &[PolyType<TypeName>]) -> String {
+    match name {
+        TypeName::Str(s) => {
+            match *s {
+                "tuple" => {
+                    // (T1, T2, ...)
+                    let items: Vec<_> = args.iter().map(format_type).collect();
+                    format!("({})", items.join(", "))
+                }
+                "->" => {
+                    // T1 -> T2
+                    if args.len() == 2 {
+                        let param = format_type(&args[0]);
+                        let ret = format_type(&args[1]);
+                        format!("{} -> {}", param, ret)
+                    } else if args.is_empty() {
+                        "() -> ?".to_string()
+                    } else {
+                        let params: Vec<_> = args[..args.len() - 1].iter().map(format_type).collect();
+                        let ret = format_type(&args[args.len() - 1]);
+                        format!("({}) -> {}", params.join(", "), ret)
+                    }
+                }
+                _ => {
+                    if args.is_empty() {
+                        s.to_string()
+                    } else {
+                        // Generic type application: T<A, B>
+                        let args_str: Vec<_> = args.iter().map(format_type).collect();
+                        format!("{}<{}>", s, args_str.join(", "))
+                    }
+                }
+            }
+        }
+        TypeName::Size(n) => format!("{}", n),
+        TypeName::SizeVar(s) => s.clone(),
+        TypeName::Unsized => "?".to_string(),
+        TypeName::Array => {
+            // [size]elem_type
+            if args.len() == 2 {
+                let size = format_type(&args[0]);
+                let elem = format_type(&args[1]);
+                format!("[{}]{}", size, elem)
+            } else {
+                "[?]?".to_string()
+            }
+        }
+        TypeName::Vec => {
+            // vec<size>elem_type
+            if args.len() == 2 {
+                let size = format_type(&args[0]);
+                let elem = format_type(&args[1]);
+                format!("vec{}{}", size, elem)
+            } else {
+                "vec?".to_string()
+            }
+        }
+        TypeName::Mat => {
+            // mat<rows x cols>elem
+            // Args are typically [rows, cols, elem_type]
+            if args.len() == 3 {
+                let rows = format_type(&args[0]);
+                let cols = format_type(&args[1]);
+                let elem = format_type(&args[2]);
+                format!("mat{}x{}{}", rows, cols, elem)
+            } else {
+                "mat?".to_string()
+            }
+        }
+        TypeName::Record(fields) => {
+            // {field1: T1, field2: T2}
+            let items: Vec<_> =
+                fields.iter().map(|(name, ty)| format!("{}: {}", name, format_type(ty))).collect();
+            format!("{{{}}}", items.join(", "))
+        }
+        TypeName::Sum(variants) => {
+            // Variant1 T1 | Variant2 T2
+            let items: Vec<_> = variants
+                .iter()
+                .map(|(name, variant_args)| {
+                    if variant_args.is_empty() {
+                        name.clone()
+                    } else {
+                        let args_str: Vec<_> = variant_args.iter().map(format_type).collect();
+                        format!("{} {}", name, args_str.join(" "))
+                    }
+                })
+                .collect();
+            items.join(" | ")
+        }
+        TypeName::Unique => {
+            // *T
+            if args.len() == 1 { format!("*{}", format_type(&args[0])) } else { "*?".to_string() }
+        }
+        TypeName::UserVar(s) => format!("'{}", s),
+        TypeName::Named(s) => {
+            if args.is_empty() {
+                s.clone()
+            } else {
+                let args_str: Vec<_> = args.iter().map(format_type).collect();
+                format!("{}<{}>", s, args_str.join(", "))
+            }
+        }
+        TypeName::Existential(vars, inner) => {
+            format!("?[{}]. {}", vars.join(", "), format_type(inner))
+        }
+        TypeName::NamedParam(name, ty) => {
+            format!("({}: {})", name, format_type(ty))
+        }
+    }
+}
 
 /// Formatter for AST nodes that produces readable output with line numbers.
 pub struct AstFormatter {
@@ -496,6 +620,7 @@ impl Display for mir::Def {
             mir::Def::Function {
                 name,
                 params,
+                ret_type,
                 attributes,
                 body,
                 ..
@@ -504,17 +629,19 @@ impl Display for mir::Def {
                 for attr in attributes {
                     writeln!(f, "{}", attr)?;
                 }
-                // Write function signature
+                // Write function signature with types
                 write!(f, "def {}", name)?;
                 for param in params.iter() {
-                    write!(f, " {}", param)?;
+                    write!(f, " ({}: {})", param.name, format_type(&param.ty))?;
                 }
+                write!(f, ": {}", format_type(ret_type))?;
                 writeln!(f, " =")?;
                 // Write body with indentation
                 write!(f, "  {}", body)
             }
             mir::Def::Constant {
                 name,
+                ty,
                 attributes,
                 body,
                 ..
@@ -523,8 +650,8 @@ impl Display for mir::Def {
                 for attr in attributes {
                     writeln!(f, "{}", attr)?;
                 }
-                // Write constant
-                writeln!(f, "def {} =", name)?;
+                // Write constant with type
+                writeln!(f, "def {}: {} =", name, format_type(ty))?;
                 write!(f, "  {}", body)
             }
         }
@@ -533,7 +660,8 @@ impl Display for mir::Def {
 
 impl Display for mir::Param {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        if self.is_consumed { write!(f, "*{}", self.name) } else { write!(f, "{}", self.name) }
+        let prefix = if self.is_consumed { "*" } else { "" };
+        write!(f, "({}{}: {})", prefix, self.name, format_type(&self.ty))
     }
 }
 

@@ -43,14 +43,15 @@ fn flatten_to_string(input: &str) -> String {
 #[test]
 fn test_simple_constant() {
     let mir = flatten_to_string("def x = 42");
-    assert!(mir.contains("def x ="));
+    assert!(mir.contains("def x:"));
     assert!(mir.contains("42"));
 }
 
 #[test]
 fn test_simple_function() {
     let mir = flatten_to_string("def add x y = x + y");
-    assert!(mir.contains("def add x y ="));
+    // MIR format includes types: def add (x: type) (y: type): return_type =
+    assert!(mir.contains("def add"));
     assert!(mir.contains("(x + y)"));
 }
 

@@ -361,10 +361,8 @@ impl TypeChecker {
                 // Bind the inner pattern with the annotated type
                 let result = self.bind_pattern(inner_pattern, annotated_type, generalize)?;
                 // Also store type for the outer Typed pattern
-                self.type_table.insert(
-                    pattern.h.id,
-                    TypeScheme::Monotype(annotated_type.apply(&self.context)),
-                );
+                let resolved = annotated_type.apply(&self.context);
+                self.type_table.insert(pattern.h.id, TypeScheme::Monotype(resolved));
                 Ok(result)
             }
             PatternKind::Attributed(_, inner_pattern) => {
@@ -882,7 +880,10 @@ impl TypeChecker {
             .iter()
             .map(|(node_id, scheme)| {
                 let resolved = match scheme {
-                    TypeScheme::Monotype(ty) => TypeScheme::Monotype(ty.apply(&self.context)),
+                    TypeScheme::Monotype(ty) => {
+                        let resolved_ty = ty.apply(&self.context);
+                        TypeScheme::Monotype(resolved_ty)
+                    }
                     TypeScheme::Polytype { variable, body } => {
                         // For polytypes, apply context to the body but preserve quantified variables
                         TypeScheme::Polytype {
@@ -964,15 +965,17 @@ impl TypeChecker {
                 })?
                 .to_string();
             let type_scheme = TypeScheme::Monotype(param_type.clone());
+
+            // Store resolved type in type_table for mirize
+            // Need to insert for the outer pattern node ID
+            let resolved_param_type = param_type.apply(&self.context);
+            self.type_table.insert(param.h.id, TypeScheme::Monotype(resolved_param_type));
+
             debug!(
                 "Adding parameter '{}' to scope with type: {:?}",
                 param_name, param_type
             );
             self.scope_stack.insert(param_name, type_scheme);
-
-            // Store resolved type in type_table for mirize
-            // Need to insert for the outer pattern node ID
-            self.type_table.insert(param.h.id, TypeScheme::Monotype(param_type.apply(&self.context)));
         }
 
         // Infer body type

@@ -72,13 +72,15 @@ impl Compiler {
         let tokens = lexer::tokenize(source).map_err(error::CompilerError::ParseError)?;
         let mut parser = parser::Parser::new(tokens);
         let ast = parser.parse()?;
-        Ok(Parsed { ast })
+        let node_counter = parser.take_node_counter();
+        Ok(Parsed { ast, node_counter })
     }
 }
 
 /// Stage 1: Source has been parsed into an AST
 pub struct Parsed {
     pub ast: ast::Program,
+    pub node_counter: ast::NodeCounter,
 }
 
 impl Parsed {
@@ -86,19 +88,23 @@ impl Parsed {
     pub fn elaborate(self) -> Result<Elaborated> {
         let mut elaborator = module::ModuleElaborator::new();
         let ast = elaborator.elaborate(self.ast)?;
-        Ok(Elaborated { ast })
+        Ok(Elaborated {
+            ast,
+            node_counter: self.node_counter,
+        })
     }
 }
 
 /// Stage 2: Modules have been elaborated
 pub struct Elaborated {
     pub ast: ast::Program,
+    pub node_counter: ast::NodeCounter,
 }
 
 impl Elaborated {
     /// Resolve names: rewrite FieldAccess -> QualifiedName and load modules
     pub fn resolve(mut self) -> Result<Resolved> {
-        let mut resolver = name_resolution::NameResolver::new();
+        let mut resolver = name_resolution::NameResolver::new_with_counter(self.node_counter);
         resolver.resolve_program(&mut self.ast)?;
         Ok(Resolved { ast: self.ast })
     }

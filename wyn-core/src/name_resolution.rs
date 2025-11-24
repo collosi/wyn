@@ -6,7 +6,7 @@
 //! 2. Loading referenced modules
 //! 3. Merging module declarations into the program
 
-use crate::ast::{Declaration, ExprKind, Expression, Program};
+use crate::ast::{Declaration, ExprKind, Expression, NodeCounter, Program};
 use crate::error::Result;
 use crate::module_manager::ModuleManager;
 use std::collections::HashSet;
@@ -21,6 +21,16 @@ impl NameResolver {
     pub fn new() -> Self {
         NameResolver {
             module_manager: ModuleManager::new(),
+            builtin_registry: crate::builtin_registry::BuiltinRegistry::default(),
+            referenced_modules: HashSet::new(),
+        }
+    }
+
+    /// Create a new NameResolver with a shared NodeCounter
+    /// This ensures modules are parsed with NodeIds that don't collide with user code
+    pub fn new_with_counter(node_counter: NodeCounter) -> Self {
+        NameResolver {
+            module_manager: ModuleManager::new_with_counter(node_counter),
             builtin_registry: crate::builtin_registry::BuiltinRegistry::default(),
             referenced_modules: HashSet::new(),
         }
