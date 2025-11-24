@@ -4,122 +4,129 @@ A minimal compiler for a Futhark-like programming language that generates SPIR-V
 
 ## Features
 
-- Simple, Futhark-inspired syntax
-- Type inference using polytype
-- SPIR-V code generation for Vulkan/OpenGL shaders
-- Support for vertex and fragment shaders
-- Array literals and indexing
-- Basic arithmetic operations
+- Hindley-Milner type inference with polymorphic types
+- Higher-order functions (map, reduce, zip, etc.)
+- Vector and matrix types optimized for GPU operations
+- Pattern matching
+- SPIR-V code generation for Vulkan/WebGPU shaders
+- Graphical and compute (planned) shader kernel generation
+- Array operations with size tracking
+- Loop constructs
+- Module system (in development)
+- Futhark-inspired functional syntax for shader programming
 
 ## Project Structure
 
-The project is organized as a Rust workspace with two crates:
+The project is organized as a Rust workspace:
 
-- `compiler/` - The core compiler library
-  - `lexer.rs` - Tokenization using nom
-  - `parser.rs` - Parsing to AST
-  - `ast.rs` - Abstract syntax tree definitions  
-  - `type_checker.rs` - Type checking with polytype
-  - `codegen.rs` - SPIR-V code generation
-  - `error.rs` - Error handling with thiserror
-- `driver/` - The command-line executable using clap
+- **`wyn-core/`** - Compiler library (lexer, parser, type checker, code generator)
+- **`wyn/`** - Command-line executable
+- **`spirv-validator/`** - SPIR-V validation tool using wgpu
+- **`viz/`** - Visualization tool for rendering SPIR-V shaders
+- **`prelude/`** - Standard library functions written in Wyn
 
 ## Example Program
 
 ```futhark
--- Full-screen triangle in NDC (like classic shader demos).
-let verts: [3][4]f32 =
-  [[-1.0f32, -1.0f32, 0.0f32, 1.0f32],
-   [ 3.0f32, -1.0f32, 0.0f32, 1.0f32],
-   [-1.0f32,  3.0f32, 0.0f32, 1.0f32]]
+-- Simple shader that renders a full-screen triangle
 
--- Vertex stage: return clip-space position for a given vertex index.
-entry vertex_main (vertex_id: i32) : [4]f32 =
-  verts[vertex_id]
+def positions: [3]vec4f32 =
+  [vec4 (-1.0f32) (-1.0f32) 0.0f32 1.0f32,
+   vec4 3.0f32 (-1.0f32) 0.0f32 1.0f32,
+   vec4 (-1.0f32) 3.0f32 0.0f32 1.0f32]
 
--- Fragment stage: constant sky blue (#87CEEB).
-let SKY_RGBA : [4]f32 =
-  [135f32/255f32, 206f32/255f32, 235f32/255f32, 1.0f32]
+#[vertex]
+def vertex_main(
+    #[builtin(vertex_index)] vertex_id: i32
+): #[builtin(position)] vec4f32 =
+  positions[vertex_id]
 
-entry fragment_main () : [4]f32 =
-  SKY_RGBA
+#[fragment]
+def fragment_main(): #[location(0)] vec4f32 =
+  vec4 0.529f32 0.808f32 0.922f32 1.0f32  -- Sky blue
 ```
-
-### Type Inference Example
-
-```futhark
-def zip_arrays xs ys = zip xs ys
-```
-
-This demonstrates Hindley-Milner type inference. The compiler infers:
-```
-val zip_arrays [d0] 't1 't2 : [d0]t1 -> [d0]t2 -> [d0](t1, t2)
-```
-
-Where `[d0]` represents arrays of dimension `d0`, and `t1`, `t2` are polymorphic type variables.
 
 ## Usage
 
-### Compile a source file to SPIR-V:
 ```bash
-wyn compile input.wyn -o output.spv
+# Compile to SPIR-V
+cargo run --bin wyn -- compile input.wyn -o output.spv
+
+# Type check without generating code
+cargo run --bin wyn -- check input.wyn
+
+# Visualize a SPIR-V shader
+cd viz && cargo run vf ../shader.spv --vertex vertex_main --fragment fragment_main
 ```
 
-### Check a source file without generating output:
-```bash
-wyn check input.wyn
-```
-
-## Building
-
-This project requires LLVM 18. If you installed LLVM via Homebrew, you'll need to set the LLVM_SYS_180_PREFIX environment variable:
+## Building and Testing
 
 ```bash
-export LLVM_SYS_180_PREFIX=/usr/local/Cellar/llvm@18/18.1.8
 cargo build --release
-```
-
-For other LLVM installations, set LLVM_SYS_180_PREFIX to your LLVM installation path.
-
-## Testing
-
-```bash
-export LLVM_SYS_180_PREFIX=/usr/local/Cellar/llvm@18/18.1.8
 cargo test
 ```
 
-## Supported Language Features
+All 277 tests currently pass.
+
+## Language Overview
 
 ### Types
-- `i32` - 32-bit signed integer
-- `f32` - 32-bit floating point
-- `[N]T` - Array of N elements of type T
-- Multi-dimensional arrays: `[M][N]T`
-- `(T1, T2, ...)` - Tuple types
-- Function types with inference
 
-### Declarations
-- `let` - Constant bindings with explicit types
-- `entry` - Shader entry points (must contain "vertex" or "fragment" in name)
-- `def` - Function definitions with type inference
+- **Primitives**: `i32`, `f32`, `bool`, etc.
+- **Arrays**: `[N]T` for fixed size, `[]T` for inferred size
+- **Vectors**: `vec2f32`, `vec3f32`, `vec4f32` (SPIR-V types)
+- **Matrices**: `mat2f32`, `mat3f32`, `mat4f32`
+- **Tuples**: `(T1, T2, ...)`
+- **Functions**: `T1 -> T2`
 
-### Expressions
-- Integer and float literals with type suffixes (e.g., `42`, `3.14f32`)
-- Array literals: `[1.0f32, 2.0f32, 3.0f32]`
-- Array indexing: `arr[i]`
-- Division operator: `/`
-- Function calls: `zip xs ys`
-- Tuples: `(a, b)`
-- Type holes: `???` - placeholder expressions for development
-- Comments: `-- comment`
+### Key Syntax
 
-## Limitations
+```futhark
+-- Function definitions
+def add x y = x + y
+def reverse [n] (arr: [n]i32): [n]i32 = ...
 
-This is a minimal implementation focused on the specific example. Current limitations include:
+-- Shader entry points with attributes
+#[vertex]
+def vs_main(#[builtin(vertex_index)] id: i32): #[builtin(position)] vec4f32 = ...
 
-- Dynamic array indexing simplified (returns first element as workaround - full SPIR-V implementation would require OpAccessChain)
-- Limited operators (only division)
-- No control flow structures
-- Function calls and tuples supported in type checking but not SPIR-V generation
-- No modules or imports
-- Type inference implemented using polytype for `def` declarations# wyn
+#[fragment]
+def fs_main(#[location(0)] color: vec3f32): #[location(0)] vec4f32 = ...
+
+-- Lambdas and pattern matching
+\x -> x + 1
+\(x, y) -> x + y
+
+-- Loops (no recursion allowed)
+loop (acc, i) = (0, 0) while i < n do (acc + arr[i], i + 1)
+
+-- Higher-order functions
+map (\x -> x * 2) arr
+reduce (+) 0 arr
+```
+
+### Type Inference
+
+```futhark
+def identity x = x
+-- Inferred: ∀a. a -> a
+
+def zip_arrays xs ys = zip xs ys
+-- Inferred: ∀n t1 t2. [n]t1 -> [n]t2 -> [n](t1, t2)
+```
+
+## Current Limitations
+
+- Module system is partially implemented
+- No recursion - use `loop` or higher-order functions instead
+- `match` expressions parsed but not fully implemented in code generation
+
+## Dependencies
+
+- **nom** - Parser combinators
+- **polytype** - Hindley-Milner type system
+- **rspirv** - SPIR-V builder
+- **thiserror** - Error handling
+- **clap** - CLI parsing
+
+For complete language details, see [SPECIFICATION.md](SPECIFICATION.md).
