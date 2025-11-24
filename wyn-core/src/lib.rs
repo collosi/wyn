@@ -10,6 +10,7 @@ pub mod mir;
 pub mod module_manager;
 pub mod name_resolution;
 pub mod parser;
+pub mod reachability;
 pub mod pattern;
 pub mod scope;
 pub mod type_checker;
@@ -110,6 +111,9 @@ impl Compiler {
         let builtins = builtin_registry::BuiltinRegistry::default().all_names();
         let mut flattener = flattening::Flattener::new(type_table, builtins);
         let mir = flattener.flatten_program(&program)?;
+
+        // Reachability analysis: filter to only reachable functions
+        let mir = reachability::filter_reachable(mir);
 
         // Lower (MIR -> SPIR-V)
         let spirv = lowering::lower(&mir)?;

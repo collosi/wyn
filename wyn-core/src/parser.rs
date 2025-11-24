@@ -69,7 +69,10 @@ impl Parser {
             declarations.push(self.parse_declaration()?);
         }
 
-        Ok(Program { declarations })
+        Ok(Program {
+            declarations,
+            library_declarations: Vec::new(),
+        })
     }
 
     fn parse_declaration(&mut self) -> Result<Declaration> {

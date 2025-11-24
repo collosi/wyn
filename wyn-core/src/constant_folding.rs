@@ -38,6 +38,7 @@ impl ConstantFolder {
 
         Ok(Program {
             declarations: folded_declarations,
+            library_declarations: program.library_declarations.clone(),
         })
     }
 

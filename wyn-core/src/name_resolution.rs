@@ -13,6 +13,7 @@ use std::collections::HashSet;
 
 pub struct NameResolver {
     module_manager: ModuleManager,
+    builtin_registry: crate::builtin_registry::BuiltinRegistry,
     referenced_modules: HashSet<String>,
 }
 
@@ -20,6 +21,7 @@ impl NameResolver {
     pub fn new() -> Self {
         NameResolver {
             module_manager: ModuleManager::new(),
+            builtin_registry: crate::builtin_registry::BuiltinRegistry::default(),
             referenced_modules: HashSet::new(),
         }
     }
@@ -31,16 +33,11 @@ impl NameResolver {
             self.resolve_declaration(decl)?;
         }
 
-        // Second pass: load all referenced modules and merge them at the beginning
-        // (so they're available when type-checking user declarations)
-        let mut module_decls = Vec::new();
+        // Second pass: load all referenced modules
         for module_name in &self.referenced_modules {
             let module_prog = self.module_manager.load_module(module_name)?;
-            module_decls.extend(module_prog.declarations.clone());
+            program.library_declarations.extend(module_prog.declarations.clone());
         }
-        // Prepend module declarations before user declarations
-        module_decls.extend(program.declarations.drain(..));
-        program.declarations = module_decls;
 
         Ok(())
     }
@@ -67,11 +64,19 @@ impl NameResolver {
                 // Check if this is module.name pattern
                 if let ExprKind::Identifier(name) = &obj.kind {
                     if self.module_manager.is_known_module(name) {
-                        // Rewrite to QualifiedName
+                        // Build the qualified name
                         let module = name.clone();
                         let func_name = field.clone();
+                        let full_name = format!("{}.{}", module, func_name);
+
+                        // Rewrite to QualifiedName
                         expr.kind = ExprKind::QualifiedName(vec![module.clone()], func_name);
-                        self.referenced_modules.insert(module);
+
+                        // Only mark module as referenced if this is NOT a builtin
+                        // (builtins like f32.sqrt shouldn't trigger module loading)
+                        if !self.builtin_registry.is_builtin(&full_name) {
+                            self.referenced_modules.insert(module);
+                        }
                         return Ok(());
                     }
                 }

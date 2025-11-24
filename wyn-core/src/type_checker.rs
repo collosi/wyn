@@ -863,7 +863,12 @@ impl TypeChecker {
         &mut self,
         program: &Program,
     ) -> Result<HashMap<crate::ast::NodeId, TypeScheme<TypeName>>> {
-        // Process declarations in order - each can only refer to preceding declarations
+        // Process library declarations first (so they're available to user code)
+        for decl in &program.library_declarations {
+            self.check_declaration(decl)?;
+        }
+
+        // Process user declarations
         for decl in &program.declarations {
             self.check_declaration(decl)?;
         }

@@ -356,6 +356,9 @@ impl From<&'static str> for TypeName {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub declarations: Vec<Declaration>,
+    /// Declarations from loaded modules (library code)
+    /// These should only be lowered if referenced by user code
+    pub library_declarations: Vec<Declaration>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

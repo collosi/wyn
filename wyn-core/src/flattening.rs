@@ -257,18 +257,11 @@ impl Flattener {
         }
     }
 
-    /// Flatten an entire program
-    pub fn flatten_program(&mut self, program: &ast::Program) -> Result<mir::Program> {
-        let mut defs = Vec::new();
+    /// Helper to flatten a single Decl
+    fn flatten_single_decl(&mut self, d: &ast::Decl, defs: &mut Vec<mir::Def>) -> Result<()> {
+        self.enclosing_decl_stack.push(d.name.clone());
 
-        for decl in &program.declarations {
-            match decl {
-                ast::Declaration::Decl(d) => {
-                    // Add this function name to builtins so it won't be captured in lambdas
-                    self.builtins.insert(d.name.clone());
-                    self.enclosing_decl_stack.push(d.name.clone());
-
-                    let def = if d.params.is_empty() {
+        let def = if d.params.is_empty() {
                         // Constant
                         let (body, _) = self.flatten_expr(&d.body)?;
                         let ty = self.get_expr_type(&d.body);
@@ -297,11 +290,32 @@ impl Flattener {
                         }
                     };
 
-                    // Collect generated lambdas before the definition
-                    defs.append(&mut self.generated_functions);
-                    defs.push(def);
+        // Collect generated lambdas before the definition
+        defs.append(&mut self.generated_functions);
+        defs.push(def);
 
-                    self.enclosing_decl_stack.pop();
+        self.enclosing_decl_stack.pop();
+        Ok(())
+    }
+
+    /// Flatten an entire program
+    pub fn flatten_program(&mut self, program: &ast::Program) -> Result<mir::Program> {
+        let mut defs = Vec::new();
+
+        // Flatten library declarations first
+        for decl in &program.library_declarations {
+            if let ast::Declaration::Decl(d) = decl {
+                self.builtins.insert(d.name.clone());
+                self.flatten_single_decl(d, &mut defs)?;
+            }
+        }
+
+        // Flatten user declarations
+        for decl in &program.declarations {
+            match decl {
+                ast::Declaration::Decl(d) => {
+                    self.builtins.insert(d.name.clone());
+                    self.flatten_single_decl(d, &mut defs)?;
                 }
                 ast::Declaration::Entry(e) => {
                     self.enclosing_decl_stack.push(e.name.clone());
