@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use log::{error, info, warn};
+use log::{info, warn};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -216,7 +216,7 @@ fn generate_annotated_source(
     // Parse the source to get the AST
     let tokens = lexer::tokenize(source).map_err(wyn_core::error::CompilerError::ParseError)?;
     let mut parser = WynParser::new(tokens);
-    let program = parser.parse()?;
+    let _program = parser.parse()?;
 
     // Generate annotated code - temporarily disabled
     // let mut annotator = CodeAnnotator::new();
