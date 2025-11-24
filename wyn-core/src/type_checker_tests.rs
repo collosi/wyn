@@ -855,3 +855,77 @@ def test (mat:mat4f32) (verts:[3]vec3f32) : [3]vec4f32 =
 "#,
     );
 }
+
+#[test]
+#[ignore]
+fn test_higher_order_reduce() {
+    // Test reduce function with higher-order operations using explicit parentheses
+    // FAILS: Type checker reports "Function argument type mismatch" even with explicit parens
+    // Issue: The type checker may not be properly handling curried function application
+    // in let bindings. Expression `(op init) arr[0]` should typecheck as:
+    //   op : f32 -> f32 -> f32
+    //   init : f32
+    //   (op init) : f32 -> f32
+    //   arr[0] : f32
+    //   (op init) arr[0] : f32
+    // But instead the type checker seems to be treating the application incorrectly.
+    typecheck_program(
+        r#"
+def reduce_f32 (op: f32 -> f32 -> f32) (init: f32) (arr: [4]f32): f32 =
+  let x0 = (op init) arr[0] in
+  let x1 = (op x0) arr[1] in
+  let x2 = (op x1) arr[2] in
+  (op x2) arr[3]
+
+def test: f32 = reduce_f32 (\x y -> x + y) 0.0f32 [1.0f32, 2.0f32, 3.0f32, 4.0f32]
+"#,
+    );
+}
+
+#[test]
+#[ignore]
+fn test_higher_order_reduce_no_parens() {
+    // Test the same but WITHOUT parentheses
+    // FAILS: Same error as above - type checker doesn't handle curried application properly
+    // Issue: Function application should be left-associative by default, so
+    // `op init arr[0]` should parse/typecheck as `((op init) arr[0])`
+    // The type checker may be treating this as trying to apply `op` to three arguments
+    // at once instead of performing curried application.
+    typecheck_program(
+        r#"
+def reduce_f32 (op: f32 -> f32 -> f32) (init: f32) (arr: [4]f32): f32 =
+  let x0 = op init arr[0] in
+  let x1 = op x0 arr[1] in
+  let x2 = op x1 arr[2] in
+  op x2 arr[3]
+
+def test: f32 = reduce_f32 (\x y -> x + y) 0.0f32 [1.0f32, 2.0f32, 3.0f32, 4.0f32]
+"#,
+    );
+}
+
+#[test]
+#[ignore]
+fn test_nested_map_with_reduce() {
+    // Test the nested map pattern used in matrix multiplication
+    // FAILS: Same curried function application issue as test_higher_order_reduce
+    // This pattern is common in array-oriented programming and critical for
+    // implementing operations like matrix multiplication using higher-order functions.
+    typecheck_program(
+        r#"
+def reduce_f32 (op: f32 -> f32 -> f32) (init: f32) (arr: [4]f32): f32 =
+  let x0 = op init arr[0] in
+  let x1 = op x0 arr[1] in
+  let x2 = op x1 arr[2] in
+  op x2 arr[3]
+
+def map2_f32 (f: f32 -> f32 -> f32) (xs: [4]f32) (ys: [4]f32): [4]f32 =
+  [f xs[0] ys[0], f xs[1] ys[1], f xs[2] ys[2], f xs[3] ys[3]]
+
+def test: f32 =
+  let row = [1.0f32, 2.0f32, 3.0f32, 4.0f32] in
+  let col = [5.0f32, 6.0f32, 7.0f32, 8.0f32] in
+  reduce_f32 (\x y -> x + y) 0.0f32 (map2_f32 (\x y -> x * y) row col)
+"#,
+    );
+}
