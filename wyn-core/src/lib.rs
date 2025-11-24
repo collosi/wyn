@@ -25,6 +25,7 @@ pub mod cfg;
 pub mod cfg_nemo;
 pub mod constant_folding;
 pub mod lowering;
+pub mod monomorphization;
 #[cfg(any())]
 pub mod module;
 #[cfg(any())]
@@ -111,6 +112,9 @@ impl Compiler {
         let builtins = builtin_registry::BuiltinRegistry::default().all_names();
         let mut flattener = flattening::Flattener::new(type_table, builtins);
         let mir = flattener.flatten_program(&program)?;
+
+        // Monomorphization: specialize polymorphic functions
+        let mir = monomorphization::monomorphize(mir)?;
 
         // Reachability analysis: filter to only reachable functions
         let mir = reachability::filter_reachable(mir);
