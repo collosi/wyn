@@ -1,6 +1,6 @@
 //! Module environment for tracking module bindings and signatures
 
-use crate::ast::{ModuleBind, ModuleTypeExpression, Type};
+use crate::ast::{Declaration, ModuleBind, ModuleTypeExpression, Type};
 use std::collections::HashMap;
 
 /// Qualified name: a path through nested modules
@@ -14,6 +14,9 @@ pub struct ModuleEnv {
     /// Map from module type names to their definitions
     module_types: HashMap<QualifiedName, ModuleTypeExpression>,
 
+    /// Map from module names to their elaborated declarations
+    module_contents: HashMap<String, Vec<Declaration>>,
+
     /// Current module path (for generating qualified names)
     path: Vec<String>,
 
@@ -26,9 +29,20 @@ impl ModuleEnv {
         ModuleEnv {
             modules: HashMap::new(),
             module_types: HashMap::new(),
+            module_contents: HashMap::new(),
             path: Vec::new(),
             opened: Vec::new(),
         }
+    }
+
+    /// Store the declarations produced by a module
+    pub fn store_module_contents(&mut self, name: String, decls: Vec<Declaration>) {
+        self.module_contents.insert(name, decls);
+    }
+
+    /// Get the declarations from a module
+    pub fn get_module_contents(&self, name: &str) -> Option<&Vec<Declaration>> {
+        self.module_contents.get(name)
     }
 
     /// Enter a module (push onto path)

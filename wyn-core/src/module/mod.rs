@@ -107,9 +107,28 @@ impl ModuleElaborator {
                 // Module types are erased after elaboration
                 Ok(vec![])
             }
-            Declaration::Open(_me) => {
-                // TODO: implement open
-                Ok(vec![])
+            Declaration::Open(me) => {
+                // Open a module, bringing its contents into scope without qualification
+                match me {
+                    ModuleExpression::Name(name) => {
+                        // Look up the module's declarations
+                        if let Some(decls) = self.env.get_module_contents(&name) {
+                            // Clone and strip the module prefix from each declaration
+                            let prefix = format!("{}_", name);
+                            let opened_decls: Vec<Declaration> =
+                                decls.iter().filter_map(|d| self.strip_module_prefix(d, &prefix)).collect();
+                            Ok(opened_decls)
+                        } else {
+                            Err(CompilerError::ModuleError(format!(
+                                "Cannot open module '{}': module not found",
+                                name
+                            )))
+                        }
+                    }
+                    _ => Err(CompilerError::ModuleError(
+                        "Only simple module names can be opened".to_string(),
+                    )),
+                }
             }
             // All other declarations pass through unchanged for now
             _ => Ok(vec![decl]),
@@ -146,11 +165,16 @@ impl ModuleElaborator {
         self.env.exit_module();
 
         // If there's a signature, check it and filter
-        if let Some(sig) = &mb.signature {
-            self.check_and_filter_signature(body_decls, sig)
+        let decls = if let Some(sig) = &mb.signature {
+            self.check_and_filter_signature(body_decls, sig)?
         } else {
-            Ok(body_decls)
-        }
+            body_decls
+        };
+
+        // Store the module contents for later use by `open`
+        self.env.store_module_contents(mb.name.clone(), decls.clone());
+
+        Ok(decls)
     }
 
     /// Elaborate a module instantiation from a signature (e.g., module i32 : (integral with t = i32))
@@ -163,7 +187,12 @@ impl ModuleElaborator {
         let resolved_sig = self.resolve_module_type_expr(sig)?;
 
         // Generate Val declarations from the signature
-        self.generate_declarations_from_signature(module_name, &resolved_sig)
+        let decls = self.generate_declarations_from_signature(module_name, &resolved_sig)?;
+
+        // Store the module contents for later use by `open`
+        self.env.store_module_contents(module_name.to_string(), decls.clone());
+
+        Ok(decls)
     }
 
     /// Resolve a module type expression, handling with clauses and includes
@@ -518,6 +547,42 @@ impl ModuleElaborator {
             }
 
             Ok(result)
+        }
+    }
+
+    /// Strip the module prefix from a declaration's name
+    /// Returns None if the declaration doesn't have the expected prefix
+    fn strip_module_prefix(&self, decl: &Declaration, prefix: &str) -> Option<Declaration> {
+        match decl {
+            Declaration::Decl(d) => {
+                if d.name.starts_with(prefix) {
+                    let mut new_decl = d.clone();
+                    new_decl.name = d.name[prefix.len()..].to_string();
+                    Some(Declaration::Decl(new_decl))
+                } else {
+                    None
+                }
+            }
+            Declaration::Val(v) => {
+                if v.name.starts_with(prefix) {
+                    let mut new_val = v.clone();
+                    new_val.name = v.name[prefix.len()..].to_string();
+                    Some(Declaration::Val(new_val))
+                } else {
+                    None
+                }
+            }
+            Declaration::TypeBind(tb) => {
+                if tb.name.starts_with(prefix) {
+                    let mut new_tb = tb.clone();
+                    new_tb.name = tb.name[prefix.len()..].to_string();
+                    Some(Declaration::TypeBind(new_tb))
+                } else {
+                    None
+                }
+            }
+            // Other declarations don't get opened
+            _ => None,
         }
     }
 }

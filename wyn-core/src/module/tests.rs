@@ -475,3 +475,50 @@ fn test_module_with_operator_definition() {
         Err(e) => panic!("Elaboration failed: {}", e),
     }
 }
+
+#[test]
+fn test_open_declaration() {
+    let source = r#"
+        module type addable = {
+            type t
+            val add: t -> t -> t
+        }
+
+        module mymod: (addable with t = i32) = {
+            type t = i32
+            def add (x: t) (y: t): t = x + y
+        }
+
+        open mymod
+    "#;
+
+    let tokens = crate::lexer::tokenize(source).unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().unwrap();
+
+    let mut elaborator = ModuleElaborator::new();
+    let result = elaborator.elaborate(program);
+
+    match result {
+        Ok(elaborated) => {
+            // Should have the qualified mymod_add from the module
+            assert!(
+                elaborated
+                    .declarations
+                    .iter()
+                    .any(|d| matches!(d, crate::ast::Declaration::Decl(decl) if decl.name == "mymod_add")),
+                "Expected qualified declaration mymod_add"
+            );
+
+            // Should have the unqualified add from the open
+            assert!(
+                elaborated
+                    .declarations
+                    .iter()
+                    .any(|d| matches!(d, crate::ast::Declaration::Decl(decl) if decl.name == "add")),
+                "Expected unqualified declaration add from open"
+            );
+        }
+        Err(e) => panic!("Elaboration failed: {}", e),
+    }
+}
