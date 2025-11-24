@@ -84,6 +84,7 @@ impl ModuleElaborator {
 
         Ok(Program {
             declarations: flat_decls,
+            library_declarations: Vec::new(),
         })
     }
 
@@ -100,7 +101,9 @@ impl ModuleElaborator {
     fn elaborate_declaration(&mut self, decl: Declaration) -> Result<Vec<Declaration>> {
         match decl {
             Declaration::ModuleBind(mb) => self.elaborate_module_bind(mb),
-            Declaration::ModuleTypeBind(_mtb) => {
+            Declaration::ModuleTypeBind(mtb) => {
+                // Register the module type in the environment
+                self.env.register_module_type(mtb.name.clone(), mtb.definition);
                 // Module types are erased after elaboration
                 Ok(vec![])
             }
@@ -122,6 +125,17 @@ impl ModuleElaborator {
             ));
         }
 
+        // If there's a signature with type parameter substitution (e.g., module i32 : (integral with t = i32))
+        // we need to elaborate the signature into actual declarations
+        if let Some(sig) = &mb.signature {
+            // Check if this is a signature-only module (empty body)
+            // This is the case for module instantiations like: module i32 : (integral with t = i32)
+            if matches!(mb.body, ModuleExpression::Struct(ref decls) if decls.is_empty()) {
+                // This is a module instantiation from a signature
+                return self.elaborate_signature_instantiation(&mb.name, sig);
+            }
+        }
+
         // Enter the module's namespace
         self.env.enter_module(mb.name.clone());
 
@@ -137,6 +151,202 @@ impl ModuleElaborator {
         } else {
             Ok(body_decls)
         }
+    }
+
+    /// Elaborate a module instantiation from a signature (e.g., module i32 : (integral with t = i32))
+    fn elaborate_signature_instantiation(
+        &mut self,
+        module_name: &str,
+        sig: &ModuleTypeExpression,
+    ) -> Result<Vec<Declaration>> {
+        // Resolve the signature with any type parameter substitutions
+        let resolved_sig = self.resolve_module_type_expr(sig)?;
+
+        // Generate Val declarations from the signature
+        self.generate_declarations_from_signature(module_name, &resolved_sig)
+    }
+
+    /// Resolve a module type expression, handling with clauses and includes
+    fn resolve_module_type_expr(&self, expr: &ModuleTypeExpression) -> Result<Vec<Spec>> {
+        match expr {
+            ModuleTypeExpression::Name(name) => {
+                // Look up the module type definition
+                let qualname = vec![name.clone()];
+                if let Some(mt_def) = self.env.lookup_module_type(&qualname) {
+                    self.resolve_module_type_expr(mt_def)
+                } else {
+                    Err(CompilerError::ModuleError(format!(
+                        "Module type '{}' not found",
+                        name
+                    )))
+                }
+            }
+            ModuleTypeExpression::Signature(specs) => {
+                // Expand includes and return all specs
+                self.expand_specs(specs)
+            }
+            ModuleTypeExpression::With(base, type_name, type_params, ty) => {
+                // Resolve the base signature
+                let mut specs = self.resolve_module_type_expr(base)?;
+
+                // Substitute the type parameter throughout the specs
+                self.substitute_type_in_specs(&mut specs, type_name, type_params, ty);
+
+                Ok(specs)
+            }
+            _ => Err(CompilerError::ModuleError(
+                "Complex module type expressions not yet fully implemented".to_string(),
+            )),
+        }
+    }
+
+    /// Expand specs, resolving include directives
+    fn expand_specs(&self, specs: &[Spec]) -> Result<Vec<Spec>> {
+        let mut result = Vec::new();
+
+        for spec in specs {
+            match spec {
+                Spec::Include(mt_expr) => {
+                    // Recursively expand the included module type
+                    let included_specs = self.resolve_module_type_expr(mt_expr)?;
+                    result.extend(included_specs);
+                }
+                _ => {
+                    result.push(spec.clone());
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Substitute a type parameter in all specs
+    fn substitute_type_in_specs(
+        &self,
+        specs: &mut [Spec],
+        type_name: &str,
+        _type_params: &[crate::ast::TypeParam],
+        replacement: &crate::ast::Type,
+    ) {
+        use crate::ast::{Spec, Type, TypeName};
+
+        for spec in specs.iter_mut() {
+            match spec {
+                Spec::Val(_, _, ty) => {
+                    *ty = self.substitute_type_in_type(ty, type_name, replacement);
+                }
+                Spec::ValOp(_, ty) => {
+                    *ty = self.substitute_type_in_type(ty, type_name, replacement);
+                }
+                Spec::Type(_, name, _, def) => {
+                    // Don't substitute in type definitions themselves
+                    // But do substitute in their definitions
+                    if let Some(ty) = def {
+                        *ty = self.substitute_type_in_type(ty, type_name, replacement);
+                    }
+                    // If this is the type being substituted, mark it as concrete
+                    if name == type_name {
+                        if let Some(ty) = def {
+                            *ty = replacement.clone();
+                        } else {
+                            *def = Some(replacement.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Substitute a type parameter in a type
+    fn substitute_type_in_type(
+        &self,
+        ty: &crate::ast::Type,
+        type_name: &str,
+        replacement: &crate::ast::Type,
+    ) -> crate::ast::Type {
+        use crate::ast::{Type, TypeName};
+
+        match ty {
+            Type::Constructed(TypeName::Named(name), args) if name == type_name => {
+                // This is a reference to the type parameter, replace it
+                replacement.clone()
+            }
+            Type::Constructed(name, args) => {
+                // Recursively substitute in type arguments
+                let new_args: Vec<Type> = args
+                    .iter()
+                    .map(|arg| self.substitute_type_in_type(arg, type_name, replacement))
+                    .collect();
+                Type::Constructed(name.clone(), new_args)
+            }
+            Type::Variable(_) => ty.clone(),
+        }
+    }
+
+    /// Generate Val declarations from a resolved signature
+    fn generate_declarations_from_signature(
+        &self,
+        module_name: &str,
+        specs: &[Spec],
+    ) -> Result<Vec<Declaration>> {
+        let mut decls = Vec::new();
+
+        for spec in specs {
+            match spec {
+                Spec::Val(name, type_params, ty) => {
+                    // Generate a Val declaration with mangled name
+                    let mangled_name = format!("{}_{}", module_name, name);
+                    decls.push(Declaration::Val(crate::ast::ValDecl {
+                        attributes: vec![],
+                        name: mangled_name,
+                        size_params: type_params
+                            .iter()
+                            .filter_map(|tp| match tp {
+                                crate::ast::TypeParam::Size(s) => Some(s.clone()),
+                                _ => None,
+                            })
+                            .collect(),
+                        type_params: type_params
+                            .iter()
+                            .filter_map(|tp| match tp {
+                                crate::ast::TypeParam::Type(t) => Some(t.clone()),
+                                _ => None,
+                            })
+                            .collect(),
+                        ty: ty.clone(),
+                    }));
+                }
+                Spec::ValOp(op, ty) => {
+                    // Generate a Val declaration for operator with mangled name
+                    let mangled_name = format!("{}_({})", module_name, op);
+                    decls.push(Declaration::Val(crate::ast::ValDecl {
+                        attributes: vec![],
+                        name: mangled_name,
+                        size_params: vec![],
+                        type_params: vec![],
+                        ty: ty.clone(),
+                    }));
+                }
+                Spec::Type(_, name, type_params, def) => {
+                    // Generate a type binding if there's a definition
+                    if let Some(ty_def) = def {
+                        let mangled_name = format!("{}_{}", module_name, name);
+                        decls.push(Declaration::TypeBind(crate::ast::TypeBind {
+                            kind: crate::ast::TypeBindKind::Normal,
+                            name: mangled_name,
+                            type_params: type_params.clone(),
+                            definition: ty_def.clone(),
+                        }));
+                    }
+                }
+                _ => {
+                    // Ignore other specs for now
+                }
+            }
+        }
+
+        Ok(decls)
     }
 
     /// Elaborate a module expression

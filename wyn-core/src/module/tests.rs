@@ -250,3 +250,108 @@ fn test_module_type_bind_is_erased() {
     assert_eq!(result.declarations.len(), 1);
     assert!(matches!(&result.declarations[0], crate::ast::Declaration::Decl(d) if d.name == "M_x"));
 }
+
+#[test]
+fn test_module_instantiation_with_type_param() {
+    let source = r#"
+        module type numeric = {
+            type t
+            val add: t -> t -> t
+            val sub: t -> t -> t
+        }
+
+        module i32 : (numeric with t = i32)
+    "#;
+
+    let tokens = crate::lexer::tokenize(source).unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().unwrap();
+
+    let mut elaborator = ModuleElaborator::new();
+    let result = elaborator.elaborate(program).unwrap();
+
+    // Should generate Val declarations for i32_add and i32_sub
+    assert_eq!(result.declarations.len(), 3); // type t, val add, val sub
+
+    // Check that we have a type binding for i32_t
+    assert!(result.declarations.iter().any(|d| matches!(d,
+        crate::ast::Declaration::TypeBind(tb) if tb.name == "i32_t"
+    )));
+
+    // Check that we have val declarations for operations
+    assert!(result.declarations.iter().any(|d| matches!(d,
+        crate::ast::Declaration::Val(v) if v.name == "i32_add"
+    )));
+
+    assert!(result.declarations.iter().any(|d| matches!(d,
+        crate::ast::Declaration::Val(v) if v.name == "i32_sub"
+    )));
+}
+
+#[test]
+fn test_module_instantiation_with_include() {
+    let source = r#"
+        module type base = {
+            type t
+            val zero: t
+        }
+
+        module type numeric = {
+            include base
+            val add: t -> t -> t
+        }
+
+        module i32 : (numeric with t = i32)
+    "#;
+
+    let tokens = crate::lexer::tokenize(source).unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().unwrap();
+
+    let mut elaborator = ModuleElaborator::new();
+    let result = elaborator.elaborate(program).unwrap();
+
+    // Should expand include and generate declarations for all specs
+    assert!(result.declarations.len() >= 3); // type t, val zero, val add
+
+    // Check that include was expanded
+    assert!(result.declarations.iter().any(|d| matches!(d,
+        crate::ast::Declaration::Val(v) if v.name == "i32_zero"
+    )));
+
+    assert!(result.declarations.iter().any(|d| matches!(d,
+        crate::ast::Declaration::Val(v) if v.name == "i32_add"
+    )));
+}
+
+#[test]
+fn test_module_instantiation_chained_with() {
+    let source = r#"
+        module type float = {
+            type t
+            type int_t
+            val to_bits: t -> int_t
+        }
+
+        module f32 : (float with t = f32 with int_t = u32)
+    "#;
+
+    let tokens = crate::lexer::tokenize(source).unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().unwrap();
+
+    let mut elaborator = ModuleElaborator::new();
+    let result = elaborator.elaborate(program).unwrap();
+
+    // Should have type bindings for both t and int_t, plus val for to_bits
+    assert!(result.declarations.len() >= 3);
+
+    // Check type bindings
+    assert!(result.declarations.iter().any(|d| matches!(d,
+        crate::ast::Declaration::TypeBind(tb) if tb.name == "f32_t"
+    )));
+
+    assert!(result.declarations.iter().any(|d| matches!(d,
+        crate::ast::Declaration::TypeBind(tb) if tb.name == "f32_int_t"
+    )));
+}

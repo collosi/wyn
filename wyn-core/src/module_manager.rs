@@ -18,10 +18,7 @@ impl ModuleManager {
     /// Create a new module manager
     pub fn new() -> Self {
         let known_modules = [
-            "f32", "f64", "f16",
-            "i8", "i16", "i32", "i64",
-            "u8", "u16", "u32", "u64",
-            "bool",
+            "f32", "f64", "f16", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "bool",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -55,9 +52,8 @@ impl ModuleManager {
         }
 
         // Get embedded source
-        let source = Self::get_prelude_source(module_name).ok_or_else(|| {
-            CompilerError::ModuleError(format!("Unknown module '{}'", module_name))
-        })?;
+        let source = Self::get_prelude_source(module_name)
+            .ok_or_else(|| CompilerError::ModuleError(format!("Unknown module '{}'", module_name)))?;
 
         // Parse module
         let tokens = lexer::tokenize(source).map_err(CompilerError::ParseError)?;
@@ -93,11 +89,7 @@ impl ModuleManager {
     /// E.g., "f32.sum" -> Some(("f32", "sum"))
     pub fn split_qualified_name(name: &str) -> Option<(&str, &str)> {
         let parts: Vec<&str> = name.splitn(2, '.').collect();
-        if parts.len() == 2 {
-            Some((parts[0], parts[1]))
-        } else {
-            None
-        }
+        if parts.len() == 2 { Some((parts[0], parts[1])) } else { None }
     }
 
     /// Get all loaded module declarations (for inlining into the main program)

@@ -262,33 +262,33 @@ impl Flattener {
         self.enclosing_decl_stack.push(d.name.clone());
 
         let def = if d.params.is_empty() {
-                        // Constant
-                        let (body, _) = self.flatten_expr(&d.body)?;
-                        let ty = self.get_expr_type(&d.body);
-                        mir::Def::Constant {
-                            name: d.name.clone(),
-                            ty,
-                            attributes: self.convert_attributes(&d.attributes),
-                            body,
-                            span: d.body.h.span,
-                        }
-                    } else {
-                        // Function
-                        let params = self.flatten_params(&d.params)?;
-                        let param_attrs = self.extract_param_attributes(&d.params);
-                        let (body, _) = self.flatten_expr(&d.body)?;
-                        let ret_type = self.get_expr_type(&d.body);
-                        mir::Def::Function {
-                            name: d.name.clone(),
-                            params,
-                            ret_type,
-                            attributes: self.convert_attributes(&d.attributes),
-                            param_attributes: param_attrs,
-                            return_attributes: vec![],
-                            body,
-                            span: d.body.h.span,
-                        }
-                    };
+            // Constant
+            let (body, _) = self.flatten_expr(&d.body)?;
+            let ty = self.get_expr_type(&d.body);
+            mir::Def::Constant {
+                name: d.name.clone(),
+                ty,
+                attributes: self.convert_attributes(&d.attributes),
+                body,
+                span: d.body.h.span,
+            }
+        } else {
+            // Function
+            let params = self.flatten_params(&d.params)?;
+            let param_attrs = self.extract_param_attributes(&d.params);
+            let (body, _) = self.flatten_expr(&d.body)?;
+            let ret_type = self.get_expr_type(&d.body);
+            mir::Def::Function {
+                name: d.name.clone(),
+                params,
+                ret_type,
+                attributes: self.convert_attributes(&d.attributes),
+                param_attributes: param_attrs,
+                return_attributes: vec![],
+                body,
+                span: d.body.h.span,
+            }
+        };
 
         // Collect generated lambdas before the definition
         defs.append(&mut self.generated_functions);
@@ -1010,11 +1010,8 @@ impl Flattener {
             }
             // Handle qualified names like f32.sum (these come from name resolution)
             ExprKind::QualifiedName(quals, name) => {
-                let full_name = if quals.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{}.{}", quals.join("."), name)
-                };
+                let full_name =
+                    if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) };
                 Ok((
                     mir::ExprKind::Call {
                         func: full_name,

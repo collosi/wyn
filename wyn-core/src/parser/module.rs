@@ -85,8 +85,10 @@ impl Parser {
 
     /// Parse a module binding:
     /// ```text
-    /// mod_bind ::= "module" name mod_param* [":" mod_type_exp] "=" mod_exp
+    /// mod_bind ::= "module" name mod_param* [":" mod_type_exp] ["=" mod_exp]
     /// ```
+    /// Note: If no body is provided but a signature is present, this is a signature-only
+    /// module instantiation (e.g., `module i32 : (integral with t = i32)`)
     pub fn parse_module_bind(&mut self) -> Result<ModuleBind> {
         trace!("parse_module_bind: next token = {:?}", self.peek());
 
@@ -107,8 +109,21 @@ impl Parser {
             None
         };
 
-        self.expect(Token::Assign)?;
-        let body = self.parse_module_expression()?;
+        // Parse optional body
+        // If there's a signature but no body, this is a signature-only instantiation
+        let body = if self.check(&Token::Assign) {
+            self.advance();
+            self.parse_module_expression()?
+        } else if signature.is_some() {
+            // Signature-only module: create a synthetic empty body
+            // The elaborator will recognize this and generate declarations from the signature
+            ModuleExpression::Struct(vec![])
+        } else {
+            return Err(CompilerError::ParseError(
+                "Module binding must have either a body (= mod_exp) or a signature (: mod_type)"
+                    .to_string(),
+            ));
+        };
 
         Ok(ModuleBind {
             name,
@@ -303,7 +318,11 @@ impl Parser {
                 self.advance();
 
                 // Could be: (mod_type) or (name : mod_type) -> mod_type
-                // Try to parse as arrow first
+                // We need to check for arrow type carefully:
+                // Save position to backtrack if needed
+                let checkpoint = self.current;
+
+                // Try to parse as arrow type: (name : mod_type) -> mod_type
                 if let Some(Token::Identifier(_)) = self.peek() {
                     let name = self.expect_identifier()?;
 
@@ -320,16 +339,15 @@ impl Parser {
                             Box::new(result),
                         ));
                     } else {
-                        // Just a parenthesized name
-                        self.expect(Token::RightParen)?;
-                        ModuleTypeExpression::Name(name)
+                        // Not an arrow type, backtrack and parse as regular expression
+                        self.current = checkpoint;
                     }
-                } else {
-                    // Parenthesized module type expression
-                    let expr = self.parse_module_type_expression()?;
-                    self.expect(Token::RightParen)?;
-                    expr
                 }
+
+                // Parenthesized module type expression
+                let expr = self.parse_module_type_expression()?;
+                self.expect(Token::RightParen)?;
+                expr
             }
 
             Some(Token::LeftBrace) => {

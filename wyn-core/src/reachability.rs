@@ -84,7 +84,11 @@ fn collect_callees_rec(expr: &Expr, callees: &mut HashSet<String>) {
         ExprKind::UnaryOp { operand, .. } => {
             collect_callees_rec(operand, callees);
         }
-        ExprKind::If { cond, then_branch, else_branch } => {
+        ExprKind::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
             collect_callees_rec(cond, callees);
             collect_callees_rec(then_branch, callees);
             collect_callees_rec(else_branch, callees);
@@ -98,7 +102,9 @@ fn collect_callees_rec(expr: &Expr, callees: &mut HashSet<String>) {
                 collect_callees_rec(arg, callees);
             }
         }
-        ExprKind::Loop { init_bindings, body, .. } => {
+        ExprKind::Loop {
+            init_bindings, body, ..
+        } => {
             for (_, init) in init_bindings {
                 collect_callees_rec(init, callees);
             }

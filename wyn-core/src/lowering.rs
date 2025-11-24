@@ -1265,7 +1265,9 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                             ));
                                         }
                                         // Get the array type
-                                        if let PolyType::Constructed(TypeName::Array, type_args) = &args[0].ty {
+                                        if let PolyType::Constructed(TypeName::Array, type_args) =
+                                            &args[0].ty
+                                        {
                                             // Try to extract the size - it could be TypeName::Size(n) or a variable
                                             match type_args.get(0) {
                                                 Some(PolyType::Constructed(TypeName::Size(n), _)) => {

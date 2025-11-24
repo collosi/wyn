@@ -1006,23 +1006,36 @@ impl TypeChecker {
                 debug!("Checking Val declaration: {}", val_decl.name);
                 self.check_val_decl(val_decl)
             }
-            Declaration::TypeBind(_) => {
-                unimplemented!("Type bindings are not yet supported in type checking")
+            Declaration::TypeBind(type_bind) => {
+                debug!("Processing TypeBind: {}", type_bind.name);
+                // Type bindings are registered in the environment during elaboration
+                // For now, just skip them in type checking
+                Ok(())
             }
             Declaration::ModuleBind(_) => {
-                unimplemented!("Module bindings are not yet supported in type checking")
+                // Module bindings should be elaborated away before type checking
+                // If we encounter one here, it means elaboration wasn't run or failed
+                Err(CompilerError::ModuleError(
+                    "Module bindings should be elaborated before type checking".to_string(),
+                ))
             }
             Declaration::ModuleTypeBind(_) => {
-                unimplemented!("Module type bindings are not yet supported in type checking")
+                // Module type bindings are erased during elaboration
+                // If we see one, elaboration wasn't run
+                Ok(())
             }
             Declaration::Open(_) => {
-                unimplemented!("Open declarations are not yet supported in type checking")
+                // Open declarations should be elaborated away
+                Ok(())
             }
             Declaration::Import(_) => {
-                unimplemented!("Import declarations are not yet supported in type checking")
+                // Import declarations should be resolved during elaboration
+                Ok(())
             }
-            Declaration::Local(_) => {
-                unimplemented!("Local declarations are not yet supported in type checking")
+            Declaration::Local(inner) => {
+                // Local just marks a declaration as local scope
+                // Check the inner declaration
+                self.check_declaration(inner)
             }
         }
     }

@@ -10,8 +10,8 @@ pub mod mir;
 pub mod module_manager;
 pub mod name_resolution;
 pub mod parser;
-pub mod reachability;
 pub mod pattern;
+pub mod reachability;
 pub mod scope;
 pub mod type_checker;
 pub mod visitor;
@@ -25,9 +25,8 @@ pub mod cfg;
 pub mod cfg_nemo;
 pub mod constant_folding;
 pub mod lowering;
-pub mod monomorphization;
-#[cfg(any())]
 pub mod module;
+pub mod monomorphization;
 #[cfg(any())]
 pub mod nemo_facts;
 
@@ -61,6 +60,10 @@ impl Compiler {
         let mut program = parser.parse()?;
         let _node_counter = parser.take_node_counter();
 
+        // Module Elaboration: expand modules and generate declarations from signatures
+        let mut module_elaborator = module::ModuleElaborator::new();
+        let mut program = module_elaborator.elaborate(program)?;
+
         // Name Resolution: rewrite FieldAccess -> QualifiedName and load modules
         let mut name_resolver = name_resolution::NameResolver::new();
         name_resolver.resolve_program(&mut program)?;
@@ -89,6 +92,10 @@ impl Compiler {
         // Parse
         let mut parser = parser::Parser::new(tokens);
         let mut program = parser.parse()?;
+
+        // Module Elaboration: expand modules and generate declarations from signatures
+        let mut module_elaborator = module::ModuleElaborator::new();
+        let mut program = module_elaborator.elaborate(program)?;
 
         // Name Resolution: rewrite FieldAccess -> QualifiedName and load modules
         let mut name_resolver = name_resolution::NameResolver::new();

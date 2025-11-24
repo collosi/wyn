@@ -6,7 +6,7 @@
 //! 2. Loading referenced modules
 //! 3. Merging module declarations into the program
 
-use crate::ast::{Declaration, Expression, ExprKind, Program};
+use crate::ast::{Declaration, ExprKind, Expression, Program};
 use crate::error::Result;
 use crate::module_manager::ModuleManager;
 use std::collections::HashSet;

@@ -64,10 +64,7 @@ enum TypeKey {
 
 impl SubstKey {
     fn from_subst(subst: &Substitution) -> Self {
-        let mut items: Vec<_> = subst
-            .iter()
-            .map(|(k, v)| (*k, TypeKey::from_type(v)))
-            .collect();
+        let mut items: Vec<_> = subst.iter().map(|(k, v)| (*k, TypeKey::from_type(v))).collect();
         items.sort();
         SubstKey(items)
     }
@@ -94,10 +91,7 @@ impl TypeKey {
                     TypeName::Existential(vars, _) => format!("exists_{}", vars.len()),
                     TypeName::NamedParam(name, _) => format!("named_{}", name),
                 };
-                TypeKey::Constructed(
-                    name_str,
-                    args.iter().map(TypeKey::from_type).collect(),
-                )
+                TypeKey::Constructed(name_str, args.iter().map(TypeKey::from_type).collect())
             }
         }
     }
@@ -217,7 +211,8 @@ impl Monomorphizer {
 
                     if !subst.is_empty() {
                         // This is a polymorphic call - specialize it
-                        let specialized_name = self.get_or_create_specialization(&func, &subst, &poly_def)?;
+                        let specialized_name =
+                            self.get_or_create_specialization(&func, &subst, &poly_def)?;
                         ExprKind::Call {
                             func: specialized_name,
                             args,
@@ -270,10 +265,7 @@ impl Monomorphizer {
             }
             ExprKind::Intrinsic { name, args } => {
                 let args: Result<Vec<_>> = args.into_iter().map(|arg| self.process_expr(arg)).collect();
-                ExprKind::Intrinsic {
-                    name,
-                    args: args?,
-                }
+                ExprKind::Intrinsic { name, args: args? }
             }
             ExprKind::Attributed { attributes, expr } => ExprKind::Attributed {
                 attributes,
@@ -309,12 +301,7 @@ impl Monomorphizer {
     }
 
     /// Unify two types to build a substitution
-    fn unify_for_subst(
-        &self,
-        expected: &Type,
-        actual: &Type,
-        subst: &mut Substitution,
-    ) -> Result<()> {
+    fn unify_for_subst(&self, expected: &Type, actual: &Type, subst: &mut Substitution) -> Result<()> {
         match (expected, actual) {
             (PolyType::Variable(id), concrete) => {
                 // This is a type variable in the polymorphic function
@@ -361,8 +348,7 @@ impl Monomorphizer {
             def: specialized_def,
         });
 
-        self.specializations
-            .insert(key, specialized_name.clone());
+        self.specializations.insert(key, specialized_name.clone());
         Ok(specialized_name)
     }
 
@@ -401,15 +387,19 @@ impl Monomorphizer {
                     span,
                 })
             }
-            Def::Constant { ty, attributes, body, span, .. } => {
-                Ok(Def::Constant {
-                    name: new_name.to_string(),
-                    ty: apply_subst(&ty, subst),
-                    attributes,
-                    body: apply_subst_expr(body, subst),
-                    span,
-                })
-            }
+            Def::Constant {
+                ty,
+                attributes,
+                body,
+                span,
+                ..
+            } => Ok(Def::Constant {
+                name: new_name.to_string(),
+                ty: apply_subst(&ty, subst),
+                attributes,
+                body: apply_subst_expr(body, subst),
+                span,
+            }),
         }
     }
 }
@@ -466,10 +456,8 @@ fn apply_subst_expr(expr: Expr, subst: &Substitution) -> Expr {
             kind,
             body,
         } => {
-            let init_bindings = init_bindings
-                .into_iter()
-                .map(|(name, e)| (name, apply_subst_expr(e, subst)))
-                .collect();
+            let init_bindings =
+                init_bindings.into_iter().map(|(name, e)| (name, apply_subst_expr(e, subst))).collect();
             ExprKind::Loop {
                 init_bindings,
                 kind,
@@ -503,11 +491,7 @@ fn format_subst(subst: &Substitution) -> String {
     let mut items: Vec<_> = subst.iter().collect();
     items.sort_by_key(|(k, _)| *k);
 
-    items
-        .iter()
-        .map(|(_, ty)| format_type_compact(ty))
-        .collect::<Vec<_>>()
-        .join("_")
+    items.iter().map(|(_, ty)| format_type_compact(ty)).collect::<Vec<_>>().join("_")
 }
 
 fn format_type_compact(ty: &Type) -> String {
@@ -516,7 +500,11 @@ fn format_type_compact(ty: &Type) -> String {
         PolyType::Constructed(TypeName::Size(n), _) => format!("n{}", n),
         PolyType::Constructed(TypeName::Str(s), args) if args.is_empty() => s.to_string(),
         PolyType::Constructed(TypeName::Array, args) if args.len() == 2 => {
-            format!("arr{}{}", format_type_compact(&args[0]), format_type_compact(&args[1]))
+            format!(
+                "arr{}{}",
+                format_type_compact(&args[0]),
+                format_type_compact(&args[1])
+            )
         }
         _ => "ty".to_string(),
     }
