@@ -1,4 +1,0 @@
-def red: vec4 = vec4 1.0f32 0.0f32 0.0f32 1.0f32
-
-#[fragment]
-def fragment_main(): #[location(0)] vec4 = red
