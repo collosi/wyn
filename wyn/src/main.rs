@@ -4,7 +4,7 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use thiserror::Error;
-use wyn_core::{Compiler, lexer, parser::Parser as WynParser};
+use wyn_core::{Compiler, Flattened, lexer, parser::Parser as WynParser};
 
 #[derive(Parser)]
 #[command(name = "wyn")]
@@ -25,6 +25,10 @@ enum Commands {
         /// Output SPIR-V file (defaults to input name with .spv extension)
         #[arg(short, long, value_name = "FILE")]
         output: Option<PathBuf>,
+
+        /// Output MIR (Mid-level IR) to a file
+        #[arg(long, value_name = "FILE")]
+        output_mir: Option<PathBuf>,
 
         /// Output annotated source code with block IDs and locations
         #[arg(long, value_name = "FILE")]
@@ -84,6 +88,7 @@ fn main() -> Result<(), DriverError> {
         Commands::Compile {
             input,
             output,
+            output_mir,
             output_annotated,
             output_nemo,
             borrow_check,
@@ -92,6 +97,7 @@ fn main() -> Result<(), DriverError> {
             compile_file(
                 input,
                 output,
+                output_mir,
                 output_annotated,
                 output_nemo,
                 borrow_check,
@@ -115,6 +121,7 @@ fn main() -> Result<(), DriverError> {
 fn compile_file(
     input: PathBuf,
     output: Option<PathBuf>,
+    output_mir: Option<PathBuf>,
     output_annotated: Option<PathBuf>,
     output_nemo: Option<PathBuf>,
     borrow_check: bool,
@@ -142,9 +149,17 @@ fn compile_file(
         run_borrow_checking(&source, verbose)?;
     }
 
-    // Compile to SPIR-V
-    let compiler = Compiler::new();
-    let spirv = compiler.compile(&source)?;
+    // Compile through the pipeline
+    let type_checked = Compiler::parse(&source)?.elaborate()?.resolve()?.type_check()?;
+
+    type_checked.print_warnings();
+
+    let flattened = type_checked.flatten()?;
+
+    // Write MIR if requested (before further passes that might fail)
+    write_mir_if_requested(&flattened, &output_mir, verbose)?;
+
+    let lowered = flattened.monomorphize()?.filter_reachable().lower()?;
 
     // Determine output path
     let output_path = output.unwrap_or_else(|| {
@@ -155,8 +170,8 @@ fn compile_file(
 
     // Write SPIR-V binary
     let mut file = fs::File::create(&output_path)?;
-    let spirv_len = spirv.len();
-    for word in spirv {
+    let spirv_len = lowered.spirv.len();
+    for word in lowered.spirv {
         file.write_all(&word.to_le_bytes())?;
     }
 
@@ -198,13 +213,28 @@ fn check_file(
     }
 
     // Type check only, don't generate code
-    let compiler = Compiler::new();
-    compiler.check_only(&source)?;
+    let type_checked = Compiler::parse(&source)?.elaborate()?.resolve()?.type_check()?;
+
+    type_checked.print_warnings();
 
     if verbose {
         info!("✓ {} is valid", input.display());
     }
 
+    Ok(())
+}
+
+fn write_mir_if_requested(
+    flattened: &Flattened,
+    output_mir: &Option<PathBuf>,
+    verbose: bool,
+) -> Result<(), DriverError> {
+    if let Some(ref mir_path) = output_mir {
+        fs::write(mir_path, format!("{}", flattened.mir))?;
+        if verbose {
+            info!("Wrote MIR to {}", mir_path.display());
+        }
+    }
     Ok(())
 }
 

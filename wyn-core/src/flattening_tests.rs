@@ -357,8 +357,14 @@ def test : f32 =
 "#;
 
     // This should compile successfully
-    let compiler = crate::Compiler::new();
-    let result = compiler.compile(source);
+    let result = crate::Compiler::parse(source)
+        .and_then(|p| p.elaborate())
+        .and_then(|e| e.resolve())
+        .and_then(|r| r.type_check())
+        .and_then(|t| t.flatten())
+        .and_then(|f| f.monomorphize())
+        .map(|m| m.filter_reachable())
+        .and_then(|r| r.lower());
     assert!(result.is_ok(), "Compilation failed: {:?}", result.err());
 }
 
