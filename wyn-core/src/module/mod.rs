@@ -444,8 +444,12 @@ impl ModuleElaborator {
         decls: Vec<Declaration>,
         sig: &ModuleTypeExpression,
     ) -> Result<Vec<Declaration>> {
-        match sig {
-            ModuleTypeExpression::Signature(specs) => {
+        // First resolve the module type expression to get expanded specs
+        // This handles With constraints, includes, etc.
+        let specs = self.resolve_module_type_expr(sig)?;
+
+        {
+            let specs = &specs;
                 let mut result = Vec::new();
 
                 // For each spec in the signature, find the matching declaration
@@ -508,28 +512,6 @@ impl ModuleElaborator {
                 }
 
                 Ok(result)
-            }
-            ModuleTypeExpression::Name(_) => {
-                // TODO: Look up named module type and use it
-                Err(CompilerError::ModuleError(
-                    "Named module types not yet implemented".to_string(),
-                ))
-            }
-            ModuleTypeExpression::With(..) => {
-                Err(CompilerError::ModuleError(
-                    "Module type constraints (with T = ...) not yet implemented".to_string(),
-                ))
-            }
-            ModuleTypeExpression::Arrow(..) => {
-                Err(CompilerError::ModuleError(
-                    "Parameterized module types (T -> ...) not yet implemented".to_string(),
-                ))
-            }
-            ModuleTypeExpression::FunctorType(..) => {
-                Err(CompilerError::ModuleError(
-                    "Functor types (mod_type -> mod_type) not yet implemented".to_string(),
-                ))
-            }
         }
     }
 }
