@@ -433,7 +433,25 @@ impl Parser {
                 // Check for operator in parens: val (op) : type
                 if self.check(&Token::LeftParen) {
                     self.advance();
-                    let op = self.expect_identifier()?; // Simplified - should handle operators
+                    // Handle both identifiers and binary operators
+                    let op = match self.peek() {
+                        Some(Token::Identifier(id)) => {
+                            let id = id.clone();
+                            self.advance();
+                            id
+                        }
+                        Some(Token::BinOp(op)) => {
+                            let op = op.clone();
+                            self.advance();
+                            op
+                        }
+                        _ => {
+                            return Err(CompilerError::ParseError(format!(
+                                "Expected identifier or operator in val spec at {}",
+                                self.current_span()
+                            )));
+                        }
+                    };
                     self.expect(Token::RightParen)?;
                     self.expect(Token::Colon)?;
                     let ty = self.parse_type()?;

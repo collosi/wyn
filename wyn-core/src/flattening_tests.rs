@@ -361,3 +361,78 @@ def test : f32 =
     let result = compiler.compile(source);
     assert!(result.is_ok(), "Compilation failed: {:?}", result.err());
 }
+
+#[test]
+fn test_f32_conversions() {
+    // Test f32 type conversion builtins
+    let mir = flatten_with_types(
+        r#"
+def test_conversions (x: i32): f32 =
+  let f1 = __builtin_f32_from_i32 x in
+  let i1 = __builtin_f32_to_i32 f1 in
+  let f2 = __builtin_f32_from_i32 i1 in
+  f2
+"#,
+    );
+    let mir_str = format!("{}", mir);
+    // Should contain the builtin conversions
+    assert!(mir_str.contains("__builtin_f32_from_i32"));
+    assert!(mir_str.contains("__builtin_f32_to_i32"));
+}
+
+#[test]
+fn test_f32_math_operations() {
+    // Test f32 math operations including GLSL extended ops
+    let mir = flatten_with_types(
+        r#"
+def test_math (x: f32): f32 =
+  let a = f32.sin x in
+  let b = f32.cos x in
+  let c = f32.sqrt a in
+  let d = f32.exp b in
+  let e = f32.log c in
+  let f = f32.pow d 2.0f32 in
+  let g = f32.sinh x in
+  let h = f32.asinh g in
+  let i = f32.atan2 x a in
+  f32.fma f e i
+"#,
+    );
+    let mir_str = format!("{}", mir);
+    // Should contain f32 math operations
+    assert!(mir_str.contains("f32.sin"));
+    assert!(mir_str.contains("f32.cos"));
+    assert!(mir_str.contains("f32.sqrt"));
+    assert!(mir_str.contains("f32.sinh"));
+    assert!(mir_str.contains("f32.asinh"));
+    assert!(mir_str.contains("f32.atan2"));
+    assert!(mir_str.contains("f32.fma"));
+}
+
+#[test]
+fn test_operator_section_direct_application() {
+    // Test operator section applied directly to arguments
+    let mir = flatten_with_types(
+        r#"
+def test_add (x: i32) (y: i32): i32 = (+) x y
+"#,
+    );
+    let mir_str = format!("{}", mir);
+    // Operator section (+) applied to arguments should flatten correctly
+    println!("MIR output:\n{}", mir_str);
+    assert!(mir_str.contains("test_add"));
+}
+
+#[test]
+fn test_operator_section_with_map() {
+    // Test operator section passed to map (special higher-order function)
+    let mir = flatten_with_types(
+        r#"
+def test_map (arr: [3]i32): [3]i32 = map (\(x:i32) -> (+) x 1) arr
+"#,
+    );
+    let mir_str = format!("{}", mir);
+    // Should successfully flatten with lambda wrapping operator section
+    println!("MIR output:\n{}", mir_str);
+    assert!(mir_str.contains("test_map"));
+}

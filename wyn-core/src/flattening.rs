@@ -480,6 +480,116 @@ impl Flattener {
                     if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) };
                 (mir::ExprKind::Var(full_name), StaticValue::Dyn)
             }
+            ExprKind::OperatorSection(op) => {
+                // Convert operator section to a lambda: (+) becomes \x y -> x + y
+                // Generate function name
+                let id = self.fresh_id();
+                let enclosing = self.enclosing_decl_stack.last().map(|s| s.as_str()).unwrap_or("anon");
+                let func_name = format!("__op_{}_{}", enclosing, id);
+
+                // Register lambda with arity 2 (binary operators)
+                let arity = 2;
+                let tag = self.add_lambda(func_name.clone(), arity);
+
+                // Get the type of the operator section to determine parameter types
+                let op_type = self.get_expr_type(expr);
+
+                // Extract parameter types from the function type 'a -> 'a -> 'b
+                let (param_type, ret_type) = if let Some((param1, rest)) = ast::types::as_arrow(&op_type) {
+                    if let Some((_param2, ret)) = ast::types::as_arrow(rest) {
+                        // Binary operator: a -> a -> b
+                        (param1.clone(), ret.clone())
+                    } else {
+                        return Err(CompilerError::TypeError(
+                            format!("Operator section has unexpected type structure: expected a -> a -> b, got {:?}", op_type),
+                            span,
+                        ));
+                    }
+                } else {
+                    return Err(CompilerError::TypeError(
+                        format!("Operator section must have function type, got {:?}", op_type),
+                        span,
+                    ));
+                };
+
+                // Build the closure record with just the __tag field (no free variables)
+                let i32_type = Type::Constructed(TypeName::Str("i32".into()), vec![]);
+                let record_fields = vec![(
+                    "__tag".to_string(),
+                    Expr::new(
+                        i32_type.clone(),
+                        mir::ExprKind::Literal(mir::Literal::Int(tag.to_string())),
+                        span,
+                    ),
+                )];
+
+                // Build the closure type
+                let mut type_fields = BTreeMap::new();
+                type_fields.insert("__tag".to_string(), i32_type);
+                let closure_type = Type::Constructed(TypeName::Record(type_fields), vec![]);
+
+                // Build parameters: closure, x, y
+                let params = vec![
+                    mir::Param {
+                        name: "__closure".to_string(),
+                        ty: closure_type.clone(),
+                        is_consumed: false,
+                    },
+                    mir::Param {
+                        name: "x".to_string(),
+                        ty: param_type.clone(),
+                        is_consumed: false,
+                    },
+                    mir::Param {
+                        name: "y".to_string(),
+                        ty: param_type.clone(),
+                        is_consumed: false,
+                    },
+                ];
+
+                // Build the body: x <op> y
+                let x_var = Expr::new(
+                    param_type.clone(),
+                    mir::ExprKind::Var("x".to_string()),
+                    span,
+                );
+                let y_var = Expr::new(
+                    param_type.clone(),
+                    mir::ExprKind::Var("y".to_string()),
+                    span,
+                );
+                let body = Expr::new(
+                    ret_type.clone(),
+                    mir::ExprKind::BinOp {
+                        op: op.clone(),
+                        lhs: Box::new(x_var),
+                        rhs: Box::new(y_var),
+                    },
+                    span,
+                );
+
+                // Create the generated function
+                let func = mir::Def::Function {
+                    name: func_name.clone(),
+                    params,
+                    ret_type,
+                    attributes: vec![],
+                    param_attributes: vec![],
+                    return_attributes: vec![],
+                    body,
+                    span,
+                };
+                self.generated_functions.push(func);
+
+                // Return the closure record with static value indicating it's a known closure
+                let sv = StaticValue::Closure {
+                    tag,
+                    lam_name: func_name,
+                    arity,
+                };
+
+                (mir::ExprKind::Literal(mir::Literal::Record(record_fields)), sv)
+            }
             ExprKind::BinaryOp(op, lhs, rhs) => {
                 let (lhs, _) = self.flatten_expr(lhs)?;
                 let (rhs, _) = self.flatten_expr(rhs)?;
@@ -939,6 +1049,7 @@ impl Flattener {
     fn find_var_type_in_expr(&self, expr: &Expression, var_name: &str) -> Option<Type> {
         match &expr.kind {
             ExprKind::Identifier(name) if name == var_name => Some(self.get_expr_type(expr)),
+            ExprKind::OperatorSection(_) => None,
             ExprKind::BinaryOp(_, lhs, rhs) => self
                 .find_var_type_in_expr(lhs, var_name)
                 .or_else(|| self.find_var_type_in_expr(rhs, var_name)),
@@ -1217,6 +1328,7 @@ impl Flattener {
             ExprKind::IntLiteral(_)
             | ExprKind::FloatLiteral(_)
             | ExprKind::BoolLiteral(_)
+            | ExprKind::OperatorSection(_)
             | ExprKind::TypeHole => {}
             ExprKind::QualifiedName(_, _) => {}
             ExprKind::BinaryOp(_, lhs, rhs) => {
@@ -1347,6 +1459,7 @@ impl Flattener {
             | ExprKind::IntLiteral(_)
             | ExprKind::FloatLiteral(_)
             | ExprKind::BoolLiteral(_)
+            | ExprKind::OperatorSection(_)
             | ExprKind::TypeHole
             | ExprKind::QualifiedName(_, _) => {
                 return Ok(expr.clone());

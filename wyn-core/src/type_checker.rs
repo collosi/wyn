@@ -1215,6 +1215,14 @@ impl TypeChecker {
             ExprKind::IntLiteral(_) => Ok(types::i32()),
             ExprKind::FloatLiteral(_) => Ok(types::f32()),
             ExprKind::BoolLiteral(_) => Ok(types::bool_type()),
+            ExprKind::OperatorSection(op) => {
+                // Operator sections like (+), (-), etc. are functions
+                // Their specific type depends on context and will be resolved via unification
+                // For now, return a polymorphic function type: 'a -> 'a -> 'a
+                let a = self.context.new_variable();
+                let func_type = Type::arrow(a.clone(), Type::arrow(a.clone(), a));
+                Ok(func_type)
+            }
             ExprKind::Identifier(name) => {
                 debug!("Looking up identifier '{}'", name);
                 debug!("Current scope depth: {}", self.scope_stack.depth());

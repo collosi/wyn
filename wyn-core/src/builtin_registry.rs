@@ -80,6 +80,23 @@ pub enum PrimOp {
     ShiftLeftLogical,
     ShiftRightArithmetic,
     ShiftRightLogical,
+    // Type conversions
+    // Float to signed int
+    FPToSI,
+    // Float to unsigned int
+    FPToUI,
+    // Signed int to float
+    SIToFP,
+    // Unsigned int to float
+    UIToFP,
+    // Float precision conversion
+    FPConvert,
+    // Signed extension
+    SConvert,
+    // Unsigned/zero extension
+    UConvert,
+    // Bitcast (reinterpret bits)
+    Bitcast,
 }
 
 /// Genuine intrinsics that need backend-specific lowering
@@ -433,15 +450,34 @@ impl BuiltinRegistry {
         self.register_unop(ty_name, "asin", BuiltinImpl::PrimOp(PrimOp::GlslExt(16)));
         self.register_unop(ty_name, "acos", BuiltinImpl::PrimOp(PrimOp::GlslExt(17)));
         self.register_unop(ty_name, "atan", BuiltinImpl::PrimOp(PrimOp::GlslExt(18)));
+
+        // Hyperbolic functions
+        self.register_unop(ty_name, "sinh", BuiltinImpl::PrimOp(PrimOp::GlslExt(19)));
+        self.register_unop(ty_name, "cosh", BuiltinImpl::PrimOp(PrimOp::GlslExt(20)));
+        self.register_unop(ty_name, "tanh", BuiltinImpl::PrimOp(PrimOp::GlslExt(21)));
+        self.register_unop(ty_name, "asinh", BuiltinImpl::PrimOp(PrimOp::GlslExt(22)));
+        self.register_unop(ty_name, "acosh", BuiltinImpl::PrimOp(PrimOp::GlslExt(23)));
+        self.register_unop(ty_name, "atanh", BuiltinImpl::PrimOp(PrimOp::GlslExt(24)));
+        self.register_binop(ty_name, "atan2", BuiltinImpl::PrimOp(PrimOp::GlslExt(25)));
+
+        // Exponential and logarithmic
         self.register_unop(ty_name, "sqrt", BuiltinImpl::PrimOp(PrimOp::GlslExt(31)));
+        self.register_unop(ty_name, "rsqrt", BuiltinImpl::PrimOp(PrimOp::GlslExt(32))); // InverseSqrt
         self.register_unop(ty_name, "exp", BuiltinImpl::PrimOp(PrimOp::GlslExt(27)));
         self.register_unop(ty_name, "log", BuiltinImpl::PrimOp(PrimOp::GlslExt(28)));
+        self.register_unop(ty_name, "log2", BuiltinImpl::PrimOp(PrimOp::GlslExt(30)));
         self.register_binop(ty_name, "pow", BuiltinImpl::PrimOp(PrimOp::GlslExt(26)));
+
+        // Rounding functions
         self.register_unop(ty_name, "floor", BuiltinImpl::PrimOp(PrimOp::GlslExt(8)));
         self.register_unop(ty_name, "ceil", BuiltinImpl::PrimOp(PrimOp::GlslExt(9)));
         self.register_unop(ty_name, "round", BuiltinImpl::PrimOp(PrimOp::GlslExt(1)));
         self.register_unop(ty_name, "trunc", BuiltinImpl::PrimOp(PrimOp::GlslExt(3)));
+
+        // Misc operations
         self.register_ternop(ty_name, "clamp", BuiltinImpl::PrimOp(PrimOp::GlslExt(43)));
+        self.register_ternop(ty_name, "lerp", BuiltinImpl::PrimOp(PrimOp::GlslExt(46))); // FMix
+        self.register_ternop(ty_name, "fma", BuiltinImpl::PrimOp(PrimOp::GlslExt(50))); // Fused multiply-add
 
         // isnan, isinf
         self.register_bool_unop(ty_name, "isnan", BuiltinImpl::PrimOp(PrimOp::GlslExt(66)));
@@ -450,8 +486,64 @@ impl BuiltinRegistry {
 
     /// Register float-specific module functions
     fn register_float_modules(&mut self) {
-        // Float-specific operations (bit manipulation, etc.)
-        // TODO: Implement f16, f32, f64 specific ops like from_bits, to_bits
+        self.register_f32_conversions();
+        // TODO: Implement f16, f64 specific conversions
+    }
+
+    /// Register f32 type conversion builtins
+    fn register_f32_conversions(&mut self) {
+        let f32_ty = Self::ty("f32");
+
+        // Conversions from signed integers to f32
+        self.register("__builtin_f32_from_i8", vec![Self::ty("i8")], f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::SIToFP));
+        self.register("__builtin_f32_from_i16", vec![Self::ty("i16")], f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::SIToFP));
+        self.register("__builtin_f32_from_i32", vec![Self::ty("i32")], f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::SIToFP));
+        self.register("__builtin_f32_from_i64", vec![Self::ty("i64")], f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::SIToFP));
+
+        // Conversions from unsigned integers to f32
+        self.register("__builtin_f32_from_u8", vec![Self::ty("u8")], f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::UIToFP));
+        self.register("__builtin_f32_from_u16", vec![Self::ty("u16")], f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::UIToFP));
+        self.register("__builtin_f32_from_u32", vec![Self::ty("u32")], f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::UIToFP));
+        self.register("__builtin_f32_from_u64", vec![Self::ty("u64")], f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::UIToFP));
+
+        // Conversions from other floats to f32
+        self.register("__builtin_f32_from_f16", vec![Self::ty("f16")], f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::FPConvert));
+        self.register("__builtin_f32_from_f64", vec![Self::ty("f64")], f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::FPConvert));
+
+        // Conversions from f32 to integers
+        self.register("__builtin_f32_to_i8", vec![f32_ty.clone()], Self::ty("i8"),
+            BuiltinImpl::PrimOp(PrimOp::FPToSI));
+        self.register("__builtin_f32_to_i16", vec![f32_ty.clone()], Self::ty("i16"),
+            BuiltinImpl::PrimOp(PrimOp::FPToSI));
+        self.register("__builtin_f32_to_i32", vec![f32_ty.clone()], Self::ty("i32"),
+            BuiltinImpl::PrimOp(PrimOp::FPToSI));
+        self.register("__builtin_f32_to_i64", vec![f32_ty.clone()], Self::ty("i64"),
+            BuiltinImpl::PrimOp(PrimOp::FPToSI));
+
+        self.register("__builtin_f32_to_u8", vec![f32_ty.clone()], Self::ty("u8"),
+            BuiltinImpl::PrimOp(PrimOp::FPToUI));
+        self.register("__builtin_f32_to_u16", vec![f32_ty.clone()], Self::ty("u16"),
+            BuiltinImpl::PrimOp(PrimOp::FPToUI));
+        self.register("__builtin_f32_to_u32", vec![f32_ty.clone()], Self::ty("u32"),
+            BuiltinImpl::PrimOp(PrimOp::FPToUI));
+        self.register("__builtin_f32_to_u64", vec![f32_ty.clone()], Self::ty("u64"),
+            BuiltinImpl::PrimOp(PrimOp::FPToUI));
+
+        // Bit manipulation: reinterpret bits without conversion
+        self.register("__builtin_f32_from_bits", vec![Self::ty("u32")], f32_ty.clone(),
+            BuiltinImpl::PrimOp(PrimOp::Bitcast));
+        self.register("__builtin_f32_to_bits", vec![f32_ty.clone()], Self::ty("u32"),
+            BuiltinImpl::PrimOp(PrimOp::Bitcast));
     }
 
     /// Register vector operations (length, normalize, dot, cross, etc.)

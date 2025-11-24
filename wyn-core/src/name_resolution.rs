@@ -168,6 +168,7 @@ impl NameResolver {
             | ExprKind::FloatLiteral(_)
             | ExprKind::BoolLiteral(_)
             | ExprKind::Identifier(_)
+            | ExprKind::OperatorSection(_)
             | ExprKind::QualifiedName(_, _)
             | ExprKind::TypeHole => {}
         }

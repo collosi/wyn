@@ -2284,3 +2284,59 @@ fn test_parse_mul_mat_vec_application() {
         _ => panic!("Expected Application, got {:?}", decl.body.kind),
     }
 }
+
+#[test]
+fn test_operator_section_in_expression() {
+    let input = "def test = map (+) [1, 2, 3]";
+    let decl = single_decl(input);
+
+    // Should parse successfully - map applied to operator section (+) and array
+    match &decl.body.kind {
+        ExprKind::Application(func, args) => {
+            // func should be "map"
+            if let ExprKind::Identifier(name) = &func.kind {
+                assert_eq!(name, "map");
+            } else {
+                panic!("Expected map identifier, got {:?}", func.kind);
+            }
+
+            // First arg should be the operator section (+)
+            assert_eq!(args.len(), 2, "map should have 2 arguments");
+            match &args[0].kind {
+                ExprKind::OperatorSection(op) => {
+                    assert_eq!(op, "+", "Expected + operator");
+                }
+                other => panic!("Expected operator section, got {:?}", other),
+            }
+        }
+        other => panic!("Expected application, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_operator_section_direct_application() {
+    let input = "def test (x: i32) (y: i32) = (+) x y";
+    let decl = single_decl(input);
+
+    // Should parse successfully - operator section directly applied to arguments
+    match &decl.body.kind {
+        ExprKind::Application(func, _args) => {
+            // func should be an application of operator section to x
+            if let ExprKind::Application(op_section, first_args) = &func.kind {
+                assert_eq!(first_args.len(), 1, "Expected 1 argument in first application");
+                match &op_section.kind {
+                    ExprKind::OperatorSection(op) => {
+                        assert_eq!(op, "+", "Expected + operator");
+                    }
+                    other => panic!("Expected operator section, got {:?}", other),
+                }
+            } else if let ExprKind::OperatorSection(op) = &func.kind {
+                // Alternative: if parser creates Application(OperatorSection, [x, y])
+                assert_eq!(op, "+", "Expected + operator");
+            } else {
+                panic!("Expected application or operator section, got {:?}", func.kind);
+            }
+        }
+        other => panic!("Expected application, got {:?}", other),
+    }
+}

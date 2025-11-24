@@ -1231,6 +1231,71 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                             arg_ids[1],
                                         )?)
                                     }
+                                    // Type conversions
+                                    PrimOp::FPToSI => {
+                                        if arg_ids.len() != 1 {
+                                            return Err(CompilerError::SpirvError(
+                                                "FPToSI requires 1 arg".to_string(),
+                                            ));
+                                        }
+                                        Ok(spv.builder.convert_f_to_s(result_type, None, arg_ids[0])?)
+                                    }
+                                    PrimOp::FPToUI => {
+                                        if arg_ids.len() != 1 {
+                                            return Err(CompilerError::SpirvError(
+                                                "FPToUI requires 1 arg".to_string(),
+                                            ));
+                                        }
+                                        Ok(spv.builder.convert_f_to_u(result_type, None, arg_ids[0])?)
+                                    }
+                                    PrimOp::SIToFP => {
+                                        if arg_ids.len() != 1 {
+                                            return Err(CompilerError::SpirvError(
+                                                "SIToFP requires 1 arg".to_string(),
+                                            ));
+                                        }
+                                        Ok(spv.builder.convert_s_to_f(result_type, None, arg_ids[0])?)
+                                    }
+                                    PrimOp::UIToFP => {
+                                        if arg_ids.len() != 1 {
+                                            return Err(CompilerError::SpirvError(
+                                                "UIToFP requires 1 arg".to_string(),
+                                            ));
+                                        }
+                                        Ok(spv.builder.convert_u_to_f(result_type, None, arg_ids[0])?)
+                                    }
+                                    PrimOp::FPConvert => {
+                                        if arg_ids.len() != 1 {
+                                            return Err(CompilerError::SpirvError(
+                                                "FPConvert requires 1 arg".to_string(),
+                                            ));
+                                        }
+                                        Ok(spv.builder.f_convert(result_type, None, arg_ids[0])?)
+                                    }
+                                    PrimOp::SConvert => {
+                                        if arg_ids.len() != 1 {
+                                            return Err(CompilerError::SpirvError(
+                                                "SConvert requires 1 arg".to_string(),
+                                            ));
+                                        }
+                                        Ok(spv.builder.s_convert(result_type, None, arg_ids[0])?)
+                                    }
+                                    PrimOp::UConvert => {
+                                        if arg_ids.len() != 1 {
+                                            return Err(CompilerError::SpirvError(
+                                                "UConvert requires 1 arg".to_string(),
+                                            ));
+                                        }
+                                        Ok(spv.builder.u_convert(result_type, None, arg_ids[0])?)
+                                    }
+                                    PrimOp::Bitcast => {
+                                        if arg_ids.len() != 1 {
+                                            return Err(CompilerError::SpirvError(
+                                                "Bitcast requires 1 arg".to_string(),
+                                            ));
+                                        }
+                                        Ok(spv.builder.bitcast(result_type, None, arg_ids[0])?)
+                                    }
                                     _ => {
                                         // TODO: Handle other PrimOp variants
                                         Err(CompilerError::SpirvError(format!(

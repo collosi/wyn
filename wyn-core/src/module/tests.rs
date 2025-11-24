@@ -355,3 +355,90 @@ fn test_module_instantiation_chained_with() {
         crate::ast::Declaration::TypeBind(tb) if tb.name == "f32_int_t"
     )));
 }
+
+#[test]
+fn test_module_with_function_body() {
+    let source = r#"
+        module type numeric = {
+            type t
+            val add: t -> t -> t
+        }
+
+        module i32: (numeric with t = i32) = {
+            type t = i32
+            def add (x: t) (y: t): t = x + y
+        }
+    "#;
+
+    let tokens = crate::lexer::tokenize(source).unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().unwrap();
+
+    let mut elaborator = ModuleElaborator::new();
+    let result = elaborator.elaborate(program);
+
+    match result {
+        Ok(elaborated) => {
+            // Should have type t and function definition
+            assert!(elaborated.declarations.len() >= 2);
+
+            // Check that we have the type binding
+            assert!(elaborated.declarations.iter().any(|d| matches!(d,
+                crate::ast::Declaration::TypeBind(tb) if tb.name == "i32_t"
+            )));
+
+            // Check that we have a function declaration
+            assert!(elaborated.declarations.iter().any(|d| matches!(d,
+                crate::ast::Declaration::Decl(_)
+            )));
+        }
+        Err(e) => panic!("Elaboration failed: {}", e),
+    }
+}
+
+#[test]
+fn test_parse_module_type_with_operators() {
+    let source = r#"
+        module type numeric = {
+            type t
+            val (+): t -> t -> t
+            val (-): t -> t -> t
+            val (*): t -> t -> t
+        }
+    "#;
+
+    let tokens = crate::lexer::tokenize(source).unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse().unwrap();
+
+    // Check that we parsed the module type with operator specs
+    assert_eq!(program.declarations.len(), 1);
+
+    match &program.declarations[0] {
+        crate::ast::Declaration::ModuleTypeBind(mtb) => {
+            assert_eq!(mtb.name, "numeric");
+            // Module type should have operator value specs
+            if let crate::ast::ModuleTypeExpression::Signature(specs) = &mtb.definition {
+                // Should have 4 specs: type t, and three operators
+                assert_eq!(specs.len(), 4, "Expected 4 specs in module type");
+
+                // Check for operator specs
+                let op_specs: Vec<_> = specs
+                    .iter()
+                    .filter_map(|s| match s {
+                        crate::ast::Spec::ValOp(op, _) => Some(op.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+
+                assert_eq!(op_specs.len(), 3, "Expected 3 operator specs");
+                assert!(op_specs.contains(&"+"), "Expected + operator");
+                assert!(op_specs.contains(&"-"), "Expected - operator");
+                assert!(op_specs.contains(&"*"), "Expected * operator");
+            } else {
+                panic!("Expected Signature module type expression");
+            }
+        }
+        other => panic!("Expected ModuleTypeBind, got {:?}", other),
+    }
+}

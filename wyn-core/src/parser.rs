@@ -1233,6 +1233,20 @@ impl Parser {
                     return Ok(self.node_counter.mk_node(ExprKind::Tuple(vec![]), span));
                 }
 
+                // Check for operator section: (+), (-), (*), etc.
+                // Use peek2 to check if we have (BinOp, RightParen) pattern
+                if let Some((Token::BinOp(op), Token::RightParen)) = self.peek2() {
+                    let op = op.clone();
+                    self.advance(); // consume operator
+                    self.advance(); // consume )
+                    let end_span = self.previous_span();
+                    let span = start_span.merge(&end_span);
+                    return Ok(self.node_counter.mk_node(
+                        ExprKind::OperatorSection(op),
+                        span,
+                    ));
+                }
+
                 // Parse first expression
                 let first_expr = self.parse_expression()?;
 
@@ -1587,6 +1601,12 @@ impl Parser {
     // Helper methods
     fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.current).map(|lt| &lt.token)
+    }
+
+    fn peek2(&self) -> Option<(&Token, &Token)> {
+        let first = self.tokens.get(self.current)?;
+        let second = self.tokens.get(self.current + 1)?;
+        Some((&first.token, &second.token))
     }
 
     fn advance(&mut self) -> Option<&Token> {

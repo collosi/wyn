@@ -194,9 +194,16 @@ impl ModuleElaborator {
 
                 Ok(specs)
             }
-            _ => Err(CompilerError::ModuleError(
-                "Complex module type expressions not yet fully implemented".to_string(),
-            )),
+            ModuleTypeExpression::Arrow(..) => {
+                Err(CompilerError::ModuleError(
+                    "Parameterized module types (T -> ...) not yet implemented in type resolution".to_string(),
+                ))
+            }
+            ModuleTypeExpression::FunctorType(..) => {
+                Err(CompilerError::ModuleError(
+                    "Functor types (mod_type -> mod_type) not yet implemented in type resolution".to_string(),
+                ))
+            }
         }
     }
 
@@ -508,9 +515,21 @@ impl ModuleElaborator {
                     "Named module types not yet implemented".to_string(),
                 ))
             }
-            _ => Err(CompilerError::ModuleError(
-                "Complex module type expressions not yet implemented".to_string(),
-            )),
+            ModuleTypeExpression::With(..) => {
+                Err(CompilerError::ModuleError(
+                    "Module type constraints (with T = ...) not yet implemented".to_string(),
+                ))
+            }
+            ModuleTypeExpression::Arrow(..) => {
+                Err(CompilerError::ModuleError(
+                    "Parameterized module types (T -> ...) not yet implemented".to_string(),
+                ))
+            }
+            ModuleTypeExpression::FunctorType(..) => {
+                Err(CompilerError::ModuleError(
+                    "Functor types (mod_type -> mod_type) not yet implemented".to_string(),
+                ))
+            }
         }
     }
 }

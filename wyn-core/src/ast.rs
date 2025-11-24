@@ -547,6 +547,7 @@ pub enum ExprKind {
     BoolLiteral(bool),
     Identifier(String),
     QualifiedName(Vec<String>, String), // quals, name - e.g., f32.sin is (["f32"], "sin")
+    OperatorSection(String),            // e.g., (+), (-), (*) - operator as a value
     ArrayLiteral(Vec<Expression>),
     ArrayIndex(Box<Expression>, Box<Expression>),
     BinaryOp(BinaryOp, Box<Expression>, Box<Expression>),

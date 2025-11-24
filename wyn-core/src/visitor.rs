@@ -266,6 +266,7 @@ pub fn walk_expression<V: Visitor>(v: &mut V, e: &Expression) -> ControlFlow<V::
         ExprKind::If(if_expr) => v.visit_expr_if(if_expr),
 
         ExprKind::TypeHole => ControlFlow::Continue(()),
+        ExprKind::OperatorSection(_) => ControlFlow::Continue(()),
         ExprKind::QualifiedName(_, _)
         | ExprKind::UnaryOp(_, _)
         | ExprKind::Loop(_)

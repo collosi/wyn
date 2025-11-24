@@ -180,6 +180,9 @@ impl AstFormatter {
             ExprKind::Identifier(name) => {
                 self.write_line(name);
             }
+            ExprKind::OperatorSection(op) => {
+                self.write_line(&format!("({})", op));
+            }
             ExprKind::QualifiedName(quals, name) => {
                 let qn =
                     if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) };
@@ -372,6 +375,7 @@ impl AstFormatter {
             ExprKind::FloatLiteral(f) => format!("{}", f),
             ExprKind::BoolLiteral(b) => b.to_string(),
             ExprKind::Identifier(name) => name.clone(),
+            ExprKind::OperatorSection(op) => format!("({})", op),
             ExprKind::QualifiedName(quals, name) => {
                 if quals.is_empty() {
                     name.clone()

@@ -281,6 +281,7 @@ impl ConstantFolder {
             | ExprKind::IntLiteral(_)
             | ExprKind::FloatLiteral(_)
             | ExprKind::BoolLiteral(_)
+            | ExprKind::OperatorSection(_)
             | ExprKind::TypeHole => Ok(expr.clone()),
 
             ExprKind::Pipe(left, right) => {
