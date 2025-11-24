@@ -1015,7 +1015,7 @@ impl Parser {
             min_precedence,
             self.peek()
         );
-        let mut left = self.parse_application_expression()?;
+        let mut left = self.parse_unary_expression()?;
 
         loop {
             // Check if we have a binary operator or pipe operator
@@ -1131,7 +1131,7 @@ impl Parser {
 
     fn parse_postfix_expression(&mut self) -> Result<Expression> {
         trace!("parse_postfix_expression: next token = {:?}", self.peek());
-        let mut expr = self.parse_unary_expression()?;
+        let mut expr = self.parse_primary_expression()?;
 
         loop {
             match self.peek() {
@@ -1179,11 +1179,12 @@ impl Parser {
     fn parse_unary_expression(&mut self) -> Result<Expression> {
         trace!("parse_unary_expression: next token = {:?}", self.peek());
         // Check for unary operators: - and !
+        // Postfix operators ([], .) bind tighter than unary, so we parse postfix for the operand
         match self.peek() {
             Some(Token::BinOp(op)) if op == "-" => {
                 let start_span = self.current_span();
                 self.advance();
-                let operand = self.parse_unary_expression()?; // Right-associative
+                let operand = self.parse_unary_expression()?; // Right-associative for chaining: --x
                 let span = start_span.merge(&operand.h.span);
                 Ok(self.node_counter.mk_node(
                     ExprKind::UnaryOp(UnaryOp { op: "-".to_string() }, Box::new(operand)),
@@ -1193,14 +1194,14 @@ impl Parser {
             Some(Token::Bang) => {
                 let start_span = self.current_span();
                 self.advance();
-                let operand = self.parse_unary_expression()?; // Right-associative
+                let operand = self.parse_unary_expression()?; // Right-associative for chaining: !!x
                 let span = start_span.merge(&operand.h.span);
                 Ok(self.node_counter.mk_node(
                     ExprKind::UnaryOp(UnaryOp { op: "!".to_string() }, Box::new(operand)),
                     span,
                 ))
             }
-            _ => self.parse_primary_expression(),
+            _ => self.parse_application_expression(),
         }
     }
 

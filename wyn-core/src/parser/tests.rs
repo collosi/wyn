@@ -2350,3 +2350,139 @@ fn test_operator_definition() {
     assert_eq!(decl.name, "(+)");
     assert_eq!(decl.params.len(), 2);
 }
+
+#[test]
+fn test_negation_of_array_index() {
+    // -s[1] should parse as -(s[1]), not (-s)[1]
+    // This is important for expressions like: vec4 (c[1]*c[2]) (-s[1]) 0
+    let decl = single_decl("def test (s: [3]f32): f32 = -s[1]");
+
+    // Should be UnaryOp("-", ArrayIndex(s, 1))
+    match &decl.body.kind {
+        ExprKind::UnaryOp(op, operand) => {
+            assert_eq!(op.op, "-", "Expected negation operator");
+            match &operand.kind {
+                ExprKind::ArrayIndex(array, index) => {
+                    assert!(
+                        matches!(&array.kind, ExprKind::Identifier(name) if name == "s"),
+                        "Expected array 's', got {:?}",
+                        array.kind
+                    );
+                    assert!(
+                        matches!(&index.kind, ExprKind::IntLiteral(1)),
+                        "Expected index 1, got {:?}",
+                        index.kind
+                    );
+                }
+                other => panic!("Expected ArrayIndex, got {:?}", other),
+            }
+        }
+        other => panic!("Expected UnaryOp, got {:?}", other),
+    }
+}
+
+// =============================================================================
+// Ambiguity Resolution Tests
+// =============================================================================
+// These tests verify the resolution of grammar ambiguities as documented in
+// the language specification.
+
+#[test]
+fn test_ambiguity_loop_body_extends_right() {
+    // The body of loop extends as far right as possible
+    // loop x = 0 while x < 10 do x + 1 + 2 should have (x + 1 + 2) as body
+    let decl = single_decl("def test(): i32 = loop x = 0 while x < 10 do x + 1 + 2");
+
+    match &decl.body.kind {
+        ExprKind::Loop(loop_expr) => {
+            // The body should be a binary op (the full x + 1 + 2)
+            assert!(
+                matches!(&loop_expr.body.kind, ExprKind::BinaryOp(op, _, _) if op.op == "+"),
+                "Loop body should extend to include full expression, got {:?}",
+                loop_expr.body.kind
+            );
+        }
+        other => panic!("Expected Loop, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_ambiguity_type_ascription_not_in_array_index() {
+    // Type ascription (exp : type) cannot appear as an array index without parens
+    // because it conflicts with slice syntax. arr[x : i32] would be ambiguous.
+    // This should parse arr[x] with type ascription on the whole expression.
+    let decl = single_decl("def test (arr: [10]i32): i32 = arr[0] : i32");
+
+    match &decl.body.kind {
+        ExprKind::TypeAscription(inner, _ty) => {
+            assert!(
+                matches!(&inner.kind, ExprKind::ArrayIndex(_, _)),
+                "Should be type ascription of array index, got {:?}",
+                inner.kind
+            );
+        }
+        other => panic!("Expected TypeAscription, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_ambiguity_field_access_vs_qualified_name() {
+    // x.y could be field access on record x, or qualified name in module x.
+    // At parse time, this is represented as FieldAccess; name resolution
+    // later determines if it's a module reference.
+    let decl = single_decl("def test (r: {x: i32}): i32 = r.x");
+
+    match &decl.body.kind {
+        ExprKind::FieldAccess(base, field) => {
+            assert!(
+                matches!(&base.kind, ExprKind::Identifier(name) if name == "r"),
+                "Base should be identifier 'r', got {:?}",
+                base.kind
+            );
+            assert_eq!(field, "x", "Field should be 'x'");
+        }
+        other => panic!("Expected FieldAccess, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_ambiguity_negation_prefix_binds_tighter_than_multiply() {
+    // -x * y should parse as (-x) * y, not -(x * y)
+    let decl = single_decl("def test (x: i32) (y: i32): i32 = -x * y");
+
+    match &decl.body.kind {
+        ExprKind::BinaryOp(op, left, _right) => {
+            assert_eq!(op.op, "*", "Top-level should be multiplication");
+            assert!(
+                matches!(&left.kind, ExprKind::UnaryOp(unary_op, _) if unary_op.op == "-"),
+                "Left side should be negation, got {:?}",
+                left.kind
+            );
+        }
+        other => panic!("Expected BinaryOp, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_ambiguity_chained_field_access() {
+    // a.b.c should parse as (a.b).c - left associative field access
+    let decl = single_decl("def test(): i32 = a.b.c");
+
+    match &decl.body.kind {
+        ExprKind::FieldAccess(inner, field_c) => {
+            assert_eq!(field_c, "c");
+            match &inner.kind {
+                ExprKind::FieldAccess(base, field_b) => {
+                    assert_eq!(field_b, "b");
+                    assert!(
+                        matches!(&base.kind, ExprKind::Identifier(name) if name == "a"),
+                        "Base should be 'a', got {:?}",
+                        base.kind
+                    );
+                }
+                other => panic!("Expected inner FieldAccess, got {:?}", other),
+            }
+        }
+        other => panic!("Expected FieldAccess, got {:?}", other),
+    }
+}
