@@ -2,17 +2,40 @@
 //!
 //! This module converts MIR (from flattening) directly to SPIR-V.
 //! It uses a SpvBuilder wrapper that handles variable hoisting automatically.
+//! Dependencies are lowered on-demand using ensure_lowered pattern.
 
 use crate::ast::TypeName;
 use crate::builtin_registry::{BuiltinImpl, BuiltinRegistry, PrimOp};
 use crate::error::{CompilerError, Result};
-use crate::mir::{self, Def, Expr, ExprKind, Literal, LoopKind};
+use crate::mir::{self, Def, Expr, ExprKind, Literal, LoopKind, Program};
 use polytype::Type as PolyType;
 use rspirv::binary::Assemble;
 use rspirv::dr::Builder;
 use rspirv::dr::Operand;
 use rspirv::spirv::{self, AddressingModel, Capability, MemoryModel, StorageClass};
 use std::collections::HashMap;
+
+/// Tracks the lowering state of each definition
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LowerState {
+    NotStarted,
+    InProgress,
+    Done,
+}
+
+/// Context for on-demand lowering of MIR to SPIR-V
+struct LowerCtx<'a> {
+    /// The MIR program being lowered
+    program: &'a Program,
+    /// Map from definition name to its index in program.defs
+    def_index: HashMap<String, usize>,
+    /// Lowering state of each definition
+    state: HashMap<String, LowerState>,
+    /// The SPIR-V builder
+    spv: SpvBuilder,
+    /// Entry points to emit (name, execution model)
+    entry_points: Vec<(String, spirv::ExecutionModel)>,
+}
 
 /// SpvBuilder wraps rspirv::Builder with an ergonomic API that handles:
 /// - Automatic variable hoisting to function entry block
@@ -507,92 +530,209 @@ impl SpvBuilder {
     }
 }
 
-/// Lower a MIR program to SPIR-V
-pub fn lower(program: &mir::Program) -> Result<Vec<u32>> {
-    let mut spv = SpvBuilder::new();
+impl<'a> LowerCtx<'a> {
+    fn new(program: &'a Program) -> Self {
+        let mut spv = SpvBuilder::new();
+        spv.lambda_registry = program.lambda_registry.clone();
 
-    // Copy lambda registry for closure dispatch
-    spv.lambda_registry = program.lambda_registry.clone();
+        // Build index from name to def position
+        let mut def_index = HashMap::new();
+        let mut entry_points = Vec::new();
 
-    // Collect entry points
-    let mut entry_points: Vec<(String, spirv::ExecutionModel)> = Vec::new();
+        for (i, def) in program.defs.iter().enumerate() {
+            let name = match def {
+                Def::Function { name, attributes, .. } => {
+                    // Collect entry points
+                    for attr in attributes {
+                        match attr.name.as_str() {
+                            "vertex" => entry_points.push((name.clone(), spirv::ExecutionModel::Vertex)),
+                            "fragment" => {
+                                entry_points.push((name.clone(), spirv::ExecutionModel::Fragment))
+                            }
+                            _ => {}
+                        }
+                    }
+                    name.clone()
+                }
+                Def::Constant { name, .. } => name.clone(),
+            };
+            def_index.insert(name, i);
+        }
 
-    for def in &program.defs {
-        if let Def::Function { name, attributes, .. } = def {
-            for attr in attributes {
-                match attr.name.as_str() {
-                    "vertex" => entry_points.push((name.clone(), spirv::ExecutionModel::Vertex)),
-                    "fragment" => entry_points.push((name.clone(), spirv::ExecutionModel::Fragment)),
-                    _ => {}
+        LowerCtx {
+            program,
+            def_index,
+            state: HashMap::new(),
+            spv,
+            entry_points,
+        }
+    }
+
+    /// Ensure a definition is lowered, recursively lowering dependencies first
+    fn ensure_lowered(&mut self, name: &str) -> Result<()> {
+        match self.state.get(name).copied().unwrap_or(LowerState::NotStarted) {
+            LowerState::Done => return Ok(()),
+            LowerState::InProgress => {
+                return Err(CompilerError::SpirvError(format!(
+                    "Recursive definition detected: {}",
+                    name
+                )));
+            }
+            LowerState::NotStarted => { /* proceed */ }
+        }
+
+        // Look up the definition
+        let def_idx = match self.def_index.get(name) {
+            Some(&idx) => idx,
+            None => return Ok(()), // Not a user def (might be a builtin)
+        };
+
+        self.state.insert(name.to_string(), LowerState::InProgress);
+
+        let def = &self.program.defs[def_idx];
+        self.lower_def(def)?;
+
+        self.state.insert(name.to_string(), LowerState::Done);
+        Ok(())
+    }
+
+    /// Lower a single definition
+    fn lower_def(&mut self, def: &Def) -> Result<()> {
+        match def {
+            Def::Function {
+                name,
+                params,
+                ret_type,
+                attributes,
+                param_attributes,
+                return_attributes,
+                body,
+                ..
+            } => {
+                // First, ensure all dependencies are lowered
+                self.ensure_deps_lowered(body)?;
+
+                // Check if this is an entry point
+                let is_entry = attributes.iter().any(|a| a.name == "vertex" || a.name == "fragment");
+
+                if is_entry {
+                    lower_entry_point(
+                        &mut self.spv,
+                        name,
+                        params,
+                        ret_type,
+                        param_attributes,
+                        return_attributes,
+                        body,
+                    )?;
+                } else {
+                    lower_regular_function(&mut self.spv, name, params, ret_type, body)?;
+                }
+            }
+            Def::Constant { name, ty, body, .. } => {
+                // First, ensure all dependencies are lowered
+                self.ensure_deps_lowered(body)?;
+
+                // Create global variable for constant (Private storage class)
+                let value_type = self.spv.ast_type_to_spirv(ty);
+                let ptr_type = self.spv.get_or_create_ptr_type(StorageClass::Private, value_type);
+                let var_id = self.spv.builder.variable(ptr_type, None, StorageClass::Private, None);
+
+                // Store for later initialization and lookup
+                self.spv.global_constants.insert(name.clone(), (var_id, value_type));
+                self.spv.pending_constant_inits.push((var_id, body.clone()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Walk an expression and ensure all referenced definitions are lowered
+    fn ensure_deps_lowered(&mut self, expr: &Expr) -> Result<()> {
+        match &expr.kind {
+            ExprKind::Var(name) => {
+                self.ensure_lowered(name)?;
+            }
+            ExprKind::Call { func, args } => {
+                self.ensure_lowered(func)?;
+                for arg in args {
+                    self.ensure_deps_lowered(arg)?;
+                }
+            }
+            ExprKind::BinOp { lhs, rhs, .. } => {
+                self.ensure_deps_lowered(lhs)?;
+                self.ensure_deps_lowered(rhs)?;
+            }
+            ExprKind::UnaryOp { operand, .. } => {
+                self.ensure_deps_lowered(operand)?;
+            }
+            ExprKind::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                self.ensure_deps_lowered(cond)?;
+                self.ensure_deps_lowered(then_branch)?;
+                self.ensure_deps_lowered(else_branch)?;
+            }
+            ExprKind::Let { value, body, .. } => {
+                self.ensure_deps_lowered(value)?;
+                self.ensure_deps_lowered(body)?;
+            }
+            ExprKind::Loop {
+                init_bindings, body, ..
+            } => {
+                for (_, init) in init_bindings {
+                    self.ensure_deps_lowered(init)?;
+                }
+                self.ensure_deps_lowered(body)?;
+            }
+            ExprKind::Intrinsic { args, .. } => {
+                for arg in args {
+                    self.ensure_deps_lowered(arg)?;
+                }
+            }
+            ExprKind::Attributed { expr, .. } => {
+                self.ensure_deps_lowered(expr)?;
+            }
+            ExprKind::Literal(_) => {}
+        }
+        Ok(())
+    }
+
+    /// Run the lowering, starting from entry points
+    fn run(mut self) -> Result<Vec<u32>> {
+        // Lower all entry points (and their dependencies)
+        let entry_names: Vec<String> = self.entry_points.iter().map(|(n, _)| n.clone()).collect();
+        for name in entry_names {
+            self.ensure_lowered(&name)?;
+        }
+
+        // Generate _init function to initialize global constants
+        if !self.spv.pending_constant_inits.is_empty() {
+            generate_init_function(&mut self.spv)?;
+        }
+
+        // Emit entry points with interface variables
+        for (name, model) in &self.entry_points {
+            if let Some(&func_id) = self.spv.functions.get(name) {
+                let interfaces = self.spv.entry_point_interfaces.get(name).cloned().unwrap_or_default();
+                self.spv.builder.entry_point(*model, func_id, name, interfaces);
+
+                // Add execution mode for fragment shaders
+                if *model == spirv::ExecutionModel::Fragment {
+                    self.spv.builder.execution_mode(func_id, spirv::ExecutionMode::OriginUpperLeft, []);
                 }
             }
         }
-        lower_def(&mut spv, def)?;
+
+        Ok(self.spv.assemble())
     }
-
-    // Generate _init function to initialize global constants
-    if !spv.pending_constant_inits.is_empty() {
-        generate_init_function(&mut spv)?;
-    }
-
-    // Emit entry points with interface variables
-    for (name, model) in entry_points {
-        if let Some(&func_id) = spv.functions.get(&name) {
-            let interfaces = spv.entry_point_interfaces.get(&name).cloned().unwrap_or_default();
-            spv.builder.entry_point(model, func_id, &name, interfaces);
-
-            // Add execution mode for fragment shaders
-            if model == spirv::ExecutionModel::Fragment {
-                spv.builder.execution_mode(func_id, spirv::ExecutionMode::OriginUpperLeft, []);
-            }
-        }
-    }
-
-    Ok(spv.assemble())
 }
 
-fn lower_def(spv: &mut SpvBuilder, def: &Def) -> Result<()> {
-    match def {
-        Def::Function {
-            name,
-            params,
-            ret_type,
-            attributes,
-            param_attributes,
-            return_attributes,
-            body,
-            ..
-        } => {
-            // Check if this is an entry point
-            let is_entry = attributes.iter().any(|a| a.name == "vertex" || a.name == "fragment");
-
-            if is_entry {
-                lower_entry_point(
-                    spv,
-                    name,
-                    params,
-                    ret_type,
-                    param_attributes,
-                    return_attributes,
-                    body,
-                )?;
-            } else {
-                lower_regular_function(spv, name, params, ret_type, body)?;
-            }
-        }
-        Def::Constant { name, ty, body, .. } => {
-            // Create global variable for constant (Private storage class)
-            let value_type = spv.ast_type_to_spirv(ty);
-            let ptr_type = spv.get_or_create_ptr_type(StorageClass::Private, value_type);
-            let var_id = spv.builder.variable(ptr_type, None, StorageClass::Private, None);
-
-            // Store for later initialization and lookup
-            spv.global_constants.insert(name.clone(), (var_id, value_type));
-            spv.pending_constant_inits.push((var_id, body.clone()));
-        }
-    }
-
-    Ok(())
+/// Lower a MIR program to SPIR-V
+pub fn lower(program: &mir::Program) -> Result<Vec<u32>> {
+    let ctx = LowerCtx::new(program);
+    ctx.run()
 }
 
 /// Generate _init function that initializes all global constants

@@ -76,7 +76,11 @@ fn collect_callees_rec(expr: &Expr, callees: &mut HashSet<String>) {
                 collect_callees_rec(arg, callees);
             }
         }
-        ExprKind::Var(_) | ExprKind::Literal(_) => {}
+        ExprKind::Var(name) => {
+            // Variable references might refer to top-level constants
+            callees.insert(name.clone());
+        }
+        ExprKind::Literal(_) => {}
         ExprKind::BinOp { lhs, rhs, .. } => {
             collect_callees_rec(lhs, callees);
             collect_callees_rec(rhs, callees);

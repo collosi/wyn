@@ -155,6 +155,20 @@ impl Monomorphizer {
         })
     }
 
+    /// Ensure a definition is in the worklist (for monomorphic callees and constants)
+    fn ensure_in_worklist(&mut self, name: &str, def: Def) {
+        if !self.processed.contains(name) {
+            // Check if it's already in the worklist
+            let already_queued = self.worklist.iter().any(|w| w.name == name);
+            if !already_queued {
+                self.worklist.push_back(WorkItem {
+                    name: name.to_string(),
+                    def,
+                });
+            }
+        }
+    }
+
     fn process_function(&mut self, def: Def) -> Result<Def> {
         match def {
             Def::Function {
@@ -218,7 +232,8 @@ impl Monomorphizer {
                             args,
                         }
                     } else {
-                        // Monomorphic call
+                        // Monomorphic call - ensure the callee is in the worklist
+                        self.ensure_in_worklist(&func, poly_def);
                         ExprKind::Call { func, args }
                     }
                 } else {
@@ -272,7 +287,14 @@ impl Monomorphizer {
                 expr: Box::new(self.process_expr(*expr)?),
             },
             // Leaf nodes - no recursion needed
-            ExprKind::Var(_) | ExprKind::Literal(_) => expr.kind,
+            ExprKind::Var(ref name) => {
+                // Variable reference might refer to a top-level constant
+                if let Some(def) = self.poly_functions.get(name).cloned() {
+                    self.ensure_in_worklist(name, def);
+                }
+                expr.kind
+            }
+            ExprKind::Literal(_) => expr.kind,
         };
 
         Ok(Expr {
