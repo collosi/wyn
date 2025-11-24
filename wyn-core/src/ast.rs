@@ -1,4 +1,3 @@
-use itertools::Itertools;
 pub use spirv;
 
 // Type aliases for polytype types specialized to our TypeName

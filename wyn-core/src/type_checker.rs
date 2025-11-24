@@ -1,6 +1,6 @@
 use crate::ast::TypeName;
 use crate::ast::*;
-use crate::builtin_registry::{BuiltinEntry, BuiltinImpl};
+use crate::builtin_registry::BuiltinRegistry;
 use crate::error::{CompilerError, Result};
 use crate::scope::ScopeStack;
 use log::debug;
@@ -52,6 +52,7 @@ pub struct TypeChecker {
     context: Context<TypeName>,                    // Polytype unification context
     record_field_map: HashMap<(String, String), Type>, // Map (type_name, field_name) -> field_type
     builtin_registry: crate::builtin_registry::BuiltinRegistry, // Centralized builtin registry
+    module_manager: crate::module_manager::ModuleManager, // Lazy module loading
     type_table: HashMap<crate::ast::NodeId, TypeScheme<TypeName>>, // Maps NodeId to type scheme
     warnings: Vec<TypeWarning>,                    // Collected warnings
     type_holes: Vec<(NodeId, Span)>,               // Track type hole locations for warning emission
@@ -237,6 +238,7 @@ impl TypeChecker {
             context,
             record_field_map: HashMap::new(),
             builtin_registry,
+            module_manager: crate::module_manager::ModuleManager::new(),
             type_table: HashMap::new(),
             warnings: Vec::new(),
             type_holes: Vec::new(),
@@ -246,6 +248,11 @@ impl TypeChecker {
     /// Get all warnings collected during type checking
     pub fn warnings(&self) -> &[TypeWarning] {
         &self.warnings
+    }
+
+    /// Get all loaded module declarations (for inlining during flattening)
+    pub fn get_loaded_module_declarations(&self) -> Vec<Declaration> {
+        self.module_manager.get_all_loaded_declarations()
     }
 
     /// Create a fresh type for a pattern based on its structure
@@ -1212,6 +1219,26 @@ impl TypeChecker {
                     } else {
                         Err(CompilerError::UndefinedVariable(name.clone(), expr.h.span))
                     }
+                } else if crate::module_manager::ModuleManager::is_qualified_name(name) {
+                    // Check for qualified module reference (e.g., "f32.sum")
+                    if let Some((module_name, _func_name)) = crate::module_manager::ModuleManager::split_qualified_name(name) {
+                        debug!("'{}' is a qualified name: module='{}', func='{}'", name, module_name, _func_name);
+                        // Load the module and type-check its declarations
+                        let module_program = self.module_manager.load_module(module_name)?;
+                        let declarations = module_program.declarations.clone();
+                        for decl in &declarations {
+                            self.check_declaration(decl)?;
+                        }
+
+                        // Now look up the fully qualified name in scope
+                        if let Ok(type_scheme) = self.scope_stack.lookup(name) {
+                            Ok(type_scheme.instantiate(&mut self.context))
+                        } else {
+                            Err(CompilerError::UndefinedVariable(name.clone(), expr.h.span))
+                        }
+                    } else {
+                        Err(CompilerError::UndefinedVariable(name.clone(), expr.h.span))
+                    }
                 } else {
                     // Not found anywhere
                     debug!("Variable lookup failed for '{}' - not in scope or builtins", name);
@@ -1457,7 +1484,7 @@ impl TypeChecker {
                         }
                     }
 
-                    // Qualified name not found as module or builtin - fall through to field access
+                    // Qualified name not found as builtin - fall through to field access
                 }
 
                 // Not a qualified name (or wasn't found), treat as normal field access
@@ -1664,9 +1691,36 @@ impl TypeChecker {
                 Ok(then_ty)
             }
 
-            // New expression kinds - to be implemented
-            ExprKind::QualifiedName(_, _) => {
-                todo!("QualifiedName not yet implemented in type checker")
+            ExprKind::QualifiedName(quals, name) => {
+                // Qualified name like f32.sum (module function) or f32.sqrt (builtin)
+                let full_name = if quals.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}.{}", quals.join("."), name)
+                };
+
+                debug!("Looking up qualified name '{}'", full_name);
+
+                // Check if it's a builtin first (e.g., f32.sqrt, f32.sin)
+                if let Some(entries) = self.builtin_registry.get_overloads(&full_name) {
+                    if entries.len() == 1 {
+                        // Single builtin entry - just instantiate it
+                        let entry = &entries[0];
+                        let ty = entry.scheme.instantiate(&mut self.context);
+                        self.type_table.insert(expr.h.id, polytype::TypeScheme::Monotype(ty.clone()));
+                        return Ok(ty);
+                    }
+                    // If multiple entries, fall through - shouldn't happen for qualified names in practice
+                }
+
+                // Look up in scope stack (for module functions like f32.sum)
+                if let Ok(type_scheme) = self.scope_stack.lookup(&full_name) {
+                    debug!("Found '{}' in scope stack with type: {:?}", full_name, type_scheme);
+                    Ok(type_scheme.instantiate(&mut self.context))
+                } else {
+                    debug!("Qualified name '{}' not found in scope or builtins", full_name);
+                    Err(CompilerError::UndefinedVariable(full_name, expr.h.span))
+                }
             }
 
             ExprKind::UnaryOp(op, operand) => {

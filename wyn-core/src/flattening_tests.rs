@@ -21,7 +21,11 @@ fn flatten_program(input: &str) -> mir::Program {
 fn flatten_with_types(input: &str) -> mir::Program {
     let tokens = tokenize(input).expect("Tokenization failed");
     let mut parser = Parser::new(tokens);
-    let ast = parser.parse().expect("Parsing failed");
+    let mut ast = parser.parse().expect("Parsing failed");
+
+    // Name resolution
+    let mut name_resolver = crate::name_resolution::NameResolver::new();
+    name_resolver.resolve_program(&mut ast).expect("Name resolution failed");
 
     let mut type_checker = TypeChecker::new();
     type_checker.load_builtins().expect("Failed to load builtins");
@@ -321,4 +325,39 @@ def test (v:vec3f32) : vec4f32 =
     assert!(mir_str.contains("vec4"));
     // vec4 should NOT be accessed through closure
     assert!(!mir_str.contains("__closure.vec4"));
+}
+
+#[test]
+fn test_f32_sum_inline_definition() {
+    // Test sum with inline definition (simpler than using prelude)
+    let mir = flatten_with_types(
+        r#"
+def mysum [n] (arr:[n]f32) : f32 =
+  let (result, _) = loop (acc, i) = (0.0f32, 0) while i < length arr do
+    (acc + arr[i], i + 1)
+  in result
+
+def test : f32 =
+  let arr = [1.0f32, 2.0f32, 3.0f32] in
+  mysum arr
+"#,
+    );
+    let mir_str = format!("{}", mir);
+    println!("MIR output:\n{}", mir_str);
+    assert!(mir_str.contains("mysum"));
+}
+
+#[test]
+fn test_f32_sum_simple() {
+    // Test that f32.sum from prelude works through full compilation
+    let source = r#"
+def test : f32 =
+  let arr = [1.0f32, 2.0f32, 3.0f32] in
+  f32.sum arr
+"#;
+
+    // This should compile successfully
+    let compiler = crate::Compiler::new();
+    let result = compiler.compile(source);
+    assert!(result.is_ok(), "Compilation failed: {:?}", result.err());
 }

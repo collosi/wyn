@@ -574,15 +574,7 @@ impl Flattener {
                         ));
                     }
 
-                    // Check if identifier has a type (i.e., it's a variable)
-                    // If not, it's a qualified name like f32.sqrt
-                    if self.type_table.get(&obj_expr.h.id).is_none() {
-                        let full_name = format!("{}.{}", name, field);
-                        return Ok((
-                            Expr::new(ty, mir::ExprKind::Var(full_name), span),
-                            StaticValue::Dyn,
-                        ));
-                    }
+                    // FieldAccess on identifier - this is a real record field access
                 }
 
                 let (obj, _) = self.flatten_expr(obj_expr)?;
@@ -1002,22 +994,23 @@ impl Flattener {
                     ))
                 }
             }
-            // Handle qualified names like f32.sqrt
-            ExprKind::FieldAccess(obj, field) => {
-                if let ExprKind::Identifier(module) = &obj.kind {
-                    // Check if this is a qualified name (no type in type_table means it's a type/module name)
-                    if self.type_table.get(&obj.h.id).is_none() {
-                        let full_name = format!("{}.{}", module, field);
-                        return Ok((
-                            mir::ExprKind::Call {
-                                func: full_name,
-                                args: args_flat,
-                            },
-                            StaticValue::Dyn,
-                        ));
-                    }
-                }
-                // Not a qualified name, fall through to closure handling
+            // Handle qualified names like f32.sum (these come from name resolution)
+            ExprKind::QualifiedName(quals, name) => {
+                let full_name = if quals.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}.{}", quals.join("."), name)
+                };
+                Ok((
+                    mir::ExprKind::Call {
+                        func: full_name,
+                        args: args_flat,
+                    },
+                    StaticValue::Dyn,
+                ))
+            }
+            // FieldAccess in application position - must be a closure
+            ExprKind::FieldAccess(_, _) => {
                 if let StaticValue::Closure { lam_name, .. } = func_sv {
                     let mut all_args = vec![func_flat];
                     all_args.extend(args_flat);

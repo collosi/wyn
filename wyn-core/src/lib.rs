@@ -7,6 +7,8 @@ pub mod flattening;
 pub mod inference;
 pub mod lexer;
 pub mod mir;
+pub mod module_manager;
+pub mod name_resolution;
 pub mod parser;
 pub mod pattern;
 pub mod scope;
@@ -54,8 +56,12 @@ impl Compiler {
 
         // Parse
         let mut parser = parser::Parser::new(tokens);
-        let program = parser.parse()?;
+        let mut program = parser.parse()?;
         let _node_counter = parser.take_node_counter();
+
+        // Name Resolution: rewrite FieldAccess -> QualifiedName and load modules
+        let mut name_resolver = name_resolution::NameResolver::new();
+        name_resolver.resolve_program(&mut program)?;
 
         // Type check
         let mut type_checker = type_checker::TypeChecker::new();
@@ -81,6 +87,10 @@ impl Compiler {
         // Parse
         let mut parser = parser::Parser::new(tokens);
         let mut program = parser.parse()?;
+
+        // Name Resolution: rewrite FieldAccess -> QualifiedName and load modules
+        let mut name_resolver = name_resolution::NameResolver::new();
+        name_resolver.resolve_program(&mut program)?;
 
         // Type check
         let mut type_checker = type_checker::TypeChecker::new();

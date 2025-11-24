@@ -18,7 +18,11 @@ fn typecheck_program(input: &str) {
 fn try_typecheck_program(input: &str) -> Result<TypeChecker, CompilerError> {
     let tokens = tokenize(input).expect("Tokenization failed");
     let mut parser = Parser::new(tokens);
-    let program = parser.parse().expect("Parsing failed");
+    let mut program = parser.parse().expect("Parsing failed");
+
+    // Name resolution
+    let mut name_resolver = crate::name_resolution::NameResolver::new();
+    name_resolver.resolve_program(&mut program).expect("Name resolution failed");
 
     let mut type_checker = TypeChecker::new();
     type_checker.load_builtins().expect("Loading builtins failed");
@@ -337,6 +341,16 @@ def test : [5]i32 =
   let arr = [1, 2, 3, 4, 5] in
   identity arr
 "#,
+    );
+}
+
+#[test]
+fn test_f32_sum_simple() {
+    // Test simple f32.sum call with array literal
+    typecheck_program(
+        r#"
+def test : f32 = f32.sum [1.0f32, 2.0f32, 3.0f32]
+    "#,
     );
 }
 

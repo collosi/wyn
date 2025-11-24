@@ -1256,6 +1256,37 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                         // Just return it with the matrix type
                                         Ok(arg_ids[0])
                                     }
+                                    Intrinsic::Placeholder if func == "length" => {
+                                        // Array length: extract size from array type
+                                        // The array type is [n]T, we need to return n as a constant
+                                        if args.len() != 1 {
+                                            return Err(CompilerError::SpirvError(
+                                                "length expects exactly 1 argument".to_string(),
+                                            ));
+                                        }
+                                        // Get the array type
+                                        if let PolyType::Constructed(TypeName::Array, type_args) = &args[0].ty {
+                                            // Try to extract the size - it could be TypeName::Size(n) or a variable
+                                            match type_args.get(0) {
+                                                Some(PolyType::Constructed(TypeName::Size(n), _)) => {
+                                                    // Return the size as a constant i32
+                                                    Ok(spv.const_i32(*n as i32))
+                                                }
+                                                _ => {
+                                                    // Size is a variable or unknown - this shouldn't happen in well-typed code
+                                                    Err(CompilerError::SpirvError(format!(
+                                                        "Cannot determine compile-time array size for length: {:?}",
+                                                        type_args.get(0)
+                                                    )))
+                                                }
+                                            }
+                                        } else {
+                                            Err(CompilerError::SpirvError(format!(
+                                                "length called on non-array type: {:?}",
+                                                args[0].ty
+                                            )))
+                                        }
+                                    }
                                     _ => {
                                         // TODO: Handle other intrinsic implementations
                                         Err(CompilerError::SpirvError(format!(

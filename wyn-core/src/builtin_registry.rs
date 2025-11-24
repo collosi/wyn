@@ -723,16 +723,9 @@ impl BuiltinRegistry {
     }
 
     /// Register higher-order functions and array operations
-    fn register_higher_order_functions(&mut self, ctx: &mut impl TypeVarGenerator) {
-        // f32.sum: [n]f32 -> f32 (sum of array elements)
-        let size_var = ctx.new_variable();
-        let arr_t = Type::Constructed(TypeName::Array, vec![size_var, Self::ty("f32")]);
-        self.register_poly(
-            "f32.sum",
-            vec![arr_t],
-            Self::ty("f32"),
-            BuiltinImpl::Intrinsic(Intrinsic::Placeholder),
-        );
+    fn register_higher_order_functions(&mut self, _ctx: &mut impl TypeVarGenerator) {
+        // f32.sum is now implemented in the prelude (prelude/f32.wyn)
+        // No need to register it here
 
         // TODO: map and zip are registered manually in TypeChecker::load_builtins
         // because they involve function types which need more careful handling
