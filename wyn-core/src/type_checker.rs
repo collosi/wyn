@@ -407,6 +407,7 @@ impl TypeChecker {
     fn resolve_overloaded_application(
         &mut self,
         expr: &Expression,
+        func: &Expression,
         func_name: &str,
         overloads: &[crate::builtin_registry::BuiltinEntry],
         args: &[Expression],
@@ -418,7 +419,7 @@ impl TypeChecker {
         }
 
         // Try each overload
-        let mut successful: Option<(usize, Type)> = None;
+        let mut successful: Option<(usize, Type, Type)> = None;
 
         for (i, entry) in overloads.iter().enumerate() {
             // Save the current unification context by cloning
@@ -445,7 +446,7 @@ impl TypeChecker {
                             expr.h.span,
                         ));
                     }
-                    successful = Some((i, return_type));
+                    successful = Some((i, func_type, return_type));
                     // Don't restore context - keep the successful unifications
                 }
                 Err(_e) => {
@@ -456,8 +457,13 @@ impl TypeChecker {
         }
 
         match successful {
-            Some((_overload_index, return_type)) => {
-                // TODO: Store overload_index for desugaring phase
+            Some((_overload_index, resolved_func_type, return_type)) => {
+                // Apply context to resolve any remaining type variables
+                let resolved_func_type = resolved_func_type.apply(&self.context);
+                let return_type = return_type.apply(&self.context);
+                // Store the type for the function identifier expression
+                self.type_table.insert(func.h.id, TypeScheme::Monotype(resolved_func_type));
+                // Store the type for the application expression
                 self.type_table.insert(expr.h.id, TypeScheme::Monotype(return_type.clone()));
                 Ok(return_type)
             }
@@ -1475,7 +1481,7 @@ impl TypeChecker {
                                 let overloads_vec = overloads.to_vec();
                                 let name_owned = name.clone();
                                 // Overloaded builtin - perform overload resolution
-                                return self.resolve_overloaded_application(expr, &name_owned, &overloads_vec, args);
+                                return self.resolve_overloaded_application(expr, func, &name_owned, &overloads_vec, args);
                             }
                         }
                     }
