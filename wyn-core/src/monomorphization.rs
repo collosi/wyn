@@ -83,10 +83,8 @@ impl TypeKey {
                 match name {
                     TypeName::Size(n) => return TypeKey::Size(*n),
                     TypeName::Record(fields) => {
-                        let mut key_fields: Vec<_> = fields
-                            .iter()
-                            .map(|(k, v)| (k.clone(), TypeKey::from_type(v)))
-                            .collect();
+                        let mut key_fields: Vec<_> =
+                            fields.iter().map(|(k, v)| (k.clone(), TypeKey::from_type(v))).collect();
                         key_fields.sort_by(|a, b| a.0.cmp(&b.0));
                         return TypeKey::Record(key_fields);
                     }
@@ -346,7 +344,9 @@ impl Monomorphizer {
 
         // Get parameter types and function name from the definition
         let (param_types, func_name) = match poly_def {
-            Def::Function { params, name, .. } => (params.iter().map(|p| &p.ty).collect::<Vec<_>>(), name.as_str()),
+            Def::Function { params, name, .. } => {
+                (params.iter().map(|p| &p.ty).collect::<Vec<_>>(), name.as_str())
+            }
             Def::Constant { .. } => return Ok(subst), // No parameters
         };
 
@@ -513,15 +513,18 @@ fn apply_subst(ty: &Type, subst: &Substitution) -> Type {
             // Also apply substitution to types nested inside TypeName
             let new_name = match name {
                 TypeName::Record(fields) => {
-                    let new_fields = fields.iter()
-                        .map(|(k, v)| (k.clone(), apply_subst(v, subst)))
-                        .collect();
+                    let new_fields =
+                        fields.iter().map(|(k, v)| (k.clone(), apply_subst(v, subst))).collect();
                     TypeName::Record(new_fields)
                 }
                 TypeName::Sum(variants) => {
-                    let new_variants = variants.iter()
+                    let new_variants = variants
+                        .iter()
                         .map(|(name, types)| {
-                            (name.clone(), types.iter().map(|t| apply_subst(t, subst)).collect())
+                            (
+                                name.clone(),
+                                types.iter().map(|t| apply_subst(t, subst)).collect(),
+                            )
                         })
                         .collect();
                     TypeName::Sum(new_variants)

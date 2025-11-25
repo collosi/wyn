@@ -748,11 +748,21 @@ impl Parser {
                 Ok(Type::Constructed(TypeName::UserVar(type_var), vec![]))
             }
             Some(Token::Identifier(name)) if name.chars().next().unwrap().is_lowercase() => {
-                // User-defined type alias (e.g., 't' from 'type t = i32')
-                // Grammar says: type ::= qualname, where qualname includes lowercase names
                 let type_name = name.clone();
                 self.advance();
-                Ok(Type::Constructed(TypeName::Named(type_name), vec![]))
+
+                // Check if this is a builtin primitive type
+                match type_name.as_str() {
+                    "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f16" | "f32" | "f64"
+                    | "bool" => Ok(Type::Constructed(
+                        TypeName::Str(Box::leak(type_name.into_boxed_str())),
+                        vec![],
+                    )),
+                    _ => {
+                        // User-defined type alias (e.g., 't' from 'type t = i32')
+                        Ok(Type::Constructed(TypeName::Named(type_name), vec![]))
+                    }
+                }
             }
             Some(Token::LeftParen) => {
                 // Tuple type (T1, T2, T3) or empty tuple ()

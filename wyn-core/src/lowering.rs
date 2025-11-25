@@ -161,16 +161,25 @@ impl SpvBuilder {
     fn ast_type_to_spirv(&mut self, ty: &PolyType<TypeName>) -> spirv::Word {
         match ty {
             PolyType::Variable(id) => {
-                panic!("BUG: Unresolved type variable Variable({}) reached lowering. All type variables should be resolved by monomorphization.", id);
+                panic!(
+                    "BUG: Unresolved type variable Variable({}) reached lowering. All type variables should be resolved by monomorphization.",
+                    id
+                );
             }
             PolyType::Constructed(name, args) => {
                 // Assert that no UserVar or SizeVar reaches lowering
                 match name {
                     TypeName::UserVar(v) => {
-                        panic!("BUG: UserVar('{}') reached lowering. All user type variables should be resolved during type checking.", v);
+                        panic!(
+                            "BUG: UserVar('{}') reached lowering. All user type variables should be resolved during type checking.",
+                            v
+                        );
                     }
                     TypeName::SizeVar(v) => {
-                        panic!("BUG: SizeVar('{}') reached lowering. All size variables should be resolved during type checking.", v);
+                        panic!(
+                            "BUG: SizeVar('{}') reached lowering. All size variables should be resolved during type checking.",
+                            v
+                        );
                     }
                     _ => {}
                 }
