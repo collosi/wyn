@@ -18,12 +18,7 @@ fn compile_through_lowering(input: &str) -> Result<(), CompilerError> {
 
 /// Helper to run full pipeline through monomorphization only
 fn compile_through_monomorphization(input: &str) -> Result<(), CompilerError> {
-    crate::Compiler::parse(input)?
-        .elaborate()?
-        .resolve()?
-        .type_check()?
-        .flatten()?
-        .monomorphize()?;
+    crate::Compiler::parse(input)?.elaborate()?.resolve()?.type_check()?.flatten()?.monomorphize()?;
     Ok(())
 }
 

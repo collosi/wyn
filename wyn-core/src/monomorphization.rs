@@ -636,20 +636,15 @@ fn apply_subst_expr(expr: Expr, subst: &Substitution) -> Expr {
         ExprKind::Literal(lit) => {
             // Recursively apply substitution to subexpressions in literals
             let new_lit = match lit {
-                crate::mir::Literal::Tuple(exprs) => {
-                    crate::mir::Literal::Tuple(exprs.into_iter().map(|e| apply_subst_expr(e, subst)).collect())
-                }
-                crate::mir::Literal::Array(exprs) => {
-                    crate::mir::Literal::Array(exprs.into_iter().map(|e| apply_subst_expr(e, subst)).collect())
-                }
-                crate::mir::Literal::Record(fields) => {
-                    crate::mir::Literal::Record(
-                        fields
-                            .into_iter()
-                            .map(|(k, v)| (k, apply_subst_expr(v, subst)))
-                            .collect(),
-                    )
-                }
+                crate::mir::Literal::Tuple(exprs) => crate::mir::Literal::Tuple(
+                    exprs.into_iter().map(|e| apply_subst_expr(e, subst)).collect(),
+                ),
+                crate::mir::Literal::Array(exprs) => crate::mir::Literal::Array(
+                    exprs.into_iter().map(|e| apply_subst_expr(e, subst)).collect(),
+                ),
+                crate::mir::Literal::Record(fields) => crate::mir::Literal::Record(
+                    fields.into_iter().map(|(k, v)| (k, apply_subst_expr(v, subst))).collect(),
+                ),
                 other => other, // Int, Float, Bool, String have no subexpressions
             };
             ExprKind::Literal(new_lit)
