@@ -10,8 +10,8 @@ use crate::error::{CompilerError, Result};
 use crate::mir::{self, Def, Expr, ExprKind, Literal, LoopKind, Program};
 use polytype::Type as PolyType;
 use rspirv::binary::Assemble;
-use rspirv::dr::{Builder, InsertPoint};
 use rspirv::dr::Operand;
+use rspirv::dr::{Builder, InsertPoint};
 use rspirv::spirv::{self, AddressingModel, Capability, MemoryModel, StorageClass};
 use std::collections::HashMap;
 
@@ -194,39 +194,94 @@ impl SpvBuilder {
                             args.iter().map(|a| self.ast_type_to_spirv(a)).collect();
                         self.get_or_create_struct_type(field_types)
                     }
-                    TypeName::Vec => {
-                        // Vector type: args[0] is size, args[1] is element type
-                        if args.len() >= 2 {
-                            // Extract size from args[0]
-                            let size = match &args[0] {
-                                PolyType::Constructed(TypeName::Size(n), _) => *n as u32,
-                                PolyType::Constructed(TypeName::Str(s), _) => s.parse().unwrap_or(4),
-                                _ => 4,
-                            };
-                            // Get element type from args[1]
-                            let elem_type = self.ast_type_to_spirv(&args[1]);
-                            self.get_or_create_vec_type(elem_type, size)
-                        } else {
-                            // Default to vec4f32
-                            self.get_or_create_vec_type(self.f32_type, 4)
+                    TypeName::Array => {
+                        // Array type: args[0] is size, args[1] is element type
+                        if args.len() < 2 {
+                            panic!(
+                                "BUG: Array type requires 2 arguments (size, element_type), got {}. This should have been caught during type checking.",
+                                args.len()
+                            );
                         }
-                    }
-                    TypeName::Str(s) if s.starts_with("vec") => {
-                        // vec2f32, vec3f32, vec4f32, vec2i32, etc.
-                        let size = s.chars().nth(3).and_then(|c| c.to_digit(10)).unwrap_or(4) as u32;
-                        let elem_type = if s.contains("f32") || s.ends_with("f32") {
-                            self.f32_type
-                        } else if s.contains("i32") || s.ends_with("i32") {
-                            self.i32_type
-                        } else {
-                            self.f32_type // Default to float
+                        // Extract size from args[0]
+                        let size = match &args[0] {
+                            PolyType::Constructed(TypeName::Size(n), _) => *n as u32,
+                            _ => {
+                                panic!(
+                                    "BUG: Array type has invalid size argument: {:?}. This should have been resolved during type checking.",
+                                    args[0]
+                                );
+                            }
                         };
+                        // Get element type from args[1]
+                        let elem_type = self.ast_type_to_spirv(&args[1]);
+                        let size_const = self.const_i32(size as i32);
+                        self.builder.type_array(elem_type, size_const)
+                    }
+                    TypeName::Vec => {
+                        // Vec type with args: args[0] is size, args[1] is element type
+                        if args.len() < 2 {
+                            panic!(
+                                "BUG: Vec type requires 2 arguments (size, element_type), got {}. This should have been caught during type checking.",
+                                args.len()
+                            );
+                        }
+                        let size = match &args[0] {
+                            PolyType::Constructed(TypeName::Size(n), _) => *n as u32,
+                            _ => {
+                                panic!(
+                                    "BUG: Vec type has invalid size argument: {:?}. This should have been resolved during type checking.",
+                                    args[0]
+                                );
+                            }
+                        };
+                        let elem_type = self.ast_type_to_spirv(&args[1]);
                         self.get_or_create_vec_type(elem_type, size)
+                    }
+                    TypeName::Mat => {
+                        // Mat type with args: args[0] is cols, args[1] is rows, args[2] is element type
+                        if args.len() < 3 {
+                            panic!(
+                                "BUG: Mat type requires 3 arguments (cols, rows, element_type), got {}. This should have been caught during type checking.",
+                                args.len()
+                            );
+                        }
+                        let cols = match &args[0] {
+                            PolyType::Constructed(TypeName::Size(n), _) => *n as u32,
+                            _ => {
+                                panic!(
+                                    "BUG: Mat type has invalid cols argument: {:?}. This should have been resolved during type checking.",
+                                    args[0]
+                                );
+                            }
+                        };
+                        let rows = match &args[1] {
+                            PolyType::Constructed(TypeName::Size(n), _) => *n as u32,
+                            _ => {
+                                panic!(
+                                    "BUG: Mat type has invalid rows argument: {:?}. This should have been resolved during type checking.",
+                                    args[1]
+                                );
+                            }
+                        };
+                        let elem_type = self.ast_type_to_spirv(&args[2]);
+                        let col_vec_type = self.get_or_create_vec_type(elem_type, rows);
+                        let cols_const = self.const_i32(cols as i32);
+                        self.builder.type_array(col_vec_type, cols_const)
+                    }
+                    TypeName::Record(fields) => {
+                        // Record becomes a struct, filtering out phantom fields like __lambda_name
+                        let real_fields: Vec<_> =
+                            fields.iter().filter(|(name, _)| name.as_str() != "__lambda_name").collect();
+                        let field_types: Vec<spirv::Word> =
+                            real_fields.iter().map(|(_, ty)| self.ast_type_to_spirv(ty)).collect();
+                        self.get_or_create_struct_type(field_types)
                     }
                     TypeName::Str(s) if *s == "unknown" => self.i32_type,
                     _ => {
-                        // Fallback - try to recognize common patterns
-                        self.i32_type
+                        panic!(
+                            "BUG: Unknown type reached lowering: {:?}. This should have been caught during type checking.",
+                            name
+                        )
                     }
                 }
             }
@@ -261,7 +316,9 @@ impl SpvBuilder {
 
     /// Get the type of a value
     fn get_value_type(&self, value: spirv::Word) -> spirv::Word {
-        *self.value_types.get(&value).unwrap_or(&self.i32_type)
+        *self.value_types.get(&value).unwrap_or_else(|| {
+            panic!("BUG: Attempted to get type of SPIR-V value %{} but it has no registered type. All values should have their types tracked.", value)
+        })
     }
 
     /// Begin a new function
@@ -1230,7 +1287,8 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                 let mut values = Vec::new();
                 for i in 0..phi_info.len() {
                     let comp_type = phi_info[i].3; // var_type
-                    let extracted = spv.builder.composite_extract(comp_type, None, body_result, [i as u32])?;
+                    let extracted =
+                        spv.builder.composite_extract(comp_type, None, body_result, [i as u32])?;
                     values.push(extracted);
                 }
                 values
@@ -1249,12 +1307,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                     (*init_val, pre_header_block),
                     (continue_values[i], continue_block_id),
                 ];
-                spv.builder.insert_phi(
-                    InsertPoint::Begin,
-                    *var_type,
-                    Some(*phi_id),
-                    incoming,
-                )?;
+                spv.builder.insert_phi(InsertPoint::Begin, *var_type, Some(*phi_id), incoming)?;
             }
 
             // Deselect block before continuing
@@ -1282,85 +1335,82 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
 
             // Special case for map - extract lambda name from closure before lowering
             if func == "map" {
-                    // map closure array -> array
-                    // args[0] is closure record {__lambda_name: "...", __tag: N, captures...}
-                    // args[1] is input array
-                    if args.len() != 2 {
-                        return Err(CompilerError::SpirvError(format!(
-                            "map requires 2 args (closure, array), got {}",
-                            args.len()
-                        )));
+                // map closure array -> array
+                // args[0] is closure record {__lambda_name: "...", __tag: N, captures...}
+                // args[1] is input array
+                if args.len() != 2 {
+                    return Err(CompilerError::SpirvError(format!(
+                        "map requires 2 args (closure, array), got {}",
+                        args.len()
+                    )));
+                }
+
+                // Extract lambda name from closure record's __lambda_name field
+                let lambda_name = match &args[0].kind {
+                    ExprKind::Literal(mir::Literal::Record(fields)) => {
+                        // Find __lambda_name field
+                        fields
+                            .iter()
+                            .find(|(name, _)| name == "__lambda_name")
+                            .and_then(|(_, expr)| match &expr.kind {
+                                ExprKind::Literal(mir::Literal::String(s)) => Some(s.clone()),
+                                _ => None,
+                            })
+                            .ok_or_else(|| {
+                                CompilerError::SpirvError(
+                                    "Closure record missing __lambda_name field".to_string(),
+                                )
+                            })?
                     }
-
-                    // Extract lambda name from closure record's __lambda_name field
-                    let lambda_name = match &args[0].kind {
-                        ExprKind::Literal(mir::Literal::Record(fields)) => {
-                            // Find __lambda_name field
-                            fields.iter()
-                                .find(|(name, _)| name == "__lambda_name")
-                                .and_then(|(_, expr)| match &expr.kind {
-                                    ExprKind::Literal(mir::Literal::String(s)) => Some(s.clone()),
-                                    _ => None,
-                                })
-                                .ok_or_else(|| CompilerError::SpirvError(
-                                    "Closure record missing __lambda_name field".to_string()
-                                ))?
-                        }
-                        _ => {
-                            return Err(CompilerError::SpirvError(
-                                "map closure argument must be a record literal".to_string()
-                            ));
-                        }
-                    };
-
-                    // Now lower both args normally
-                    let closure_val = lower_expr(spv, &args[0])?;
-                    let array_val = lower_expr(spv, &args[1])?;
-
-                    // Get array info from MIR types
-                    let (array_size, elem_mir_type) = match &expr.ty {
-                        PolyType::Constructed(TypeName::Array, type_args) if type_args.len() == 2 => {
-                            let size = match &type_args[0] {
-                                PolyType::Constructed(TypeName::Size(n), _) => *n as u32,
-                                _ => {
-                                    return Err(CompilerError::SpirvError(
-                                        "Invalid array size type".to_string(),
-                                    ));
-                                }
-                            };
-                            (size, &type_args[1])
-                        }
-                        _ => {
-                            return Err(CompilerError::SpirvError(
-                                "map result must be array type".to_string(),
-                            ));
-                        }
-                    };
-
-                    let elem_type = spv.ast_type_to_spirv(elem_mir_type);
-
-                    // Look up the lambda function by name
-                    let lambda_func_id = *spv.functions.get(&lambda_name).ok_or_else(|| {
-                        CompilerError::SpirvError(format!(
-                            "Lambda function not found: {}",
-                            lambda_name
-                        ))
-                    })?;
-
-                    // Build result array by calling lambda for each element
-                    let mut result_elements = Vec::new();
-                    for i in 0..array_size {
-                        // Extract element from input array
-                        let input_elem = spv.builder.composite_extract(elem_type, None, array_val, [i])?;
-
-                        // Call lambda with closure and element
-                        let result_elem = spv.function_call(
-                            elem_type,
-                            lambda_func_id,
-                            vec![closure_val, input_elem],
-                        )?;
-                        result_elements.push(result_elem);
+                    _ => {
+                        return Err(CompilerError::SpirvError(
+                            "map closure argument must be a record literal".to_string(),
+                        ));
                     }
+                };
+
+                // Now lower both args normally
+                let closure_val = lower_expr(spv, &args[0])?;
+                let array_val = lower_expr(spv, &args[1])?;
+
+                // Get array info from MIR types
+                let (array_size, elem_mir_type) = match &expr.ty {
+                    PolyType::Constructed(TypeName::Array, type_args) if type_args.len() == 2 => {
+                        let size = match &type_args[0] {
+                            PolyType::Constructed(TypeName::Size(n), _) => *n as u32,
+                            _ => {
+                                return Err(CompilerError::SpirvError(
+                                    "Invalid array size type".to_string(),
+                                ));
+                            }
+                        };
+                        (size, &type_args[1])
+                    }
+                    _ => {
+                        return Err(CompilerError::SpirvError(
+                            "map result must be array type".to_string(),
+                        ));
+                    }
+                };
+
+                let elem_type = spv.ast_type_to_spirv(elem_mir_type);
+
+                // Look up the lambda function by name
+                let lambda_func_id = *spv.functions.get(&lambda_name).ok_or_else(|| {
+                    CompilerError::SpirvError(format!("Lambda function not found: {}", lambda_name))
+                })?;
+
+                // Build result array by calling lambda for each element
+                let mut result_elements = Vec::new();
+                for i in 0..array_size {
+                    // Extract element from input array
+                    let input_elem = spv.builder.composite_extract(elem_type, None, array_val, [i])?;
+
+                    // Call lambda with closure and element
+                    let result_elem =
+                        spv.function_call(elem_type, lambda_func_id, vec![closure_val, input_elem])?;
+                    result_elements.push(result_elem);
+                }
 
                 // Construct result array
                 return spv.composite_construct(result_type, result_elements);
@@ -1612,8 +1662,14 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                     let composite_id = lower_expr(spv, &args[0])?;
                     // Second arg should be a constant index - extract it from the literal
                     let index = match &args[1].kind {
-                        ExprKind::Literal(Literal::Int(s)) => s.parse::<u32>().unwrap_or(0),
-                        _ => 0,
+                        ExprKind::Literal(Literal::Int(s)) => {
+                            s.parse::<u32>().unwrap_or_else(|e| {
+                                panic!("BUG: tuple_access index '{}' failed to parse as u32: {}. Type checking should ensure valid indices.", s, e)
+                            })
+                        }
+                        _ => {
+                            panic!("BUG: tuple_access requires a constant integer literal as second argument, got {:?}. Type checking should ensure this.", args[1].kind)
+                        }
                     };
                     spv.composite_extract(result_type, composite_id, index)
                 }
@@ -1663,15 +1719,18 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                     let index = match record_type {
                         PolyType::Constructed(TypeName::Record(fields), _) => {
                             // Filter out phantom fields and find the index
-                            let real_fields: Vec<_> = fields.keys()
-                                .filter(|name| name.as_str() != "__lambda_name")
-                                .collect();
-                            real_fields.iter()
+                            let real_fields: Vec<_> =
+                                fields.keys().filter(|name| name.as_str() != "__lambda_name").collect();
+                            real_fields
+                                .iter()
                                 .enumerate()
                                 .find(|(_, name)| name.as_str() == field_name)
                                 .map(|(idx, _)| idx as u32)
                                 .ok_or_else(|| {
-                                    CompilerError::SpirvError(format!("Unknown record field: {}", field_name))
+                                    CompilerError::SpirvError(format!(
+                                        "Unknown record field: {}",
+                                        field_name
+                                    ))
                                 })?
                         }
                         _ => {
@@ -1734,8 +1793,12 @@ fn lower_literal(spv: &mut SpvBuilder, lit: &Literal) -> Result<spirv::Word> {
             let elem_ids: Vec<spirv::Word> =
                 elems.iter().map(|e| lower_expr(spv, e)).collect::<Result<Vec<_>>>()?;
 
-            // Get element type from first element (or i32 as fallback)
-            let elem_type = elems.first().map(|e| spv.ast_type_to_spirv(&e.ty)).unwrap_or(spv.i32_type);
+            // Get element type from first element
+            let elem_type = elems.first()
+                .map(|e| spv.ast_type_to_spirv(&e.ty))
+                .unwrap_or_else(|| {
+                    panic!("BUG: Empty array literal reached lowering. Type checking should require explicit type annotation for empty arrays or reject them entirely.")
+                });
 
             // Create array type
             let array_type = spv.type_array(elem_type, elem_ids.len() as u32);
@@ -1745,9 +1808,7 @@ fn lower_literal(spv: &mut SpvBuilder, lit: &Literal) -> Result<spirv::Word> {
         }
         Literal::Record(fields) => {
             // Filter out phantom fields that only exist for compile-time dispatch
-            let real_fields: Vec<_> = fields.iter()
-                .filter(|(name, _)| name != "__lambda_name")
-                .collect();
+            let real_fields: Vec<_> = fields.iter().filter(|(name, _)| name != "__lambda_name").collect();
 
             // Records are represented as structs with fields in order
             let field_ids: Vec<spirv::Word> =
@@ -1773,29 +1834,18 @@ mod tests {
     use crate::type_checker::TypeChecker;
 
     fn compile_to_spirv(source: &str) -> Result<Vec<u32>> {
-        let tokens = tokenize(source).expect("Tokenization failed");
-        let mut parser = Parser::new(tokens);
-        let ast = parser.parse().expect("Parsing failed");
-
-        let mut flattener =
-            Flattener::new(std::collections::HashMap::new(), std::collections::HashSet::new());
-        let mir = flattener.flatten_program(&ast)?;
-
-        lower(&mir)
-    }
-
-    fn compile_to_spirv_with_types(source: &str) -> Result<Vec<u32>> {
-        let tokens = tokenize(source).expect("Tokenization failed");
-        let mut parser = Parser::new(tokens);
-        let ast = parser.parse().expect("Parsing failed");
-
-        let mut type_checker = TypeChecker::new();
-        type_checker.load_builtins().expect("Failed to load builtins");
-        let type_table = type_checker.check_program(&ast).expect("Type checking failed");
-
-        let builtins = crate::builtin_registry::BuiltinRegistry::default().all_names();
-        let mut flattener = Flattener::new(type_table, builtins);
-        let mir = flattener.flatten_program(&ast)?;
+        // Use the typestate API to ensure proper compilation pipeline
+        let mir = crate::Compiler::parse(source)
+            .expect("Parsing failed")
+            .elaborate()
+            .expect("Elaboration failed")
+            .resolve()
+            .expect("Name resolution failed")
+            .type_check()
+            .expect("Type checking failed")
+            .flatten()
+            .expect("Flattening failed")
+            .mir;
 
         lower(&mir)
     }
@@ -1873,7 +1923,7 @@ mod tests {
 
     #[test]
     fn test_record_field_access() {
-        let spirv = compile_to_spirv_with_types(
+        let spirv = compile_to_spirv(
             r#"
 def get_x (r:{x:i32, y:i32}) : i32 = r.x
 "#,
@@ -1886,7 +1936,7 @@ def get_x (r:{x:i32, y:i32}) : i32 = r.x
     #[test]
     fn test_closure_capture_access() {
         // This test requires record_access intrinsic for closure field access
-        let spirv = compile_to_spirv_with_types(
+        let spirv = compile_to_spirv(
             r#"
 def test (x:i32) : i32 =
     let f = \(y:i32) -> x + y in

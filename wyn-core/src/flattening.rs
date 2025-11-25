@@ -95,8 +95,7 @@ impl Flattener {
             .and_then(|scheme| self.get_monotype(scheme))
             .cloned()
             .unwrap_or_else(|| {
-                // Fallback to a placeholder type if not found
-                Type::Constructed(TypeName::Str("unknown".into()), vec![])
+                panic!("BUG: Expression (id={:?}) has no type in type table during flattening. Type checking should ensure all expressions have types.", expr.h.id)
             })
     }
 
@@ -195,7 +194,9 @@ impl Flattener {
             .get(&pat.h.id)
             .and_then(|scheme| self.get_monotype(scheme))
             .cloned()
-            .unwrap_or_else(|| Type::Constructed(TypeName::Str("unknown".into()), vec![]))
+            .unwrap_or_else(|| {
+                panic!("BUG: Pattern (id={:?}) has no type in type table during flattening. Type checking should ensure all patterns have types.", pat.h.id)
+            })
     }
 
     /// Generate a unique ID
@@ -880,7 +881,9 @@ impl Flattener {
                     let elem_ty = elem_types
                         .get(i)
                         .cloned()
-                        .unwrap_or_else(|| Type::Constructed(TypeName::Str("unknown".into()), vec![]));
+                        .unwrap_or_else(|| {
+                            panic!("BUG: Tuple pattern element {} has no type. Type checking should ensure all tuple elements have types.", i)
+                        });
                     let i32_type = Type::Constructed(TypeName::Str("i32".into()), vec![]);
 
                     let extract = Expr::new(
@@ -953,16 +956,14 @@ impl Flattener {
 
         // Build the closure record fields first so we can construct the type
         let string_type = Type::Constructed(TypeName::Str("string"), vec![]);
-        let mut record_fields = vec![
-            (
-                "__lambda_name".to_string(),
-                Expr::new(
-                    string_type,
-                    mir::ExprKind::Literal(mir::Literal::String(func_name.clone())),
-                    span,
-                ),
+        let mut record_fields = vec![(
+            "__lambda_name".to_string(),
+            Expr::new(
+                string_type,
+                mir::ExprKind::Literal(mir::Literal::String(func_name.clone())),
+                span,
             ),
-        ];
+        )];
 
         let mut sorted_vars: Vec<_> = free_vars.iter().collect();
         sorted_vars.sort();
@@ -971,7 +972,9 @@ impl Flattener {
             // We need to find an Identifier node with this name and get its type
             let var_type = self
                 .find_var_type_in_expr(&lambda.body, var)
-                .unwrap_or_else(|| Type::Constructed(TypeName::Str("unknown".into()), vec![]));
+                .unwrap_or_else(|| {
+                    panic!("BUG: Free variable '{}' in lambda has no type. Type checking should ensure all variables have types.", var)
+                });
             record_fields.push((
                 (*var).clone(),
                 Expr::new(var_type, mir::ExprKind::Var((*var).clone()), span),
@@ -1278,7 +1281,9 @@ impl Flattener {
                     let elem_ty = elem_types
                         .get(i)
                         .cloned()
-                        .unwrap_or_else(|| Type::Constructed(TypeName::Str("unknown".into()), vec![]));
+                        .unwrap_or_else(|| {
+                            panic!("BUG: Loop tuple pattern element {} has no type. Type checking should ensure all tuple elements have types.", i)
+                        });
                     let i32_type = Type::Constructed(TypeName::Str("i32".into()), vec![]);
 
                     let extract = Expr::new(

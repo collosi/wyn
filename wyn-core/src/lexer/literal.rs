@@ -66,7 +66,9 @@ fn parse_hexadecimal_int(input: &str) -> IResult<&str, Token> {
         )),
         |(_, digits, _suffix)| {
             let clean = strip_underscores(digits);
-            let value = i32::from_str_radix(&clean, 16).unwrap_or(0);
+            let value = i32::from_str_radix(&clean, 16).unwrap_or_else(|e| {
+                panic!("BUG: Failed to parse hexadecimal integer '0x{}': {}. The lexer matched the pattern but conversion failed.", clean, e)
+            });
             Token::IntLiteral(value)
         },
     )(input)
@@ -82,7 +84,9 @@ fn parse_binary_int(input: &str) -> IResult<&str, Token> {
         )),
         |(_, digits, _suffix)| {
             let clean = strip_underscores(digits);
-            let value = i32::from_str_radix(&clean, 2).unwrap_or(0);
+            let value = i32::from_str_radix(&clean, 2).unwrap_or_else(|e| {
+                panic!("BUG: Failed to parse binary integer '0b{}': {}. The lexer matched the pattern but conversion failed.", clean, e)
+            });
             Token::IntLiteral(value)
         },
     )(input)
@@ -101,7 +105,10 @@ fn parse_decimal_int(input: &str) -> IResult<&str, Token> {
             if sign.is_some() {
                 clean = format!("-{}", clean);
             }
-            Token::IntLiteral(clean.parse().unwrap_or(0))
+            let value = clean.parse().unwrap_or_else(|e| {
+                panic!("BUG: Failed to parse decimal integer '{}': {}. The lexer matched the pattern but conversion failed.", clean, e)
+            });
+            Token::IntLiteral(value)
         },
     )(input)
 }
@@ -168,11 +175,15 @@ pub fn parse_float_literal(input: &str) -> IResult<&str, Token> {
             // Hexadecimal floats need special parsing
             if clean.starts_with("0x") || clean.starts_with("0X") {
                 // Parse hex float manually: 0x[mantissa]p[exponent]
-                // For simplicity, convert to decimal approximation
-                // TODO: Implement proper hex float parsing
-                Token::FloatLiteral(0.0)
+                panic!(
+                    "BUG: Hexadecimal float literals (e.g., '{}') are not yet implemented. The lexer should not accept this syntax.",
+                    clean
+                )
             } else {
-                Token::FloatLiteral(clean.parse().unwrap_or(0.0))
+                let value = clean.parse().unwrap_or_else(|e| {
+                    panic!("BUG: Failed to parse float literal '{}': {}. The lexer matched the pattern but conversion failed.", clean, e)
+                });
+                Token::FloatLiteral(value)
             }
         },
     )(input)
