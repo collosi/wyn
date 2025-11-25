@@ -10,7 +10,7 @@ use crate::error::{CompilerError, Result};
 use crate::mir::{self, Def, Expr, ExprKind, Literal, LoopKind, Program};
 use polytype::Type as PolyType;
 use rspirv::binary::Assemble;
-use rspirv::dr::Builder;
+use rspirv::dr::{Builder, InsertPoint};
 use rspirv::dr::Operand;
 use rspirv::spirv::{self, AddressingModel, Capability, MemoryModel, StorageClass};
 use std::collections::HashMap;
@@ -1167,30 +1167,28 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
             let continue_block = spv.create_block();
             let merge_block = spv.create_block();
 
-            // Evaluate init expressions in order, adding each to environment
-            // This is necessary because later init expressions may reference earlier ones
-            // (e.g., tuple destructuring creates a temp var that subsequent extractions reference)
+            // Evaluate init expressions in order, collecting values and types
             let mut init_values = Vec::new();
             for (name, init_expr) in init_bindings {
                 let init_val = lower_expr(spv, init_expr)?;
-                // Add to environment immediately so subsequent init expressions can reference it
+                let init_type = spv.ast_type_to_spirv(&init_expr.ty);
                 spv.env.insert(name.clone(), init_val);
-                init_values.push((name.clone(), init_val));
+                init_values.push((name.clone(), init_val, init_type));
             }
             let pre_header_block = spv.current_block.unwrap();
 
             // Branch to header
             spv.branch(header_block)?;
 
-            // Header block - phi nodes and condition check
+            // Header block - we'll add phi nodes later
             spv.begin_block(header_block)?;
+            let header_block_idx = spv.builder.selected_block().expect("No block selected");
 
-            // Create phi nodes for loop variables
-            let mut phi_results = Vec::new();
-            for (i, (name, init_val)) in init_values.iter().enumerate() {
-                // We'll update these with continue block values later
+            // Allocate phi IDs and add to environment so condition/body can reference them
+            let mut phi_info = Vec::new();
+            for (name, init_val, var_type) in &init_values {
                 let phi_id = spv.builder.id();
-                phi_results.push((name.clone(), phi_id, *init_val));
+                phi_info.push((name.clone(), phi_id, *init_val, *var_type));
                 spv.env.insert(name.clone(), phi_id);
             }
 
@@ -1205,7 +1203,6 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                     spv.s_less_than(var_id, bound_id)?
                 }
                 LoopKind::For { .. } => {
-                    // For-in loops need iterator support
                     return Err(CompilerError::SpirvError(
                         "For-in loops not yet implemented".to_string(),
                     ));
@@ -1221,35 +1218,58 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
             let body_result = lower_expr(spv, body)?;
             spv.branch(continue_block)?;
 
-            // Continue block - update loop variables and branch back to header
+            // Continue block - extract updated values from body result
             spv.begin_block(continue_block)?;
 
-            // For now, use body result as the new value for first loop var
-            // This is simplified - real implementation needs to handle multiple vars
-            let continue_values: Vec<spirv::Word> = if phi_results.len() == 1 {
+            // Extract continue values based on number of loop variables
+            let continue_values: Vec<spirv::Word> = if phi_info.len() == 1 {
+                // Single loop variable - body result is the new value
                 vec![body_result]
             } else {
-                // For multiple vars, we'd need to extract from tuple
-                vec![body_result; phi_results.len()]
+                // Multiple loop variables - body returns tuple, extract each component
+                let mut values = Vec::new();
+                for i in 0..phi_info.len() {
+                    let comp_type = phi_info[i].3; // var_type
+                    let extracted = spv.builder.composite_extract(comp_type, None, body_result, [i as u32])?;
+                    values.push(extracted);
+                }
+                values
             };
 
             spv.branch(header_block)?;
+            let continue_block_id = continue_block;
 
-            // Now emit the actual phi instructions in header
-            // We need to go back and fix up the phi nodes
-            // For simplicity, we'll rebuild the header with proper phis
-            // This is a limitation - proper implementation would use rspirv's phi building
+            // Now go back and insert phi nodes at the beginning of header block
+            // We need to save current function context and temporarily work on header
+            let saved_current_block = spv.current_block;
+            spv.builder.select_block(Some(header_block_idx))?;
 
-            // Merge block - result is the final loop value
+            for (i, (name, phi_id, init_val, var_type)) in phi_info.iter().enumerate() {
+                let incoming = vec![
+                    (*init_val, pre_header_block),
+                    (continue_values[i], continue_block_id),
+                ];
+                spv.builder.insert_phi(
+                    InsertPoint::Begin,
+                    *var_type,
+                    Some(*phi_id),
+                    incoming,
+                )?;
+            }
+
+            // Deselect block before continuing
+            spv.builder.select_block(None)?;
+
+            // Continue to merge block
             spv.begin_block(merge_block)?;
 
             // Clean up environment
-            for (name, _, _) in &phi_results {
+            for (name, _, _, _) in &phi_info {
                 spv.env.remove(name);
             }
 
-            // Return the last phi value (loop result)
-            if let Some((_, phi_id, _)) = phi_results.first() {
+            // Return the first phi value as loop result
+            if let Some((_, phi_id, _, _)) = phi_info.first() {
                 Ok(*phi_id)
             } else {
                 Ok(spv.const_i32(0)) // Empty loop
