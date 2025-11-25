@@ -716,7 +716,18 @@ impl<'a> LowerCtx<'a> {
             ExprKind::Attributed { expr, .. } => {
                 self.ensure_deps_lowered(expr)?;
             }
-            ExprKind::Literal(_) => {}
+            ExprKind::Literal(lit) => {
+                // Check for closure records with __lambda_name field
+                if let Some(lambda_name) = crate::mir::extract_lambda_name(expr) {
+                    self.ensure_lowered(lambda_name)?;
+                }
+                // Recurse into record field values
+                if let crate::mir::Literal::Record(fields) = lit {
+                    for (_, field_expr) in fields {
+                        self.ensure_deps_lowered(field_expr)?;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -1246,29 +1257,45 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
         }
 
         ExprKind::Call { func, args } => {
-            // Lower all arguments
-            let arg_ids: Vec<spirv::Word> =
-                args.iter().map(|a| lower_expr(spv, a)).collect::<Result<Vec<_>>>()?;
-
             // Get the result type from the expression
             let result_type = spv.ast_type_to_spirv(&expr.ty);
 
-            // Check for builtin vector constructors and higher-order functions
-            match func.as_str() {
-                "vec2" | "vec3" | "vec4" => {
-                    // Use the result type which should be the proper vector type
-                    spv.composite_construct(result_type, arg_ids)
-                }
-                "map" => {
+            // Special case for map - extract lambda name from closure before lowering
+            if func == "map" {
                     // map closure array -> array
-                    // args[0] is closure record {__tag=N, ...}
+                    // args[0] is closure record {__lambda_name: "...", __tag: N, captures...}
                     // args[1] is input array
                     if args.len() != 2 {
-                        return Err(CompilerError::SpirvError("map requires 2 args".to_string()));
+                        return Err(CompilerError::SpirvError(format!(
+                            "map requires 2 args (closure, array), got {}",
+                            args.len()
+                        )));
                     }
 
-                    let closure_val = arg_ids[0];
-                    let array_val = arg_ids[1];
+                    // Extract lambda name from closure record's __lambda_name field
+                    let lambda_name = match &args[0].kind {
+                        ExprKind::Literal(mir::Literal::Record(fields)) => {
+                            // Find __lambda_name field
+                            fields.iter()
+                                .find(|(name, _)| name == "__lambda_name")
+                                .and_then(|(_, expr)| match &expr.kind {
+                                    ExprKind::Literal(mir::Literal::String(s)) => Some(s.clone()),
+                                    _ => None,
+                                })
+                                .ok_or_else(|| CompilerError::SpirvError(
+                                    "Closure record missing __lambda_name field".to_string()
+                                ))?
+                        }
+                        _ => {
+                            return Err(CompilerError::SpirvError(
+                                "map closure argument must be a record literal".to_string()
+                            ));
+                        }
+                    };
+
+                    // Now lower both args normally
+                    let closure_val = lower_expr(spv, &args[0])?;
+                    let array_val = lower_expr(spv, &args[1])?;
 
                     // Get array info from MIR types
                     let (array_size, elem_mir_type) = match &expr.ty {
@@ -1292,36 +1319,42 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
 
                     let elem_type = spv.ast_type_to_spirv(elem_mir_type);
 
+                    // Look up the lambda function by name
+                    let lambda_func_id = *spv.functions.get(&lambda_name).ok_or_else(|| {
+                        CompilerError::SpirvError(format!(
+                            "Lambda function not found: {}",
+                            lambda_name
+                        ))
+                    })?;
+
                     // Build result array by calling lambda for each element
                     let mut result_elements = Vec::new();
                     for i in 0..array_size {
                         // Extract element from input array
                         let input_elem = spv.builder.composite_extract(elem_type, None, array_val, [i])?;
 
-                        // Call the lambda function
-                        // For now, we only support single-lambda case (tag 0)
-                        // TODO: Add switch for multiple lambdas based on tag
-                        if let Some((func_name, _arity)) = spv.lambda_registry.first() {
-                            let lambda_func_id = *spv.functions.get(func_name).ok_or_else(|| {
-                                CompilerError::SpirvError(format!(
-                                    "Lambda function not found: {}",
-                                    func_name
-                                ))
-                            })?;
-                            // Call lambda with closure and element
-                            let result_elem = spv.function_call(
-                                elem_type,
-                                lambda_func_id,
-                                vec![closure_val, input_elem],
-                            )?;
-                            result_elements.push(result_elem);
-                        } else {
-                            return Err(CompilerError::SpirvError("No lambda in registry".to_string()));
-                        }
+                        // Call lambda with closure and element
+                        let result_elem = spv.function_call(
+                            elem_type,
+                            lambda_func_id,
+                            vec![closure_val, input_elem],
+                        )?;
+                        result_elements.push(result_elem);
                     }
 
-                    // Construct result array
-                    spv.composite_construct(result_type, result_elements)
+                // Construct result array
+                return spv.composite_construct(result_type, result_elements);
+            }
+
+            // For all other calls, lower arguments normally
+            let arg_ids: Vec<spirv::Word> =
+                args.iter().map(|a| lower_expr(spv, a)).collect::<Result<Vec<_>>>()?;
+
+            // Check for builtin vector constructors
+            match func.as_str() {
+                "vec2" | "vec3" | "vec4" => {
+                    // Use the result type which should be the proper vector type
+                    spv.composite_construct(result_type, arg_ids)
                 }
                 _ => {
                     // Check if it's a builtin function
@@ -1605,17 +1638,22 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                         }
                     };
 
-                    // Look up the field index from the record type
+                    // Look up the field index from the record type, skipping phantom fields
                     let record_type = &args[0].ty;
                     let index = match record_type {
-                        PolyType::Constructed(TypeName::Record(fields), _) => fields
-                            .keys()
-                            .enumerate()
-                            .find(|(_, name)| name.as_str() == field_name)
-                            .map(|(idx, _)| idx as u32)
-                            .ok_or_else(|| {
-                                CompilerError::SpirvError(format!("Unknown record field: {}", field_name))
-                            })?,
+                        PolyType::Constructed(TypeName::Record(fields), _) => {
+                            // Filter out phantom fields and find the index
+                            let real_fields: Vec<_> = fields.keys()
+                                .filter(|name| name.as_str() != "__lambda_name")
+                                .collect();
+                            real_fields.iter()
+                                .enumerate()
+                                .find(|(_, name)| name.as_str() == field_name)
+                                .map(|(idx, _)| idx as u32)
+                                .ok_or_else(|| {
+                                    CompilerError::SpirvError(format!("Unknown record field: {}", field_name))
+                                })?
+                        }
                         _ => {
                             return Err(CompilerError::SpirvError(format!(
                                 "record_access on non-record type: {:?}",
@@ -1686,13 +1724,18 @@ fn lower_literal(spv: &mut SpvBuilder, lit: &Literal) -> Result<spirv::Word> {
             spv.composite_construct(array_type, elem_ids)
         }
         Literal::Record(fields) => {
+            // Filter out phantom fields that only exist for compile-time dispatch
+            let real_fields: Vec<_> = fields.iter()
+                .filter(|(name, _)| name != "__lambda_name")
+                .collect();
+
             // Records are represented as structs with fields in order
             let field_ids: Vec<spirv::Word> =
-                fields.iter().map(|(_, e)| lower_expr(spv, e)).collect::<Result<Vec<_>>>()?;
+                real_fields.iter().map(|(_, e)| lower_expr(spv, e)).collect::<Result<Vec<_>>>()?;
 
             // Create struct type for record from field types
             let field_types: Vec<spirv::Word> =
-                fields.iter().map(|(_, e)| spv.ast_type_to_spirv(&e.ty)).collect();
+                real_fields.iter().map(|(_, e)| spv.ast_type_to_spirv(&e.ty)).collect();
             let record_type = spv.type_struct(field_types);
 
             // Construct the composite

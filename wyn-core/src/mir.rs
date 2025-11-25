@@ -222,6 +222,25 @@ pub enum LoopKind {
     },
 }
 
+/// Extract lambda function name from a closure record if present.
+/// Closure records contain a `__lambda_name` field with a string literal
+/// that identifies which lambda function the closure calls.
+pub fn extract_lambda_name(expr: &Expr) -> Option<&str> {
+    match &expr.kind {
+        ExprKind::Literal(Literal::Record(fields)) => {
+            for (field_name, field_expr) in fields {
+                if field_name == "__lambda_name" {
+                    if let ExprKind::Literal(Literal::String(lambda_name)) = &field_expr.kind {
+                        return Some(lambda_name.as_str());
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

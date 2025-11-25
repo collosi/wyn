@@ -80,7 +80,18 @@ fn collect_callees_rec(expr: &Expr, callees: &mut HashSet<String>) {
             // Variable references might refer to top-level constants
             callees.insert(name.clone());
         }
-        ExprKind::Literal(_) => {}
+        ExprKind::Literal(lit) => {
+            // Check for closure records with __lambda_name field
+            if let Some(lambda_name) = crate::mir::extract_lambda_name(expr) {
+                callees.insert(lambda_name.to_string());
+            }
+            // Recurse into record field values
+            if let crate::mir::Literal::Record(fields) = lit {
+                for (_, field_expr) in fields {
+                    collect_callees_rec(field_expr, callees);
+                }
+            }
+        }
         ExprKind::BinOp { lhs, rhs, .. } => {
             collect_callees_rec(lhs, callees);
             collect_callees_rec(rhs, callees);

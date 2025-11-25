@@ -952,15 +952,17 @@ impl Flattener {
         let tag = self.add_lambda(func_name.clone(), arity);
 
         // Build the closure record fields first so we can construct the type
-        let i32_type = Type::Constructed(TypeName::Str("i32".into()), vec![]);
-        let mut record_fields = vec![(
-            "__tag".to_string(),
-            Expr::new(
-                i32_type.clone(),
-                mir::ExprKind::Literal(mir::Literal::Int(tag.to_string())),
-                span,
+        let string_type = Type::Constructed(TypeName::Str("string"), vec![]);
+        let mut record_fields = vec![
+            (
+                "__lambda_name".to_string(),
+                Expr::new(
+                    string_type,
+                    mir::ExprKind::Literal(mir::Literal::String(func_name.clone())),
+                    span,
+                ),
             ),
-        )];
+        ];
 
         let mut sorted_vars: Vec<_> = free_vars.iter().collect();
         sorted_vars.sort();
@@ -1079,11 +1081,14 @@ impl Flattener {
         &mut self,
         func: &Expression,
         args: &[Expression],
-        _span: Span,
+        span: Span,
     ) -> Result<(mir::ExprKind, StaticValue)> {
         let (func_flat, func_sv) = self.flatten_expr(func)?;
-        let args_flat: Result<Vec<_>> = args.iter().map(|a| self.flatten_expr(a).map(|(e, _)| e)).collect();
-        let args_flat = args_flat?;
+
+        // Flatten arguments while keeping static values for closure detection
+        let args_with_sv: Result<Vec<_>> = args.iter().map(|a| self.flatten_expr(a)).collect();
+        let args_with_sv = args_with_sv?;
+        let args_flat: Vec<_> = args_with_sv.iter().map(|(e, _)| e.clone()).collect();
 
         // Check if this is applying a known function name
         match &func.kind {

@@ -328,7 +328,21 @@ impl Monomorphizer {
                 }
                 expr.kind
             }
-            ExprKind::Literal(_) => expr.kind,
+            ExprKind::Literal(ref lit) => {
+                // Check for closure records with __lambda_name field
+                if let Some(lambda_name) = crate::mir::extract_lambda_name(&expr) {
+                    if let Some(def) = self.poly_functions.get(lambda_name).cloned() {
+                        self.ensure_in_worklist(lambda_name, def);
+                    }
+                }
+                // Also process field expressions recursively if this is a record
+                if let crate::mir::Literal::Record(fields) = lit {
+                    for (_, field_expr) in fields {
+                        let _ = self.process_expr(field_expr.clone())?;
+                    }
+                }
+                expr.kind
+            }
         };
 
         Ok(Expr {
