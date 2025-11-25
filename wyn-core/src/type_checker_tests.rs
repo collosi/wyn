@@ -3,6 +3,7 @@ use crate::error::CompilerError;
 use crate::lexer::tokenize;
 use crate::parser::Parser;
 use crate::type_checker::{TypeChecker, TypeWarning};
+use polytype::TypeScheme;
 
 /// Helper to parse and type check source code, expecting success
 fn typecheck_program(input: &str) {
@@ -24,6 +25,12 @@ fn try_typecheck_program(input: &str) -> Result<TypeChecker, CompilerError> {
     let mut type_checker = TypeChecker::new();
     type_checker.load_builtins()?;
     Ok(type_checker)
+}
+
+/// Helper to parse and type check, returning the type table
+fn typecheck_and_get_types(input: &str) -> Result<crate::TypeTable, CompilerError> {
+    let type_checked = crate::Compiler::parse(input)?.elaborate()?.resolve()?.type_check()?;
+    Ok(type_checked.type_table)
 }
 
 #[test]
@@ -902,5 +909,74 @@ def test: f32 =
   let col = [5.0f32, 6.0f32, 7.0f32, 8.0f32] in
   reduce_f32 (\x y -> x + y) 0.0f32 (map2_f32 (\x y -> x * y) row col)
 "#,
+    );
+}
+
+#[test]
+#[ignore = "BUG: Size parameter inference fails with map - size variable not constrained"]
+fn test_size_param_with_map() {
+    // This test captures the bug where a function with a size parameter
+    // receives the result of map, but the size variable doesn't get properly
+    // constrained to a concrete value, leaving Variable(N) unresolved.
+    //
+    // The bug manifests during lowering as:
+    // "BUG: Array type has invalid size argument: Variable(51)"
+    //
+    // Pattern from de_rasterizer.wyn line 158:
+    //   f32.sum (map (\e -> ...) edges)
+    // where edges : [12][2]i32
+    //
+    // Expected: map produces [12]f32, sum's size param [n] unifies with 12
+    // Actual: size variable remains as Variable(N) through to lowering
+
+    let source = r#"
+-- Function with size parameter
+def sum [n] (arr:[n]f32) : f32 =
+  let (result, _) = loop (acc, i) = (0.0f32, 0) while i < length arr do
+    (acc + arr[i], i + 1)
+  in result
+
+-- Test: sum on map result should constrain size to 3
+def test : f32 =
+  let edges : [3][2]i32 = [[0,1], [1,2], [2,0]] in
+  sum (map (\(e:[2]i32) -> 1.0f32) edges)
+"#;
+
+    let type_table = typecheck_and_get_types(source).expect("Type checking should succeed");
+
+    // Helper to check if a type contains unresolved variables
+    fn has_unresolved_variables(ty: &Type) -> bool {
+        match ty {
+            Type::Variable(_) => true,
+            Type::Constructed(_, args) => args.iter().any(has_unresolved_variables),
+        }
+    }
+
+    // Check all types in the type table
+    let mut found_unresolved = false;
+    for (node_id, type_scheme) in &type_table {
+        let ty = match type_scheme {
+            TypeScheme::Monotype(t) => t,
+            TypeScheme::Polytype { body, .. } => {
+                match body.as_ref() {
+                    TypeScheme::Monotype(t) => t,
+                    // Nested polytypes - skip for now
+                    _ => continue,
+                }
+            }
+        };
+
+        if has_unresolved_variables(ty) {
+            eprintln!(
+                "Found unresolved variable in type for node {:?}: {:?}",
+                node_id, ty
+            );
+            found_unresolved = true;
+        }
+    }
+
+    assert!(
+        !found_unresolved,
+        "Type table should not contain unresolved type variables after type checking"
     );
 }

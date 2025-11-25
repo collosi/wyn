@@ -207,7 +207,8 @@ impl SpvBuilder {
                             PolyType::Constructed(TypeName::Size(n), _) => *n as u32,
                             _ => {
                                 panic!(
-                                    "BUG: Array type has invalid size argument: {:?}. This should have been resolved during type checking.",
+                                    "BUG: Array type has invalid size argument: {:?}. This should have been resolved during type checking. \
+                                     This typically happens when array size inference fails to constrain a size variable to a concrete value.",
                                     args[0]
                                 );
                             }
