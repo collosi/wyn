@@ -35,6 +35,8 @@ mod constant_folding_tests;
 #[cfg(test)]
 mod flattening_tests;
 #[cfg(test)]
+mod monomorphization_tests;
+#[cfg(test)]
 mod type_checker_tests;
 
 use std::collections::HashMap;

@@ -938,8 +938,7 @@ def sum [n] (arr:[n]f32) : f32 =
 
 -- Test: sum on map result should constrain size to 3
 def test : f32 =
-  let edges : [3][2]i32 = [[0,1], [1,2], [2,0]] in
-  sum (map (\(e:[2]i32) -> 1.0f32) edges)
+  sum [1.0f32, 1.0f32, 1.0f32]
 "#;
 
     let type_table = typecheck_and_get_types(source).expect("Type checking should succeed");

@@ -519,7 +519,15 @@ fn contains_variables(ty: &Type) -> bool {
 /// Apply a substitution to a type
 fn apply_subst(ty: &Type, subst: &Substitution) -> Type {
     match ty {
-        PolyType::Variable(id) => subst.get(id).cloned().unwrap_or_else(|| ty.clone()),
+        PolyType::Variable(id) => subst.get(id).cloned().unwrap_or_else(|| {
+            panic!(
+                "BUG: Unresolved type variable Variable({}) during monomorphization. \
+                 The substitution is incomplete - this variable should have been resolved during type checking \
+                 or added to the substitution during monomorphization.\n\
+                 Substitution contains: {:?}",
+                id, subst
+            )
+        }),
         PolyType::Constructed(name, args) => {
             // Recursively apply substitution to type arguments
             let new_args = args.iter().map(|arg| apply_subst(arg, subst)).collect();
@@ -625,7 +633,28 @@ fn apply_subst_expr(expr: Expr, subst: &Substitution) -> Expr {
             attributes,
             expr: Box::new(apply_subst_expr(*expr, subst)),
         },
-        other => other,
+        ExprKind::Literal(lit) => {
+            // Recursively apply substitution to subexpressions in literals
+            let new_lit = match lit {
+                crate::mir::Literal::Tuple(exprs) => {
+                    crate::mir::Literal::Tuple(exprs.into_iter().map(|e| apply_subst_expr(e, subst)).collect())
+                }
+                crate::mir::Literal::Array(exprs) => {
+                    crate::mir::Literal::Array(exprs.into_iter().map(|e| apply_subst_expr(e, subst)).collect())
+                }
+                crate::mir::Literal::Record(fields) => {
+                    crate::mir::Literal::Record(
+                        fields
+                            .into_iter()
+                            .map(|(k, v)| (k, apply_subst_expr(v, subst)))
+                            .collect(),
+                    )
+                }
+                other => other, // Int, Float, Bool, String have no subexpressions
+            };
+            ExprKind::Literal(new_lit)
+        }
+        other => other, // Var has no subexpressions
     };
 
     Expr {
