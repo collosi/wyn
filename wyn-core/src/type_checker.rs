@@ -589,6 +589,8 @@ impl TypeChecker {
                     )
                 })?;
 
+                // Store the checked type in the type table
+                self.type_table.insert(expr.h.id, TypeScheme::Monotype(func_type.clone()));
                 Ok(func_type)
             }
             _ => {
@@ -1521,12 +1523,12 @@ impl TypeChecker {
                     // Not a qualified name, proceed with normal field access
                     let expr_type = self.infer_expression(inner_expr)?;
 
-                    // Check if this is a __tag field access (closure tag for defunctionalization)
-                    // Allow it on any type variable and return i32
-                    if field == "__tag" {
+                    // Check if this is a __lambda_name field access (closure lambda name for direct dispatch)
+                    // Allow it on any type variable and return string type
+                    if field == "__lambda_name" {
                         // The type checker can't verify this is actually a closure record,
-                        // but the defunctionalizer guarantees it. Just return i32.
-                        let ty = types::i32();
+                        // but the defunctionalizer guarantees it. Just return string type.
+                        let ty = Type::Constructed(TypeName::Str("string".into()), vec![]);
                         self.type_table.insert(expr.h.id, TypeScheme::Monotype(ty.clone()));
                         return Ok(ty);
                     }

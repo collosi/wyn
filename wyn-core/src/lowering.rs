@@ -1336,7 +1336,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
             // Special case for map - extract lambda name from closure before lowering
             if func == "map" {
                 // map closure array -> array
-                // args[0] is closure record {__lambda_name: "...", __tag: N, captures...}
+                // args[0] is closure record {__lambda_name: "...", captures...}
                 // args[1] is input array
                 if args.len() != 2 {
                     return Err(CompilerError::SpirvError(format!(

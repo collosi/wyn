@@ -95,6 +95,9 @@ impl Flattener {
             .and_then(|scheme| self.get_monotype(scheme))
             .cloned()
             .unwrap_or_else(|| {
+                eprintln!("BUG: Expression (id={:?}) has no type in type table", expr.h.id);
+                eprintln!("Expression kind: {:?}", expr.kind);
+                eprintln!("Expression span: {:?}", expr.h.span);
                 panic!("BUG: Expression (id={:?}) has no type in type table during flattening. Type checking should ensure all expressions have types.", expr.h.id)
             })
     }
@@ -516,20 +519,20 @@ impl Flattener {
                     ));
                 };
 
-                // Build the closure record with just the __tag field (no free variables)
-                let i32_type = Type::Constructed(TypeName::Str("i32".into()), vec![]);
+                // Build the closure record with __lambda_name field (no free variables)
+                let string_type = Type::Constructed(TypeName::Str("string".into()), vec![]);
                 let record_fields = vec![(
-                    "__tag".to_string(),
+                    "__lambda_name".to_string(),
                     Expr::new(
-                        i32_type.clone(),
-                        mir::ExprKind::Literal(mir::Literal::Int(tag.to_string())),
+                        string_type.clone(),
+                        mir::ExprKind::Literal(mir::Literal::String(func_name.clone())),
                         span,
                     ),
                 )];
 
                 // Build the closure type
                 let mut type_fields = BTreeMap::new();
-                type_fields.insert("__tag".to_string(), i32_type);
+                type_fields.insert("__lambda_name".to_string(), string_type);
                 let closure_type = Type::Constructed(TypeName::Record(type_fields), vec![]);
 
                 // Build parameters: closure, x, y

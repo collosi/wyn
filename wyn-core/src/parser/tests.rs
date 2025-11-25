@@ -2224,13 +2224,13 @@ fn test_parse_record_literal_single_field() {
 
 #[test]
 fn test_parse_record_literal_multiple_fields() {
-    let input = "def test = {__tag: 0, v3s: v3s}";
+    let input = "def test = {x: 0, v3s: v3s}";
     let decl = single_decl(input);
 
     match &decl.body.kind {
         ExprKind::RecordLiteral(fields) => {
             assert_eq!(fields.len(), 2);
-            assert_eq!(fields[0].0, "__tag");
+            assert_eq!(fields[0].0, "x");
             assert_eq!(fields[1].0, "v3s");
         }
         other => panic!("Expected RecordLiteral, got {:?}", other),

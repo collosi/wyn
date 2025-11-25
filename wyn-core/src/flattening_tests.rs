@@ -157,7 +157,43 @@ def f =
 }
 
 #[test]
-#[ignore] // TODO: Fix bug where some expressions have no type in type table
+fn test_map_with_lambda() {
+    // Test map with inline lambda
+    let source = r#"
+def test : [4]i32 =
+    map (\(x:i32) -> x + 1) [0, 1, 2, 3]
+"#;
+
+    // Parse
+    let parsed = crate::Compiler::parse(source).expect("Parsing failed");
+
+    // Elaborate
+    let elaborated = parsed.elaborate().expect("Elaboration failed");
+
+    // Resolve
+    let resolved = elaborated.resolve().expect("Name resolution failed");
+
+    // Print AST to see what NodeId(6) is
+    println!("AST:");
+    println!("{:#?}", resolved.ast);
+
+    // Type check
+    let typed = resolved.type_check().expect("Type checking failed");
+    println!("\nType table has {} entries", typed.type_table.len());
+    for (id, scheme) in &typed.type_table {
+        println!("  NodeId({:?}): {:?}", id, scheme);
+    }
+
+    println!("\nNodeId(6) is missing from type table!");
+
+    // Flatten - this is where it fails
+    let flattened = typed.flatten().expect("Flattening failed");
+    let mir_str = format!("{}", flattened.mir);
+    println!("MIR: {}", mir_str);
+    assert!(mir_str.contains("def test"));
+}
+
+#[test]
 fn test_lambda_captures_typed_variable() {
     // This test reproduces an issue where a lambda captures a typed variable (like an array),
     // and the free variable rewriting creates __closure.mat, which then fails when trying
@@ -191,7 +227,6 @@ def length2 (v:vec2f32) : f32 =
 }
 
 #[test]
-#[ignore] // TODO: Fix bug where some expressions have no type in type table
 fn test_map_with_closure_application() {
     // This test checks that map with a lambda generates a closure record
     // and registers the lambda in the registry for dispatch.
@@ -207,9 +242,9 @@ def test_map (arr:[4]i32) : [4]i32 =
 
     // Should have generated lambda function
     assert!(mir_str.contains("__lam_test_map_"));
-    // Should have closure record with tag
-    assert!(mir_str.contains("__tag=0"));
-    // Lambda registry should map tag 0 to the lambda function
+    // Should have closure record with __lambda_name
+    assert!(mir_str.contains("__lambda_name"));
+    // Lambda registry should have the lambda function
     assert_eq!(mir.lambda_registry.len(), 1);
     assert_eq!(mir.lambda_registry[0].0, "__lam_test_map_0");
     assert_eq!(mir.lambda_registry[0].1, 1); // arity 1
@@ -418,7 +453,6 @@ def test_add (x: i32) (y: i32): i32 = (+) x y
 }
 
 #[test]
-#[ignore] // TODO: Fix bug where some expressions have no type in type table
 fn test_operator_section_with_map() {
     // Test operator section passed to map (special higher-order function)
     let mir = flatten_program(
