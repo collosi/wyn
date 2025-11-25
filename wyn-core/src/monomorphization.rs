@@ -13,7 +13,7 @@
 
 use crate::ast::{Type, TypeName};
 use crate::error::Result;
-use crate::mir::{Def, Expr, ExprKind, Param, Program};
+use crate::mir::{Def, Expr, ExprKind, LoopKind, Param, Program};
 use polytype::Type as PolyType;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -60,6 +60,10 @@ enum TypeKey {
     Size(usize),
     Named(String),
     Constructed(String, Vec<TypeKey>),
+    Record(Vec<(String, TypeKey)>),
+    Sum(Vec<(String, Vec<TypeKey>)>),
+    Existential(Vec<String>, Box<TypeKey>),
+    NamedParam(String, Box<TypeKey>),
 }
 
 impl SubstKey {
@@ -75,9 +79,38 @@ impl TypeKey {
         match ty {
             PolyType::Variable(id) => TypeKey::Var(*id),
             PolyType::Constructed(name, args) => {
+                // Handle types with nested structure that need full representation
+                match name {
+                    TypeName::Size(n) => return TypeKey::Size(*n),
+                    TypeName::Record(fields) => {
+                        let mut key_fields: Vec<_> = fields
+                            .iter()
+                            .map(|(k, v)| (k.clone(), TypeKey::from_type(v)))
+                            .collect();
+                        key_fields.sort_by(|a, b| a.0.cmp(&b.0));
+                        return TypeKey::Record(key_fields);
+                    }
+                    TypeName::Sum(variants) => {
+                        let key_variants: Vec<_> = variants
+                            .iter()
+                            .map(|(name, types)| {
+                                (name.clone(), types.iter().map(TypeKey::from_type).collect())
+                            })
+                            .collect();
+                        return TypeKey::Sum(key_variants);
+                    }
+                    TypeName::Existential(vars, inner) => {
+                        return TypeKey::Existential(vars.clone(), Box::new(TypeKey::from_type(inner)));
+                    }
+                    TypeName::NamedParam(name, inner) => {
+                        return TypeKey::NamedParam(name.clone(), Box::new(TypeKey::from_type(inner)));
+                    }
+                    _ => {}
+                }
+
+                // For other constructed types, use a string name + args
                 let name_str = match name {
                     TypeName::Str(s) => s.to_string(),
-                    TypeName::Size(n) => return TypeKey::Size(*n),
                     TypeName::Array => "array".to_string(),
                     TypeName::Vec => "vec".to_string(),
                     TypeName::Mat => "mat".to_string(),
@@ -85,11 +118,8 @@ impl TypeKey {
                     TypeName::SizeVar(s) => format!("sizevar_{}", s),
                     TypeName::UserVar(s) => format!("uservar_{}", s),
                     TypeName::Named(s) => s.clone(),
-                    TypeName::Record(fields) => format!("record_{}", fields.len()),
                     TypeName::Unique => "unique".to_string(),
-                    TypeName::Sum(variants) => format!("sum_{}", variants.len()),
-                    TypeName::Existential(vars, _) => format!("exists_{}", vars.len()),
-                    TypeName::NamedParam(name, _) => format!("named_{}", name),
+                    _ => unreachable!("Should have been handled above"),
                 };
                 TypeKey::Constructed(name_str, args.iter().map(TypeKey::from_type).collect())
             }
@@ -289,6 +319,12 @@ impl Monomorphizer {
             // Leaf nodes - no recursion needed
             ExprKind::Var(ref name) => {
                 // Variable reference might refer to a top-level constant
+                // NOTE: This can't distinguish local variables from global constants,
+                // so it may unnecessarily queue constants when a local variable shadows
+                // a constant name. This is safe but suboptimal - it won't change the
+                // semantics, just might do extra work.
+                // A proper fix would require tracking local scope or using resolved
+                // symbol IDs instead of strings.
                 if let Some(def) = self.poly_functions.get(name).cloned() {
                     self.ensure_in_worklist(name, def);
                 }
@@ -308,9 +344,9 @@ impl Monomorphizer {
     fn infer_substitution(&self, poly_def: &Def, args: &[Expr]) -> Result<Substitution> {
         let mut subst = Substitution::new();
 
-        // Get parameter types from the definition
-        let param_types = match poly_def {
-            Def::Function { params, .. } => params.iter().map(|p| &p.ty).collect::<Vec<_>>(),
+        // Get parameter types and function name from the definition
+        let (param_types, func_name) = match poly_def {
+            Def::Function { params, name, .. } => (params.iter().map(|p| &p.ty).collect::<Vec<_>>(), name.as_str()),
             Def::Constant { .. } => return Ok(subst), // No parameters
         };
 
@@ -430,8 +466,39 @@ impl Monomorphizer {
 fn contains_variables(ty: &Type) -> bool {
     match ty {
         PolyType::Variable(_) => true,
-        PolyType::Constructed(_, args) => args.iter().any(contains_variables),
-        _ => false,
+        PolyType::Constructed(name, args) => {
+            // Check for unresolved variables in TypeName itself
+            match name {
+                TypeName::SizeVar(_) | TypeName::UserVar(_) => return true,
+                TypeName::Record(fields) => {
+                    // Check types inside record fields
+                    if fields.values().any(contains_variables) {
+                        return true;
+                    }
+                }
+                TypeName::Sum(variants) => {
+                    // Check types inside sum variants
+                    if variants.iter().any(|(_, types)| types.iter().any(contains_variables)) {
+                        return true;
+                    }
+                }
+                TypeName::Existential(_, inner) => {
+                    // Check the inner type
+                    if contains_variables(inner) {
+                        return true;
+                    }
+                }
+                TypeName::NamedParam(_, inner) => {
+                    // Check the inner type
+                    if contains_variables(inner) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+            // Check type arguments
+            args.iter().any(contains_variables)
+        }
     }
 }
 
@@ -440,8 +507,35 @@ fn apply_subst(ty: &Type, subst: &Substitution) -> Type {
     match ty {
         PolyType::Variable(id) => subst.get(id).cloned().unwrap_or_else(|| ty.clone()),
         PolyType::Constructed(name, args) => {
+            // Recursively apply substitution to type arguments
             let new_args = args.iter().map(|arg| apply_subst(arg, subst)).collect();
-            PolyType::Constructed(name.clone(), new_args)
+
+            // Also apply substitution to types nested inside TypeName
+            let new_name = match name {
+                TypeName::Record(fields) => {
+                    let new_fields = fields.iter()
+                        .map(|(k, v)| (k.clone(), apply_subst(v, subst)))
+                        .collect();
+                    TypeName::Record(new_fields)
+                }
+                TypeName::Sum(variants) => {
+                    let new_variants = variants.iter()
+                        .map(|(name, types)| {
+                            (name.clone(), types.iter().map(|t| apply_subst(t, subst)).collect())
+                        })
+                        .collect();
+                    TypeName::Sum(new_variants)
+                }
+                TypeName::Existential(vars, inner) => {
+                    TypeName::Existential(vars.clone(), Box::new(apply_subst(inner, subst)))
+                }
+                TypeName::NamedParam(name, inner) => {
+                    TypeName::NamedParam(name.clone(), Box::new(apply_subst(inner, subst)))
+                }
+                _ => name.clone(),
+            };
+
+            PolyType::Constructed(new_name, new_args)
         }
         _ => ty.clone(),
     }
@@ -480,6 +574,22 @@ fn apply_subst_expr(expr: Expr, subst: &Substitution) -> Expr {
         } => {
             let init_bindings =
                 init_bindings.into_iter().map(|(name, e)| (name, apply_subst_expr(e, subst))).collect();
+
+            // Also apply substitution to expressions inside LoopKind
+            let kind = match kind {
+                LoopKind::For { var, iter } => LoopKind::For {
+                    var,
+                    iter: Box::new(apply_subst_expr(*iter, subst)),
+                },
+                LoopKind::ForRange { var, bound } => LoopKind::ForRange {
+                    var,
+                    bound: Box::new(apply_subst_expr(*bound, subst)),
+                },
+                LoopKind::While { cond } => LoopKind::While {
+                    cond: Box::new(apply_subst_expr(*cond, subst)),
+                },
+            };
+
             ExprKind::Loop {
                 init_bindings,
                 kind,

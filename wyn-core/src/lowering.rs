@@ -160,8 +160,21 @@ impl SpvBuilder {
     /// Convert a polytype Type to a SPIR-V type ID
     fn ast_type_to_spirv(&mut self, ty: &PolyType<TypeName>) -> spirv::Word {
         match ty {
-            PolyType::Variable(_) => self.i32_type, // Fallback for unresolved vars
+            PolyType::Variable(id) => {
+                panic!("BUG: Unresolved type variable Variable({}) reached lowering. All type variables should be resolved by monomorphization.", id);
+            }
             PolyType::Constructed(name, args) => {
+                // Assert that no UserVar or SizeVar reaches lowering
+                match name {
+                    TypeName::UserVar(v) => {
+                        panic!("BUG: UserVar('{}') reached lowering. All user type variables should be resolved during type checking.", v);
+                    }
+                    TypeName::SizeVar(v) => {
+                        panic!("BUG: SizeVar('{}') reached lowering. All size variables should be resolved during type checking.", v);
+                    }
+                    _ => {}
+                }
+
                 match name {
                     TypeName::Str(s) if *s == "i32" => self.i32_type,
                     TypeName::Str(s) if *s == "f32" => self.f32_type,
