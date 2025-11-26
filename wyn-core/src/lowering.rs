@@ -1,7 +1,7 @@
 //! SPIR-V Lowering
 //!
 //! This module converts MIR (from flattening) directly to SPIR-V.
-//! It uses a SpvBuilder wrapper that handles variable hoisting automatically.
+//! It uses a Constructor wrapper that handles variable hoisting automatically.
 //! Dependencies are lowered on-demand using ensure_lowered pattern.
 
 use crate::ast::TypeName;
@@ -32,16 +32,16 @@ struct LowerCtx<'a> {
     /// Lowering state of each definition
     state: HashMap<String, LowerState>,
     /// The SPIR-V builder
-    spv: SpvBuilder,
+    constructor: Constructor,
     /// Entry points to emit (name, execution model)
     entry_points: Vec<(String, spirv::ExecutionModel)>,
 }
 
-/// SpvBuilder wraps rspirv::Builder with an ergonomic API that handles:
+/// Constructor wraps rspirv::Builder with an ergonomic API that handles:
 /// - Automatic variable hoisting to function entry block
 /// - Block management with implicit branch from variables block to code
 /// - Value and type caching
-struct SpvBuilder {
+struct Constructor {
     builder: Builder,
 
     // Type caching
@@ -98,7 +98,7 @@ struct SpvBuilder {
     builtin_registry: BuiltinRegistry,
 }
 
-impl SpvBuilder {
+impl Constructor {
     fn new() -> Self {
         let mut builder = Builder::new();
         builder.set_version(1, 0);
@@ -111,7 +111,7 @@ impl SpvBuilder {
         let f32_type = builder.type_float(32);
         let glsl_ext_inst_id = builder.ext_inst_import("GLSL.std.450");
 
-        SpvBuilder {
+        Constructor {
             builder,
             void_type,
             bool_type,
@@ -161,25 +161,16 @@ impl SpvBuilder {
     fn ast_type_to_spirv(&mut self, ty: &PolyType<TypeName>) -> spirv::Word {
         match ty {
             PolyType::Variable(id) => {
-                panic!(
-                    "BUG: Unresolved type variable Variable({}) reached lowering. All type variables should be resolved by monomorphization.",
-                    id
-                );
+                panic!("BUG: Unresolved type variable Variable({}) reached lowering.", id);
             }
             PolyType::Constructed(name, args) => {
                 // Assert that no UserVar or SizeVar reaches lowering
                 match name {
                     TypeName::UserVar(v) => {
-                        panic!(
-                            "BUG: UserVar('{}') reached lowering. All user type variables should be resolved during type checking.",
-                            v
-                        );
+                        panic!("BUG: UserVar('{}') reached lowering.", v);
                     }
                     TypeName::SizeVar(v) => {
-                        panic!(
-                            "BUG: SizeVar('{}') reached lowering. All size variables should be resolved during type checking.",
-                            v
-                        );
+                        panic!("BUG: SizeVar('{}') reached lowering.", v);
                     }
                     _ => {}
                 }
@@ -201,7 +192,7 @@ impl SpvBuilder {
                         // Array type: args[0] is size, args[1] is element type
                         if args.len() < 2 {
                             panic!(
-                                "BUG: Array type requires 2 arguments (size, element_type), got {}. This should have been caught during type checking.",
+                                "BUG: Array type requires 2 arguments (size, element_type), got {}.",
                                 args.len()
                             );
                         }
@@ -225,17 +216,14 @@ impl SpvBuilder {
                         // Vec type with args: args[0] is size, args[1] is element type
                         if args.len() < 2 {
                             panic!(
-                                "BUG: Vec type requires 2 arguments (size, element_type), got {}. This should have been caught during type checking.",
+                                "BUG: Vec type requires 2 arguments (size, element_type), got {}.",
                                 args.len()
                             );
                         }
                         let size = match &args[0] {
                             PolyType::Constructed(TypeName::Size(n), _) => *n as u32,
                             _ => {
-                                panic!(
-                                    "BUG: Vec type has invalid size argument: {:?}. This should have been resolved during type checking.",
-                                    args[0]
-                                );
+                                panic!("BUG: Vec type has invalid size argument: {:?}.", args[0]);
                             }
                         };
                         let elem_type = self.ast_type_to_spirv(&args[1]);
@@ -245,26 +233,20 @@ impl SpvBuilder {
                         // Mat type with args: args[0] is cols, args[1] is rows, args[2] is element type
                         if args.len() < 3 {
                             panic!(
-                                "BUG: Mat type requires 3 arguments (cols, rows, element_type), got {}. This should have been caught during type checking.",
+                                "BUG: Mat type requires 3 arguments (cols, rows, element_type), got {}.",
                                 args.len()
                             );
                         }
                         let cols = match &args[0] {
                             PolyType::Constructed(TypeName::Size(n), _) => *n as u32,
                             _ => {
-                                panic!(
-                                    "BUG: Mat type has invalid cols argument: {:?}. This should have been resolved during type checking.",
-                                    args[0]
-                                );
+                                panic!("BUG: Mat type has invalid cols argument: {:?}.", args[0]);
                             }
                         };
                         let rows = match &args[1] {
                             PolyType::Constructed(TypeName::Size(n), _) => *n as u32,
                             _ => {
-                                panic!(
-                                    "BUG: Mat type has invalid rows argument: {:?}. This should have been resolved during type checking.",
-                                    args[1]
-                                );
+                                panic!("BUG: Mat type has invalid rows argument: {:?}.", args[1]);
                             }
                         };
                         let elem_type = self.ast_type_to_spirv(&args[2]);
@@ -279,7 +261,6 @@ impl SpvBuilder {
                             real_fields.iter().map(|(_, ty)| self.ast_type_to_spirv(ty)).collect();
                         self.get_or_create_struct_type(field_types)
                     }
-                    TypeName::Str(s) if *s == "unknown" => self.i32_type,
                     _ => {
                         panic!(
                             "BUG: Unknown type reached lowering: {:?}. This should have been caught during type checking.",
@@ -365,6 +346,7 @@ impl SpvBuilder {
     /// End the current function, emitting the variables block with branch
     fn end_function(&mut self) -> Result<()> {
         // Save current block
+        //TODO: is this meant to be used?
         let code_continues_from = self.current_block;
 
         // Now emit the variables block at the start
@@ -438,90 +420,9 @@ impl SpvBuilder {
         id
     }
 
-    /// Binary arithmetic operations
-    fn i_add(&mut self, lhs: spirv::Word, rhs: spirv::Word) -> Result<spirv::Word> {
-        Ok(self.builder.i_add(self.i32_type, None, lhs, rhs)?)
-    }
-
-    fn i_sub(&mut self, lhs: spirv::Word, rhs: spirv::Word) -> Result<spirv::Word> {
-        Ok(self.builder.i_sub(self.i32_type, None, lhs, rhs)?)
-    }
-
-    fn i_mul(&mut self, lhs: spirv::Word, rhs: spirv::Word) -> Result<spirv::Word> {
-        Ok(self.builder.i_mul(self.i32_type, None, lhs, rhs)?)
-    }
-
-    fn s_div(&mut self, lhs: spirv::Word, rhs: spirv::Word) -> Result<spirv::Word> {
-        Ok(self.builder.s_div(self.i32_type, None, lhs, rhs)?)
-    }
-
-    fn f_add(&mut self, lhs: spirv::Word, rhs: spirv::Word) -> Result<spirv::Word> {
-        Ok(self.builder.f_add(self.f32_type, None, lhs, rhs)?)
-    }
-
-    fn f_sub(&mut self, lhs: spirv::Word, rhs: spirv::Word) -> Result<spirv::Word> {
-        Ok(self.builder.f_sub(self.f32_type, None, lhs, rhs)?)
-    }
-
-    fn f_mul(&mut self, lhs: spirv::Word, rhs: spirv::Word) -> Result<spirv::Word> {
-        Ok(self.builder.f_mul(self.f32_type, None, lhs, rhs)?)
-    }
-
-    fn f_div(&mut self, lhs: spirv::Word, rhs: spirv::Word) -> Result<spirv::Word> {
-        Ok(self.builder.f_div(self.f32_type, None, lhs, rhs)?)
-    }
-
-    /// Comparison operations
-    fn i_equal(&mut self, lhs: spirv::Word, rhs: spirv::Word) -> Result<spirv::Word> {
-        Ok(self.builder.i_equal(self.bool_type, None, lhs, rhs)?)
-    }
-
-    fn s_less_than(&mut self, lhs: spirv::Word, rhs: spirv::Word) -> Result<spirv::Word> {
-        Ok(self.builder.s_less_than(self.bool_type, None, lhs, rhs)?)
-    }
-
-    fn s_less_than_equal(&mut self, lhs: spirv::Word, rhs: spirv::Word) -> Result<spirv::Word> {
-        Ok(self.builder.s_less_than_equal(self.bool_type, None, lhs, rhs)?)
-    }
-
-    fn s_greater_than(&mut self, lhs: spirv::Word, rhs: spirv::Word) -> Result<spirv::Word> {
-        Ok(self.builder.s_greater_than(self.bool_type, None, lhs, rhs)?)
-    }
-
-    fn s_greater_than_equal(&mut self, lhs: spirv::Word, rhs: spirv::Word) -> Result<spirv::Word> {
-        Ok(self.builder.s_greater_than_equal(self.bool_type, None, lhs, rhs)?)
-    }
-
-    fn i_not_equal(&mut self, lhs: spirv::Word, rhs: spirv::Word) -> Result<spirv::Word> {
-        Ok(self.builder.i_not_equal(self.bool_type, None, lhs, rhs)?)
-    }
-
-    /// Unary operations
-    fn s_negate(&mut self, operand: spirv::Word) -> Result<spirv::Word> {
-        Ok(self.builder.s_negate(self.i32_type, None, operand)?)
-    }
-
-    fn f_negate(&mut self, operand: spirv::Word) -> Result<spirv::Word> {
-        Ok(self.builder.f_negate(self.f32_type, None, operand)?)
-    }
-
-    fn logical_not(&mut self, operand: spirv::Word) -> Result<spirv::Word> {
-        Ok(self.builder.logical_not(self.bool_type, None, operand)?)
-    }
-
-    /// Return from function
-    fn ret(&mut self) -> Result<()> {
-        self.builder.ret()?;
-        Ok(())
-    }
-
-    fn ret_value(&mut self, value: spirv::Word) -> Result<()> {
-        self.builder.ret_value(value)?;
-        Ok(())
-    }
-
     /// Create a new block and return its ID
     fn create_block(&mut self) -> spirv::Word {
+        //TODO: what is this?  this doesn't appear to create a block
         self.builder.id()
     }
 
@@ -529,12 +430,6 @@ impl SpvBuilder {
     fn begin_block(&mut self, block_id: spirv::Word) -> Result<()> {
         self.builder.begin_block(Some(block_id))?;
         self.current_block = Some(block_id);
-        Ok(())
-    }
-
-    /// Emit an unconditional branch
-    fn branch(&mut self, target: spirv::Word) -> Result<()> {
-        self.builder.branch(target)?;
         Ok(())
     }
 
@@ -551,71 +446,17 @@ impl SpvBuilder {
         Ok(())
     }
 
-    /// Emit a phi instruction
-    fn phi(
-        &mut self,
-        result_type: spirv::Word,
-        incoming: Vec<(spirv::Word, spirv::Word)>,
-    ) -> Result<spirv::Word> {
-        Ok(self.builder.phi(result_type, None, incoming)?)
-    }
-
-    /// Emit a loop merge
-    fn loop_merge(&mut self, merge_block: spirv::Word, continue_block: spirv::Word) -> Result<()> {
-        self.builder.loop_merge(merge_block, continue_block, spirv::LoopControl::NONE, [])?;
-        Ok(())
-    }
-
-    /// Emit a function call
-    fn function_call(
-        &mut self,
-        result_type: spirv::Word,
-        func_id: spirv::Word,
-        args: Vec<spirv::Word>,
-    ) -> Result<spirv::Word> {
-        Ok(self.builder.function_call(result_type, None, func_id, args)?)
-    }
-
-    /// Construct a composite (tuple/array/struct)
-    fn composite_construct(
-        &mut self,
-        result_type: spirv::Word,
-        elements: Vec<spirv::Word>,
-    ) -> Result<spirv::Word> {
-        Ok(self.builder.composite_construct(result_type, None, elements)?)
-    }
-
-    /// Extract an element from a composite
-    fn composite_extract(
-        &mut self,
-        result_type: spirv::Word,
-        composite: spirv::Word,
-        index: u32,
-    ) -> Result<spirv::Word> {
-        Ok(self.builder.composite_extract(result_type, None, composite, [index])?)
-    }
-
     /// Get array type
     fn type_array(&mut self, elem_type: spirv::Word, length: u32) -> spirv::Word {
         let length_id = self.const_i32(length as i32);
         self.builder.type_array(elem_type, length_id)
     }
-
-    /// Get struct type (for tuples/records)
-    fn type_struct(&mut self, field_types: Vec<spirv::Word>) -> spirv::Word {
-        self.builder.type_struct(field_types)
-    }
-
-    /// Assemble the module
-    fn assemble(self) -> Vec<u32> {
-        self.builder.module().assemble()
-    }
 }
 
 impl<'a> LowerCtx<'a> {
     fn new(program: &'a Program) -> Self {
-        let mut spv = SpvBuilder::new();
-        spv.lambda_registry = program.lambda_registry.clone();
+        let mut constructor = Constructor::new();
+        constructor.lambda_registry = program.lambda_registry.clone();
 
         // Build index from name to def position
         let mut def_index = HashMap::new();
@@ -645,7 +486,7 @@ impl<'a> LowerCtx<'a> {
             program,
             def_index,
             state: HashMap::new(),
-            spv,
+            constructor,
             entry_points,
         }
     }
@@ -699,7 +540,7 @@ impl<'a> LowerCtx<'a> {
 
                 if is_entry {
                     lower_entry_point(
-                        &mut self.spv,
+                        &mut self.constructor,
                         name,
                         params,
                         ret_type,
@@ -708,7 +549,7 @@ impl<'a> LowerCtx<'a> {
                         body,
                     )?;
                 } else {
-                    lower_regular_function(&mut self.spv, name, params, ret_type, body)?;
+                    lower_regular_function(&mut self.constructor, name, params, ret_type, body)?;
                 }
             }
             Def::Constant { name, ty, body, .. } => {
@@ -716,13 +557,13 @@ impl<'a> LowerCtx<'a> {
                 self.ensure_deps_lowered(body)?;
 
                 // Create global variable for constant (Private storage class)
-                let value_type = self.spv.ast_type_to_spirv(ty);
-                let ptr_type = self.spv.get_or_create_ptr_type(StorageClass::Private, value_type);
-                let var_id = self.spv.builder.variable(ptr_type, None, StorageClass::Private, None);
+                let value_type = self.constructor.ast_type_to_spirv(ty);
+                let ptr_type = self.constructor.get_or_create_ptr_type(StorageClass::Private, value_type);
+                let var_id = self.constructor.builder.variable(ptr_type, None, StorageClass::Private, None);
 
                 // Store for later initialization and lookup
-                self.spv.global_constants.insert(name.clone(), (var_id, value_type));
-                self.spv.pending_constant_inits.push((var_id, body.clone()));
+                self.constructor.global_constants.insert(name.clone(), (var_id, value_type));
+                self.constructor.pending_constant_inits.push((var_id, body.clone()));
             }
         }
         Ok(())
@@ -801,24 +642,29 @@ impl<'a> LowerCtx<'a> {
         }
 
         // Generate _init function to initialize global constants
-        if !self.spv.pending_constant_inits.is_empty() {
-            generate_init_function(&mut self.spv)?;
+        if !self.constructor.pending_constant_inits.is_empty() {
+            generate_init_function(&mut self.constructor)?;
         }
 
         // Emit entry points with interface variables
         for (name, model) in &self.entry_points {
-            if let Some(&func_id) = self.spv.functions.get(name) {
-                let interfaces = self.spv.entry_point_interfaces.get(name).cloned().unwrap_or_default();
-                self.spv.builder.entry_point(*model, func_id, name, interfaces);
+            if let Some(&func_id) = self.constructor.functions.get(name) {
+                let interfaces =
+                    self.constructor.entry_point_interfaces.get(name).cloned().unwrap_or_default();
+                self.constructor.builder.entry_point(*model, func_id, name, interfaces);
 
                 // Add execution mode for fragment shaders
                 if *model == spirv::ExecutionModel::Fragment {
-                    self.spv.builder.execution_mode(func_id, spirv::ExecutionMode::OriginUpperLeft, []);
+                    self.constructor.builder.execution_mode(
+                        func_id,
+                        spirv::ExecutionMode::OriginUpperLeft,
+                        [],
+                    );
                 }
             }
         }
 
-        Ok(self.spv.assemble())
+        Ok(self.constructor.builder.module().assemble())
     }
 }
 
@@ -829,44 +675,45 @@ pub fn lower(program: &mir::Program) -> Result<Vec<u32>> {
 }
 
 /// Generate _init function that initializes all global constants
-fn generate_init_function(spv: &mut SpvBuilder) -> Result<()> {
+fn generate_init_function(constructor: &mut Constructor) -> Result<()> {
     // Take pending inits to avoid borrow issues
-    let inits = std::mem::take(&mut spv.pending_constant_inits);
+    let inits = std::mem::take(&mut constructor.pending_constant_inits);
 
-    spv.begin_function("_init", &[], &[], spv.void_type)?;
+    constructor.begin_function("_init", &[], &[], constructor.void_type)?;
 
     for (var_id, body) in inits {
-        let value = lower_expr(spv, &body)?;
-        spv.builder.store(var_id, value, None, [])?;
+        let value = lower_expr(constructor, &body)?;
+        constructor.builder.store(var_id, value, None, [])?;
     }
 
-    spv.builder.ret()?;
-    spv.end_function()?;
+    constructor.builder.ret()?;
+    constructor.end_function()?;
 
     Ok(())
 }
 
 fn lower_regular_function(
-    spv: &mut SpvBuilder,
+    constructor: &mut Constructor,
     name: &str,
     params: &[mir::Param],
     ret_type: &PolyType<TypeName>,
     body: &Expr,
 ) -> Result<()> {
     let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
-    let param_types: Vec<spirv::Word> = params.iter().map(|p| spv.ast_type_to_spirv(&p.ty)).collect();
-    let return_type = spv.ast_type_to_spirv(ret_type);
-    spv.begin_function(name, &param_names, &param_types, return_type)?;
+    let param_types: Vec<spirv::Word> =
+        params.iter().map(|p| constructor.ast_type_to_spirv(&p.ty)).collect();
+    let return_type = constructor.ast_type_to_spirv(ret_type);
+    constructor.begin_function(name, &param_names, &param_types, return_type)?;
 
-    let result = lower_expr(spv, body)?;
-    spv.ret_value(result)?;
+    let result = lower_expr(constructor, body)?;
+    constructor.builder.ret_value(result)?;
 
-    spv.end_function()?;
+    constructor.end_function()?;
     Ok(())
 }
 
 fn lower_entry_point(
-    spv: &mut SpvBuilder,
+    constructor: &mut Constructor,
     name: &str,
     params: &[mir::Param],
     ret_type: &PolyType<TypeName>,
@@ -874,17 +721,17 @@ fn lower_entry_point(
     return_attributes: &[Vec<mir::Attribute>],
     body: &Expr,
 ) -> Result<()> {
-    spv.current_is_entry_point = true;
-    spv.current_output_vars.clear();
-    spv.current_input_vars.clear();
+    constructor.current_is_entry_point = true;
+    constructor.current_output_vars.clear();
+    constructor.current_input_vars.clear();
 
     let mut interface_vars = Vec::new();
 
     // Create Input variables for parameters
     for (i, param) in params.iter().enumerate() {
-        let param_type_id = spv.ast_type_to_spirv(&param.ty);
-        let ptr_type_id = spv.get_or_create_ptr_type(StorageClass::Input, param_type_id);
-        let var_id = spv.builder.variable(ptr_type_id, None, StorageClass::Input, None);
+        let param_type_id = constructor.ast_type_to_spirv(&param.ty);
+        let ptr_type_id = constructor.get_or_create_ptr_type(StorageClass::Input, param_type_id);
+        let var_id = constructor.builder.variable(ptr_type_id, None, StorageClass::Input, None);
 
         // Add decorations from attributes
         if i < param_attributes.len() {
@@ -893,7 +740,7 @@ fn lower_entry_point(
                     "location" => {
                         if let Some(loc_str) = attr.args.first() {
                             if let Ok(loc) = loc_str.parse::<u32>() {
-                                spv.builder.decorate(
+                                constructor.builder.decorate(
                                     var_id,
                                     spirv::Decoration::Location,
                                     [rspirv::dr::Operand::LiteralBit32(loc)],
@@ -904,7 +751,7 @@ fn lower_entry_point(
                     "builtin" => {
                         if let Some(builtin_str) = attr.args.first() {
                             if let Some(builtin) = parse_builtin(builtin_str) {
-                                spv.builder.decorate(
+                                constructor.builder.decorate(
                                     var_id,
                                     spirv::Decoration::BuiltIn,
                                     [rspirv::dr::Operand::BuiltIn(builtin)],
@@ -918,12 +765,12 @@ fn lower_entry_point(
         }
 
         interface_vars.push(var_id);
-        spv.current_input_vars.push((var_id, param.name.clone(), param_type_id));
+        constructor.current_input_vars.push((var_id, param.name.clone(), param_type_id));
     }
 
     // Create Output variables for return values
     // Get return type components (if tuple, each element gets its own output)
-    let ret_type_id = spv.ast_type_to_spirv(ret_type);
+    let ret_type_id = constructor.ast_type_to_spirv(ret_type);
     let is_void = matches!(ret_type, PolyType::Constructed(TypeName::Str(s), _) if *s == "void");
 
     if !is_void {
@@ -932,9 +779,11 @@ fn lower_entry_point(
             if *s == "tuple" && !return_attributes.is_empty() {
                 // Multiple outputs - one variable per component
                 for (i, comp_ty) in component_types.iter().enumerate() {
-                    let comp_type_id = spv.ast_type_to_spirv(comp_ty);
-                    let ptr_type_id = spv.get_or_create_ptr_type(StorageClass::Output, comp_type_id);
-                    let var_id = spv.builder.variable(ptr_type_id, None, StorageClass::Output, None);
+                    let comp_type_id = constructor.ast_type_to_spirv(comp_ty);
+                    let ptr_type_id =
+                        constructor.get_or_create_ptr_type(StorageClass::Output, comp_type_id);
+                    let var_id =
+                        constructor.builder.variable(ptr_type_id, None, StorageClass::Output, None);
 
                     // Add decorations
                     if i < return_attributes.len() {
@@ -943,7 +792,7 @@ fn lower_entry_point(
                                 "location" => {
                                     if let Some(loc_str) = attr.args.first() {
                                         if let Ok(loc) = loc_str.parse::<u32>() {
-                                            spv.builder.decorate(
+                                            constructor.builder.decorate(
                                                 var_id,
                                                 spirv::Decoration::Location,
                                                 [rspirv::dr::Operand::LiteralBit32(loc)],
@@ -954,7 +803,7 @@ fn lower_entry_point(
                                 "builtin" => {
                                     if let Some(builtin_str) = attr.args.first() {
                                         if let Some(builtin) = parse_builtin(builtin_str) {
-                                            spv.builder.decorate(
+                                            constructor.builder.decorate(
                                                 var_id,
                                                 spirv::Decoration::BuiltIn,
                                                 [rspirv::dr::Operand::BuiltIn(builtin)],
@@ -968,12 +817,12 @@ fn lower_entry_point(
                     }
 
                     interface_vars.push(var_id);
-                    spv.current_output_vars.push(var_id);
+                    constructor.current_output_vars.push(var_id);
                 }
             } else {
                 // Single output
-                let ptr_type_id = spv.get_or_create_ptr_type(StorageClass::Output, ret_type_id);
-                let var_id = spv.builder.variable(ptr_type_id, None, StorageClass::Output, None);
+                let ptr_type_id = constructor.get_or_create_ptr_type(StorageClass::Output, ret_type_id);
+                let var_id = constructor.builder.variable(ptr_type_id, None, StorageClass::Output, None);
 
                 // Add decorations from first return attribute set
                 if let Some(attrs) = return_attributes.first() {
@@ -982,7 +831,7 @@ fn lower_entry_point(
                             "location" => {
                                 if let Some(loc_str) = attr.args.first() {
                                     if let Ok(loc) = loc_str.parse::<u32>() {
-                                        spv.builder.decorate(
+                                        constructor.builder.decorate(
                                             var_id,
                                             spirv::Decoration::Location,
                                             [rspirv::dr::Operand::LiteralBit32(loc)],
@@ -993,7 +842,7 @@ fn lower_entry_point(
                             "builtin" => {
                                 if let Some(builtin_str) = attr.args.first() {
                                     if let Some(builtin) = parse_builtin(builtin_str) {
-                                        spv.builder.decorate(
+                                        constructor.builder.decorate(
                                             var_id,
                                             spirv::Decoration::BuiltIn,
                                             [rspirv::dr::Operand::BuiltIn(builtin)],
@@ -1007,12 +856,12 @@ fn lower_entry_point(
                 }
 
                 interface_vars.push(var_id);
-                spv.current_output_vars.push(var_id);
+                constructor.current_output_vars.push(var_id);
             }
         } else {
             // Single non-tuple output
-            let ptr_type_id = spv.get_or_create_ptr_type(StorageClass::Output, ret_type_id);
-            let var_id = spv.builder.variable(ptr_type_id, None, StorageClass::Output, None);
+            let ptr_type_id = constructor.get_or_create_ptr_type(StorageClass::Output, ret_type_id);
+            let var_id = constructor.builder.variable(ptr_type_id, None, StorageClass::Output, None);
 
             if let Some(attrs) = return_attributes.first() {
                 for attr in attrs {
@@ -1020,7 +869,7 @@ fn lower_entry_point(
                         "location" => {
                             if let Some(loc_str) = attr.args.first() {
                                 if let Ok(loc) = loc_str.parse::<u32>() {
-                                    spv.builder.decorate(
+                                    constructor.builder.decorate(
                                         var_id,
                                         spirv::Decoration::Location,
                                         [rspirv::dr::Operand::LiteralBit32(loc)],
@@ -1031,7 +880,7 @@ fn lower_entry_point(
                         "builtin" => {
                             if let Some(builtin_str) = attr.args.first() {
                                 if let Some(builtin) = parse_builtin(builtin_str) {
-                                    spv.builder.decorate(
+                                    constructor.builder.decorate(
                                         var_id,
                                         spirv::Decoration::BuiltIn,
                                         [rspirv::dr::Operand::BuiltIn(builtin)],
@@ -1045,65 +894,69 @@ fn lower_entry_point(
             }
 
             interface_vars.push(var_id);
-            spv.current_output_vars.push(var_id);
+            constructor.current_output_vars.push(var_id);
         }
     }
 
     // Store interface variables for entry point declaration
-    spv.entry_point_interfaces.insert(name.to_string(), interface_vars);
+    constructor.entry_point_interfaces.insert(name.to_string(), interface_vars);
 
     // Create void(void) function for entry point
-    let func_type = spv.builder.type_function(spv.void_type, vec![]);
-    let func_id =
-        spv.builder.begin_function(spv.void_type, None, spirv::FunctionControl::NONE, func_type)?;
-    spv.functions.insert(name.to_string(), func_id);
+    let func_type = constructor.builder.type_function(constructor.void_type, vec![]);
+    let func_id = constructor.builder.begin_function(
+        constructor.void_type,
+        None,
+        spirv::FunctionControl::NONE,
+        func_type,
+    )?;
+    constructor.functions.insert(name.to_string(), func_id);
 
     // Create entry block
-    let block_id = spv.builder.id();
-    spv.builder.begin_block(Some(block_id))?;
-    spv.current_block = Some(block_id);
+    let block_id = constructor.builder.id();
+    constructor.builder.begin_block(Some(block_id))?;
+    constructor.current_block = Some(block_id);
 
     // Call _init to initialize global constants
-    if let Some(&init_func_id) = spv.functions.get("_init") {
-        spv.builder.function_call(spv.void_type, None, init_func_id, [])?;
+    if let Some(&init_func_id) = constructor.functions.get("_init") {
+        constructor.builder.function_call(constructor.void_type, None, init_func_id, [])?;
     }
 
     // Load input variables into environment
-    for (var_id, param_name, type_id) in spv.current_input_vars.clone() {
-        let loaded = spv.builder.load(type_id, None, var_id, None, [])?;
-        spv.env.insert(param_name, loaded);
+    for (var_id, param_name, type_id) in constructor.current_input_vars.clone() {
+        let loaded = constructor.builder.load(type_id, None, var_id, None, [])?;
+        constructor.env.insert(param_name, loaded);
     }
 
     // Lower the body
-    let result = lower_expr(spv, body)?;
+    let result = lower_expr(constructor, body)?;
 
     // Store result to output variables
-    if !spv.current_output_vars.is_empty() {
+    if !constructor.current_output_vars.is_empty() {
         // Check if result is a tuple that needs to be decomposed
         if let PolyType::Constructed(TypeName::Str(s), component_types) = ret_type {
-            if *s == "tuple" && spv.current_output_vars.len() > 1 {
+            if *s == "tuple" && constructor.current_output_vars.len() > 1 {
                 // Extract each component and store
-                for (i, &output_var) in spv.current_output_vars.clone().iter().enumerate() {
-                    let comp_type_id = spv.ast_type_to_spirv(&component_types[i]);
+                for (i, &output_var) in constructor.current_output_vars.clone().iter().enumerate() {
+                    let comp_type_id = constructor.ast_type_to_spirv(&component_types[i]);
                     let component =
-                        spv.builder.composite_extract(comp_type_id, None, result, [i as u32])?;
-                    spv.builder.store(output_var, component, None, [])?;
+                        constructor.builder.composite_extract(comp_type_id, None, result, [i as u32])?;
+                    constructor.builder.store(output_var, component, None, [])?;
                 }
-            } else if let Some(&output_var) = spv.current_output_vars.first() {
-                spv.builder.store(output_var, result, None, [])?;
+            } else if let Some(&output_var) = constructor.current_output_vars.first() {
+                constructor.builder.store(output_var, result, None, [])?;
             }
-        } else if let Some(&output_var) = spv.current_output_vars.first() {
-            spv.builder.store(output_var, result, None, [])?;
+        } else if let Some(&output_var) = constructor.current_output_vars.first() {
+            constructor.builder.store(output_var, result, None, [])?;
         }
     }
 
     // Return void
-    spv.builder.ret()?;
-    spv.builder.end_function()?;
+    constructor.builder.ret()?;
+    constructor.builder.end_function()?;
 
     // Clean up
-    spv.current_is_entry_point = false;
-    spv.env.clear();
+    constructor.current_is_entry_point = false;
+    constructor.env.clear();
 
     Ok(())
 }
@@ -1123,47 +976,121 @@ fn parse_builtin(s: &str) -> Option<spirv::BuiltIn> {
     }
 }
 
-fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
+fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word> {
     match &expr.kind {
-        ExprKind::Literal(lit) => lower_literal(spv, lit),
+        ExprKind::Literal(lit) => lower_literal(constructor, lit),
 
         ExprKind::Var(name) => {
             // First check local environment
-            if let Some(&id) = spv.env.get(name) {
+            if let Some(&id) = constructor.env.get(name) {
                 return Ok(id);
             }
             // Then check global constants (load from global variable)
-            if let Some(&(var_id, type_id)) = spv.global_constants.get(name) {
-                return Ok(spv.builder.load(type_id, None, var_id, None, [])?);
+            if let Some(&(var_id, type_id)) = constructor.global_constants.get(name) {
+                return Ok(constructor.builder.load(type_id, None, var_id, None, [])?);
             }
             Err(CompilerError::SpirvError(format!("Undefined variable: {}", name)))
         }
 
         ExprKind::BinOp { op, lhs, rhs } => {
-            let lhs_id = lower_expr(spv, lhs)?;
-            let rhs_id = lower_expr(spv, rhs)?;
+            let lhs_id = lower_expr(constructor, lhs)?;
+            let rhs_id = lower_expr(constructor, rhs)?;
+            let same_out_type = constructor.ast_type_to_spirv(&lhs.ty);
+            let bool_type = constructor.bool_type;
 
-            match op.as_str() {
-                "+" => spv.i_add(lhs_id, rhs_id),
-                "-" => spv.i_sub(lhs_id, rhs_id),
-                "*" => spv.i_mul(lhs_id, rhs_id),
-                "/" => spv.s_div(lhs_id, rhs_id),
-                "==" => spv.i_equal(lhs_id, rhs_id),
-                "!=" => spv.i_not_equal(lhs_id, rhs_id),
-                "<" => spv.s_less_than(lhs_id, rhs_id),
-                "<=" => spv.s_less_than_equal(lhs_id, rhs_id),
-                ">" => spv.s_greater_than(lhs_id, rhs_id),
-                ">=" => spv.s_greater_than_equal(lhs_id, rhs_id),
+            use PolyType::*;
+            use TypeName::*;
+            match (op.as_str(), &lhs.ty) {
+                // Float operations
+                ("+", Constructed(Float(_), _)) => {
+                    Ok(constructor.builder.f_add(same_out_type, None, lhs_id, rhs_id)?)
+                }
+                ("-", Constructed(Float(_), _)) => {
+                    Ok(constructor.builder.f_sub(same_out_type, None, lhs_id, rhs_id)?)
+                }
+                ("*", Constructed(Float(_), _)) => {
+                    Ok(constructor.builder.f_mul(same_out_type, None, lhs_id, rhs_id)?)
+                }
+                ("/", Constructed(Float(_), _)) => {
+                    Ok(constructor.builder.f_div(same_out_type, None, lhs_id, rhs_id)?)
+                }
+                ("%", Constructed(Float(_), _)) => {
+                    Ok(constructor.builder.f_rem(same_out_type, None, lhs_id, rhs_id)?)
+                }
+                ("==", Constructed(Float(_), _)) => {
+                    Ok(constructor.builder.f_ord_equal(bool_type, None, lhs_id, rhs_id)?)
+                }
+                ("!=", Constructed(Float(_), _)) => {
+                    Ok(constructor.builder.f_ord_not_equal(bool_type, None, lhs_id, rhs_id)?)
+                }
+                ("<", Constructed(Float(_), _)) => {
+                    Ok(constructor.builder.f_ord_less_than(bool_type, None, lhs_id, rhs_id)?)
+                }
+                ("<=", Constructed(Float(_), _)) => {
+                    Ok(constructor.builder.f_ord_less_than_equal(bool_type, None, lhs_id, rhs_id)?)
+                }
+                (">", Constructed(Float(_), _)) => {
+                    Ok(constructor.builder.f_ord_greater_than(bool_type, None, lhs_id, rhs_id)?)
+                }
+                (">=", Constructed(Float(_), _)) => {
+                    Ok(constructor.builder.f_ord_greater_than_equal(bool_type, None, lhs_id, rhs_id)?)
+                }
+
+                // Unsigned integer operations
+                ("/", Constructed(UInt(_), _)) => {
+                    Ok(constructor.builder.u_div(same_out_type, None, lhs_id, rhs_id)?)
+                }
+                ("%", Constructed(UInt(_), _)) => {
+                    Ok(constructor.builder.u_mod(same_out_type, None, lhs_id, rhs_id)?)
+                }
+                ("<", Constructed(UInt(_), _)) => {
+                    Ok(constructor.builder.u_less_than(bool_type, None, lhs_id, rhs_id)?)
+                }
+                ("<=", Constructed(UInt(_), _)) => {
+                    Ok(constructor.builder.u_less_than_equal(bool_type, None, lhs_id, rhs_id)?)
+                }
+                (">", Constructed(UInt(_), _)) => {
+                    Ok(constructor.builder.u_greater_than(bool_type, None, lhs_id, rhs_id)?)
+                }
+                (">=", Constructed(UInt(_), _)) => {
+                    Ok(constructor.builder.u_greater_than_equal(bool_type, None, lhs_id, rhs_id)?)
+                }
+
+                // Signed integer operations (and fallback for +, -, *, ==, != which are the same for signed/unsigned)
+                ("+", _) => Ok(constructor.builder.i_add(same_out_type, None, lhs_id, rhs_id)?),
+                ("-", _) => Ok(constructor.builder.i_sub(same_out_type, None, lhs_id, rhs_id)?),
+                ("*", _) => Ok(constructor.builder.i_mul(same_out_type, None, lhs_id, rhs_id)?),
+                ("/", _) => Ok(constructor.builder.s_div(same_out_type, None, lhs_id, rhs_id)?),
+                ("%", _) => Ok(constructor.builder.s_mod(same_out_type, None, lhs_id, rhs_id)?),
+                ("==", _) => Ok(constructor.builder.i_equal(bool_type, None, lhs_id, rhs_id)?),
+                ("!=", _) => Ok(constructor.builder.i_not_equal(bool_type, None, lhs_id, rhs_id)?),
+                ("<", _) => Ok(constructor.builder.s_less_than(bool_type, None, lhs_id, rhs_id)?),
+                ("<=", _) => Ok(constructor.builder.s_less_than_equal(bool_type, None, lhs_id, rhs_id)?),
+                (">", _) => Ok(constructor.builder.s_greater_than(bool_type, None, lhs_id, rhs_id)?),
+                (">=", _) => {
+                    Ok(constructor.builder.s_greater_than_equal(bool_type, None, lhs_id, rhs_id)?)
+                }
+
                 _ => Err(CompilerError::SpirvError(format!("Unknown binary op: {}", op))),
             }
         }
 
         ExprKind::UnaryOp { op, operand } => {
-            let operand_id = lower_expr(spv, operand)?;
+            let operand_id = lower_expr(constructor, operand)?;
+            let same_type = constructor.ast_type_to_spirv(&operand.ty);
 
-            match op.as_str() {
-                "-" => spv.s_negate(operand_id),
-                "!" => spv.logical_not(operand_id),
+            use PolyType::*;
+            use TypeName::*;
+            match (op.as_str(), &operand.ty) {
+                ("-", Constructed(Float(_), _)) => {
+                    Ok(constructor.builder.f_negate(same_type, None, operand_id)?)
+                }
+                ("-", Constructed(UInt(bits), _)) => Err(CompilerError::SpirvError(format!(
+                    "Cannot negate unsigned integer type u{}",
+                    bits
+                ))),
+                ("-", _) => Ok(constructor.builder.s_negate(same_type, None, operand_id)?),
+                ("!", _) => Ok(constructor.builder.logical_not(constructor.bool_type, None, operand_id)?),
                 _ => Err(CompilerError::SpirvError(format!("Unknown unary op: {}", op))),
             }
         }
@@ -1173,46 +1100,44 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
             then_branch,
             else_branch,
         } => {
-            let cond_id = lower_expr(spv, cond)?;
+            let cond_id = lower_expr(constructor, cond)?;
 
             // Get the result type from the expression
-            let result_type = spv.ast_type_to_spirv(&expr.ty);
+            let result_type = constructor.ast_type_to_spirv(&expr.ty);
 
             // Create blocks
-            let then_block = spv.create_block();
-            let else_block = spv.create_block();
-            let merge_block = spv.create_block();
+            let then_block = constructor.create_block();
+            let else_block = constructor.create_block();
+            let merge_block = constructor.create_block();
 
             // Branch based on condition
-            spv.branch_conditional(cond_id, then_block, else_block, merge_block)?;
+            constructor.branch_conditional(cond_id, then_block, else_block, merge_block)?;
 
             // Then block
-            spv.begin_block(then_block)?;
-            let then_result = lower_expr(spv, then_branch)?;
-            let then_exit_block = spv.current_block.unwrap();
-            spv.branch(merge_block)?;
+            constructor.begin_block(then_block)?;
+            let then_result = lower_expr(constructor, then_branch)?;
+            let then_exit_block = constructor.current_block.unwrap();
+
+            constructor.builder.branch(merge_block)?;
 
             // Else block
-            spv.begin_block(else_block)?;
-            let else_result = lower_expr(spv, else_branch)?;
-            let else_exit_block = spv.current_block.unwrap();
-            spv.branch(merge_block)?;
+            constructor.begin_block(else_block)?;
+            let else_result = lower_expr(constructor, else_branch)?;
+            let else_exit_block = constructor.current_block.unwrap();
+            constructor.builder.branch(merge_block)?;
 
             // Merge block with phi
-            spv.begin_block(merge_block)?;
-            let result = spv.phi(
-                result_type,
-                vec![(then_result, then_exit_block), (else_result, else_exit_block)],
-            )?;
-
+            constructor.begin_block(merge_block)?;
+            let incoming = vec![(then_result, then_exit_block), (else_result, else_exit_block)];
+            let result = constructor.builder.phi(result_type, None, incoming)?;
             Ok(result)
         }
 
         ExprKind::Let { name, value, body } => {
-            let value_id = lower_expr(spv, value)?;
-            spv.env.insert(name.clone(), value_id);
-            let result = lower_expr(spv, body)?;
-            spv.env.remove(name);
+            let value_id = lower_expr(constructor, value)?;
+            constructor.env.insert(name.clone(), value_id);
+            let result = lower_expr(constructor, body)?;
+            constructor.env.remove(name);
             Ok(result)
         }
 
@@ -1222,45 +1147,45 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
             body,
         } => {
             // Create blocks for loop structure
-            let header_block = spv.create_block();
-            let body_block = spv.create_block();
-            let continue_block = spv.create_block();
-            let merge_block = spv.create_block();
+            let header_block = constructor.create_block();
+            let body_block = constructor.create_block();
+            let continue_block = constructor.create_block();
+            let merge_block = constructor.create_block();
 
             // Evaluate init expressions in order, collecting values and types
             let mut init_values = Vec::new();
             for (name, init_expr) in init_bindings {
-                let init_val = lower_expr(spv, init_expr)?;
-                let init_type = spv.ast_type_to_spirv(&init_expr.ty);
-                spv.env.insert(name.clone(), init_val);
+                let init_val = lower_expr(constructor, init_expr)?;
+                let init_type = constructor.ast_type_to_spirv(&init_expr.ty);
+                constructor.env.insert(name.clone(), init_val);
                 init_values.push((name.clone(), init_val, init_type));
             }
-            let pre_header_block = spv.current_block.unwrap();
+            let pre_header_block = constructor.current_block.unwrap();
 
             // Branch to header
-            spv.branch(header_block)?;
+            constructor.builder.branch(header_block)?;
 
             // Header block - we'll add phi nodes later
-            spv.begin_block(header_block)?;
-            let header_block_idx = spv.builder.selected_block().expect("No block selected");
+            constructor.begin_block(header_block)?;
+            let header_block_idx = constructor.builder.selected_block().expect("No block selected");
 
             // Allocate phi IDs and add to environment so condition/body can reference them
             let mut phi_info = Vec::new();
             for (name, init_val, var_type) in &init_values {
-                let phi_id = spv.builder.id();
+                let phi_id = constructor.builder.id();
                 phi_info.push((name.clone(), phi_id, *init_val, *var_type));
-                spv.env.insert(name.clone(), phi_id);
+                constructor.env.insert(name.clone(), phi_id);
             }
 
             // Generate condition based on loop kind
             let cond_id = match kind {
-                LoopKind::While { cond } => lower_expr(spv, cond)?,
+                LoopKind::While { cond } => lower_expr(constructor, cond)?,
                 LoopKind::ForRange { var, bound } => {
-                    let bound_id = lower_expr(spv, bound)?;
-                    let var_id = *spv.env.get(var).ok_or_else(|| {
+                    let bound_id = lower_expr(constructor, bound)?;
+                    let var_id = *constructor.env.get(var).ok_or_else(|| {
                         CompilerError::SpirvError(format!("Loop variable {} not found", var))
                     })?;
-                    spv.s_less_than(var_id, bound_id)?
+                    constructor.builder.s_less_than(constructor.bool_type, None, var_id, bound_id)?
                 }
                 LoopKind::For { .. } => {
                     return Err(CompilerError::SpirvError(
@@ -1270,16 +1195,16 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
             };
 
             // Loop merge and conditional branch
-            spv.loop_merge(merge_block, continue_block)?;
-            spv.builder.branch_conditional(cond_id, body_block, merge_block, [])?;
+            constructor.builder.loop_merge(merge_block, continue_block, spirv::LoopControl::NONE, [])?;
+            constructor.builder.branch_conditional(cond_id, body_block, merge_block, [])?;
 
             // Body block
-            spv.begin_block(body_block)?;
-            let body_result = lower_expr(spv, body)?;
-            spv.branch(continue_block)?;
+            constructor.begin_block(body_block)?;
+            let body_result = lower_expr(constructor, body)?;
+            constructor.builder.branch(continue_block)?;
 
             // Continue block - extract updated values from body result
-            spv.begin_block(continue_block)?;
+            constructor.begin_block(continue_block)?;
 
             // Extract continue values based on number of loop variables
             let continue_values: Vec<spirv::Word> = if phi_info.len() == 1 {
@@ -1291,50 +1216,50 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                 for i in 0..phi_info.len() {
                     let comp_type = phi_info[i].3; // var_type
                     let extracted =
-                        spv.builder.composite_extract(comp_type, None, body_result, [i as u32])?;
+                        constructor.builder.composite_extract(comp_type, None, body_result, [i as u32])?;
                     values.push(extracted);
                 }
                 values
             };
 
-            spv.branch(header_block)?;
+            constructor.builder.branch(header_block)?;
             let continue_block_id = continue_block;
 
             // Now go back and insert phi nodes at the beginning of header block
             // We need to save current function context and temporarily work on header
-            let saved_current_block = spv.current_block;
-            spv.builder.select_block(Some(header_block_idx))?;
+            let saved_current_block = constructor.current_block;
+            constructor.builder.select_block(Some(header_block_idx))?;
 
             for (i, (name, phi_id, init_val, var_type)) in phi_info.iter().enumerate() {
                 let incoming = vec![
                     (*init_val, pre_header_block),
                     (continue_values[i], continue_block_id),
                 ];
-                spv.builder.insert_phi(InsertPoint::Begin, *var_type, Some(*phi_id), incoming)?;
+                constructor.builder.insert_phi(InsertPoint::Begin, *var_type, Some(*phi_id), incoming)?;
             }
 
             // Deselect block before continuing
-            spv.builder.select_block(None)?;
+            constructor.builder.select_block(None)?;
 
             // Continue to merge block
-            spv.begin_block(merge_block)?;
+            constructor.begin_block(merge_block)?;
 
             // Clean up environment
             for (name, _, _, _) in &phi_info {
-                spv.env.remove(name);
+                constructor.env.remove(name);
             }
 
             // Return the first phi value as loop result
             if let Some((_, phi_id, _, _)) = phi_info.first() {
                 Ok(*phi_id)
             } else {
-                Ok(spv.const_i32(0)) // Empty loop
+                Ok(constructor.const_i32(0)) // Empty loop
             }
         }
 
         ExprKind::Call { func, args } => {
             // Get the result type from the expression
-            let result_type = spv.ast_type_to_spirv(&expr.ty);
+            let result_type = constructor.ast_type_to_spirv(&expr.ty);
 
             // Special case for map - extract lambda name from closure before lowering
             if func == "map" {
@@ -1373,8 +1298,8 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                 };
 
                 // Now lower both args normally
-                let closure_val = lower_expr(spv, &args[0])?;
-                let array_val = lower_expr(spv, &args[1])?;
+                let closure_val = lower_expr(constructor, &args[0])?;
+                let array_val = lower_expr(constructor, &args[1])?;
 
                 // Get array info from MIR types
                 let (array_size, elem_mir_type) = match &expr.ty {
@@ -1396,10 +1321,10 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                     }
                 };
 
-                let elem_type = spv.ast_type_to_spirv(elem_mir_type);
+                let elem_type = constructor.ast_type_to_spirv(elem_mir_type);
 
                 // Look up the lambda function by name
-                let lambda_func_id = *spv.functions.get(&lambda_name).ok_or_else(|| {
+                let lambda_func_id = *constructor.functions.get(&lambda_name).ok_or_else(|| {
                     CompilerError::SpirvError(format!("Lambda function not found: {}", lambda_name))
                 })?;
 
@@ -1407,33 +1332,35 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                 let mut result_elements = Vec::new();
                 for i in 0..array_size {
                     // Extract element from input array
-                    let input_elem = spv.builder.composite_extract(elem_type, None, array_val, [i])?;
+                    let input_elem =
+                        constructor.builder.composite_extract(elem_type, None, array_val, [i])?;
 
                     // Call lambda with closure and element
+                    let args = vec![closure_val, input_elem];
                     let result_elem =
-                        spv.function_call(elem_type, lambda_func_id, vec![closure_val, input_elem])?;
+                        constructor.builder.function_call(elem_type, None, lambda_func_id, args)?;
                     result_elements.push(result_elem);
                 }
 
                 // Construct result array
-                return spv.composite_construct(result_type, result_elements);
+                return Ok(constructor.builder.composite_construct(result_type, None, result_elements)?);
             }
 
             // For all other calls, lower arguments normally
             let arg_ids: Vec<spirv::Word> =
-                args.iter().map(|a| lower_expr(spv, a)).collect::<Result<Vec<_>>>()?;
+                args.iter().map(|a| lower_expr(constructor, a)).collect::<Result<Vec<_>>>()?;
 
             // Check for builtin vector constructors
             match func.as_str() {
                 "vec2" | "vec3" | "vec4" => {
                     // Use the result type which should be the proper vector type
-                    spv.composite_construct(result_type, arg_ids)
+                    Ok(constructor.builder.composite_construct(result_type, None, arg_ids)?)
                 }
                 _ => {
                     // Check if it's a builtin function
-                    if let Some(overloads) = spv.builtin_registry.get_overloads(func) {
+                    if let Some(overloads) = constructor.builtin_registry.get_overloads(func) {
                         // TODO: Use the selected overload from type checking
-                        // For now, just use the first overload
+                        // Please evaluate what the correct thing is here
                         let builtin = &overloads[0];
                         match &builtin.implementation {
                             BuiltinImpl::PrimOp(spirv_op) => {
@@ -1441,10 +1368,10 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                 match spirv_op {
                                     PrimOp::GlslExt(ext_op) => {
                                         // Call GLSL extended instruction
-                                        let glsl_id = spv.glsl_ext_inst_id;
+                                        let glsl_id = constructor.glsl_ext_inst_id;
                                         let operands: Vec<Operand> =
                                             arg_ids.iter().map(|&id| Operand::IdRef(id)).collect();
-                                        Ok(spv.builder.ext_inst(
+                                        Ok(constructor.builder.ext_inst(
                                             result_type,
                                             None,
                                             glsl_id,
@@ -1454,11 +1381,17 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                     }
                                     PrimOp::Dot => {
                                         if arg_ids.len() != 2 {
+                                            //TODO: can you create a "bail!" macro to do this?
                                             return Err(CompilerError::SpirvError(
                                                 "dot requires 2 args".to_string(),
                                             ));
                                         }
-                                        Ok(spv.builder.dot(result_type, None, arg_ids[0], arg_ids[1])?)
+                                        Ok(constructor.builder.dot(
+                                            result_type,
+                                            None,
+                                            arg_ids[0],
+                                            arg_ids[1],
+                                        )?)
                                     }
                                     PrimOp::MatrixTimesMatrix => {
                                         if arg_ids.len() != 2 {
@@ -1466,7 +1399,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                                 "matrix × matrix requires 2 args".to_string(),
                                             ));
                                         }
-                                        Ok(spv.builder.matrix_times_matrix(
+                                        Ok(constructor.builder.matrix_times_matrix(
                                             result_type,
                                             None,
                                             arg_ids[0],
@@ -1479,7 +1412,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                                 "matrix × vector requires 2 args".to_string(),
                                             ));
                                         }
-                                        Ok(spv.builder.matrix_times_vector(
+                                        Ok(constructor.builder.matrix_times_vector(
                                             result_type,
                                             None,
                                             arg_ids[0],
@@ -1492,7 +1425,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                                 "vector × matrix requires 2 args".to_string(),
                                             ));
                                         }
-                                        Ok(spv.builder.vector_times_matrix(
+                                        Ok(constructor.builder.vector_times_matrix(
                                             result_type,
                                             None,
                                             arg_ids[0],
@@ -1506,7 +1439,11 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                                 "FPToSI requires 1 arg".to_string(),
                                             ));
                                         }
-                                        Ok(spv.builder.convert_f_to_s(result_type, None, arg_ids[0])?)
+                                        Ok(constructor.builder.convert_f_to_s(
+                                            result_type,
+                                            None,
+                                            arg_ids[0],
+                                        )?)
                                     }
                                     PrimOp::FPToUI => {
                                         if arg_ids.len() != 1 {
@@ -1514,7 +1451,11 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                                 "FPToUI requires 1 arg".to_string(),
                                             ));
                                         }
-                                        Ok(spv.builder.convert_f_to_u(result_type, None, arg_ids[0])?)
+                                        Ok(constructor.builder.convert_f_to_u(
+                                            result_type,
+                                            None,
+                                            arg_ids[0],
+                                        )?)
                                     }
                                     PrimOp::SIToFP => {
                                         if arg_ids.len() != 1 {
@@ -1522,7 +1463,11 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                                 "SIToFP requires 1 arg".to_string(),
                                             ));
                                         }
-                                        Ok(spv.builder.convert_s_to_f(result_type, None, arg_ids[0])?)
+                                        Ok(constructor.builder.convert_s_to_f(
+                                            result_type,
+                                            None,
+                                            arg_ids[0],
+                                        )?)
                                     }
                                     PrimOp::UIToFP => {
                                         if arg_ids.len() != 1 {
@@ -1530,7 +1475,11 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                                 "UIToFP requires 1 arg".to_string(),
                                             ));
                                         }
-                                        Ok(spv.builder.convert_u_to_f(result_type, None, arg_ids[0])?)
+                                        Ok(constructor.builder.convert_u_to_f(
+                                            result_type,
+                                            None,
+                                            arg_ids[0],
+                                        )?)
                                     }
                                     PrimOp::FPConvert => {
                                         if arg_ids.len() != 1 {
@@ -1538,7 +1487,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                                 "FPConvert requires 1 arg".to_string(),
                                             ));
                                         }
-                                        Ok(spv.builder.f_convert(result_type, None, arg_ids[0])?)
+                                        Ok(constructor.builder.f_convert(result_type, None, arg_ids[0])?)
                                     }
                                     PrimOp::SConvert => {
                                         if arg_ids.len() != 1 {
@@ -1546,7 +1495,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                                 "SConvert requires 1 arg".to_string(),
                                             ));
                                         }
-                                        Ok(spv.builder.s_convert(result_type, None, arg_ids[0])?)
+                                        Ok(constructor.builder.s_convert(result_type, None, arg_ids[0])?)
                                     }
                                     PrimOp::UConvert => {
                                         if arg_ids.len() != 1 {
@@ -1554,7 +1503,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                                 "UConvert requires 1 arg".to_string(),
                                             ));
                                         }
-                                        Ok(spv.builder.u_convert(result_type, None, arg_ids[0])?)
+                                        Ok(constructor.builder.u_convert(result_type, None, arg_ids[0])?)
                                     }
                                     PrimOp::Bitcast => {
                                         if arg_ids.len() != 1 {
@@ -1562,7 +1511,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                                 "Bitcast requires 1 arg".to_string(),
                                             ));
                                         }
-                                        Ok(spv.builder.bitcast(result_type, None, arg_ids[0])?)
+                                        Ok(constructor.builder.bitcast(result_type, None, arg_ids[0])?)
                                     }
                                     _ => {
                                         // TODO: Handle other PrimOp variants
@@ -1605,7 +1554,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                                             match type_args.get(0) {
                                                 Some(PolyType::Constructed(TypeName::Size(n), _)) => {
                                                     // Return the size as a constant i32
-                                                    Ok(spv.const_i32(*n as i32))
+                                                    Ok(constructor.const_i32(*n as i32))
                                                 }
                                                 _ => {
                                                     // Size is a variable or unknown - this shouldn't happen in well-typed code
@@ -1634,18 +1583,28 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                             BuiltinImpl::CoreFn(core_fn_name) => {
                                 // Library-level builtins implemented as normal functions in prelude
                                 // Look up the function and call it
-                                let func_id = *spv.functions.get(core_fn_name).ok_or_else(|| {
-                                    CompilerError::SpirvError(format!("CoreFn not found: {}", core_fn_name))
-                                })?;
-                                spv.function_call(result_type, func_id, arg_ids)
+                                let func_id =
+                                    *constructor.functions.get(core_fn_name).ok_or_else(|| {
+                                        CompilerError::SpirvError(format!(
+                                            "CoreFn not found: {}",
+                                            core_fn_name
+                                        ))
+                                    })?;
+
+                                Ok(constructor.builder.function_call(
+                                    result_type,
+                                    None,
+                                    func_id,
+                                    arg_ids,
+                                )?)
                             }
                         }
                     } else {
                         // Look up user-defined function
-                        let func_id = *spv.functions.get(func).ok_or_else(|| {
+                        let func_id = *constructor.functions.get(func).ok_or_else(|| {
                             CompilerError::SpirvError(format!("Unknown function: {}", func))
                         })?;
-                        spv.function_call(result_type, func_id, arg_ids)
+                        Ok(constructor.builder.function_call(result_type, None, func_id, arg_ids)?)
                     }
                 }
             }
@@ -1653,7 +1612,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
 
         ExprKind::Intrinsic { name, args } => {
             // Get the result type from the expression
-            let result_type = spv.ast_type_to_spirv(&expr.ty);
+            let result_type = constructor.ast_type_to_spirv(&expr.ty);
 
             match name.as_str() {
                 "tuple_access" => {
@@ -1662,7 +1621,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                             "tuple_access requires 2 args".to_string(),
                         ));
                     }
-                    let composite_id = lower_expr(spv, &args[0])?;
+                    let composite_id = lower_expr(constructor, &args[0])?;
                     // Second arg should be a constant index - extract it from the literal
                     let index = match &args[1].kind {
                         ExprKind::Literal(Literal::Int(s)) => {
@@ -1674,28 +1633,33 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                             panic!("BUG: tuple_access requires a constant integer literal as second argument, got {:?}. Type checking should ensure this.", args[1].kind)
                         }
                     };
-                    spv.composite_extract(result_type, composite_id, index)
+
+                    Ok(constructor.builder.composite_extract(result_type, None, composite_id, [index])?)
                 }
                 "index" => {
                     if args.len() != 2 {
                         return Err(CompilerError::SpirvError("index requires 2 args".to_string()));
                     }
                     // Array indexing with OpAccessChain + OpLoad
-                    let array_val = lower_expr(spv, &args[0])?;
-                    let index_val = lower_expr(spv, &args[1])?;
+                    let array_val = lower_expr(constructor, &args[0])?;
+                    let index_val = lower_expr(constructor, &args[1])?;
 
                     // Store array in a variable to get a pointer
-                    let array_type = spv.ast_type_to_spirv(&args[0].ty);
-                    let ptr_type = spv.builder.type_pointer(None, StorageClass::Function, array_type);
-                    let array_var = spv.builder.variable(ptr_type, None, StorageClass::Function, None);
-                    spv.builder.store(array_var, array_val, None, [])?;
+                    let array_type = constructor.ast_type_to_spirv(&args[0].ty);
+                    let ptr_type =
+                        constructor.builder.type_pointer(None, StorageClass::Function, array_type);
+                    let array_var =
+                        constructor.builder.variable(ptr_type, None, StorageClass::Function, None);
+                    constructor.builder.store(array_var, array_val, None, [])?;
 
                     // Use OpAccessChain to get pointer to element
-                    let elem_ptr_type = spv.builder.type_pointer(None, StorageClass::Function, result_type);
-                    let elem_ptr = spv.builder.access_chain(elem_ptr_type, None, array_var, [index_val])?;
+                    let elem_ptr_type =
+                        constructor.builder.type_pointer(None, StorageClass::Function, result_type);
+                    let elem_ptr =
+                        constructor.builder.access_chain(elem_ptr_type, None, array_var, [index_val])?;
 
                     // Load the element
-                    Ok(spv.builder.load(result_type, None, elem_ptr, None, [])?)
+                    Ok(constructor.builder.load(result_type, None, elem_ptr, None, [])?)
                 }
                 "record_access" => {
                     // Record field access by name
@@ -1705,7 +1669,7 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                             "record_access requires 2 args".to_string(),
                         ));
                     }
-                    let composite_id = lower_expr(spv, &args[0])?;
+                    let composite_id = lower_expr(constructor, &args[0])?;
 
                     // Get field name from string literal
                     let field_name = match &args[1].kind {
@@ -1744,11 +1708,15 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
                         }
                     };
 
-                    spv.composite_extract(result_type, composite_id, index)
+                    Ok(constructor.builder.composite_extract(result_type, None, composite_id, [index])?)
                 }
                 "assert" => {
                     // Assertions are no-ops in release, return body
-                    if args.len() >= 2 { lower_expr(spv, &args[1]) } else { Ok(spv.const_i32(0)) }
+                    if args.len() >= 2 {
+                        lower_expr(constructor, &args[1])
+                    } else {
+                        Ok(constructor.const_i32(0))
+                    }
                 }
                 _ => Err(CompilerError::SpirvError(format!("Unknown intrinsic: {}", name))),
             }
@@ -1756,58 +1724,60 @@ fn lower_expr(spv: &mut SpvBuilder, expr: &Expr) -> Result<spirv::Word> {
 
         ExprKind::Attributed { expr, .. } => {
             // Attributes are metadata, just lower the inner expression
-            lower_expr(spv, expr)
+            lower_expr(constructor, expr)
         }
     }
 }
 
-fn lower_literal(spv: &mut SpvBuilder, lit: &Literal) -> Result<spirv::Word> {
+fn lower_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::Word> {
     match lit {
         Literal::Int(s) => {
             let value: i32 = s
                 .parse()
                 .map_err(|_| CompilerError::SpirvError(format!("Invalid integer literal: {}", s)))?;
-            Ok(spv.const_i32(value))
+            Ok(constructor.const_i32(value))
         }
         Literal::Float(s) => {
             let value: f32 = s
                 .parse()
                 .map_err(|_| CompilerError::SpirvError(format!("Invalid float literal: {}", s)))?;
-            Ok(spv.const_f32(value))
+            Ok(constructor.const_f32(value))
         }
-        Literal::Bool(b) => Ok(spv.const_bool(*b)),
+        Literal::Bool(b) => Ok(constructor.const_bool(*b)),
         Literal::String(_) => Err(CompilerError::SpirvError(
             "String literals not supported in SPIR-V".to_string(),
         )),
         Literal::Tuple(elems) => {
             // Lower all elements
             let elem_ids: Vec<spirv::Word> =
-                elems.iter().map(|e| lower_expr(spv, e)).collect::<Result<Vec<_>>>()?;
+                elems.iter().map(|e| lower_expr(constructor, e)).collect::<Result<Vec<_>>>()?;
 
             // Create struct type for tuple from element types
-            let elem_types: Vec<spirv::Word> = elems.iter().map(|e| spv.ast_type_to_spirv(&e.ty)).collect();
-            let tuple_type = spv.type_struct(elem_types);
+            let elem_types: Vec<spirv::Word> =
+                elems.iter().map(|e| constructor.ast_type_to_spirv(&e.ty)).collect();
+            let tuple_type = constructor.builder.type_struct(elem_types);
 
             // Construct the composite
-            spv.composite_construct(tuple_type, elem_ids)
+            Ok(constructor.builder.composite_construct(tuple_type, None, elem_ids)?)
         }
         Literal::Array(elems) => {
             // Lower all elements
             let elem_ids: Vec<spirv::Word> =
-                elems.iter().map(|e| lower_expr(spv, e)).collect::<Result<Vec<_>>>()?;
+                elems.iter().map(|e| lower_expr(constructor, e)).collect::<Result<Vec<_>>>()?;
 
             // Get element type from first element
             let elem_type = elems.first()
-                .map(|e| spv.ast_type_to_spirv(&e.ty))
+                .map(|e| constructor.ast_type_to_spirv(&e.ty))
                 .unwrap_or_else(|| {
                     panic!("BUG: Empty array literal reached lowering. Type checking should require explicit type annotation for empty arrays or reject them entirely.")
                 });
 
             // Create array type
-            let array_type = spv.type_array(elem_type, elem_ids.len() as u32);
+            let array_type = constructor.type_array(elem_type, elem_ids.len() as u32);
 
             // Construct the composite
-            spv.composite_construct(array_type, elem_ids)
+
+            Ok(constructor.builder.composite_construct(array_type, None, elem_ids)?)
         }
         Literal::Record(fields) => {
             // Filter out phantom fields that only exist for compile-time dispatch
@@ -1815,15 +1785,15 @@ fn lower_literal(spv: &mut SpvBuilder, lit: &Literal) -> Result<spirv::Word> {
 
             // Records are represented as structs with fields in order
             let field_ids: Vec<spirv::Word> =
-                real_fields.iter().map(|(_, e)| lower_expr(spv, e)).collect::<Result<Vec<_>>>()?;
+                real_fields.iter().map(|(_, e)| lower_expr(constructor, e)).collect::<Result<Vec<_>>>()?;
 
             // Create struct type for record from field types
             let field_types: Vec<spirv::Word> =
-                real_fields.iter().map(|(_, e)| spv.ast_type_to_spirv(&e.ty)).collect();
-            let record_type = spv.type_struct(field_types);
+                real_fields.iter().map(|(_, e)| constructor.ast_type_to_spirv(&e.ty)).collect();
+            let record_type = constructor.builder.type_struct(field_types);
 
             // Construct the composite
-            spv.composite_construct(record_type, field_ids)
+            Ok(constructor.builder.composite_construct(record_type, None, field_ids)?)
         }
     }
 }
