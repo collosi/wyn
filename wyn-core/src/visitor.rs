@@ -5,6 +5,7 @@
 //! Visitor trait and override only the hooks they need, while the walk_*
 //! functions handle the actual tree traversal.
 
+use crate::NodeId;
 use crate::ast::*;
 use std::ops::ControlFlow;
 
@@ -49,28 +50,33 @@ pub trait Visitor: Sized {
         walk_expression(self, e)
     }
 
-    fn visit_expr_int_literal(&mut self, _n: i32) -> ControlFlow<Self::Break> {
+    fn visit_expr_int_literal(&mut self, _id: NodeId, _n: i32) -> ControlFlow<Self::Break> {
         ControlFlow::Continue(())
     }
 
-    fn visit_expr_float_literal(&mut self, _f: f32) -> ControlFlow<Self::Break> {
+    fn visit_expr_float_literal(&mut self, _id: NodeId, _f: f32) -> ControlFlow<Self::Break> {
         ControlFlow::Continue(())
     }
 
-    fn visit_expr_bool_literal(&mut self, _b: bool) -> ControlFlow<Self::Break> {
+    fn visit_expr_bool_literal(&mut self, _id: NodeId, _b: bool) -> ControlFlow<Self::Break> {
         ControlFlow::Continue(())
     }
 
-    fn visit_expr_identifier(&mut self, _name: &str) -> ControlFlow<Self::Break> {
+    fn visit_expr_identifier(&mut self, _id: NodeId, _name: &str) -> ControlFlow<Self::Break> {
         ControlFlow::Continue(())
     }
 
-    fn visit_expr_array_literal(&mut self, elements: &[Expression]) -> ControlFlow<Self::Break> {
+    fn visit_expr_array_literal(
+        &mut self,
+        _id: NodeId,
+        elements: &[Expression],
+    ) -> ControlFlow<Self::Break> {
         walk_expr_array_literal(self, elements)
     }
 
     fn visit_expr_array_index(
         &mut self,
+        _id: NodeId,
         array: &Expression,
         index: &Expression,
     ) -> ControlFlow<Self::Break> {
@@ -79,6 +85,7 @@ pub trait Visitor: Sized {
 
     fn visit_expr_binary_op(
         &mut self,
+        _id: NodeId,
         _op: &BinaryOp,
         left: &Expression,
         right: &Expression,
@@ -86,35 +93,46 @@ pub trait Visitor: Sized {
         walk_expr_binary_op(self, left, right)
     }
 
-    fn visit_expr_function_call(&mut self, _name: &str, args: &[Expression]) -> ControlFlow<Self::Break> {
+    fn visit_expr_function_call(
+        &mut self,
+        _id: NodeId,
+        _name: &str,
+        args: &[Expression],
+    ) -> ControlFlow<Self::Break> {
         walk_expr_function_call(self, args)
     }
 
-    fn visit_expr_tuple(&mut self, elements: &[Expression]) -> ControlFlow<Self::Break> {
+    fn visit_expr_tuple(&mut self, _id: NodeId, elements: &[Expression]) -> ControlFlow<Self::Break> {
         walk_expr_tuple(self, elements)
     }
 
-    fn visit_expr_lambda(&mut self, lambda: &LambdaExpr) -> ControlFlow<Self::Break> {
+    fn visit_expr_lambda(&mut self, _id: NodeId, lambda: &LambdaExpr) -> ControlFlow<Self::Break> {
         walk_expr_lambda(self, lambda)
     }
 
     fn visit_expr_application(
         &mut self,
+        _id: NodeId,
         func: &Expression,
         args: &[Expression],
     ) -> ControlFlow<Self::Break> {
         walk_expr_application(self, func, args)
     }
 
-    fn visit_expr_let_in(&mut self, let_in: &LetInExpr) -> ControlFlow<Self::Break> {
+    fn visit_expr_let_in(&mut self, _id: NodeId, let_in: &LetInExpr) -> ControlFlow<Self::Break> {
         walk_expr_let_in(self, let_in)
     }
 
-    fn visit_expr_field_access(&mut self, expr: &Expression, _field: &str) -> ControlFlow<Self::Break> {
+    fn visit_expr_field_access(
+        &mut self,
+        _id: NodeId,
+        expr: &Expression,
+        _field: &str,
+    ) -> ControlFlow<Self::Break> {
         walk_expr_field_access(self, expr)
     }
 
-    fn visit_expr_if(&mut self, if_expr: &IfExpr) -> ControlFlow<Self::Break> {
+    fn visit_expr_if(&mut self, _id: NodeId, if_expr: &IfExpr) -> ControlFlow<Self::Break> {
         walk_expr_if(self, if_expr)
     }
 
@@ -125,6 +143,56 @@ pub trait Visitor: Sized {
 
     fn visit_pattern(&mut self, p: &Pattern) -> ControlFlow<Self::Break> {
         walk_pattern(self, p)
+    }
+
+    fn visit_pattern_name(&mut self, _id: NodeId, _name: &str) -> ControlFlow<Self::Break> {
+        ControlFlow::Continue(())
+    }
+
+    fn visit_pattern_wildcard(&mut self, _id: NodeId) -> ControlFlow<Self::Break> {
+        ControlFlow::Continue(())
+    }
+
+    fn visit_pattern_unit(&mut self, _id: NodeId) -> ControlFlow<Self::Break> {
+        ControlFlow::Continue(())
+    }
+
+    fn visit_pattern_literal(&mut self, _id: NodeId, _lit: &PatternLiteral) -> ControlFlow<Self::Break> {
+        ControlFlow::Continue(())
+    }
+
+    fn visit_pattern_tuple(&mut self, _id: NodeId, patterns: &[Pattern]) -> ControlFlow<Self::Break> {
+        walk_pattern_tuple(self, patterns)
+    }
+
+    fn visit_pattern_record(
+        &mut self,
+        _id: NodeId,
+        fields: &[RecordPatternField],
+    ) -> ControlFlow<Self::Break> {
+        walk_pattern_record(self, fields)
+    }
+
+    fn visit_pattern_constructor(
+        &mut self,
+        _id: NodeId,
+        _name: &str,
+        patterns: &[Pattern],
+    ) -> ControlFlow<Self::Break> {
+        walk_pattern_constructor(self, patterns)
+    }
+
+    fn visit_pattern_typed(&mut self, _id: NodeId, inner: &Pattern, ty: &Type) -> ControlFlow<Self::Break> {
+        walk_pattern_typed(self, inner, ty)
+    }
+
+    fn visit_pattern_attributed(
+        &mut self,
+        _id: NodeId,
+        _attrs: &[Attribute],
+        inner: &Pattern,
+    ) -> ControlFlow<Self::Break> {
+        walk_pattern_attributed(self, inner)
     }
 
     fn visit_parameter(&mut self, p: &Parameter) -> ControlFlow<Self::Break> {
@@ -211,39 +279,54 @@ pub fn walk_parameter<V: Visitor>(v: &mut V, p: &Parameter) -> ControlFlow<V::Br
 }
 
 pub fn walk_pattern<V: Visitor>(v: &mut V, pat: &Pattern) -> ControlFlow<V::Break> {
+    let id = pat.h.id;
     match &pat.kind {
-        PatternKind::Name(_) | PatternKind::Wildcard | PatternKind::Unit | PatternKind::Literal(_) => {
-            ControlFlow::Continue(())
-        }
-        PatternKind::Tuple(patterns) => {
-            for p in patterns {
-                v.visit_pattern(p)?;
-            }
-            ControlFlow::Continue(())
-        }
-        PatternKind::Record(fields) => {
-            for field in fields {
-                if let Some(p) = &field.pattern {
-                    v.visit_pattern(p)?;
-                }
-            }
-            ControlFlow::Continue(())
-        }
-        PatternKind::Constructor(_, patterns) => {
-            for p in patterns {
-                v.visit_pattern(p)?;
-            }
-            ControlFlow::Continue(())
-        }
-        PatternKind::Typed(inner, ty) => {
-            v.visit_pattern(inner)?;
-            v.visit_type(ty)
-        }
-        PatternKind::Attributed(_, inner) => v.visit_pattern(inner),
+        PatternKind::Name(name) => v.visit_pattern_name(id, name),
+        PatternKind::Wildcard => v.visit_pattern_wildcard(id),
+        PatternKind::Unit => v.visit_pattern_unit(id),
+        PatternKind::Literal(lit) => v.visit_pattern_literal(id, lit),
+        PatternKind::Tuple(patterns) => v.visit_pattern_tuple(id, patterns),
+        PatternKind::Record(fields) => v.visit_pattern_record(id, fields),
+        PatternKind::Constructor(name, patterns) => v.visit_pattern_constructor(id, name, patterns),
+        PatternKind::Typed(inner, ty) => v.visit_pattern_typed(id, inner, ty),
+        PatternKind::Attributed(attrs, inner) => v.visit_pattern_attributed(id, attrs, inner),
     }
 }
 
+pub fn walk_pattern_tuple<V: Visitor>(v: &mut V, patterns: &[Pattern]) -> ControlFlow<V::Break> {
+    for p in patterns {
+        v.visit_pattern(p)?;
+    }
+    ControlFlow::Continue(())
+}
+
+pub fn walk_pattern_record<V: Visitor>(v: &mut V, fields: &[RecordPatternField]) -> ControlFlow<V::Break> {
+    for field in fields {
+        if let Some(p) = &field.pattern {
+            v.visit_pattern(p)?;
+        }
+    }
+    ControlFlow::Continue(())
+}
+
+pub fn walk_pattern_constructor<V: Visitor>(v: &mut V, patterns: &[Pattern]) -> ControlFlow<V::Break> {
+    for p in patterns {
+        v.visit_pattern(p)?;
+    }
+    ControlFlow::Continue(())
+}
+
+pub fn walk_pattern_typed<V: Visitor>(v: &mut V, inner: &Pattern, ty: &Type) -> ControlFlow<V::Break> {
+    v.visit_pattern(inner)?;
+    v.visit_type(ty)
+}
+
+pub fn walk_pattern_attributed<V: Visitor>(v: &mut V, inner: &Pattern) -> ControlFlow<V::Break> {
+    v.visit_pattern(inner)
+}
+
 pub fn walk_expression<V: Visitor>(v: &mut V, e: &Expression) -> ControlFlow<V::Break> {
+    let id = e.h.id;
     match &e.kind {
         ExprKind::RecordLiteral(fields) => {
             for (_name, field_expr) in fields {
@@ -251,19 +334,19 @@ pub fn walk_expression<V: Visitor>(v: &mut V, e: &Expression) -> ControlFlow<V::
             }
             ControlFlow::Continue(())
         }
-        ExprKind::IntLiteral(n) => v.visit_expr_int_literal(*n),
-        ExprKind::FloatLiteral(f) => v.visit_expr_float_literal(*f),
-        ExprKind::BoolLiteral(b) => v.visit_expr_bool_literal(*b),
-        ExprKind::Identifier(name) => v.visit_expr_identifier(name),
-        ExprKind::ArrayLiteral(elements) => v.visit_expr_array_literal(elements),
-        ExprKind::ArrayIndex(array, index) => v.visit_expr_array_index(array, index),
-        ExprKind::BinaryOp(op, left, right) => v.visit_expr_binary_op(op, left, right),
-        ExprKind::Tuple(elements) => v.visit_expr_tuple(elements),
-        ExprKind::Lambda(lambda) => v.visit_expr_lambda(lambda),
-        ExprKind::Application(func, args) => v.visit_expr_application(func, args),
-        ExprKind::LetIn(let_in) => v.visit_expr_let_in(let_in),
-        ExprKind::FieldAccess(expr, field) => v.visit_expr_field_access(expr, field),
-        ExprKind::If(if_expr) => v.visit_expr_if(if_expr),
+        ExprKind::IntLiteral(n) => v.visit_expr_int_literal(id, *n),
+        ExprKind::FloatLiteral(f) => v.visit_expr_float_literal(id, *f),
+        ExprKind::BoolLiteral(b) => v.visit_expr_bool_literal(id, *b),
+        ExprKind::Identifier(name) => v.visit_expr_identifier(id, name),
+        ExprKind::ArrayLiteral(elements) => v.visit_expr_array_literal(id, elements),
+        ExprKind::ArrayIndex(array, index) => v.visit_expr_array_index(id, array, index),
+        ExprKind::BinaryOp(op, left, right) => v.visit_expr_binary_op(id, op, left, right),
+        ExprKind::Tuple(elements) => v.visit_expr_tuple(id, elements),
+        ExprKind::Lambda(lambda) => v.visit_expr_lambda(id, lambda),
+        ExprKind::Application(func, args) => v.visit_expr_application(id, func, args),
+        ExprKind::LetIn(let_in) => v.visit_expr_let_in(id, let_in),
+        ExprKind::FieldAccess(expr, field) => v.visit_expr_field_access(id, expr, field),
+        ExprKind::If(if_expr) => v.visit_expr_if(id, if_expr),
 
         ExprKind::TypeHole => ControlFlow::Continue(()),
         ExprKind::OperatorSection(_) => ControlFlow::Continue(()),
