@@ -154,7 +154,12 @@ fn compile_file(
 
     type_checked.print_warnings();
 
-    let flattened = type_checked.flatten()?;
+    let borrow_checked = type_checked.borrow_check()?;
+    if borrow_checked.has_borrow_errors() {
+        borrow_checked.print_borrow_errors();
+    }
+
+    let flattened = borrow_checked.flatten()?;
 
     // Write MIR if requested (before further passes that might fail)
     write_mir_if_requested(&flattened, &output_mir, verbose)?;
@@ -213,10 +218,15 @@ fn check_file(
         run_borrow_checking(&source, verbose)?;
     }
 
-    // Type check only, don't generate code
+    // Type check and borrow check, don't generate code
     let type_checked = Compiler::parse(&source)?.elaborate()?.resolve()?.type_check()?;
 
     type_checked.print_warnings();
+
+    let borrow_checked = type_checked.borrow_check()?;
+    if borrow_checked.has_borrow_errors() {
+        borrow_checked.print_borrow_errors();
+    }
 
     if verbose {
         info!("✓ {} is valid", input.display());

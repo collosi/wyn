@@ -1870,6 +1870,8 @@ mod tests {
             .expect("Name resolution failed")
             .type_check()
             .expect("Type checking failed")
+            .borrow_check()
+            .expect("Borrow checking failed")
             .flatten()
             .expect("Flattening failed")
             .mir;

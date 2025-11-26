@@ -350,17 +350,43 @@ pub fn walk_expression<V: Visitor>(v: &mut V, e: &Expression) -> ControlFlow<V::
 
         ExprKind::TypeHole => ControlFlow::Continue(()),
         ExprKind::OperatorSection(_) => ControlFlow::Continue(()),
-        ExprKind::QualifiedName(_, _)
-        | ExprKind::UnaryOp(_, _)
-        | ExprKind::Loop(_)
-        | ExprKind::Match(_)
-        | ExprKind::Range(_)
-        | ExprKind::Pipe(_, _)
-        | ExprKind::TypeAscription(_, _)
-        | ExprKind::TypeCoercion(_, _)
-        | ExprKind::Unsafe(_)
-        | ExprKind::Assert(_, _) => {
-            todo!("New expression kinds not yet implemented in visitor")
+        ExprKind::QualifiedName(_, _) => ControlFlow::Continue(()), // Just a name reference
+        ExprKind::UnaryOp(_, operand) => v.visit_expression(operand),
+        ExprKind::Loop(loop_expr) => {
+            // Visit the loop condition/iterator
+            match &loop_expr.form {
+                LoopForm::For(_, iterator) => v.visit_expression(iterator)?,
+                LoopForm::ForIn(pattern, iterator) => {
+                    v.visit_pattern(pattern)?;
+                    v.visit_expression(iterator)?
+                }
+                LoopForm::While(condition) => v.visit_expression(condition)?,
+            }
+            // Visit the loop body
+            v.visit_expression(&loop_expr.body)
+        }
+        ExprKind::Match(match_expr) => {
+            v.visit_expression(&match_expr.scrutinee)?;
+            for case in &match_expr.cases {
+                v.visit_pattern(&case.pattern)?;
+                v.visit_expression(&case.body)?;
+            }
+            ControlFlow::Continue(())
+        }
+        ExprKind::Range(range_expr) => {
+            v.visit_expression(&range_expr.start)?;
+            v.visit_expression(&range_expr.end)
+        }
+        ExprKind::Pipe(left, right) => {
+            v.visit_expression(left)?;
+            v.visit_expression(right)
+        }
+        ExprKind::TypeAscription(expr, _) => v.visit_expression(expr),
+        ExprKind::TypeCoercion(expr, _) => v.visit_expression(expr),
+        ExprKind::Unsafe(expr) => v.visit_expression(expr),
+        ExprKind::Assert(cond, expr) => {
+            v.visit_expression(cond)?;
+            v.visit_expression(expr)
         }
     } // NEWCASESHERE - add new cases before this closing brace
 }

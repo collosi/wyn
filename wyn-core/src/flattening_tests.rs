@@ -15,6 +15,8 @@ fn flatten_program(input: &str) -> mir::Program {
         .expect("Name resolution failed")
         .type_check()
         .expect("Type checking failed")
+        .borrow_check()
+        .expect("Borrow checking failed")
         .flatten()
         .expect("Flattening failed")
         .mir
@@ -186,8 +188,11 @@ def test : [4]i32 =
 
     println!("\nNodeId(6) is missing from type table!");
 
+    // Borrow check
+    let borrow_checked = typed.borrow_check().expect("Borrow checking failed");
+
     // Flatten - this is where it fails
-    let flattened = typed.flatten().expect("Flattening failed");
+    let flattened = borrow_checked.flatten().expect("Flattening failed");
     let mir_str = format!("{}", flattened.mir);
     println!("MIR: {}", mir_str);
     assert!(mir_str.contains("def test"));
@@ -383,7 +388,8 @@ def test : f32 =
         .and_then(|p| p.elaborate())
         .and_then(|e| e.resolve())
         .and_then(|r| r.type_check())
-        .and_then(|t| t.flatten())
+        .and_then(|t| t.borrow_check())
+        .and_then(|b| b.flatten())
         .and_then(|f| f.monomorphize())
         .map(|m| m.filter_reachable())
         .and_then(|r| r.fold_constants())
