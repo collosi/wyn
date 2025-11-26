@@ -64,9 +64,8 @@ struct Constructor {
 
     // Current function state
     current_block: Option<spirv::Word>,
-
-    // Variables to hoist (collected during codegen, emitted at function end)
-    pending_variables: Vec<(spirv::Word, spirv::Word)>, // (var_id, ptr_type_id)
+    variables_block: Option<spirv::Word>, // Block for OpVariable declarations
+    first_code_block: Option<spirv::Word>, // First block with actual code
 
     // Environment: name -> value ID
     env: HashMap<String, spirv::Word>,
@@ -126,7 +125,8 @@ impl Constructor {
             float_const_cache: HashMap::new(),
             bool_const_cache: HashMap::new(),
             current_block: None,
-            pending_variables: Vec::new(),
+            variables_block: None,
+            first_code_block: None,
             env: HashMap::new(),
             functions: HashMap::new(),
             glsl_ext_inst_id,
@@ -328,34 +328,78 @@ impl Constructor {
             self.env.insert(param_name.to_string(), param_id);
         }
 
-        // Create the entry block
-        let entry_block_id = self.builder.id();
-        self.builder.begin_block(Some(entry_block_id))?;
-        self.current_block = Some(entry_block_id);
+        // Create two blocks: one for variables, one for code
+        let vars_block_id = self.builder.id();
+        let code_block_id = self.builder.id();
+        self.variables_block = Some(vars_block_id);
+        self.first_code_block = Some(code_block_id);
 
-        // Clear pending variables for this function
-        self.pending_variables.clear();
+        // Begin variables block (leave it open - no terminator yet)
+        self.builder.begin_block(Some(vars_block_id))?;
+
+        // Deselect current block so we can begin a new one
+        self.builder.select_block(None)?;
+
+        // Begin code block - this is where we'll emit code
+        self.builder.begin_block(Some(code_block_id))?;
+        self.current_block = Some(code_block_id);
 
         Ok(func_id)
     }
 
     /// End the current function
     fn end_function(&mut self) -> Result<()> {
+        // Terminate the variables block with a branch to the code block
+        if let (Some(vars_block), Some(code_block)) = (self.variables_block, self.first_code_block) {
+            // Find the variables block index and select it
+            let func = self.builder.module_ref().functions.last().expect("No function");
+            let vars_idx = func
+                .blocks
+                .iter()
+                .position(|b| b.label.as_ref().map(|l| l.result_id) == Some(Some(vars_block)));
+
+            if let Some(idx) = vars_idx {
+                self.builder.select_block(Some(idx))?;
+                self.builder.branch(code_block)?;
+            }
+        }
+
         self.builder.end_function()?;
 
         // Clear function state
         self.current_block = None;
+        self.variables_block = None;
+        self.first_code_block = None;
         self.env.clear();
 
         Ok(())
     }
 
-    /// Declare a variable (will be hoisted to function entry)
-    fn declare_variable(&mut self, _name: &str, value_type: spirv::Word) -> spirv::Word {
+    /// Declare a variable in the function's variables block
+    fn declare_variable(&mut self, _name: &str, value_type: spirv::Word) -> Result<spirv::Word> {
         let ptr_type = self.builder.type_pointer(None, StorageClass::Function, value_type);
+
+        // Save current block
+        let current_idx = self.builder.selected_block();
+
+        // Find and select the variables block
+        let vars_block = self.variables_block.expect("declare_variable called outside function");
+        let func = self.builder.module_ref().functions.last().expect("No function");
+        let vars_idx = func
+            .blocks
+            .iter()
+            .position(|b| b.label.as_ref().map(|l| l.result_id) == Some(Some(vars_block)))
+            .expect("Variables block not found");
+
+        self.builder.select_block(Some(vars_idx))?;
+
+        // Emit the variable
         let var_id = self.builder.variable(ptr_type, None, StorageClass::Function, None);
-        self.pending_variables.push((var_id, ptr_type));
-        var_id
+
+        // Restore current block
+        self.builder.select_block(current_idx)?;
+
+        Ok(var_id)
     }
 
     /// Get or create an i32 constant
@@ -875,10 +919,21 @@ fn lower_entry_point(
     )?;
     constructor.functions.insert(name.to_string(), func_id);
 
-    // Create entry block
-    let block_id = constructor.builder.id();
-    constructor.builder.begin_block(Some(block_id))?;
-    constructor.current_block = Some(block_id);
+    // Create two blocks: one for variables, one for code (same pattern as regular functions)
+    let vars_block_id = constructor.builder.id();
+    let code_block_id = constructor.builder.id();
+    constructor.variables_block = Some(vars_block_id);
+    constructor.first_code_block = Some(code_block_id);
+
+    // Begin variables block (leave it open - no terminator yet)
+    constructor.builder.begin_block(Some(vars_block_id))?;
+
+    // Deselect current block so we can begin a new one
+    constructor.builder.select_block(None)?;
+
+    // Begin code block - this is where we'll emit code
+    constructor.builder.begin_block(Some(code_block_id))?;
+    constructor.current_block = Some(code_block_id);
 
     // Call _init to initialize global constants
     if let Some(&init_func_id) = constructor.functions.get("_init") {
@@ -916,10 +971,30 @@ fn lower_entry_point(
 
     // Return void
     constructor.builder.ret()?;
+
+    // Terminate the variables block with a branch to the code block
+    if let (Some(vars_block), Some(code_block)) =
+        (constructor.variables_block, constructor.first_code_block)
+    {
+        // Find the variables block index and select it
+        let func = constructor.builder.module_ref().functions.last().expect("No function");
+        let vars_idx = func
+            .blocks
+            .iter()
+            .position(|b| b.label.as_ref().map(|l| l.result_id) == Some(Some(vars_block)));
+
+        if let Some(idx) = vars_idx {
+            constructor.builder.select_block(Some(idx))?;
+            constructor.builder.branch(code_block)?;
+        }
+    }
+
     constructor.builder.end_function()?;
 
     // Clean up
     constructor.current_is_entry_point = false;
+    constructor.variables_block = None;
+    constructor.first_code_block = None;
     constructor.env.clear();
 
     Ok(())
@@ -1537,17 +1612,8 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
 
                                         // Store array in a variable, update element, load back
                                         let arr_type = result_type;
-                                        let ptr_type = constructor.builder.type_pointer(
-                                            None,
-                                            StorageClass::Function,
-                                            arr_type,
-                                        );
-                                        let arr_var = constructor.builder.variable(
-                                            ptr_type,
-                                            None,
-                                            StorageClass::Function,
-                                            None,
-                                        );
+                                        let arr_var =
+                                            constructor.declare_variable("__array_update_tmp", arr_type)?;
                                         constructor.builder.store(arr_var, arr_id, None, [])?;
 
                                         // Get pointer to element and store new value
@@ -1660,12 +1726,9 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                     let array_val = lower_expr(constructor, &args[0])?;
                     let index_val = lower_expr(constructor, &args[1])?;
 
-                    // Store array in a variable to get a pointer
+                    // Store array in a variable to get a pointer (using declare_variable for proper hoisting)
                     let array_type = constructor.ast_type_to_spirv(&args[0].ty);
-                    let ptr_type =
-                        constructor.builder.type_pointer(None, StorageClass::Function, array_type);
-                    let array_var =
-                        constructor.builder.variable(ptr_type, None, StorageClass::Function, None);
+                    let array_var = constructor.declare_variable("__index_tmp", array_type)?;
                     constructor.builder.store(array_var, array_val, None, [])?;
 
                     // Use OpAccessChain to get pointer to element
