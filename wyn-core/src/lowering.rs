@@ -4,6 +4,13 @@
 //! It uses a Constructor wrapper that handles variable hoisting automatically.
 //! Dependencies are lowered on-demand using ensure_lowered pattern.
 
+/// Early return with a SPIR-V error
+macro_rules! bail_spirv {
+    ($($arg:tt)*) => {
+        return Err(CompilerError::SpirvError(format!($($arg)*)))
+    };
+}
+
 use crate::ast::TypeName;
 use crate::builtin_registry::{BuiltinImpl, BuiltinRegistry, PrimOp};
 use crate::error::{CompilerError, Result};
@@ -56,8 +63,6 @@ struct Constructor {
     bool_const_cache: HashMap<bool, spirv::Word>,
 
     // Current function state
-    variables_block: Option<spirv::Word>,
-    first_code_block: Option<spirv::Word>,
     current_block: Option<spirv::Word>,
 
     // Variables to hoist (collected during codegen, emitted at function end)
@@ -120,8 +125,6 @@ impl Constructor {
             int_const_cache: HashMap::new(),
             float_const_cache: HashMap::new(),
             bool_const_cache: HashMap::new(),
-            variables_block: None,
-            first_code_block: None,
             current_block: None,
             pending_variables: Vec::new(),
             env: HashMap::new(),
@@ -325,17 +328,10 @@ impl Constructor {
             self.env.insert(param_name.to_string(), param_id);
         }
 
-        // Create variables block (entry block for OpVariable)
-        let vars_block_id = self.builder.id();
-        self.variables_block = Some(vars_block_id);
-
-        // Create first code block
-        let code_block_id = self.builder.id();
-        self.first_code_block = Some(code_block_id);
-
-        // Start in the code block (we'll emit variables block at the end)
-        self.builder.begin_block(Some(code_block_id))?;
-        self.current_block = Some(code_block_id);
+        // Create the entry block
+        let entry_block_id = self.builder.id();
+        self.builder.begin_block(Some(entry_block_id))?;
+        self.current_block = Some(entry_block_id);
 
         // Clear pending variables for this function
         self.pending_variables.clear();
@@ -343,34 +339,11 @@ impl Constructor {
         Ok(func_id)
     }
 
-    /// End the current function, emitting the variables block with branch
+    /// End the current function
     fn end_function(&mut self) -> Result<()> {
-        // Save current block
-        //TODO: is this meant to be used?
-        let code_continues_from = self.current_block;
-
-        // Now emit the variables block at the start
-        if let (Some(vars_block), Some(first_code)) = (self.variables_block, self.first_code_block) {
-            // We need to insert the variables block before all other blocks
-            // rspirv doesn't make this easy, so we'll use a workaround:
-            // Actually, SPIR-V requires variables at the START of the first block,
-            // not in a separate block. Let me reconsider...
-
-            // The proper approach: emit OpVariable instructions at the start of the
-            // first block. We've been collecting them in pending_variables.
-            //
-            // Since we already started the code block, we need to modify the module
-            // after the fact. For now, let's skip the two-block approach and just
-            // emit variables at the start.
-            //
-            // TODO: Implement proper variable hoisting by modifying the module structure
-        }
-
         self.builder.end_function()?;
 
         // Clear function state
-        self.variables_block = None;
-        self.first_code_block = None;
         self.current_block = None;
         self.env.clear();
 
@@ -418,12 +391,6 @@ impl Constructor {
         };
         self.bool_const_cache.insert(value, id);
         id
-    }
-
-    /// Create a new block and return its ID
-    fn create_block(&mut self) -> spirv::Word {
-        //TODO: what is this?  this doesn't appear to create a block
-        self.builder.id()
     }
 
     /// Begin a block (must be called before emitting instructions into it)
@@ -496,10 +463,7 @@ impl<'a> LowerCtx<'a> {
         match self.state.get(name).copied().unwrap_or(LowerState::NotStarted) {
             LowerState::Done => return Ok(()),
             LowerState::InProgress => {
-                return Err(CompilerError::SpirvError(format!(
-                    "Recursive definition detected: {}",
-                    name
-                )));
+                bail_spirv!("Recursive definition detected: {}", name);
             }
             LowerState::NotStarted => { /* proceed */ }
         }
@@ -1106,28 +1070,28 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             let result_type = constructor.ast_type_to_spirv(&expr.ty);
 
             // Create blocks
-            let then_block = constructor.create_block();
-            let else_block = constructor.create_block();
-            let merge_block = constructor.create_block();
+            let then_block_id = constructor.builder.id();
+            let else_block_id = constructor.builder.id();
+            let merge_block_id = constructor.builder.id();
 
             // Branch based on condition
-            constructor.branch_conditional(cond_id, then_block, else_block, merge_block)?;
+            constructor.branch_conditional(cond_id, then_block_id, else_block_id, merge_block_id)?;
 
             // Then block
-            constructor.begin_block(then_block)?;
+            constructor.begin_block(then_block_id)?;
             let then_result = lower_expr(constructor, then_branch)?;
             let then_exit_block = constructor.current_block.unwrap();
 
-            constructor.builder.branch(merge_block)?;
+            constructor.builder.branch(merge_block_id)?;
 
             // Else block
-            constructor.begin_block(else_block)?;
+            constructor.begin_block(else_block_id)?;
             let else_result = lower_expr(constructor, else_branch)?;
             let else_exit_block = constructor.current_block.unwrap();
-            constructor.builder.branch(merge_block)?;
+            constructor.builder.branch(merge_block_id)?;
 
             // Merge block with phi
-            constructor.begin_block(merge_block)?;
+            constructor.begin_block(merge_block_id)?;
             let incoming = vec![(then_result, then_exit_block), (else_result, else_exit_block)];
             let result = constructor.builder.phi(result_type, None, incoming)?;
             Ok(result)
@@ -1147,10 +1111,10 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             body,
         } => {
             // Create blocks for loop structure
-            let header_block = constructor.create_block();
-            let body_block = constructor.create_block();
-            let continue_block = constructor.create_block();
-            let merge_block = constructor.create_block();
+            let header_block_id = constructor.builder.id();
+            let body_block_id = constructor.builder.id();
+            let continue_block_id = constructor.builder.id();
+            let merge_block_id = constructor.builder.id();
 
             // Evaluate init expressions in order, collecting values and types
             let mut init_values = Vec::new();
@@ -1163,10 +1127,10 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             let pre_header_block = constructor.current_block.unwrap();
 
             // Branch to header
-            constructor.builder.branch(header_block)?;
+            constructor.builder.branch(header_block_id)?;
 
             // Header block - we'll add phi nodes later
-            constructor.begin_block(header_block)?;
+            constructor.begin_block(header_block_id)?;
             let header_block_idx = constructor.builder.selected_block().expect("No block selected");
 
             // Allocate phi IDs and add to environment so condition/body can reference them
@@ -1188,23 +1152,26 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                     constructor.builder.s_less_than(constructor.bool_type, None, var_id, bound_id)?
                 }
                 LoopKind::For { .. } => {
-                    return Err(CompilerError::SpirvError(
-                        "For-in loops not yet implemented".to_string(),
-                    ));
+                    bail_spirv!("For-in loops not yet implemented");
                 }
             };
 
             // Loop merge and conditional branch
-            constructor.builder.loop_merge(merge_block, continue_block, spirv::LoopControl::NONE, [])?;
-            constructor.builder.branch_conditional(cond_id, body_block, merge_block, [])?;
+            constructor.builder.loop_merge(
+                merge_block_id,
+                continue_block_id,
+                spirv::LoopControl::NONE,
+                [],
+            )?;
+            constructor.builder.branch_conditional(cond_id, body_block_id, merge_block_id, [])?;
 
             // Body block
-            constructor.begin_block(body_block)?;
+            constructor.begin_block(body_block_id)?;
             let body_result = lower_expr(constructor, body)?;
-            constructor.builder.branch(continue_block)?;
+            constructor.builder.branch(continue_block_id)?;
 
             // Continue block - extract updated values from body result
-            constructor.begin_block(continue_block)?;
+            constructor.begin_block(continue_block_id)?;
 
             // Extract continue values based on number of loop variables
             let continue_values: Vec<spirv::Word> = if phi_info.len() == 1 {
@@ -1222,8 +1189,8 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                 values
             };
 
-            constructor.builder.branch(header_block)?;
-            let continue_block_id = continue_block;
+            constructor.builder.branch(header_block_id)?;
+            let continue_block_id = continue_block_id;
 
             // Now go back and insert phi nodes at the beginning of header block
             // We need to save current function context and temporarily work on header
@@ -1242,7 +1209,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             constructor.builder.select_block(None)?;
 
             // Continue to merge block
-            constructor.begin_block(merge_block)?;
+            constructor.begin_block(merge_block_id)?;
 
             // Clean up environment
             for (name, _, _, _) in &phi_info {
@@ -1267,10 +1234,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                 // args[0] is closure record {__lambda_name: "...", captures...}
                 // args[1] is input array
                 if args.len() != 2 {
-                    return Err(CompilerError::SpirvError(format!(
-                        "map requires 2 args (closure, array), got {}",
-                        args.len()
-                    )));
+                    bail_spirv!("map requires 2 args (closure, array), got {}", args.len());
                 }
 
                 // Extract lambda name from closure record's __lambda_name field
@@ -1291,9 +1255,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                             })?
                     }
                     _ => {
-                        return Err(CompilerError::SpirvError(
-                            "map closure argument must be a record literal".to_string(),
-                        ));
+                        bail_spirv!("map closure argument must be a record literal");
                     }
                 };
 
@@ -1306,19 +1268,11 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                     PolyType::Constructed(TypeName::Array, type_args) if type_args.len() == 2 => {
                         let size = match &type_args[0] {
                             PolyType::Constructed(TypeName::Size(n), _) => *n as u32,
-                            _ => {
-                                return Err(CompilerError::SpirvError(
-                                    "Invalid array size type".to_string(),
-                                ));
-                            }
+                            _ => bail_spirv!("Invalid array size type"),
                         };
                         (size, &type_args[1])
                     }
-                    _ => {
-                        return Err(CompilerError::SpirvError(
-                            "map result must be array type".to_string(),
-                        ));
-                    }
+                    _ => bail_spirv!("map result must be array type"),
                 };
 
                 let elem_type = constructor.ast_type_to_spirv(elem_mir_type);
@@ -1359,8 +1313,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                 _ => {
                     // Check if it's a builtin function
                     if let Some(overloads) = constructor.builtin_registry.get_overloads(func) {
-                        // TODO: Use the selected overload from type checking
-                        // Please evaluate what the correct thing is here
+                        // All overloads share the same implementation, only types differ
                         let builtin = &overloads[0];
                         match &builtin.implementation {
                             BuiltinImpl::PrimOp(spirv_op) => {
@@ -1381,10 +1334,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                     }
                                     PrimOp::Dot => {
                                         if arg_ids.len() != 2 {
-                                            //TODO: can you create a "bail!" macro to do this?
-                                            return Err(CompilerError::SpirvError(
-                                                "dot requires 2 args".to_string(),
-                                            ));
+                                            bail_spirv!("dot requires 2 args");
                                         }
                                         Ok(constructor.builder.dot(
                                             result_type,
@@ -1395,9 +1345,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                     }
                                     PrimOp::MatrixTimesMatrix => {
                                         if arg_ids.len() != 2 {
-                                            return Err(CompilerError::SpirvError(
-                                                "matrix × matrix requires 2 args".to_string(),
-                                            ));
+                                            bail_spirv!("matrix × matrix requires 2 args");
                                         }
                                         Ok(constructor.builder.matrix_times_matrix(
                                             result_type,
@@ -1408,9 +1356,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                     }
                                     PrimOp::MatrixTimesVector => {
                                         if arg_ids.len() != 2 {
-                                            return Err(CompilerError::SpirvError(
-                                                "matrix × vector requires 2 args".to_string(),
-                                            ));
+                                            bail_spirv!("matrix × vector requires 2 args");
                                         }
                                         Ok(constructor.builder.matrix_times_vector(
                                             result_type,
@@ -1421,9 +1367,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                     }
                                     PrimOp::VectorTimesMatrix => {
                                         if arg_ids.len() != 2 {
-                                            return Err(CompilerError::SpirvError(
-                                                "vector × matrix requires 2 args".to_string(),
-                                            ));
+                                            bail_spirv!("vector × matrix requires 2 args");
                                         }
                                         Ok(constructor.builder.vector_times_matrix(
                                             result_type,
@@ -1435,9 +1379,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                     // Type conversions
                                     PrimOp::FPToSI => {
                                         if arg_ids.len() != 1 {
-                                            return Err(CompilerError::SpirvError(
-                                                "FPToSI requires 1 arg".to_string(),
-                                            ));
+                                            bail_spirv!("FPToSI requires 1 arg");
                                         }
                                         Ok(constructor.builder.convert_f_to_s(
                                             result_type,
@@ -1447,9 +1389,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                     }
                                     PrimOp::FPToUI => {
                                         if arg_ids.len() != 1 {
-                                            return Err(CompilerError::SpirvError(
-                                                "FPToUI requires 1 arg".to_string(),
-                                            ));
+                                            bail_spirv!("FPToUI requires 1 arg");
                                         }
                                         Ok(constructor.builder.convert_f_to_u(
                                             result_type,
@@ -1459,9 +1399,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                     }
                                     PrimOp::SIToFP => {
                                         if arg_ids.len() != 1 {
-                                            return Err(CompilerError::SpirvError(
-                                                "SIToFP requires 1 arg".to_string(),
-                                            ));
+                                            bail_spirv!("SIToFP requires 1 arg");
                                         }
                                         Ok(constructor.builder.convert_s_to_f(
                                             result_type,
@@ -1471,9 +1409,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                     }
                                     PrimOp::UIToFP => {
                                         if arg_ids.len() != 1 {
-                                            return Err(CompilerError::SpirvError(
-                                                "UIToFP requires 1 arg".to_string(),
-                                            ));
+                                            bail_spirv!("UIToFP requires 1 arg");
                                         }
                                         Ok(constructor.builder.convert_u_to_f(
                                             result_type,
@@ -1483,42 +1419,30 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                     }
                                     PrimOp::FPConvert => {
                                         if arg_ids.len() != 1 {
-                                            return Err(CompilerError::SpirvError(
-                                                "FPConvert requires 1 arg".to_string(),
-                                            ));
+                                            bail_spirv!("FPConvert requires 1 arg");
                                         }
                                         Ok(constructor.builder.f_convert(result_type, None, arg_ids[0])?)
                                     }
                                     PrimOp::SConvert => {
                                         if arg_ids.len() != 1 {
-                                            return Err(CompilerError::SpirvError(
-                                                "SConvert requires 1 arg".to_string(),
-                                            ));
+                                            bail_spirv!("SConvert requires 1 arg");
                                         }
                                         Ok(constructor.builder.s_convert(result_type, None, arg_ids[0])?)
                                     }
                                     PrimOp::UConvert => {
                                         if arg_ids.len() != 1 {
-                                            return Err(CompilerError::SpirvError(
-                                                "UConvert requires 1 arg".to_string(),
-                                            ));
+                                            bail_spirv!("UConvert requires 1 arg");
                                         }
                                         Ok(constructor.builder.u_convert(result_type, None, arg_ids[0])?)
                                     }
                                     PrimOp::Bitcast => {
                                         if arg_ids.len() != 1 {
-                                            return Err(CompilerError::SpirvError(
-                                                "Bitcast requires 1 arg".to_string(),
-                                            ));
+                                            bail_spirv!("Bitcast requires 1 arg");
                                         }
                                         Ok(constructor.builder.bitcast(result_type, None, arg_ids[0])?)
                                     }
                                     _ => {
-                                        // TODO: Handle other PrimOp variants
-                                        Err(CompilerError::SpirvError(format!(
-                                            "Unsupported PrimOp for: {}",
-                                            func
-                                        )))
+                                        bail_spirv!("Unsupported PrimOp for: {}", func)
                                     }
                                 }
                             }
@@ -1528,55 +1452,112 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                     Intrinsic::MatrixFromVectors => {
                                         // Matrix from array of vectors: In SPIR-V, matrices ARE arrays of column vectors
                                         // So this is essentially a no-op/identity at the SPIR-V level
-                                        // Just return the array as-is, but with matrix type
                                         if arg_ids.len() != 1 {
-                                            return Err(CompilerError::SpirvError(
-                                                "matav expects exactly 1 argument".to_string(),
-                                            ));
+                                            bail_spirv!("matav expects exactly 1 argument");
                                         }
-                                        // The array of vectors is already in the correct format for a SPIR-V matrix
-                                        // Just return it with the matrix type
                                         Ok(arg_ids[0])
+                                    }
+                                    Intrinsic::Uninit => {
+                                        // Return an undefined value of the result type
+                                        Ok(constructor.builder.undef(result_type, None))
+                                    }
+                                    Intrinsic::Replicate => {
+                                        // replicate n val: create array of n copies of val
+                                        if arg_ids.len() != 2 {
+                                            bail_spirv!("replicate expects exactly 2 arguments");
+                                        }
+                                        // Extract array size from result type
+                                        if let PolyType::Constructed(TypeName::Array, type_args) = &expr.ty
+                                        {
+                                            if let Some(PolyType::Constructed(TypeName::Size(n), _)) =
+                                                type_args.get(0)
+                                            {
+                                                // Build array by repeating the value
+                                                let val_id = arg_ids[1]; // second arg is the value
+                                                let elem_ids: Vec<_> = (0..*n).map(|_| val_id).collect();
+                                                Ok(constructor.builder.composite_construct(
+                                                    result_type,
+                                                    None,
+                                                    elem_ids,
+                                                )?)
+                                            } else {
+                                                bail_spirv!(
+                                                    "replicate: cannot determine array size at compile time"
+                                                )
+                                            }
+                                        } else {
+                                            bail_spirv!("replicate: result type is not an array")
+                                        }
+                                    }
+                                    Intrinsic::ArrayUpdate => {
+                                        // array_update arr idx val: functional update, returns new array
+                                        if arg_ids.len() != 3 {
+                                            bail_spirv!("array_update expects exactly 3 arguments");
+                                        }
+                                        let arr_id = arg_ids[0];
+                                        let idx_id = arg_ids[1];
+                                        let val_id = arg_ids[2];
+
+                                        // Store array in a variable, update element, load back
+                                        let arr_type = result_type;
+                                        let ptr_type = constructor.builder.type_pointer(
+                                            None,
+                                            StorageClass::Function,
+                                            arr_type,
+                                        );
+                                        let arr_var = constructor.builder.variable(
+                                            ptr_type,
+                                            None,
+                                            StorageClass::Function,
+                                            None,
+                                        );
+                                        constructor.builder.store(arr_var, arr_id, None, [])?;
+
+                                        // Get pointer to element and store new value
+                                        let elem_type = constructor.ast_type_to_spirv(&args[2].ty);
+                                        let elem_ptr_type = constructor.builder.type_pointer(
+                                            None,
+                                            StorageClass::Function,
+                                            elem_type,
+                                        );
+                                        let elem_ptr = constructor.builder.access_chain(
+                                            elem_ptr_type,
+                                            None,
+                                            arr_var,
+                                            [idx_id],
+                                        )?;
+                                        constructor.builder.store(elem_ptr, val_id, None, [])?;
+
+                                        // Load and return the updated array
+                                        Ok(constructor.builder.load(arr_type, None, arr_var, None, [])?)
                                     }
                                     Intrinsic::Placeholder if func == "length" => {
                                         // Array length: extract size from array type
-                                        // The array type is [n]T, we need to return n as a constant
                                         if args.len() != 1 {
-                                            return Err(CompilerError::SpirvError(
-                                                "length expects exactly 1 argument".to_string(),
-                                            ));
+                                            bail_spirv!("length expects exactly 1 argument");
                                         }
-                                        // Get the array type
                                         if let PolyType::Constructed(TypeName::Array, type_args) =
                                             &args[0].ty
                                         {
-                                            // Try to extract the size - it could be TypeName::Size(n) or a variable
                                             match type_args.get(0) {
                                                 Some(PolyType::Constructed(TypeName::Size(n), _)) => {
-                                                    // Return the size as a constant i32
                                                     Ok(constructor.const_i32(*n as i32))
                                                 }
-                                                _ => {
-                                                    // Size is a variable or unknown - this shouldn't happen in well-typed code
-                                                    Err(CompilerError::SpirvError(format!(
-                                                        "Cannot determine compile-time array size for length: {:?}",
-                                                        type_args.get(0)
-                                                    )))
-                                                }
+                                                _ => bail_spirv!(
+                                                    "Cannot determine compile-time array size for length: {:?}",
+                                                    type_args.get(0)
+                                                ),
                                             }
                                         } else {
-                                            Err(CompilerError::SpirvError(format!(
-                                                "length called on non-array type: {:?}",
-                                                args[0].ty
-                                            )))
+                                            bail_spirv!("length called on non-array type: {:?}", args[0].ty)
                                         }
                                     }
-                                    _ => {
-                                        // TODO: Handle other intrinsic implementations
-                                        Err(CompilerError::SpirvError(format!(
-                                            "Intrinsic builtin not yet supported: {}",
+                                    Intrinsic::Placeholder => {
+                                        // Other placeholder intrinsics should have been desugared
+                                        bail_spirv!(
+                                            "Placeholder intrinsic '{}' should have been desugared before lowering",
                                             func
-                                        )))
+                                        )
                                     }
                                 }
                             }
@@ -1617,9 +1598,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             match name.as_str() {
                 "tuple_access" => {
                     if args.len() != 2 {
-                        return Err(CompilerError::SpirvError(
-                            "tuple_access requires 2 args".to_string(),
-                        ));
+                        bail_spirv!("tuple_access requires 2 args");
                     }
                     let composite_id = lower_expr(constructor, &args[0])?;
                     // Second arg should be a constant index - extract it from the literal
@@ -1638,7 +1617,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                 }
                 "index" => {
                     if args.len() != 2 {
-                        return Err(CompilerError::SpirvError("index requires 2 args".to_string()));
+                        bail_spirv!("index requires 2 args");
                     }
                     // Array indexing with OpAccessChain + OpLoad
                     let array_val = lower_expr(constructor, &args[0])?;
@@ -1665,20 +1644,14 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                     // Record field access by name
                     // args[0] is the record, args[1] is a string literal with field name
                     if args.len() != 2 {
-                        return Err(CompilerError::SpirvError(
-                            "record_access requires 2 args".to_string(),
-                        ));
+                        bail_spirv!("record_access requires 2 args");
                     }
                     let composite_id = lower_expr(constructor, &args[0])?;
 
                     // Get field name from string literal
                     let field_name = match &args[1].kind {
                         ExprKind::Literal(Literal::String(s)) => s.clone(),
-                        _ => {
-                            return Err(CompilerError::SpirvError(
-                                "record_access field must be string literal".to_string(),
-                            ));
-                        }
+                        _ => bail_spirv!("record_access field must be string literal"),
                     };
 
                     // Look up the field index from the record type, skipping phantom fields
@@ -1700,12 +1673,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                     ))
                                 })?
                         }
-                        _ => {
-                            return Err(CompilerError::SpirvError(format!(
-                                "record_access on non-record type: {:?}",
-                                record_type
-                            )));
-                        }
+                        _ => bail_spirv!("record_access on non-record type: {:?}", record_type),
                     };
 
                     Ok(constructor.builder.composite_extract(result_type, None, composite_id, [index])?)
