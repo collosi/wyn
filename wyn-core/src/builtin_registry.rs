@@ -3,6 +3,7 @@
 
 use crate::ast::{Type, TypeName, TypeScheme};
 use crate::type_checker::TypeVarGenerator;
+use polytype::Context;
 use std::collections::HashMap;
 
 /// Implementation strategy for a builtin function
@@ -130,6 +131,116 @@ pub struct BuiltinEntry {
     pub implementation: BuiltinImpl,
 }
 
+impl BuiltinEntry {
+    /// Compute the arity (number of arguments) of this builtin
+    pub fn arity(&self) -> usize {
+        fn count_arrows(ty: &Type) -> usize {
+            match ty {
+                Type::Constructed(TypeName::Str(s), args) if *s == "->" && args.len() == 2 => {
+                    1 + count_arrows(&args[1])
+                }
+                _ => 0,
+            }
+        }
+
+        fn scheme_arity(scheme: &TypeScheme) -> usize {
+            match scheme {
+                TypeScheme::Monotype(ty) => count_arrows(ty),
+                TypeScheme::Polytype { body, .. } => scheme_arity(body),
+            }
+        }
+
+        scheme_arity(&self.scheme)
+    }
+}
+
+/// Result of looking up a builtin - either a single entry or an overload set
+pub enum BuiltinLookup<'a> {
+    /// Single builtin with no overloads
+    Single(&'a BuiltinEntry),
+    /// Multiple overloads that need resolution based on argument types
+    Overloaded(OverloadSet<'a>),
+}
+
+/// A set of overloaded builtins that need type-based resolution
+pub struct OverloadSet<'a> {
+    entries: &'a [BuiltinEntry],
+    arity: usize,
+}
+
+impl<'a> OverloadSet<'a> {
+    /// Create a fresh type for this overload set: ?0 -> ?1 -> ... -> ?n
+    /// Since all overloads have the same arity, we can defer resolution to unification time.
+    pub fn fresh_type(&self, ctx: &mut impl TypeVarGenerator) -> Type {
+        let mut ty = ctx.new_variable();
+        for _ in 0..self.arity {
+            let param = ctx.new_variable();
+            ty = Type::arrow(param, ty);
+        }
+        ty
+    }
+
+    /// Choose the correct overload based on argument types.
+    /// Returns the matching entry and the resolved return type.
+    /// Uses backtracking: saves context, tries each overload, restores on failure.
+    pub fn choose(
+        &self,
+        arg_types: &[Type],
+        ctx: &mut Context<TypeName>,
+    ) -> Option<(&'a BuiltinEntry, Type)> {
+        for entry in self.entries {
+            // Save context for backtracking
+            let saved_context = ctx.clone();
+
+            // Instantiate this overload with fresh type variables
+            let func_type = entry.scheme.instantiate(ctx);
+
+            // Try to unify parameter types with argument types
+            if let Some(return_type) = Self::try_unify(&func_type, arg_types, ctx) {
+                return Some((entry, return_type));
+            }
+
+            // Restore context and try next overload
+            *ctx = saved_context;
+        }
+        None
+    }
+
+    /// Try to unify a function type with the given argument types.
+    /// Returns the return type if successful, None otherwise.
+    fn try_unify(func_type: &Type, arg_types: &[Type], ctx: &mut Context<TypeName>) -> Option<Type> {
+        let mut current_type = func_type.clone();
+
+        for arg_type in arg_types {
+            // Decompose the function type: should be param_ty -> rest
+            let param_ty = ctx.new_variable();
+            let rest_ty = ctx.new_variable();
+            let expected_arrow = Type::arrow(param_ty.clone(), rest_ty.clone());
+
+            // Unify current function type with the expected arrow type
+            if ctx.unify(&current_type, &expected_arrow).is_err() {
+                return None;
+            }
+
+            // Unify the parameter type with the argument type
+            let param_ty = param_ty.apply(ctx);
+            if ctx.unify(&param_ty, arg_type).is_err() {
+                return None;
+            }
+
+            // Continue with the rest of the function type
+            current_type = rest_ty.apply(ctx);
+        }
+
+        Some(current_type)
+    }
+
+    /// Get the entries (for error messages)
+    pub fn entries(&self) -> &[BuiltinEntry] {
+        self.entries
+    }
+}
+
 /// Central registry for all builtin functions
 pub struct BuiltinRegistry {
     /// All builtins: maps name to list of overloads
@@ -167,14 +278,33 @@ impl BuiltinRegistry {
         self.builtins.keys().cloned().collect()
     }
 
-    /// Get all overloads for a builtin name
-    pub fn get_overloads(&self, name: &str) -> Option<&[BuiltinEntry]> {
-        self.builtins.get(name).map(|v| v.as_slice())
+    /// Get a builtin by name, returning either a single entry or an overload set
+    pub fn get(&self, name: &str) -> Option<BuiltinLookup<'_>> {
+        self.builtins.get(name).map(|entries| {
+            if entries.len() == 1 {
+                BuiltinLookup::Single(&entries[0])
+            } else {
+                // All overloads have the same arity (enforced by add_overload)
+                let arity = entries[0].arity();
+                BuiltinLookup::Overloaded(OverloadSet { entries, arity })
+            }
+        })
     }
 
-    /// Add an overload for a builtin
+    /// Add an overload for a builtin.
+    /// Asserts that all overloads for the same name have the same arity.
     fn add_overload(&mut self, name: String, entry: BuiltinEntry) {
-        self.builtins.entry(name).or_insert_with(Vec::new).push(entry);
+        let new_arity = entry.arity();
+        let entries = self.builtins.entry(name.clone()).or_insert_with(Vec::new);
+        if let Some(existing) = entries.first() {
+            let existing_arity = existing.arity();
+            assert_eq!(
+                existing_arity, new_arity,
+                "BUG: Overload for '{}' has arity {} but existing overloads have arity {}",
+                name, new_arity, existing_arity
+            );
+        }
+        entries.push(entry);
     }
 
     /// Get the type of a field on a given type (e.g., vec3f32.x returns f32)
@@ -792,16 +922,18 @@ impl BuiltinRegistry {
         // Internal multiplication variants (desugared from surface "mul")
         // Surface code uses "mul", which is desugared to these based on argument shapes
 
-        // mul_mat_mat : ∀n m a. mat<n,m,a> -> mat<m,p,a> -> mat<n,p,a>
-        // For square matrices: mat<n,n,a> -> mat<n,n,a> -> mat<n,n,a>
+        // mul_mat_mat : ∀n m p a. mat<n,m,a> -> mat<m,p,a> -> mat<n,p,a>
         let n = ctx.new_variable();
         let m = ctx.new_variable();
+        let p = ctx.new_variable();
         let a = ctx.new_variable();
         let mat_n_m_a = Type::Constructed(TypeName::Mat, vec![n.clone(), m.clone(), a.clone()]);
+        let mat_m_p_a = Type::Constructed(TypeName::Mat, vec![m, p.clone(), a.clone()]);
+        let mat_n_p_a = Type::Constructed(TypeName::Mat, vec![n, p, a]);
         self.register_poly(
             "mul_mat_mat",
-            vec![mat_n_m_a.clone(), mat_n_m_a.clone()],
-            mat_n_m_a,
+            vec![mat_n_m_a, mat_m_p_a],
+            mat_n_p_a,
             BuiltinImpl::PrimOp(PrimOp::MatrixTimesMatrix),
         );
 
@@ -836,15 +968,18 @@ impl BuiltinRegistry {
         // Surface "mul" overloads (will be desugared to the above variants)
         // These are registered for type checking; desugaring rewrites them before lowering
 
-        // mul : ∀n m a. mat<n,m,a> -> mat<n,m,a> -> mat<n,m,a>
+        // mul : ∀n m p a. mat<n,m,a> -> mat<m,p,a> -> mat<n,p,a>
         let n = ctx.new_variable();
         let m = ctx.new_variable();
+        let p = ctx.new_variable();
         let a = ctx.new_variable();
         let mat_n_m_a = Type::Constructed(TypeName::Mat, vec![n.clone(), m.clone(), a.clone()]);
+        let mat_m_p_a = Type::Constructed(TypeName::Mat, vec![m, p.clone(), a.clone()]);
+        let mat_n_p_a = Type::Constructed(TypeName::Mat, vec![n, p, a]);
         self.register_poly(
             "mul",
-            vec![mat_n_m_a.clone(), mat_n_m_a.clone()],
-            mat_n_m_a,
+            vec![mat_n_m_a, mat_m_p_a],
+            mat_n_p_a,
             BuiltinImpl::Intrinsic(Intrinsic::Placeholder), // Will be desugared
         );
 

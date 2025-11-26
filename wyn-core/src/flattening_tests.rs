@@ -465,3 +465,28 @@ def test_map (arr: [3]i32): [3]i32 = map (\(x:i32) -> (+) x 1) arr
     println!("MIR output:\n{}", mir_str);
     assert!(mir_str.contains("test_map"));
 }
+
+#[test]
+fn test_mul_overloads() {
+    // Test all three overloaded versions of mul:
+    // - mul_mat_mat: mat * mat -> mat
+    // - mul_mat_vec: mat * vec -> vec
+    // - mul_vec_mat: vec * mat -> vec
+    // Note: Square matrices use mat4f32 syntax (not mat4x4f32)
+    let mir = flatten_program(
+        r#"
+def test_mul_overloads (m1: mat4f32) (m2: mat4f32) (v: vec4f32) : vec4f32 =
+    let mat_result = mul m1 m2 in          -- mul_mat_mat
+    let vec_result1 = mul mat_result v in  -- mul_mat_vec
+    let vec_result2 = mul v m1 in          -- mul_vec_mat
+    vec_result1
+"#,
+    );
+    let mir_str = format!("{}", mir);
+    println!("MIR output:\n{}", mir_str);
+
+    // All three should be desugared to their specific variants
+    assert!(mir_str.contains("mul_mat_mat"), "Expected mul_mat_mat in MIR");
+    assert!(mir_str.contains("mul_mat_vec"), "Expected mul_mat_vec in MIR");
+    assert!(mir_str.contains("mul_vec_mat"), "Expected mul_vec_mat in MIR");
+}

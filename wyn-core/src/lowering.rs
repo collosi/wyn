@@ -1355,9 +1355,15 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                 }
                 _ => {
                     // Check if it's a builtin function
-                    if let Some(overloads) = constructor.builtin_registry.get_overloads(func) {
-                        // All overloads share the same implementation, only types differ
-                        let builtin = &overloads[0];
+                    use crate::builtin_registry::BuiltinLookup;
+                    if let Some(lookup) = constructor.builtin_registry.get(func) {
+                        let builtin = match &lookup {
+                            BuiltinLookup::Single(entry) => *entry,
+                            BuiltinLookup::Overloaded(overloads) => {
+                                // All overloads share the same implementation, only types differ
+                                &overloads.entries()[0]
+                            }
+                        };
                         match &builtin.implementation {
                             BuiltinImpl::PrimOp(spirv_op) => {
                                 // Handle core SPIR-V operations

@@ -402,112 +402,38 @@ impl TypeChecker {
         }
     }
 
-    /// Resolve an overloaded builtin function application by trying each overload
-    fn resolve_overloaded_application(
-        &mut self,
-        expr: &Expression,
-        func: &Expression,
-        func_name: &str,
-        overloads: &[crate::builtin_registry::BuiltinEntry],
-        args: &[Expression],
-    ) -> Result<Type> {
-        // Infer argument types
-        let mut arg_types = Vec::new();
-        for arg in args {
-            arg_types.push(self.infer_expression(arg)?);
-        }
-
-        // Try each overload
-        let mut successful: Option<(usize, Type, Type)> = None;
-
-        for (i, entry) in overloads.iter().enumerate() {
-            // Save the current unification context by cloning
-            let saved_context = self.context.clone();
-
-            // Instantiate this overload with fresh type variables
-            let func_type = entry.scheme.instantiate(&mut self.context);
-
-            // Try to unify this overload's parameter types with the argument types
-            match self.try_unify_overload(&func_type, &arg_types, expr.h.span) {
-                Ok(return_type) => {
-                    if successful.is_some() {
-                        // Ambiguous: multiple overloads match
-                        return Err(CompilerError::TypeError(
-                            format!(
-                                "Ambiguous call to '{}': multiple overloads match argument types {}",
-                                func_name,
-                                arg_types
-                                    .iter()
-                                    .map(|t| self.format_type(t))
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            ),
-                            expr.h.span,
-                        ));
-                    }
-                    successful = Some((i, func_type, return_type));
-                    // Don't restore context - keep the successful unifications
-                }
-                Err(_e) => {
-                    // This overload doesn't match, restore the context and try the next one
-                    self.context = saved_context;
-                }
-            }
-        }
-
-        match successful {
-            Some((_overload_index, resolved_func_type, return_type)) => {
-                // Apply context to resolve any remaining type variables
-                let resolved_func_type = resolved_func_type.apply(&self.context);
-                let return_type = return_type.apply(&self.context);
-                // Store the type for the function identifier expression
-                self.type_table.insert(func.h.id, TypeScheme::Monotype(resolved_func_type));
-                // Store the type for the application expression
-                self.type_table.insert(expr.h.id, TypeScheme::Monotype(return_type.clone()));
-                Ok(return_type)
-            }
-            None => {
-                // No overload matched
-                Err(CompilerError::TypeError(
-                    format!(
-                        "No matching overload for '{}' with argument types: {}",
-                        func_name,
-                        arg_types.iter().map(|t| self.format_type(t)).collect::<Vec<_>>().join(", ")
-                    ),
-                    expr.h.span,
-                ))
-            }
-        }
-    }
-
     /// Try to unify an overload's function type with the given argument types
-    /// Returns the return type if successful
-    fn try_unify_overload(&mut self, func_type: &Type, arg_types: &[Type], span: Span) -> Result<Type> {
+    /// Returns the return type if successful, None if unification fails
+    fn try_unify_overload(
+        func_type: &Type,
+        arg_types: &[Type],
+        ctx: &mut Context<TypeName>,
+    ) -> Option<Type> {
         let mut current_type = func_type.clone();
 
         for arg_type in arg_types {
             // Decompose the function type: should be param_ty -> rest
-            let param_ty = self.context.new_variable();
-            let rest_ty = self.context.new_variable();
+            let param_ty = ctx.new_variable();
+            let rest_ty = ctx.new_variable();
             let expected_arrow = Type::arrow(param_ty.clone(), rest_ty.clone());
 
             // Unify current function type with the expected arrow type
-            self.context.unify(&current_type, &expected_arrow).map_err(|e| {
-                CompilerError::TypeError(format!("Function argument type mismatch: {:?}", e), span)
-            })?;
+            if ctx.unify(&current_type, &expected_arrow).is_err() {
+                return None;
+            }
 
             // Unify the parameter type with the argument type
-            let param_ty = param_ty.apply(&self.context);
-            self.context.unify(&param_ty, arg_type).map_err(|e| {
-                CompilerError::TypeError(format!("Function argument type mismatch: {:?}", e), span)
-            })?;
+            let param_ty = param_ty.apply(ctx);
+            if ctx.unify(&param_ty, arg_type).is_err() {
+                return None;
+            }
 
             // Continue with the rest of the function type
-            current_type = rest_ty.apply(&self.context);
+            current_type = rest_ty.apply(ctx);
         }
 
         // After processing all arguments, current_type should be the return type
-        Ok(current_type)
+        Some(current_type)
     }
 
     /// Check an expression against an expected type (bidirectional checking mode)
@@ -1238,19 +1164,16 @@ impl TypeChecker {
                     debug!("Found '{}' in scope stack with type: {:?}", name, type_scheme);
                     // Instantiate the type scheme to get a concrete type
                     Ok(type_scheme.instantiate(&mut self.context))
-                } else if self.builtin_registry.is_builtin(name) {
-                    // Then check builtin registry for builtin functions/constructors
+                } else if let Some(lookup) = self.builtin_registry.get(name) {
+                    // Check builtin registry for builtin functions/constructors
+                    use crate::builtin_registry::BuiltinLookup;
                     debug!("'{}' is a builtin", name);
-                    if let Some(overloads) = self.builtin_registry.get_overloads(name) {
-                        // TODO: Implement proper overload resolution with backtracking
-                        // For now, just use the first overload
-                        let entry = &overloads[0];
-                        let func_type = entry.scheme.instantiate(&mut self.context);
-                        debug!("Built function type for builtin '{}': {:?}", name, func_type);
-                        Ok(func_type)
-                    } else {
-                        Err(CompilerError::UndefinedVariable(name.clone(), expr.h.span))
-                    }
+                    let func_type = match lookup {
+                        BuiltinLookup::Single(entry) => entry.scheme.instantiate(&mut self.context),
+                        BuiltinLookup::Overloaded(overloads) => overloads.fresh_type(&mut self.context),
+                    };
+                    debug!("Built function type for builtin '{}': {:?}", name, func_type);
+                    Ok(func_type)
                 } else if crate::module_manager::ModuleManager::is_qualified_name(name) {
                     // Check for qualified module reference (e.g., "f32.sum")
                     if let Some((module_name, _func_name)) = crate::module_manager::ModuleManager::split_qualified_name(name) {
@@ -1469,16 +1392,47 @@ impl TypeChecker {
                 // Check if the function is an overloaded builtin identifier
                 // If so, perform overload resolution based on argument types
                 if let ExprKind::Identifier(name) = &func.kind {
-                    if self.builtin_registry.is_builtin(name) {
-                        if let Some(overloads) = self.builtin_registry.get_overloads(name) {
-                            if overloads.len() > 1 {
-                                // Clone the overloads to avoid borrow checker issues
-                                let overloads_vec = overloads.to_vec();
-                                let name_owned = name.clone();
-                                // Overloaded builtin - perform overload resolution
-                                return self.resolve_overloaded_application(expr, func, &name_owned, &overloads_vec, args);
-                            }
+                    use crate::builtin_registry::BuiltinLookup;
+                    // Clone entries to release the borrow on self.builtin_registry
+                    let overload_entries = match self.builtin_registry.get(name) {
+                        Some(BuiltinLookup::Overloaded(overload_set)) => {
+                            Some(overload_set.entries().to_vec())
                         }
+                        _ => None,
+                    };
+
+                    if let Some(entries) = overload_entries {
+                        // Infer argument types first
+                        let mut arg_types = Vec::new();
+                        for arg in args {
+                            arg_types.push(self.infer_expression(arg)?);
+                        }
+
+                        // Try each overload with backtracking
+                        for entry in &entries {
+                            let saved_context = self.context.clone();
+                            let func_type = entry.scheme.instantiate(&mut self.context);
+
+                            if let Some(return_type) = Self::try_unify_overload(&func_type, &arg_types, &mut self.context) {
+                                // Store the types in the type table
+                                // Each identifier node is unique, so storing the resolved type is correct
+                                let resolved_func_type = func_type.apply(&self.context);
+                                self.type_table.insert(func.h.id, TypeScheme::Monotype(resolved_func_type));
+                                self.type_table.insert(expr.h.id, TypeScheme::Monotype(return_type.clone()));
+                                return Ok(return_type);
+                            }
+
+                            self.context = saved_context;
+                        }
+
+                        return Err(CompilerError::TypeError(
+                            format!(
+                                "No matching overload for '{}' with argument types: {}",
+                                name,
+                                arg_types.iter().map(|t| self.format_type(t)).collect::<Vec<_>>().join(", ")
+                            ),
+                            expr.h.span,
+                        ));
                     }
                 }
 
@@ -1505,15 +1459,14 @@ impl TypeChecker {
                     }
 
                     // Check if this is a builtin function (e.g., f32.sin)
-                    if self.builtin_registry.is_builtin(&dotted) {
-                        if let Some(overloads) = self.builtin_registry.get_overloads(&dotted) {
-                            // TODO: Implement proper overload resolution
-                            // For now, just use the first overload
-                            let entry = &overloads[0];
-                            let ty = entry.scheme.instantiate(&mut self.context);
-                            self.type_table.insert(expr.h.id, TypeScheme::Monotype(ty.clone()));
-                            return Ok(ty);
-                        }
+                    if let Some(lookup) = self.builtin_registry.get(&dotted) {
+                        use crate::builtin_registry::BuiltinLookup;
+                        let ty = match lookup {
+                            BuiltinLookup::Single(entry) => entry.scheme.instantiate(&mut self.context),
+                            BuiltinLookup::Overloaded(overloads) => overloads.fresh_type(&mut self.context),
+                        };
+                        self.type_table.insert(expr.h.id, TypeScheme::Monotype(ty.clone()));
+                        return Ok(ty);
                     }
 
                     // Qualified name not found as builtin - fall through to field access
@@ -1737,15 +1690,14 @@ impl TypeChecker {
                 debug!("Looking up qualified name '{}'", full_name);
 
                 // Check if it's a builtin first (e.g., f32.sqrt, f32.sin)
-                if let Some(entries) = self.builtin_registry.get_overloads(&full_name) {
-                    if entries.len() == 1 {
-                        // Single builtin entry - just instantiate it
-                        let entry = &entries[0];
-                        let ty = entry.scheme.instantiate(&mut self.context);
-                        self.type_table.insert(expr.h.id, polytype::TypeScheme::Monotype(ty.clone()));
-                        return Ok(ty);
-                    }
-                    // If multiple entries, fall through - shouldn't happen for qualified names in practice
+                if let Some(lookup) = self.builtin_registry.get(&full_name) {
+                    use crate::builtin_registry::BuiltinLookup;
+                    let ty = match lookup {
+                        BuiltinLookup::Single(entry) => entry.scheme.instantiate(&mut self.context),
+                        BuiltinLookup::Overloaded(overloads) => overloads.fresh_type(&mut self.context),
+                    };
+                    self.type_table.insert(expr.h.id, polytype::TypeScheme::Monotype(ty.clone()));
+                    return Ok(ty);
                 }
 
                 // Look up in scope stack (for module functions like f32.sum)
