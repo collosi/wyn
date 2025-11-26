@@ -836,10 +836,6 @@ impl TypeChecker {
         };
         self.scope_stack.insert("dot".to_string(), dot_scheme);
 
-        // TODO: Add vector magnitude function (GLSL length)
-        // Should be: vec[n]f32 -> f32 or more generally vec[n]t -> t
-        // For now, removed to avoid conflict with array length function
-
         // Trigonometric functions: f32 -> f32
         let trig_type = Type::arrow(types::f32(), types::f32());
         self.scope_stack.insert("sin".to_string(), TypeScheme::Monotype(trig_type.clone()));

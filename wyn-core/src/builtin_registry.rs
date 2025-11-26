@@ -651,13 +651,14 @@ impl BuiltinRegistry {
         let elem_var = ctx.new_variable(); // ?T - the element type
         let vec_t = Type::Constructed(TypeName::Vec, vec![size_var.clone(), elem_var.clone()]);
 
-        // Skip vector length (magnitude) for now - define in user code as it needs special handling
-        // self.register(BuiltinDescriptor {
-        //     name: "length".to_string(),
-        //     param_types: vec![vec_t.clone()],
-        //     return_type: elem_var.clone(),  // returns T
-        //     implementation: BuiltinImpl::PrimOp(PrimOp::GlslExt(66)),
-        // });
+        // Vector magnitude (GLSL length): Vec[n, T] -> T
+        // Named "magnitude" to avoid conflict with array "length"
+        self.register_poly(
+            "magnitude",
+            vec![vec_t.clone()],
+            elem_var.clone(),
+            BuiltinImpl::PrimOp(PrimOp::GlslExt(66)),
+        );
 
         // Array length: returns the size as i32
         let arr_size_var = ctx.new_variable();
