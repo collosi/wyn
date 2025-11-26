@@ -153,7 +153,7 @@ impl Flattener {
                             Self::extract_size(&vec_args[0]),
                         ) {
                             // Extract element type
-                            let elem_type_str = Self::type_to_string(&vec_args[1]);
+                            let elem_type_str = Self::primitive_type_to_string(&vec_args[1])?;
                             return Ok(format!("matav_{}_{}_{}", n, m, elem_type_str));
                         }
                     }
@@ -181,13 +181,21 @@ impl Flattener {
         }
     }
 
-    /// Convert a type to a string for name mangling
-    fn type_to_string(ty: &Type) -> String {
+    /// Convert a primitive numeric type to a string for name mangling.
+    fn primitive_type_to_string(ty: &Type) -> Result<String> {
         match ty {
-            Type::Constructed(TypeName::Str(s), _) => s.to_string(),
-            Type::Constructed(TypeName::Named(s), _) => s.clone(),
-            Type::Constructed(TypeName::Size(n), _) => n.to_string(),
-            _ => "unknown".to_string(),
+            Type::Constructed(TypeName::Float(bits), _) => Ok(format!("f{}", bits)),
+            Type::Constructed(TypeName::Int(bits), _) => Ok(format!("i{}", bits)),
+            Type::Constructed(TypeName::UInt(bits), _) => Ok(format!("u{}", bits)),
+            Type::Constructed(TypeName::Str(s), _) if *s == "bool" => Ok("bool".to_string()),
+            _ => Err(CompilerError::TypeError(
+                format!(
+                    "Invalid element type for matrix/vector: {:?}. \
+                    Only f16/f32/f64, i8/i16/i32/i64, u8/u16/u32/u64, and bool are supported.",
+                    ty
+                ),
+                Span::dummy(),
+            )),
         }
     }
 
