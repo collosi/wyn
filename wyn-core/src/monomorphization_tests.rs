@@ -23,7 +23,6 @@ fn compile_through_monomorphization(input: &str) -> Result<(), CompilerError> {
 }
 
 #[test]
-#[ignore = "BUG: Size parameter inference fails - monomorphization should catch unresolved variables"]
 fn test_monomorphization_asserts_on_unresolved_size_params() {
     // This test verifies that monomorphization properly asserts when
     // there are unresolved type variables in the MIR from type checking.
@@ -53,7 +52,6 @@ def vertex_main (vertex_id:i32) : #[builtin(position)] vec4f32 =
 }
 
 #[test]
-#[ignore = "BUG: Size parameter inference fails with map - original de_rasterizer pattern"]
 fn test_monomorphization_with_map_and_size_params() {
     // This is the original pattern from de_rasterizer.wyn line 158:
     //   f32.sum (map (\e -> ...) edges)

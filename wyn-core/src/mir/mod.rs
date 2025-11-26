@@ -13,6 +13,8 @@ use polytype::Type;
 #[cfg(test)]
 mod tests;
 
+pub mod visitor;
+
 /// A complete MIR program.
 #[derive(Debug, Clone)]
 pub struct Program {

@@ -13,7 +13,8 @@
 
 use crate::ast::{Type, TypeName};
 use crate::error::Result;
-use crate::mir::{Def, Expr, ExprKind, LoopKind, Param, Program};
+use crate::mir::visitor::MirVisitor;
+use crate::mir::{Def, Expr, ExprKind, Param, Program};
 use polytype::Type as PolyType;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -516,6 +517,19 @@ fn contains_variables(ty: &Type) -> bool {
     }
 }
 
+/// Visitor that applies type substitutions to expressions
+struct SubstitutionVisitor<'a> {
+    subst: &'a Substitution,
+}
+
+impl<'a> MirVisitor for SubstitutionVisitor<'a> {
+    type Error = std::convert::Infallible;
+
+    fn visit_type(&mut self, ty: Type) -> std::result::Result<Type, Self::Error> {
+        Ok(apply_subst(&ty, self.subst))
+    }
+}
+
 /// Apply a substitution to a type
 fn apply_subst(ty: &Type, subst: &Substitution) -> Type {
     match ty {
@@ -568,95 +582,8 @@ fn apply_subst(ty: &Type, subst: &Substitution) -> Type {
 
 /// Apply a substitution to an expression
 fn apply_subst_expr(expr: Expr, subst: &Substitution) -> Expr {
-    let kind = match expr.kind {
-        ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
-            op,
-            lhs: Box::new(apply_subst_expr(*lhs, subst)),
-            rhs: Box::new(apply_subst_expr(*rhs, subst)),
-        },
-        ExprKind::UnaryOp { op, operand } => ExprKind::UnaryOp {
-            op,
-            operand: Box::new(apply_subst_expr(*operand, subst)),
-        },
-        ExprKind::If {
-            cond,
-            then_branch,
-            else_branch,
-        } => ExprKind::If {
-            cond: Box::new(apply_subst_expr(*cond, subst)),
-            then_branch: Box::new(apply_subst_expr(*then_branch, subst)),
-            else_branch: Box::new(apply_subst_expr(*else_branch, subst)),
-        },
-        ExprKind::Let { name, value, body } => ExprKind::Let {
-            name,
-            value: Box::new(apply_subst_expr(*value, subst)),
-            body: Box::new(apply_subst_expr(*body, subst)),
-        },
-        ExprKind::Loop {
-            init_bindings,
-            kind,
-            body,
-        } => {
-            let init_bindings =
-                init_bindings.into_iter().map(|(name, e)| (name, apply_subst_expr(e, subst))).collect();
-
-            // Also apply substitution to expressions inside LoopKind
-            let kind = match kind {
-                LoopKind::For { var, iter } => LoopKind::For {
-                    var,
-                    iter: Box::new(apply_subst_expr(*iter, subst)),
-                },
-                LoopKind::ForRange { var, bound } => LoopKind::ForRange {
-                    var,
-                    bound: Box::new(apply_subst_expr(*bound, subst)),
-                },
-                LoopKind::While { cond } => LoopKind::While {
-                    cond: Box::new(apply_subst_expr(*cond, subst)),
-                },
-            };
-
-            ExprKind::Loop {
-                init_bindings,
-                kind,
-                body: Box::new(apply_subst_expr(*body, subst)),
-            }
-        }
-        ExprKind::Call { func, args } => {
-            let args = args.into_iter().map(|arg| apply_subst_expr(arg, subst)).collect();
-            ExprKind::Call { func, args }
-        }
-        ExprKind::Intrinsic { name, args } => {
-            let args = args.into_iter().map(|arg| apply_subst_expr(arg, subst)).collect();
-            ExprKind::Intrinsic { name, args }
-        }
-        ExprKind::Attributed { attributes, expr } => ExprKind::Attributed {
-            attributes,
-            expr: Box::new(apply_subst_expr(*expr, subst)),
-        },
-        ExprKind::Literal(lit) => {
-            // Recursively apply substitution to subexpressions in literals
-            let new_lit = match lit {
-                crate::mir::Literal::Tuple(exprs) => crate::mir::Literal::Tuple(
-                    exprs.into_iter().map(|e| apply_subst_expr(e, subst)).collect(),
-                ),
-                crate::mir::Literal::Array(exprs) => crate::mir::Literal::Array(
-                    exprs.into_iter().map(|e| apply_subst_expr(e, subst)).collect(),
-                ),
-                crate::mir::Literal::Record(fields) => crate::mir::Literal::Record(
-                    fields.into_iter().map(|(k, v)| (k, apply_subst_expr(v, subst))).collect(),
-                ),
-                other => other, // Int, Float, Bool, String have no subexpressions
-            };
-            ExprKind::Literal(new_lit)
-        }
-        other => other, // Var has no subexpressions
-    };
-
-    Expr {
-        ty: apply_subst(&expr.ty, subst),
-        kind,
-        span: expr.span,
-    }
+    let mut visitor = SubstitutionVisitor { subst };
+    visitor.visit_expr(expr).unwrap()
 }
 
 /// Format a substitution for use in specialized function names
