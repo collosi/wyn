@@ -3,8 +3,20 @@ use log::{info, warn};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::Instant;
 use thiserror::Error;
 use wyn_core::{Compiler, Flattened, lexer, parser::Parser as WynParser};
+
+/// Times the execution of a closure and prints the elapsed time if verbose.
+fn time<T, F: FnOnce() -> T>(name: &str, verbose: bool, f: F) -> T {
+    let start = Instant::now();
+    let result = f();
+    if verbose {
+        let elapsed = start.elapsed().as_millis();
+        eprintln!("{}: {}ms", name, elapsed);
+    }
+    result
+}
 
 #[derive(Parser)]
 #[command(name = "wyn")]
@@ -150,22 +162,27 @@ fn compile_file(
     }
 
     // Compile through the pipeline
-    let type_checked = Compiler::parse(&source)?.elaborate()?.resolve()?.type_check()?;
+    let parsed = time("parse", verbose, || Compiler::parse(&source))?;
+    let elaborated = time("elaborate", verbose, || parsed.elaborate())?;
+    let resolved = time("resolve", verbose, || elaborated.resolve())?;
+    let type_checked = time("type_check", verbose, || resolved.type_check())?;
 
     type_checked.print_warnings();
 
-    let borrow_checked = type_checked.borrow_check()?;
+    let borrow_checked = time("borrow_check", verbose, || type_checked.borrow_check())?;
     if borrow_checked.has_borrow_errors() {
         borrow_checked.print_borrow_errors();
     }
 
-    let flattened = borrow_checked.flatten()?;
+    let flattened = time("flatten", verbose, || borrow_checked.flatten())?;
 
     // Write MIR if requested (before further passes that might fail)
     write_mir_if_requested(&flattened, &output_mir, verbose)?;
 
-    let monomorphized = flattened.monomorphize()?;
-    let lowered = monomorphized.filter_reachable().fold_constants()?.lower()?;
+    let monomorphized = time("monomorphize", verbose, || flattened.monomorphize())?;
+    let reachable = time("filter_reachable", verbose, || monomorphized.filter_reachable());
+    let folded = time("fold_constants", verbose, || reachable.fold_constants())?;
+    let lowered = time("lower", verbose, || folded.lower())?;
 
     // Determine output path
     let output_path = output.unwrap_or_else(|| {
