@@ -706,7 +706,7 @@ impl Flattener {
                 let idx = self.resolve_field_index(obj_expr, field)?;
 
                 // Create i32 type for the index literal
-                let i32_type = Type::Constructed(TypeName::Str("i32".into()), vec![]);
+                let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
 
                 (
                     mir::ExprKind::Intrinsic {
@@ -887,7 +887,7 @@ impl Flattener {
                         .unwrap_or_else(|| {
                             panic!("BUG: Tuple pattern element {} has no type. Type checking should ensure all tuple elements have types.", i)
                         });
-                    let i32_type = Type::Constructed(TypeName::Str("i32".into()), vec![]);
+                    let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
 
                     let extract = Expr::new(
                         elem_ty.clone(),
@@ -1287,7 +1287,7 @@ impl Flattener {
                         .unwrap_or_else(|| {
                             panic!("BUG: Loop tuple pattern element {} has no type. Type checking should ensure all tuple elements have types.", i)
                         });
-                    let i32_type = Type::Constructed(TypeName::Str("i32".into()), vec![]);
+                    let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
 
                     let extract = Expr::new(
                         elem_ty,

@@ -262,7 +262,25 @@ impl BuiltinRegistry {
 
     /// Helper to create a type from a static string
     fn ty(name: &'static str) -> Type {
-        Type::Constructed(TypeName::Str(name), vec![])
+        let type_name = match name {
+            // Floating point types
+            "f16" => TypeName::Float(16),
+            "f32" => TypeName::Float(32),
+            "f64" => TypeName::Float(64),
+            // Signed integer types
+            "i8" => TypeName::Int(8),
+            "i16" => TypeName::Int(16),
+            "i32" => TypeName::Int(32),
+            "i64" => TypeName::Int(64),
+            // Unsigned integer types
+            "u8" => TypeName::UInt(8),
+            "u16" => TypeName::UInt(16),
+            "u32" => TypeName::UInt(32),
+            "u64" => TypeName::UInt(64),
+            // All other types remain as Str
+            _ => TypeName::Str(name),
+        };
+        Type::Constructed(type_name, vec![])
     }
 
     /// Register from_prim module functions (type conversions)

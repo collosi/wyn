@@ -211,16 +211,24 @@ pub type Expression = Node<ExprKind>;
 
 /// Type name constructors for the Wyn type system.
 ///
-/// Note on Str vs Named:
-/// - `Str`: Primitive type names hardcoded in the compiler (e.g., "i32", "f32", "->", "tuple")
+/// Note on type name variants:
+/// - `Float/Int/SInt`: Numeric primitive types with bit widths (e.g., Float(32), SInt(32))
+/// - `Str`: Other primitive type names hardcoded in the compiler (e.g., "->", "tuple", "bool")
 ///          Uses static strings for efficiency
 /// - `Named`: Type names parsed from user source code (e.g., "vec3", "MyType")
 ///            Could refer to built-in types, type aliases, or user-defined types
 ///            Uses owned String since the name comes from parsed input
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeName {
-    /// Primitive type names hardcoded in compiler: "i32", "f32", "tuple", "->", etc.
+    /// Primitive type names hardcoded in compiler: "->", "tuple", "bool", etc.
+    /// Numeric types use dedicated Float/Int/SInt variants instead.
     Str(&'static str),
+    /// Floating point types: f16, f32, f64, etc.
+    Float(usize),
+    /// Unsigned integer types: u8, u16, u32, u64
+    UInt(usize),
+    /// Signed integer types: i8, i16, i32, i64
+    Int(usize),
     /// Array type constructor (takes size and element type)
     Array,
     /// Unsized/anonymous array size placeholder (for []t syntax where size is inferred)
@@ -255,6 +263,9 @@ impl std::fmt::Display for TypeName {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             TypeName::Str(s) => write!(f, "{}", s),
+            TypeName::Float(bits) => write!(f, "f{}", bits),
+            TypeName::UInt(bits) => write!(f, "u{}", bits),
+            TypeName::Int(bits) => write!(f, "i{}", bits),
             TypeName::Array => write!(f, "Array"),
             TypeName::Unsized => write!(f, ""),
             TypeName::Vec => write!(f, "Vec"),
@@ -309,6 +320,9 @@ impl polytype::Name for TypeName {
     fn show(&self) -> String {
         match self {
             TypeName::Str(s) => s.to_string(),
+            TypeName::Float(bits) => format!("f{}", bits),
+            TypeName::UInt(bits) => format!("u{}", bits),
+            TypeName::Int(bits) => format!("i{}", bits),
             TypeName::Array => "Array".to_string(),
             TypeName::Unsized => "".to_string(),
             TypeName::Vec => "Vec".to_string(),
@@ -728,11 +742,11 @@ pub mod types {
     use super::{Type, TypeName};
 
     pub fn i32() -> Type {
-        Type::Constructed(TypeName::Str("i32"), vec![])
+        Type::Constructed(TypeName::Int(32), vec![])
     }
 
     pub fn f32() -> Type {
-        Type::Constructed(TypeName::Str("f32"), vec![])
+        Type::Constructed(TypeName::Float(32), vec![])
     }
 
     pub fn bool_type() -> Type {
@@ -742,17 +756,17 @@ pub mod types {
     /// All valid SPIR-V scalar element types for vectors and matrices
     fn spirv_element_types() -> Vec<(&'static str, Type)> {
         vec![
-            ("i8", Type::Constructed(TypeName::Str("i8"), vec![])),
-            ("i16", Type::Constructed(TypeName::Str("i16"), vec![])),
-            ("i32", Type::Constructed(TypeName::Str("i32"), vec![])),
-            ("i64", Type::Constructed(TypeName::Str("i64"), vec![])),
-            ("u8", Type::Constructed(TypeName::Str("u8"), vec![])),
-            ("u16", Type::Constructed(TypeName::Str("u16"), vec![])),
-            ("u32", Type::Constructed(TypeName::Str("u32"), vec![])),
-            ("u64", Type::Constructed(TypeName::Str("u64"), vec![])),
-            ("f16", Type::Constructed(TypeName::Str("f16"), vec![])),
-            ("f32", Type::Constructed(TypeName::Str("f32"), vec![])),
-            ("f64", Type::Constructed(TypeName::Str("f64"), vec![])),
+            ("i8", Type::Constructed(TypeName::Int(8), vec![])),
+            ("i16", Type::Constructed(TypeName::Int(16), vec![])),
+            ("i32", Type::Constructed(TypeName::Int(32), vec![])),
+            ("i64", Type::Constructed(TypeName::Int(64), vec![])),
+            ("u8", Type::Constructed(TypeName::UInt(8), vec![])),
+            ("u16", Type::Constructed(TypeName::UInt(16), vec![])),
+            ("u32", Type::Constructed(TypeName::UInt(32), vec![])),
+            ("u64", Type::Constructed(TypeName::UInt(64), vec![])),
+            ("f16", Type::Constructed(TypeName::Float(16), vec![])),
+            ("f32", Type::Constructed(TypeName::Float(32), vec![])),
+            ("f64", Type::Constructed(TypeName::Float(64), vec![])),
             ("bool", Type::Constructed(TypeName::Str("bool"), vec![])),
         ]
     }

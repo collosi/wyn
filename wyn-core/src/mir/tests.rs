@@ -4,11 +4,11 @@ use polytype::Type;
 use super::*;
 
 fn i32_type() -> Type<TypeName> {
-    Type::Constructed(TypeName::Str("i32".into()), vec![])
+    Type::Constructed(TypeName::Int(32), vec![])
 }
 
 fn f32_type() -> Type<TypeName> {
-    Type::Constructed(TypeName::Str("f32".into()), vec![])
+    Type::Constructed(TypeName::Float(32), vec![])
 }
 
 #[test]

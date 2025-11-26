@@ -778,7 +778,7 @@ impl TypeChecker {
             TypeName::Array,
             vec![Type::Variable(var_size_id), Type::Variable(var_a_id)],
         );
-        let i32_type = Type::Constructed(TypeName::Str("i32"), vec![]);
+        let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
         let replicate_body = Type::arrow(i32_type, Type::arrow(Type::Variable(var_a_id), output_array));
 
         let replicate_scheme = TypeScheme::Polytype {
@@ -1652,6 +1652,9 @@ impl TypeChecker {
                                 // Get the type name as a string for other types
                                 let type_name_str = match &type_name {
                                     TypeName::Str(s) => s.to_string(),
+                                    TypeName::Float(bits) => format!("f{}", bits),
+                                    TypeName::UInt(bits) => format!("u{}", bits),
+                                    TypeName::Int(bits) => format!("i{}", bits),
                                     TypeName::Array => "array".to_string(),
                                     TypeName::Unsized => "unsized".to_string(),
                                     TypeName::Vec => "vec".to_string(),

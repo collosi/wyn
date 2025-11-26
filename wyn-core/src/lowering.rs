@@ -185,8 +185,11 @@ impl SpvBuilder {
                 }
 
                 match name {
-                    TypeName::Str(s) if *s == "i32" => self.i32_type,
-                    TypeName::Str(s) if *s == "f32" => self.f32_type,
+                    TypeName::Int(32) => self.i32_type,
+                    TypeName::Float(32) => self.f32_type,
+                    TypeName::Int(bits) => self.builder.type_int(*bits as u32, 1),
+                    TypeName::UInt(bits) => self.builder.type_int(*bits as u32, 0),
+                    TypeName::Float(bits) => self.builder.type_float(*bits as u32),
                     TypeName::Str(s) if *s == "bool" => self.bool_type,
                     TypeName::Str(s) if *s == "tuple" => {
                         // Tuple becomes struct

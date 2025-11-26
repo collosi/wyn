@@ -752,17 +752,27 @@ impl Parser {
                 self.advance();
 
                 // Check if this is a builtin primitive type
-                match type_name.as_str() {
-                    "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f16" | "f32" | "f64"
-                    | "bool" => Ok(Type::Constructed(
-                        TypeName::Str(Box::leak(type_name.into_boxed_str())),
-                        vec![],
-                    )),
-                    _ => {
-                        // User-defined type alias (e.g., 't' from 'type t = i32')
-                        Ok(Type::Constructed(TypeName::Named(type_name), vec![]))
-                    }
-                }
+                let type_name_variant = match type_name.as_str() {
+                    // Floating point types
+                    "f16" => TypeName::Float(16),
+                    "f32" => TypeName::Float(32),
+                    "f64" => TypeName::Float(64),
+                    // Signed integer types
+                    "i8" => TypeName::Int(8),
+                    "i16" => TypeName::Int(16),
+                    "i32" => TypeName::Int(32),
+                    "i64" => TypeName::Int(64),
+                    // Unsigned integer types
+                    "u8" => TypeName::UInt(8),
+                    "u16" => TypeName::UInt(16),
+                    "u32" => TypeName::UInt(32),
+                    "u64" => TypeName::UInt(64),
+                    // Boolean
+                    "bool" => TypeName::Str("bool"),
+                    // User-defined type alias or unrecognized type
+                    _ => TypeName::Named(type_name),
+                };
+                Ok(Type::Constructed(type_name_variant, vec![]))
             }
             Some(Token::LeftParen) => {
                 // Tuple type (T1, T2, T3) or empty tuple ()

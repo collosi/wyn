@@ -5,11 +5,11 @@ use crate::constant_folding::ConstantFolder;
 use crate::mir::{Expr, ExprKind, Literal};
 
 fn i32_type() -> polytype::Type<crate::ast::TypeName> {
-    polytype::Type::Constructed(crate::ast::TypeName::Str("i32".into()), vec![])
+    polytype::Type::Constructed(crate::ast::TypeName::Int(32), vec![])
 }
 
 fn f32_type() -> polytype::Type<crate::ast::TypeName> {
-    polytype::Type::Constructed(crate::ast::TypeName::Str("f32".into()), vec![])
+    polytype::Type::Constructed(crate::ast::TypeName::Float(32), vec![])
 }
 
 fn bool_type() -> polytype::Type<crate::ast::TypeName> {

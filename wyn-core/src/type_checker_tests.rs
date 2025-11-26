@@ -131,7 +131,7 @@ fn test_type_hole_in_array() {
     let inferred = check_type_hole("def arr = [1i32, ???, 3i32]");
 
     // ??? should be inferred as i32 (to match array elements)
-    let expected = Type::Constructed(TypeName::Str("i32"), vec![]);
+    let expected = Type::Constructed(TypeName::Int(32), vec![]);
     assert_eq!(inferred, expected);
 }
 
@@ -140,7 +140,7 @@ fn test_type_hole_in_binop() {
     let inferred = check_type_hole("def result = 5i32 + ???");
 
     // ??? should be inferred as i32 (to match addition operand)
-    let expected = Type::Constructed(TypeName::Str("i32"), vec![]);
+    let expected = Type::Constructed(TypeName::Int(32), vec![]);
     assert_eq!(inferred, expected);
 }
 
@@ -149,7 +149,7 @@ fn test_type_hole_function_arg() {
     let inferred = check_type_hole("def apply = (\\x:i32 -> x + 1i32) ???");
 
     // ??? should be inferred as i32 (the function argument type)
-    let expected = Type::Constructed(TypeName::Str("i32"), vec![]);
+    let expected = Type::Constructed(TypeName::Int(32), vec![]);
     assert_eq!(inferred, expected);
 }
 

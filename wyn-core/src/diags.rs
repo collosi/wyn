@@ -52,6 +52,9 @@ fn format_constructed_type(name: &TypeName, args: &[PolyType<TypeName>]) -> Stri
                 }
             }
         }
+        TypeName::Float(bits) => format!("f{}", bits),
+        TypeName::UInt(bits) => format!("u{}", bits),
+        TypeName::Int(bits) => format!("i{}", bits),
         TypeName::Size(n) => format!("{}", n),
         TypeName::SizeVar(s) => s.clone(),
         TypeName::Unsized => "?".to_string(),

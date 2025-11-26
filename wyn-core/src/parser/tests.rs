@@ -1734,7 +1734,7 @@ fn test_ambiguity_type_ascription() {
 
     assert!(matches!(&decl.body.kind, ExprKind::TypeAscription(inner, ty)
         if matches!(&inner.kind, ExprKind::Identifier(name) if name == "x")
-        && matches!(ty, Type::Constructed(TypeName::Str("i32"), _))));
+        && matches!(ty, Type::Constructed(TypeName::Int(32), _))));
 }
 
 #[test]
