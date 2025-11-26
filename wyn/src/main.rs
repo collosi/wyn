@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use log::{info, warn};
+use log::info;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -46,14 +46,6 @@ enum Commands {
         #[arg(long, value_name = "FILE")]
         output_annotated: Option<PathBuf>,
 
-        /// Output Nemo/Datalog facts for basic block analysis
-        #[arg(long, value_name = "FILE")]
-        output_nemo: Option<PathBuf>,
-
-        /// Run borrow checking with Nemo rule engine
-        #[arg(long)]
-        borrow_check: bool,
-
         /// Print verbose output
         #[arg(short, long)]
         verbose: bool,
@@ -68,14 +60,6 @@ enum Commands {
         /// Output annotated source code with block IDs and locations
         #[arg(long, value_name = "FILE")]
         output_annotated: Option<PathBuf>,
-
-        /// Output Nemo/Datalog facts for basic block analysis
-        #[arg(long, value_name = "FILE")]
-        output_nemo: Option<PathBuf>,
-
-        /// Run borrow checking with Nemo rule engine
-        #[arg(long)]
-        borrow_check: bool,
 
         /// Print verbose output
         #[arg(short, long)]
@@ -102,28 +86,16 @@ fn main() -> Result<(), DriverError> {
             output,
             output_mir,
             output_annotated,
-            output_nemo,
-            borrow_check,
             verbose,
         } => {
-            compile_file(
-                input,
-                output,
-                output_mir,
-                output_annotated,
-                output_nemo,
-                borrow_check,
-                verbose,
-            )?;
+            compile_file(input, output, output_mir, output_annotated, verbose)?;
         }
         Commands::Check {
             input,
             output_annotated,
-            output_nemo,
-            borrow_check,
             verbose,
         } => {
-            check_file(input, output_annotated, output_nemo, borrow_check, verbose)?;
+            check_file(input, output_annotated, verbose)?;
         }
     }
 
@@ -135,8 +107,6 @@ fn compile_file(
     output: Option<PathBuf>,
     output_mir: Option<PathBuf>,
     output_annotated: Option<PathBuf>,
-    output_nemo: Option<PathBuf>,
-    borrow_check: bool,
     verbose: bool,
 ) -> Result<(), DriverError> {
     if verbose {
@@ -151,16 +121,6 @@ fn compile_file(
         generate_annotated_source(&source, annotated_path, verbose)?;
     }
 
-    // Generate Nemo facts if requested
-    if let Some(ref nemo_path) = output_nemo {
-        generate_nemo_facts(&source, nemo_path, verbose)?;
-    }
-
-    // Run borrow checking if requested
-    if borrow_check {
-        run_borrow_checking(&source, verbose)?;
-    }
-
     // Compile through the pipeline
     let parsed = time("parse", verbose, || Compiler::parse(&source))?;
     let elaborated = time("elaborate", verbose, || parsed.elaborate())?;
@@ -169,12 +129,12 @@ fn compile_file(
 
     type_checked.print_warnings();
 
-    let borrow_checked = time("borrow_check", verbose, || type_checked.borrow_check())?;
-    if borrow_checked.has_borrow_errors() {
-        borrow_checked.print_borrow_errors();
+    let alias_checked = time("alias_check", verbose, || type_checked.alias_check())?;
+    if alias_checked.has_alias_errors() {
+        alias_checked.print_alias_errors();
     }
 
-    let flattened = time("flatten", verbose, || borrow_checked.flatten())?;
+    let flattened = time("flatten", verbose, || alias_checked.flatten())?;
 
     // Write MIR if requested (before further passes that might fail)
     write_mir_if_requested(&flattened, &output_mir, verbose)?;
@@ -206,13 +166,7 @@ fn compile_file(
     Ok(())
 }
 
-fn check_file(
-    input: PathBuf,
-    output_annotated: Option<PathBuf>,
-    output_nemo: Option<PathBuf>,
-    borrow_check: bool,
-    verbose: bool,
-) -> Result<(), DriverError> {
+fn check_file(input: PathBuf, output_annotated: Option<PathBuf>, verbose: bool) -> Result<(), DriverError> {
     if verbose {
         info!("Checking {}...", input.display());
     }
@@ -225,24 +179,14 @@ fn check_file(
         generate_annotated_source(&source, annotated_path, verbose)?;
     }
 
-    // Generate Nemo facts if requested
-    if let Some(ref nemo_path) = output_nemo {
-        generate_nemo_facts(&source, nemo_path, verbose)?;
-    }
-
-    // Run borrow checking if requested
-    if borrow_check {
-        run_borrow_checking(&source, verbose)?;
-    }
-
-    // Type check and borrow check, don't generate code
+    // Type check and alias check, don't generate code
     let type_checked = Compiler::parse(&source)?.elaborate()?.resolve()?.type_check()?;
 
     type_checked.print_warnings();
 
-    let borrow_checked = type_checked.borrow_check()?;
-    if borrow_checked.has_borrow_errors() {
-        borrow_checked.print_borrow_errors();
+    let alias_checked = type_checked.alias_check()?;
+    if alias_checked.has_alias_errors() {
+        alias_checked.print_alias_errors();
     }
 
     if verbose {
@@ -288,32 +232,6 @@ fn generate_annotated_source(
 
     if verbose {
         info!("Generated annotated source: {}", output_path.display());
-    }
-
-    Ok(())
-}
-
-fn generate_nemo_facts(_source: &str, output_path: &PathBuf, verbose: bool) -> Result<(), DriverError> {
-    // Disabled during reorganization
-    warn!("Nemo fact generation is disabled during reorganization");
-    fs::write(
-        output_path,
-        "% Nemo fact generation disabled during reorganization\n",
-    )?;
-
-    if verbose {
-        info!("Generated placeholder Nemo facts: {}", output_path.display());
-    }
-
-    Ok(())
-}
-
-fn run_borrow_checking(_source: &str, verbose: bool) -> Result<(), DriverError> {
-    // Disabled during reorganization
-    warn!("Borrow checking is disabled during reorganization");
-
-    if verbose {
-        info!("Skipped borrow checking (disabled)");
     }
 
     Ok(())

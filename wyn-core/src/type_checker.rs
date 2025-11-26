@@ -1247,11 +1247,13 @@ impl TypeChecker {
 
                 // Constrain array type to be Array(n, a) even if it's currently unknown
                 // This allows indexing arrays whose type is a meta-variable
+                // Strip uniqueness marker - indexing a *[n]T should work like indexing [n]T
+                let array_type_stripped = types::strip_unique(&array_type);
                 let size_var = self.context.new_variable();
                 let elem_var = self.context.new_variable();
                 let want_array = Type::Constructed(TypeName::Array, vec![size_var, elem_var.clone()]);
 
-                self.context.unify(&array_type, &want_array).map_err(|_| {
+                self.context.unify(&array_type_stripped, &want_array).map_err(|_| {
                     CompilerError::TypeError(
                         format!(
                             "Cannot index non-array type: got {}",
@@ -1932,9 +1934,6 @@ impl TypeChecker {
                 // Extract the expected parameter type
                 let expected_param_type = param_type_var.apply(&self.context);
 
-                // Check for unique ownership
-                let expects_unique = types::is_unique(&expected_param_type);
-
                 // Strip uniqueness for unification
                 let arg_type_for_unify = types::strip_unique(&arg_type);
                 let expected_param_for_unify = types::strip_unique(&expected_param_type);
@@ -1957,38 +1956,6 @@ impl TypeChecker {
                     };
                     CompilerError::TypeError(error_msg, arg.h.span)
                 })?;
-
-                // Handle uniqueness/consumption:
-                // TODO: Implement proper alias tracking and explicit consumption
-                //
-                // Current limitation: We only track consumption for direct identifiers.
-                // This is unsound because we allow expressions that may alias variables
-                // to be passed to consuming parameters without explicit 'consume' annotations.
-                //
-                // Proper semantics (Futhark-like):
-                // 1. Track alias sets during inference: infer_expression -> (Type, AliasSet)
-                // 2. At consuming positions, check if arg aliases any variables
-                // 3. If aliases non-empty, require explicit 'consume x' expression
-                // 4. If aliases empty (fresh value), allow without consumption
-                //
-                // Examples that should require explicit consume:
-                // - xs[0] where indexing returns a view/reference (not scalar copy)
-                // - slice xs i j (aliases xs)
-                // - f xs where f returns an alias to its parameter
-                //
-                // For now, we conservatively only consume direct identifiers:
-                if expects_unique {
-                    if let ExprKind::Identifier(var_name) = &arg.kind {
-                        self.scope_stack.mark_consumed(var_name).map_err(|e| {
-                            CompilerError::TypeError(
-                                format!("Cannot consume variable '{}': {}", var_name, e),
-                                arg.h.span,
-                            )
-                        })?;
-                    }
-                    // WARNING: Non-identifiers are currently allowed without checking aliases.
-                    // This may allow unsound programs where aliased values are consumed.
-                }
 
                 func_type = result_type;
             }

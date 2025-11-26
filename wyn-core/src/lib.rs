@@ -16,13 +16,14 @@ pub mod scope;
 pub mod type_checker;
 pub mod visitor;
 
-pub mod borrow_checker;
+pub mod alias_checker;
 pub mod constant_folding;
 pub mod lowering;
 pub mod module;
 pub mod monomorphization;
-pub mod nemo_facts;
 
+#[cfg(test)]
+mod alias_checker_tests;
 #[cfg(test)]
 mod constant_folding_tests;
 #[cfg(test)]
@@ -55,7 +56,7 @@ pub type TypeTable = HashMap<NodeId, TypeScheme<TypeName>>;
 //       -> .elaborate()  -> Elaborated
 //       -> .resolve()    -> Resolved
 //       -> .type_check() -> TypeChecked
-//       -> .borrow_check() -> BorrowChecked
+//       -> .alias_check() -> AliasChecked
 //       -> .flatten()    -> Flattened
 //       -> .monomorphize() -> Monomorphized
 //       -> .filter_reachable() -> Reachable
@@ -153,29 +154,29 @@ impl TypeChecked {
         }
     }
 
-    /// Run borrow checking analysis on the program
-    pub fn borrow_check(self) -> Result<BorrowChecked> {
-        let checker = borrow_checker::BorrowChecker::new(false);
-        let borrow_result = checker.check_program(&self.ast)?;
+    /// Run alias checking analysis on the program
+    pub fn alias_check(self) -> Result<AliasChecked> {
+        let checker = alias_checker::AliasChecker::new(&self.type_table);
+        let alias_result = checker.check_program(&self.ast)?;
 
-        Ok(BorrowChecked {
+        Ok(AliasChecked {
             ast: self.ast,
             type_table: self.type_table,
             warnings: self.warnings,
-            borrow_result,
+            alias_result,
         })
     }
 }
 
-/// Stage 5: Program has been borrow checked
-pub struct BorrowChecked {
+/// Stage 5: Program has been alias checked
+pub struct AliasChecked {
     pub ast: ast::Program,
     pub type_table: TypeTable,
     pub warnings: Vec<type_checker::TypeWarning>,
-    pub borrow_result: borrow_checker::BorrowCheckResult,
+    pub alias_result: alias_checker::AliasCheckResult,
 }
 
-impl BorrowChecked {
+impl AliasChecked {
     /// Print warnings to stderr (convenience method)
     pub fn print_warnings(&self) {
         // We need a type checker instance to format types
@@ -189,14 +190,14 @@ impl BorrowChecked {
         }
     }
 
-    /// Check if borrow checking found any errors
-    pub fn has_borrow_errors(&self) -> bool {
-        self.borrow_result.has_errors()
+    /// Check if alias checking found any errors
+    pub fn has_alias_errors(&self) -> bool {
+        self.alias_result.has_errors()
     }
 
-    /// Print borrow errors to stdout
-    pub fn print_borrow_errors(&self) {
-        self.borrow_result.print_errors();
+    /// Print alias errors to stderr
+    pub fn print_alias_errors(&self) {
+        self.alias_result.print_errors();
     }
 
     /// Flatten AST to MIR (with defunctionalization and desugaring)
