@@ -4,7 +4,8 @@
 //! operations on literals to their computed values.
 
 use crate::error::{CompilerError, Result};
-use crate::mir::{Def, Expr, ExprKind, Literal, LoopKind, Program};
+use crate::mir::visitor::MirVisitor;
+use crate::mir::{Def, Expr, ExprKind, Literal, Program};
 
 /// Constant folder that performs compile-time evaluation of constant expressions.
 pub struct ConstantFolder;
@@ -15,240 +16,97 @@ impl Default for ConstantFolder {
     }
 }
 
+impl MirVisitor for ConstantFolder {
+    type Error = CompilerError;
+
+    fn visit_expr_bin_op(
+        &mut self,
+        op: String,
+        lhs: Expr,
+        rhs: Expr,
+        expr: Expr,
+    ) -> std::result::Result<Expr, Self::Error> {
+        // First, recursively fold the operands
+        let folded_lhs = self.visit_expr(lhs)?;
+        let folded_rhs = self.visit_expr(rhs)?;
+
+        // Try to fold if both are literals
+        if let Some(folded) = self.try_fold_binop(&op, &folded_lhs, &folded_rhs, &expr.ty, expr.span)? {
+            return Ok(folded);
+        }
+
+        // Can't fold, return with folded children
+        Ok(Expr {
+            kind: ExprKind::BinOp {
+                op,
+                lhs: Box::new(folded_lhs),
+                rhs: Box::new(folded_rhs),
+            },
+            ..expr
+        })
+    }
+
+    fn visit_expr_unary_op(
+        &mut self,
+        op: String,
+        operand: Expr,
+        expr: Expr,
+    ) -> std::result::Result<Expr, Self::Error> {
+        // First, recursively fold the operand
+        let folded_operand = self.visit_expr(operand)?;
+
+        // Try to fold if operand is a literal
+        if let Some(folded) = self.try_fold_unaryop(&op, &folded_operand, &expr.ty, expr.span)? {
+            return Ok(folded);
+        }
+
+        // Can't fold, return with folded child
+        Ok(Expr {
+            kind: ExprKind::UnaryOp {
+                op,
+                operand: Box::new(folded_operand),
+            },
+            ..expr
+        })
+    }
+
+    fn visit_expr_if(
+        &mut self,
+        cond: Expr,
+        then_branch: Expr,
+        else_branch: Expr,
+        expr: Expr,
+    ) -> std::result::Result<Expr, Self::Error> {
+        // First, recursively fold all branches
+        let folded_cond = self.visit_expr(cond)?;
+        let folded_then = self.visit_expr(then_branch)?;
+        let folded_else = self.visit_expr(else_branch)?;
+
+        // If condition is a constant bool, return the appropriate branch
+        if let ExprKind::Literal(Literal::Bool(b)) = &folded_cond.kind {
+            return Ok(if *b { folded_then } else { folded_else });
+        }
+
+        // Can't fold, return with folded children
+        Ok(Expr {
+            kind: ExprKind::If {
+                cond: Box::new(folded_cond),
+                then_branch: Box::new(folded_then),
+                else_branch: Box::new(folded_else),
+            },
+            ..expr
+        })
+    }
+}
+
 impl ConstantFolder {
     pub fn new() -> Self {
         ConstantFolder
     }
 
-    /// Fold constants in an entire MIR program.
-    pub fn fold_program(&mut self, program: &Program) -> Result<Program> {
-        let mut folded_defs = Vec::new();
-
-        for def in &program.defs {
-            let folded_def = self.fold_def(def)?;
-            folded_defs.push(folded_def);
-        }
-
-        Ok(Program {
-            defs: folded_defs,
-            lambda_registry: program.lambda_registry.clone(),
-        })
-    }
-
-    /// Fold constants in a definition.
-    fn fold_def(&mut self, def: &Def) -> Result<Def> {
-        match def {
-            Def::Function {
-                name,
-                params,
-                ret_type,
-                attributes,
-                param_attributes,
-                return_attributes,
-                body,
-                span,
-            } => {
-                let folded_body = self.fold_expr(body)?;
-                Ok(Def::Function {
-                    name: name.clone(),
-                    params: params.clone(),
-                    ret_type: ret_type.clone(),
-                    attributes: attributes.clone(),
-                    param_attributes: param_attributes.clone(),
-                    return_attributes: return_attributes.clone(),
-                    body: folded_body,
-                    span: *span,
-                })
-            }
-            Def::Constant {
-                name,
-                ty,
-                attributes,
-                body,
-                span,
-            } => {
-                let folded_body = self.fold_expr(body)?;
-                Ok(Def::Constant {
-                    name: name.clone(),
-                    ty: ty.clone(),
-                    attributes: attributes.clone(),
-                    body: folded_body,
-                    span: *span,
-                })
-            }
-        }
-    }
-
-    /// Fold constants in an expression (recursive).
+    /// Convenience wrapper for tests - folds an expression by cloning it
     pub fn fold_expr(&mut self, expr: &Expr) -> Result<Expr> {
-        let span = expr.span;
-        let ty = expr.ty.clone();
-
-        let kind = match &expr.kind {
-            // Binary operations - try to evaluate if both sides are literals
-            ExprKind::BinOp { op, lhs, rhs } => {
-                let folded_lhs = self.fold_expr(lhs)?;
-                let folded_rhs = self.fold_expr(rhs)?;
-
-                // Try to fold if both are literals
-                if let Some(folded) = self.try_fold_binop(op, &folded_lhs, &folded_rhs, &ty, span)? {
-                    return Ok(folded);
-                }
-
-                // Can't fold, return with folded children
-                ExprKind::BinOp {
-                    op: op.clone(),
-                    lhs: Box::new(folded_lhs),
-                    rhs: Box::new(folded_rhs),
-                }
-            }
-
-            // Unary operations - try to evaluate if operand is a literal
-            ExprKind::UnaryOp { op, operand } => {
-                let folded_operand = self.fold_expr(operand)?;
-
-                // Try to fold if operand is a literal
-                if let Some(folded) = self.try_fold_unaryop(op, &folded_operand, &ty, span)? {
-                    return Ok(folded);
-                }
-
-                ExprKind::UnaryOp {
-                    op: op.clone(),
-                    operand: Box::new(folded_operand),
-                }
-            }
-
-            // If expression - fold all branches, and simplify if condition is constant
-            ExprKind::If {
-                cond,
-                then_branch,
-                else_branch,
-            } => {
-                let folded_cond = self.fold_expr(cond)?;
-                let folded_then = self.fold_expr(then_branch)?;
-                let folded_else = self.fold_expr(else_branch)?;
-
-                // If condition is a constant bool, return the appropriate branch
-                if let ExprKind::Literal(Literal::Bool(b)) = &folded_cond.kind {
-                    return Ok(if *b { folded_then } else { folded_else });
-                }
-
-                ExprKind::If {
-                    cond: Box::new(folded_cond),
-                    then_branch: Box::new(folded_then),
-                    else_branch: Box::new(folded_else),
-                }
-            }
-
-            // Let binding - fold value and body
-            ExprKind::Let { name, value, body } => {
-                let folded_value = self.fold_expr(value)?;
-                let folded_body = self.fold_expr(body)?;
-
-                ExprKind::Let {
-                    name: name.clone(),
-                    value: Box::new(folded_value),
-                    body: Box::new(folded_body),
-                }
-            }
-
-            // Loop - fold init bindings, loop condition/iter, and body
-            ExprKind::Loop {
-                init_bindings,
-                kind,
-                body,
-            } => {
-                let folded_bindings: Result<Vec<_>> = init_bindings
-                    .iter()
-                    .map(|(name, expr)| Ok((name.clone(), self.fold_expr(expr)?)))
-                    .collect();
-                let folded_bindings = folded_bindings?;
-
-                let folded_kind = match kind {
-                    LoopKind::For { var, iter } => LoopKind::For {
-                        var: var.clone(),
-                        iter: Box::new(self.fold_expr(iter)?),
-                    },
-                    LoopKind::ForRange { var, bound } => LoopKind::ForRange {
-                        var: var.clone(),
-                        bound: Box::new(self.fold_expr(bound)?),
-                    },
-                    LoopKind::While { cond } => LoopKind::While {
-                        cond: Box::new(self.fold_expr(cond)?),
-                    },
-                };
-
-                let folded_body = self.fold_expr(body)?;
-
-                ExprKind::Loop {
-                    init_bindings: folded_bindings,
-                    kind: folded_kind,
-                    body: Box::new(folded_body),
-                }
-            }
-
-            // Call - fold arguments
-            ExprKind::Call { func, args } => {
-                let folded_args: Result<Vec<_>> = args.iter().map(|arg| self.fold_expr(arg)).collect();
-
-                ExprKind::Call {
-                    func: func.clone(),
-                    args: folded_args?,
-                }
-            }
-
-            // Intrinsic - fold arguments
-            ExprKind::Intrinsic { name, args } => {
-                let folded_args: Result<Vec<_>> = args.iter().map(|arg| self.fold_expr(arg)).collect();
-
-                ExprKind::Intrinsic {
-                    name: name.clone(),
-                    args: folded_args?,
-                }
-            }
-
-            // Attributed - fold inner expression
-            ExprKind::Attributed { attributes, expr } => {
-                let folded_expr = self.fold_expr(expr)?;
-
-                ExprKind::Attributed {
-                    attributes: attributes.clone(),
-                    expr: Box::new(folded_expr),
-                }
-            }
-
-            // Literals - fold nested expressions in compound literals
-            ExprKind::Literal(lit) => {
-                let folded_lit = self.fold_literal(lit)?;
-                ExprKind::Literal(folded_lit)
-            }
-
-            // Variables - nothing to fold
-            ExprKind::Var(_) => expr.kind.clone(),
-        };
-
-        Ok(Expr::new(ty, kind, span))
-    }
-
-    /// Fold constants in a literal (for compound literals like arrays, tuples, records).
-    fn fold_literal(&mut self, lit: &Literal) -> Result<Literal> {
-        match lit {
-            Literal::Tuple(exprs) => {
-                let folded: Result<Vec<_>> = exprs.iter().map(|e| self.fold_expr(e)).collect();
-                Ok(Literal::Tuple(folded?))
-            }
-            Literal::Array(exprs) => {
-                let folded: Result<Vec<_>> = exprs.iter().map(|e| self.fold_expr(e)).collect();
-                Ok(Literal::Array(folded?))
-            }
-            Literal::Record(fields) => {
-                let folded: Result<Vec<_>> =
-                    fields.iter().map(|(name, expr)| Ok((name.clone(), self.fold_expr(expr)?))).collect();
-                Ok(Literal::Record(folded?))
-            }
-            // Simple literals don't need folding
-            Literal::Int(_) | Literal::Float(_) | Literal::Bool(_) | Literal::String(_) => Ok(lit.clone()),
-        }
+        self.visit_expr(expr.clone())
     }
 
     /// Try to fold a binary operation on two literals.
@@ -449,5 +307,5 @@ impl ConstantFolder {
 /// Fold constants in a MIR program (convenience function).
 pub fn fold_constants(program: Program) -> Result<Program> {
     let mut folder = ConstantFolder::new();
-    folder.fold_program(&program)
+    folder.visit_program(program)
 }
