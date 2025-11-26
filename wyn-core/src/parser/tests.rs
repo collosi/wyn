@@ -595,7 +595,7 @@ fn test_parse_lambda_application_with_literal() {
 
     // Should be a function application (eitherApplication)
     match &decl.body.kind {
-        ExprKind::Application(func, args) => {
+        ExprKind::Application(_func, args) => {
             assert!(!args.is_empty(), "Should have at least one argument");
         }
         _ => panic!("Expected function application, got {:?}", decl.body.kind),
@@ -2193,7 +2193,7 @@ fn test_let_tuple_pattern() {
 #[test]
 fn test_parse_record_literal_empty() {
     let input = "def test = {}";
-    let program = parse_ok(input);
+    let _program = parse_ok(input);
     let decl = single_decl(input);
 
     match &decl.body.kind {

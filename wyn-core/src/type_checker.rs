@@ -1,6 +1,5 @@
 use crate::ast::TypeName;
 use crate::ast::*;
-use crate::builtin_registry::BuiltinRegistry;
 use crate::error::{CompilerError, Result};
 use crate::scope::ScopeStack;
 use log::debug;
@@ -1226,7 +1225,7 @@ impl TypeChecker {
             ExprKind::IntLiteral(_) => Ok(types::i32()),
             ExprKind::FloatLiteral(_) => Ok(types::f32()),
             ExprKind::BoolLiteral(_) => Ok(types::bool_type()),
-            ExprKind::OperatorSection(op) => {
+            ExprKind::OperatorSection(_op) => {
                 // Operator sections like (+), (-), etc. are functions
                 // Their specific type depends on context and will be resolved via unification
                 // For now, return a polymorphic function type: 'a -> 'a -> 'a

@@ -1,7 +1,5 @@
 use crate::ast::{Type, TypeName};
 use crate::error::CompilerError;
-use crate::lexer::tokenize;
-use crate::parser::Parser;
 use crate::type_checker::{TypeChecker, TypeWarning};
 use polytype::TypeScheme;
 

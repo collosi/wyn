@@ -5,7 +5,7 @@
 
 use crate::error::{CompilerError, Result};
 use crate::mir::visitor::MirVisitor;
-use crate::mir::{Def, Expr, ExprKind, Literal, Program};
+use crate::mir::{Expr, ExprKind, Literal, Program};
 
 /// Constant folder that performs compile-time evaluation of constant expressions.
 pub struct ConstantFolder;

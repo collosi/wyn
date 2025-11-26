@@ -15,27 +15,19 @@ mod env;
 #[cfg(test)]
 mod tests;
 
-use crate::ast::{
-    Declaration, ExprKind, Expression, ModuleBind, ModuleExpression, ModuleTypeExpression, Program, Span,
-    Spec,
-};
-use crate::builtin_registry::BuiltinRegistry;
+use crate::ast::{Declaration, ModuleBind, ModuleExpression, ModuleTypeExpression, Program, Spec};
 use crate::error::{CompilerError, Result};
-use env::{ModuleEnv, ModuleSignature};
+use env::ModuleEnv;
 
 /// Main entry point for module elaboration
 pub struct ModuleElaborator {
     env: ModuleEnv,
-    builtin_registry: BuiltinRegistry,
 }
 
 impl ModuleElaborator {
     pub fn new() -> Self {
         let mut elaborator = ModuleElaborator {
             env: ModuleEnv::new(),
-            builtin_registry: BuiltinRegistry::new(
-                &mut polytype::Context::<crate::ast::TypeName>::default(),
-            ),
         };
         elaborator.load_prelude().ok(); // Ignore errors for now
         elaborator
@@ -260,7 +252,7 @@ impl ModuleElaborator {
         _type_params: &[crate::ast::TypeParam],
         replacement: &crate::ast::Type,
     ) {
-        use crate::ast::{Spec, Type, TypeName};
+        use crate::ast::Spec;
 
         for spec in specs.iter_mut() {
             match spec {

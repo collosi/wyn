@@ -76,9 +76,6 @@ struct Constructor {
     // GLSL extended instruction set
     glsl_ext_inst_id: spirv::Word,
 
-    // Value types: value ID -> SPIR-V type ID
-    value_types: HashMap<spirv::Word, spirv::Word>,
-
     // Type cache: avoid recreating same types
     vec_type_cache: HashMap<(spirv::Word, u32), spirv::Word>,
     struct_type_cache: HashMap<Vec<spirv::Word>, spirv::Word>,
@@ -130,7 +127,6 @@ impl Constructor {
             env: HashMap::new(),
             functions: HashMap::new(),
             glsl_ext_inst_id,
-            value_types: HashMap::new(),
             vec_type_cache: HashMap::new(),
             struct_type_cache: HashMap::new(),
             ptr_type_cache: HashMap::new(),
@@ -294,18 +290,6 @@ impl Constructor {
         let ty = self.builder.type_struct(field_types.clone());
         self.struct_type_cache.insert(field_types, ty);
         ty
-    }
-
-    /// Record the type of a value
-    fn set_value_type(&mut self, value: spirv::Word, ty: spirv::Word) {
-        self.value_types.insert(value, ty);
-    }
-
-    /// Get the type of a value
-    fn get_value_type(&self, value: spirv::Word) -> spirv::Word {
-        *self.value_types.get(&value).unwrap_or_else(|| {
-            panic!("BUG: Attempted to get type of SPIR-V value %{} but it has no registered type. All values should have their types tracked.", value)
-        })
     }
 
     /// Begin a new function
@@ -1869,10 +1853,6 @@ fn lower_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flattening::Flattener;
-    use crate::lexer::tokenize;
-    use crate::parser::Parser;
-    use crate::type_checker::TypeChecker;
 
     fn compile_to_spirv(source: &str) -> Result<Vec<u32>> {
         // Use the typestate API to ensure proper compilation pipeline

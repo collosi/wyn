@@ -59,7 +59,6 @@ struct SubstKey(Vec<(usize, TypeKey)>);
 enum TypeKey {
     Var(usize),
     Size(usize),
-    Named(String),
     Constructed(String, Vec<TypeKey>),
     Record(Vec<(String, TypeKey)>),
     Sum(Vec<(String, Vec<TypeKey>)>),
@@ -361,11 +360,9 @@ impl Monomorphizer {
     fn infer_substitution(&self, poly_def: &Def, args: &[Expr]) -> Result<Substitution> {
         let mut subst = Substitution::new();
 
-        // Get parameter types and function name from the definition
-        let (param_types, func_name) = match poly_def {
-            Def::Function { params, name, .. } => {
-                (params.iter().map(|p| &p.ty).collect::<Vec<_>>(), name.as_str())
-            }
+        // Get parameter types from the definition
+        let param_types = match poly_def {
+            Def::Function { params, .. } => params.iter().map(|p| &p.ty).collect::<Vec<_>>(),
             Def::Constant { .. } => return Ok(subst), // No parameters
         };
 
@@ -580,7 +577,6 @@ fn apply_subst(ty: &Type, subst: &Substitution) -> Type {
 
             PolyType::Constructed(new_name, new_args)
         }
-        _ => ty.clone(),
     }
 }
 

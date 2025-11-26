@@ -1,6 +1,11 @@
 //! Module environment for tracking module bindings and signatures
+//!
+//! This module provides infrastructure for the ML-style module system.
+//! Some APIs are reserved for future use as the module system is expanded.
 
-use crate::ast::{Declaration, ModuleBind, ModuleTypeExpression, Type};
+#![allow(dead_code)]
+
+use crate::ast::{Declaration, ModuleTypeExpression, Type};
 use std::collections::HashMap;
 
 /// Qualified name: a path through nested modules

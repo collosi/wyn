@@ -1,7 +1,6 @@
 //! Tests for the module system
 
 use super::*;
-use crate::ast::{Declaration, ModuleBind, ModuleExpression, Program};
 use crate::parser::Parser;
 
 #[test]

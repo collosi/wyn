@@ -342,7 +342,7 @@ pub fn walk_param<V: MirVisitor>(v: &mut V, p: Param) -> Result<Param, V::Error>
     })
 }
 
-pub fn walk_attribute<V: MirVisitor>(v: &mut V, a: Attribute) -> Result<Attribute, V::Error> {
+pub fn walk_attribute<V: MirVisitor>(_v: &mut V, a: Attribute) -> Result<Attribute, V::Error> {
     Ok(a)
 }
 

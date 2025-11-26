@@ -29,12 +29,8 @@ enum StaticValue {
     Dyn,
     /// Defunctionalized closure with known call target
     Closure {
-        /// Runtime tag (index in lambda_registry)
-        tag: i32,
         /// Name of the generated lambda function
         lam_name: String,
-        /// Number of parameters (excluding closure)
-        arity: usize,
     },
 }
 
@@ -73,11 +69,9 @@ impl Flattener {
         }
     }
 
-    /// Register a lambda function and return its tag.
-    fn add_lambda(&mut self, func_name: String, arity: usize) -> i32 {
-        let tag = self.lambda_registry.len() as i32;
+    /// Register a lambda function.
+    fn add_lambda(&mut self, func_name: String, arity: usize) {
         self.lambda_registry.push((func_name, arity));
-        tag
     }
 
     /// Extract the monotype from a TypeScheme
@@ -501,7 +495,7 @@ impl Flattener {
 
                 // Register lambda with arity 2 (binary operators)
                 let arity = 2;
-                let tag = self.add_lambda(func_name.clone(), arity);
+                self.add_lambda(func_name.clone(), arity);
 
                 // Get the type of the operator section to determine parameter types
                 let op_type = self.get_expr_type(expr);
@@ -589,11 +583,7 @@ impl Flattener {
                 self.generated_functions.push(func);
 
                 // Return the closure record with static value indicating it's a known closure
-                let sv = StaticValue::Closure {
-                    tag,
-                    lam_name: func_name,
-                    arity,
-                };
+                let sv = StaticValue::Closure { lam_name: func_name };
 
                 (mir::ExprKind::Literal(mir::Literal::Record(record_fields)), sv)
             }
@@ -961,9 +951,9 @@ impl Flattener {
         let enclosing = self.enclosing_decl_stack.last().map(|s| s.as_str()).unwrap_or("anon");
         let func_name = format!("__lam_{}_{}", enclosing, id);
 
-        // Register lambda and get tag
+        // Register lambda
         let arity = lambda.params.len();
-        let tag = self.add_lambda(func_name.clone(), arity);
+        self.add_lambda(func_name.clone(), arity);
 
         // Build the closure record fields first so we can construct the type
         let string_type = Type::Constructed(TypeName::Str("string"), vec![]);
@@ -1047,11 +1037,7 @@ impl Flattener {
         self.generated_functions.push(func);
 
         // Return the closure record along with the static value indicating it's a known closure
-        let sv = StaticValue::Closure {
-            tag,
-            lam_name: func_name,
-            arity,
-        };
+        let sv = StaticValue::Closure { lam_name: func_name };
 
         Ok((mir::ExprKind::Literal(mir::Literal::Record(record_fields)), sv))
     }
@@ -1095,7 +1081,7 @@ impl Flattener {
         &mut self,
         func: &Expression,
         args: &[Expression],
-        span: Span,
+        _span: Span,
     ) -> Result<(mir::ExprKind, StaticValue)> {
         let (func_flat, func_sv) = self.flatten_expr(func)?;
 
@@ -1507,7 +1493,7 @@ impl Flattener {
 
     /// Rewrite free variable references to access from closure
     fn rewrite_free_vars(&self, expr: &Expression, free_vars: &HashSet<String>) -> Result<Expression> {
-        let span = expr.h.span;
+        let _span = expr.h.span;
         let kind = match &expr.kind {
             ExprKind::Identifier(name) if free_vars.contains(name) => {
                 // Rewrite to __closure.name
