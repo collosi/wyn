@@ -1106,6 +1106,8 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
         }
 
         ExprKind::Loop {
+            loop_var,
+            init,
             init_bindings,
             kind,
             body,
@@ -1116,29 +1118,27 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             let continue_block_id = constructor.builder.id();
             let merge_block_id = constructor.builder.id();
 
-            // Evaluate init expressions in order, collecting values and types
-            let mut init_values = Vec::new();
-            for (name, init_expr) in init_bindings {
-                let init_val = lower_expr(constructor, init_expr)?;
-                let init_type = constructor.ast_type_to_spirv(&init_expr.ty);
-                constructor.env.insert(name.clone(), init_val);
-                init_values.push((name.clone(), init_val, init_type));
-            }
+            // Evaluate the init expression for loop_var
+            let init_val = lower_expr(constructor, init)?;
+            let loop_var_type = constructor.ast_type_to_spirv(&init.ty);
             let pre_header_block = constructor.current_block.unwrap();
 
             // Branch to header
             constructor.builder.branch(header_block_id)?;
 
-            // Header block - we'll add phi nodes later
+            // Header block - we'll add phi node later
             constructor.begin_block(header_block_id)?;
             let header_block_idx = constructor.builder.selected_block().expect("No block selected");
 
-            // Allocate phi IDs and add to environment so condition/body can reference them
-            let mut phi_info = Vec::new();
-            for (name, init_val, var_type) in &init_values {
-                let phi_id = constructor.builder.id();
-                phi_info.push((name.clone(), phi_id, *init_val, *var_type));
-                constructor.env.insert(name.clone(), phi_id);
+            // Allocate phi ID for loop_var
+            let loop_var_phi_id = constructor.builder.id();
+            constructor.env.insert(loop_var.clone(), loop_var_phi_id);
+
+            // Evaluate init_bindings to bind user variables from loop_var
+            // These extractions reference loop_var which is now bound to the phi
+            for (name, binding_expr) in init_bindings.iter() {
+                let val = lower_expr(constructor, binding_expr)?;
+                constructor.env.insert(name.clone(), val);
             }
 
             // Generate condition based on loop kind
@@ -1170,40 +1170,19 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             let body_result = lower_expr(constructor, body)?;
             constructor.builder.branch(continue_block_id)?;
 
-            // Continue block - extract updated values from body result
+            // Continue block - body_result is the new value for loop_var
             constructor.begin_block(continue_block_id)?;
-
-            // Extract continue values based on number of loop variables
-            let continue_values: Vec<spirv::Word> = if phi_info.len() == 1 {
-                // Single loop variable - body result is the new value
-                vec![body_result]
-            } else {
-                // Multiple loop variables - body returns tuple, extract each component
-                let mut values = Vec::new();
-                for i in 0..phi_info.len() {
-                    let comp_type = phi_info[i].3; // var_type
-                    let extracted =
-                        constructor.builder.composite_extract(comp_type, None, body_result, [i as u32])?;
-                    values.push(extracted);
-                }
-                values
-            };
-
             constructor.builder.branch(header_block_id)?;
-            let continue_block_id = continue_block_id;
 
-            // Now go back and insert phi nodes at the beginning of header block
-            // We need to save current function context and temporarily work on header
-            let saved_current_block = constructor.current_block;
+            // Now go back and insert phi node at the beginning of header block
             constructor.builder.select_block(Some(header_block_idx))?;
-
-            for (i, (name, phi_id, init_val, var_type)) in phi_info.iter().enumerate() {
-                let incoming = vec![
-                    (*init_val, pre_header_block),
-                    (continue_values[i], continue_block_id),
-                ];
-                constructor.builder.insert_phi(InsertPoint::Begin, *var_type, Some(*phi_id), incoming)?;
-            }
+            let incoming = vec![(init_val, pre_header_block), (body_result, continue_block_id)];
+            constructor.builder.insert_phi(
+                InsertPoint::Begin,
+                loop_var_type,
+                Some(loop_var_phi_id),
+                incoming,
+            )?;
 
             // Deselect block before continuing
             constructor.builder.select_block(None)?;
@@ -1212,16 +1191,13 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             constructor.begin_block(merge_block_id)?;
 
             // Clean up environment
-            for (name, _, _, _) in &phi_info {
-                constructor.env.remove(name);
+            constructor.env.remove(loop_var.as_str());
+            for (name, _) in init_bindings.iter() {
+                constructor.env.remove(name.as_str());
             }
 
-            // Return the first phi value as loop result
-            if let Some((_, phi_id, _, _)) = phi_info.first() {
-                Ok(*phi_id)
-            } else {
-                Ok(constructor.const_i32(0)) // Empty loop
-            }
+            // Return the loop_var phi value as loop result
+            Ok(loop_var_phi_id)
         }
 
         ExprKind::Call { func, args } => {
@@ -1263,8 +1239,16 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                 let closure_val = lower_expr(constructor, &args[0])?;
                 let array_val = lower_expr(constructor, &args[1])?;
 
-                // Get array info from MIR types
-                let (array_size, elem_mir_type) = match &expr.ty {
+                // Get input array element type from args[1]
+                let input_elem_type = match &args[1].ty {
+                    PolyType::Constructed(TypeName::Array, type_args) if type_args.len() == 2 => {
+                        constructor.ast_type_to_spirv(&type_args[1])
+                    }
+                    _ => bail_spirv!("map input must be array type"),
+                };
+
+                // Get output array info from result type
+                let (array_size, output_elem_mir_type) = match &expr.ty {
                     PolyType::Constructed(TypeName::Array, type_args) if type_args.len() == 2 => {
                         let size = match &type_args[0] {
                             PolyType::Constructed(TypeName::Size(n), _) => *n as u32,
@@ -1275,7 +1259,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                     _ => bail_spirv!("map result must be array type"),
                 };
 
-                let elem_type = constructor.ast_type_to_spirv(elem_mir_type);
+                let output_elem_type = constructor.ast_type_to_spirv(output_elem_mir_type);
 
                 // Look up the lambda function by name
                 let lambda_func_id = *constructor.functions.get(&lambda_name).ok_or_else(|| {
@@ -1285,14 +1269,14 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                 // Build result array by calling lambda for each element
                 let mut result_elements = Vec::new();
                 for i in 0..array_size {
-                    // Extract element from input array
+                    // Extract element from input array (using input element type)
                     let input_elem =
-                        constructor.builder.composite_extract(elem_type, None, array_val, [i])?;
+                        constructor.builder.composite_extract(input_elem_type, None, array_val, [i])?;
 
                     // Call lambda with closure and element
                     let args = vec![closure_val, input_elem];
                     let result_elem =
-                        constructor.builder.function_call(elem_type, None, lambda_func_id, args)?;
+                        constructor.builder.function_call(output_elem_type, None, lambda_func_id, args)?;
                     result_elements.push(result_elem);
                 }
 
@@ -1450,12 +1434,65 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                 use crate::builtin_registry::Intrinsic;
                                 match custom_impl {
                                     Intrinsic::MatrixFromVectors => {
-                                        // Matrix from array of vectors: In SPIR-V, matrices ARE arrays of column vectors
-                                        // So this is essentially a no-op/identity at the SPIR-V level
-                                        if arg_ids.len() != 1 {
+                                        // Matrix from array of vectors: extract vectors and construct matrix
+                                        // SPIR-V matrices are constructed from column vectors via OpCompositeConstruct
+                                        if args.len() != 1 {
                                             bail_spirv!("matav expects exactly 1 argument");
                                         }
-                                        Ok(arg_ids[0])
+
+                                        // The argument is an array literal [v0, v1, ...] - extract the vectors
+                                        let vectors = match &args[0].kind {
+                                            ExprKind::Literal(Literal::Array(elems)) => elems
+                                                .iter()
+                                                .map(|e| lower_expr(constructor, e))
+                                                .collect::<Result<Vec<_>>>()?,
+                                            _ => {
+                                                // If not a literal array, the array was already lowered
+                                                // We need to extract elements from it
+                                                let arr_id = arg_ids[0];
+                                                let num_cols = match &expr.ty {
+                                                    PolyType::Constructed(TypeName::Mat, type_args) => {
+                                                        match type_args.get(0) {
+                                                            Some(PolyType::Constructed(
+                                                                TypeName::Size(n),
+                                                                _,
+                                                            )) => *n as u32,
+                                                            _ => bail_spirv!(
+                                                                "matav: cannot determine matrix column count"
+                                                            ),
+                                                        }
+                                                    }
+                                                    _ => bail_spirv!("matav: result type is not a matrix"),
+                                                };
+                                                let vec_type = match &args[0].ty {
+                                                    PolyType::Constructed(TypeName::Array, type_args)
+                                                        if type_args.len() >= 2 =>
+                                                    {
+                                                        constructor.ast_type_to_spirv(&type_args[1])
+                                                    }
+                                                    _ => bail_spirv!(
+                                                        "matav: argument is not an array of vectors"
+                                                    ),
+                                                };
+                                                (0..num_cols)
+                                                    .map(|i| {
+                                                        Ok(constructor.builder.composite_extract(
+                                                            vec_type,
+                                                            None,
+                                                            arr_id,
+                                                            [i],
+                                                        )?)
+                                                    })
+                                                    .collect::<Result<Vec<_>>>()?
+                                            }
+                                        };
+
+                                        // Construct the matrix from the column vectors
+                                        Ok(constructor.builder.composite_construct(
+                                            result_type,
+                                            None,
+                                            vectors,
+                                        )?)
                                     }
                                     Intrinsic::Uninit => {
                                         // Return an undefined value of the result type

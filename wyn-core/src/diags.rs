@@ -713,28 +713,29 @@ impl Display for mir::ExprKind {
                 write!(f, "let {} = {} in {}", name, value, body)
             }
             mir::ExprKind::Loop {
+                loop_var,
+                init,
                 init_bindings,
                 kind,
                 body,
             } => {
-                write!(f, "loop ")?;
+                write!(f, "loop ({}, ", loop_var)?;
                 if init_bindings.len() == 1 {
-                    let (name, init) = &init_bindings[0];
-                    write!(f, "{} = {}", name, init)?;
+                    let (name, binding) = &init_bindings[0];
+                    write!(f, "{}) = ({}, {})", name, init, binding)?;
                 } else {
-                    write!(f, "(")?;
                     for (i, (name, _)) in init_bindings.iter().enumerate() {
                         if i > 0 {
                             write!(f, ", ")?;
                         }
                         write!(f, "{}", name)?;
                     }
-                    write!(f, ") = (")?;
-                    for (i, (_, init)) in init_bindings.iter().enumerate() {
+                    write!(f, ") = ({}, ", init)?;
+                    for (i, (_, binding)) in init_bindings.iter().enumerate() {
                         if i > 0 {
                             write!(f, ", ")?;
                         }
-                        write!(f, "{}", init)?;
+                        write!(f, "{}", binding)?;
                     }
                     write!(f, ")")?;
                 }

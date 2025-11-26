@@ -136,12 +136,14 @@ pub trait MirVisitor: Sized {
 
     fn visit_expr_loop(
         &mut self,
+        loop_var: String,
+        init: Expr,
         init_bindings: Vec<(String, Expr)>,
         kind: LoopKind,
         body: Expr,
         expr: Expr,
     ) -> Result<Expr, Self::Error> {
-        walk_expr_loop(self, init_bindings, kind, body, expr)
+        walk_expr_loop(self, loop_var, init, init_bindings, kind, body, expr)
     }
 
     fn visit_expr_call(&mut self, func: String, args: Vec<Expr>, expr: Expr) -> Result<Expr, Self::Error> {
@@ -404,6 +406,8 @@ pub fn walk_expr<V: MirVisitor>(v: &mut V, e: Expr) -> Result<Expr, V::Error> {
             v.visit_expr_let(name, *value, *body, expr)
         }
         ExprKind::Loop {
+            loop_var,
+            init,
             init_bindings,
             kind,
             body,
@@ -413,7 +417,7 @@ pub fn walk_expr<V: MirVisitor>(v: &mut V, e: Expr) -> Result<Expr, V::Error> {
                 kind: ExprKind::Var(String::new()),
                 span,
             };
-            v.visit_expr_loop(init_bindings, kind, *body, expr)
+            v.visit_expr_loop(loop_var, *init, init_bindings, kind, *body, expr)
         }
         ExprKind::Call { func, args } => {
             let expr = Expr {
@@ -521,11 +525,14 @@ pub fn walk_expr_let<V: MirVisitor>(
 
 pub fn walk_expr_loop<V: MirVisitor>(
     v: &mut V,
+    loop_var: String,
+    init: Expr,
     init_bindings: Vec<(String, Expr)>,
     kind: LoopKind,
     body: Expr,
     expr: Expr,
 ) -> Result<Expr, V::Error> {
+    let init = v.visit_expr(init)?;
     let init_bindings = init_bindings
         .into_iter()
         .map(|(name, e)| Ok((name, v.visit_expr(e)?)))
@@ -536,6 +543,8 @@ pub fn walk_expr_loop<V: MirVisitor>(
 
     Ok(Expr {
         kind: ExprKind::Loop {
+            loop_var,
+            init: Box::new(init),
             init_bindings,
             kind,
             body: Box::new(body),

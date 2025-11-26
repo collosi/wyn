@@ -1196,8 +1196,8 @@ impl Flattener {
         loop_expr: &ast::LoopExpr,
         span: Span,
     ) -> Result<(mir::ExprKind, StaticValue)> {
-        // Extract init bindings from pattern
-        let init_bindings =
+        // Extract loop_var, init value, and bindings from pattern
+        let (loop_var, init, init_bindings) =
             self.extract_loop_bindings(&loop_expr.pattern, loop_expr.init.as_deref(), span)?;
 
         // Flatten loop kind
@@ -1234,6 +1234,8 @@ impl Flattener {
 
         Ok((
             mir::ExprKind::Loop {
+                loop_var,
+                init: Box::new(init),
                 init_bindings,
                 kind,
                 body: Box::new(body),
@@ -1242,89 +1244,135 @@ impl Flattener {
         ))
     }
 
-    /// Extract loop init bindings from pattern and init expression
+    /// Extract loop_var name, init expr, and bindings from pattern and init expression.
+    /// Returns (loop_var_name, init_expr, bindings) where bindings extract from loop_var.
     fn extract_loop_bindings(
         &mut self,
         pattern: &ast::Pattern,
         init: Option<&Expression>,
         span: Span,
-    ) -> Result<Vec<(String, Expr)>> {
+    ) -> Result<(String, Expr, Vec<(String, Expr)>)> {
         let init_expr = init
             .ok_or_else(|| CompilerError::FlatteningError("Loop must have init expression".to_string()))?;
 
+        let (init_flat, _) = self.flatten_expr(init_expr)?;
+        let init_ty = init_flat.ty.clone();
+        let loop_var = self.fresh_name("__loop_var");
+
+        let bindings = match &pattern.kind {
+            PatternKind::Name(name) => {
+                // Single variable: binding is just identity (Var(loop_var))
+                let binding = Expr::new(init_ty, mir::ExprKind::Var(loop_var.clone()), span);
+                vec![(name.clone(), binding)]
+            }
+            PatternKind::Typed(inner, _) => {
+                // Unwrap type annotation and recurse
+                self.extract_bindings_from_pattern(inner, &loop_var, &init_ty, span)?
+            }
+            PatternKind::Tuple(patterns) => {
+                self.extract_tuple_bindings(patterns, &loop_var, &init_ty, span)?
+            }
+            _ => {
+                return Err(CompilerError::FlatteningError(format!(
+                    "Loop pattern {:?} not supported",
+                    pattern.kind
+                )));
+            }
+        };
+
+        Ok((loop_var, init_flat, bindings))
+    }
+
+    /// Helper to extract bindings from pattern given loop_var and init_ty
+    fn extract_bindings_from_pattern(
+        &self,
+        pattern: &ast::Pattern,
+        loop_var: &str,
+        init_ty: &Type,
+        span: Span,
+    ) -> Result<Vec<(String, Expr)>> {
         match &pattern.kind {
             PatternKind::Name(name) => {
-                let (init_flat, _) = self.flatten_expr(init_expr)?;
-                Ok(vec![(name.clone(), init_flat)])
+                let binding = Expr::new(init_ty.clone(), mir::ExprKind::Var(loop_var.to_string()), span);
+                Ok(vec![(name.clone(), binding)])
             }
-            PatternKind::Typed(inner, _) => self.extract_loop_bindings(inner, init, span),
-            PatternKind::Tuple(patterns) => {
-                // Init should also be a tuple
-                let (init_flat, _) = self.flatten_expr(init_expr)?;
-                let tuple_ty = init_flat.ty.clone();
-                let tmp = self.fresh_name("init");
-
-                // Get element types from tuple type
-                let elem_types: Vec<Type> = match &tuple_ty {
-                    Type::Constructed(TypeName::Str(s), args) if *s == "tuple" => args.clone(),
-                    _ => patterns.iter().map(|p| self.get_pattern_type(p)).collect(),
-                };
-
-                let mut bindings = Vec::new();
-                for (i, pat) in patterns.iter().enumerate() {
-                    let name = match &pat.kind {
-                        PatternKind::Name(n) => n.clone(),
-                        PatternKind::Typed(inner, _) => match &inner.kind {
-                            PatternKind::Name(n) => n.clone(),
-                            _ => {
-                                return Err(CompilerError::FlatteningError(
-                                    "Complex loop patterns not supported".to_string(),
-                                ));
-                            }
-                        },
-                        _ => {
-                            return Err(CompilerError::FlatteningError(
-                                "Complex loop patterns not supported".to_string(),
-                            ));
-                        }
-                    };
-
-                    let elem_ty = elem_types
-                        .get(i)
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            panic!("BUG: Loop tuple pattern element {} has no type. Type checking should ensure all tuple elements have types.", i)
-                        });
-                    let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
-
-                    let extract = Expr::new(
-                        elem_ty,
-                        mir::ExprKind::Intrinsic {
-                            name: "tuple_access".to_string(),
-                            args: vec![
-                                Expr::new(tuple_ty.clone(), mir::ExprKind::Var(tmp.clone()), span),
-                                Expr::new(
-                                    i32_type,
-                                    mir::ExprKind::Literal(mir::Literal::Int(i.to_string())),
-                                    span,
-                                ),
-                            ],
-                        },
-                        span,
-                    );
-
-                    bindings.push((name, extract));
-                }
-
-                // Prepend the tuple binding
-                bindings.insert(0, (tmp, init_flat));
-                Ok(bindings)
+            PatternKind::Typed(inner, _) => {
+                self.extract_bindings_from_pattern(inner, loop_var, init_ty, span)
             }
+            PatternKind::Tuple(patterns) => self.extract_tuple_bindings(patterns, loop_var, init_ty, span),
             _ => Err(CompilerError::FlatteningError(format!(
                 "Loop pattern {:?} not supported",
                 pattern.kind
             ))),
         }
+    }
+
+    /// Extract bindings for tuple pattern
+    fn extract_tuple_bindings(
+        &self,
+        patterns: &[ast::Pattern],
+        loop_var: &str,
+        tuple_ty: &Type,
+        span: Span,
+    ) -> Result<Vec<(String, Expr)>> {
+        // Get element types from tuple type
+        let elem_types: Vec<Type> = match tuple_ty {
+            Type::Constructed(TypeName::Str(s), args) if *s == "tuple" => args.clone(),
+            _ => {
+                return Err(CompilerError::FlatteningError(format!(
+                    "Expected tuple type for tuple pattern, got {:?}",
+                    tuple_ty
+                )));
+            }
+        };
+
+        let mut bindings = Vec::new();
+        for (i, pat) in patterns.iter().enumerate() {
+            let name = match &pat.kind {
+                PatternKind::Name(n) => n.clone(),
+                PatternKind::Typed(inner, _) => match &inner.kind {
+                    PatternKind::Name(n) => n.clone(),
+                    _ => {
+                        return Err(CompilerError::FlatteningError(
+                            "Complex loop patterns not supported".to_string(),
+                        ));
+                    }
+                },
+                _ => {
+                    return Err(CompilerError::FlatteningError(
+                        "Complex loop patterns not supported".to_string(),
+                    ));
+                }
+            };
+
+            let elem_ty = elem_types.get(i).cloned().ok_or_else(|| {
+                CompilerError::FlatteningError(format!(
+                    "Tuple pattern element {} has no corresponding type",
+                    i
+                ))
+            })?;
+            let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
+
+            let extract = Expr::new(
+                elem_ty,
+                mir::ExprKind::Intrinsic {
+                    name: "tuple_access".to_string(),
+                    args: vec![
+                        Expr::new(tuple_ty.clone(), mir::ExprKind::Var(loop_var.to_string()), span),
+                        Expr::new(
+                            i32_type,
+                            mir::ExprKind::Literal(mir::Literal::Int(i.to_string())),
+                            span,
+                        ),
+                    ],
+                },
+                span,
+            );
+
+            bindings.push((name, extract));
+        }
+
+        Ok(bindings)
     }
 
     /// Find free variables in an expression

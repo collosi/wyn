@@ -293,6 +293,8 @@ impl Monomorphizer {
                 body: Box::new(self.process_expr(*body)?),
             },
             ExprKind::Loop {
+                loop_var,
+                init,
                 init_bindings,
                 kind,
                 body,
@@ -302,6 +304,8 @@ impl Monomorphizer {
                     .map(|(name, expr)| Ok((name, self.process_expr(expr)?)))
                     .collect();
                 ExprKind::Loop {
+                    loop_var,
+                    init: Box::new(self.process_expr(*init)?),
                     init_bindings: init_bindings?,
                     kind,
                     body: Box::new(self.process_expr(*body)?),

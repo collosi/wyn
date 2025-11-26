@@ -147,7 +147,13 @@ pub enum ExprKind {
 
     /// Unified loop construct.
     Loop {
-        /// Initial bindings: `loop (x, y) = (init_x, init_y)`.
+        /// Name for the value returned by the body each iteration.
+        loop_var: String,
+        /// Initial value for loop_var.
+        init: Box<Expr>,
+        /// Bindings that extract from loop_var for use in condition/body.
+        /// For single var: `[(x, Var(loop_var))]`
+        /// For tuple: `[(a, tuple_access(loop_var, 0)), (b, tuple_access(loop_var, 1))]`
         init_bindings: Vec<(String, Expr)>,
         /// The kind of loop (for, for-range, or while).
         kind: LoopKind,
