@@ -4,7 +4,8 @@
 //! which functions are actually called, starting from entry points.
 //! This allows the lowerer to skip unused library functions.
 
-use crate::mir::{Def, Expr, ExprKind, Program};
+use crate::mir::visitor::MirVisitor;
+use crate::mir::{Def, Expr, ExprKind, Literal, Program};
 use std::collections::{HashSet, VecDeque};
 
 /// Find all functions reachable from entry points
@@ -61,74 +62,65 @@ pub fn reachable_functions(program: &Program) -> HashSet<String> {
     seen
 }
 
-/// Collect all function names called in an expression
-fn collect_callees(expr: &Expr) -> HashSet<String> {
-    let mut callees = HashSet::new();
-    collect_callees_rec(expr, &mut callees);
-    callees
+/// Visitor that collects function names called in expressions
+struct CalleeCollector {
+    callees: HashSet<String>,
 }
 
-fn collect_callees_rec(expr: &Expr, callees: &mut HashSet<String>) {
-    match &expr.kind {
-        ExprKind::Call { func, args } => {
-            callees.insert(func.clone());
-            for arg in args {
-                collect_callees_rec(arg, callees);
-            }
+impl MirVisitor for CalleeCollector {
+    type Error = std::convert::Infallible;
+
+    fn visit_expr_call(&mut self, func: String, args: Vec<Expr>, expr: Expr) -> Result<Expr, Self::Error> {
+        // Collect the function name
+        self.callees.insert(func.clone());
+
+        // Continue traversal of arguments
+        for arg in &args {
+            self.visit_expr(arg.clone()).ok();
         }
-        ExprKind::Var(name) => {
-            // Variable references might refer to top-level constants
-            callees.insert(name.clone());
-        }
-        ExprKind::Literal(lit) => {
-            // Check for closure records with __lambda_name field
-            if let Some(lambda_name) = crate::mir::extract_lambda_name(expr) {
-                callees.insert(lambda_name.to_string());
-            }
-            // Recurse into record field values
-            if let crate::mir::Literal::Record(fields) = lit {
-                for (_, field_expr) in fields {
-                    collect_callees_rec(field_expr, callees);
-                }
-            }
-        }
-        ExprKind::BinOp { lhs, rhs, .. } => {
-            collect_callees_rec(lhs, callees);
-            collect_callees_rec(rhs, callees);
-        }
-        ExprKind::UnaryOp { operand, .. } => {
-            collect_callees_rec(operand, callees);
-        }
-        ExprKind::If {
-            cond,
-            then_branch,
-            else_branch,
-        } => {
-            collect_callees_rec(cond, callees);
-            collect_callees_rec(then_branch, callees);
-            collect_callees_rec(else_branch, callees);
-        }
-        ExprKind::Let { value, body, .. } => {
-            collect_callees_rec(value, callees);
-            collect_callees_rec(body, callees);
-        }
-        ExprKind::Intrinsic { args, .. } => {
-            for arg in args {
-                collect_callees_rec(arg, callees);
-            }
-        }
-        ExprKind::Loop {
-            init_bindings, body, ..
-        } => {
-            for (_, init) in init_bindings {
-                collect_callees_rec(init, callees);
-            }
-            collect_callees_rec(body, callees);
-        }
-        ExprKind::Attributed { expr, .. } => {
-            collect_callees_rec(expr, callees);
-        }
+
+        Ok(Expr {
+            kind: ExprKind::Call { func, args },
+            ..expr
+        })
     }
+
+    fn visit_expr_var(&mut self, name: String, expr: Expr) -> Result<Expr, Self::Error> {
+        // Variable references might refer to top-level constants
+        self.callees.insert(name.clone());
+        Ok(Expr {
+            kind: ExprKind::Var(name),
+            ..expr
+        })
+    }
+
+    fn visit_expr_literal(&mut self, lit: Literal, expr: Expr) -> Result<Expr, Self::Error> {
+        // Check for closure records with __lambda_name field
+        if let Some(lambda_name) = crate::mir::extract_lambda_name(&expr) {
+            self.callees.insert(lambda_name.to_string());
+        }
+
+        // Continue traversal into literal subexpressions
+        if let Literal::Record(ref fields) = lit {
+            for (_, field_expr) in fields {
+                self.visit_expr(field_expr.clone()).ok();
+            }
+        }
+
+        Ok(Expr {
+            kind: ExprKind::Literal(lit),
+            ..expr
+        })
+    }
+}
+
+/// Collect all function names called in an expression
+fn collect_callees(expr: &Expr) -> HashSet<String> {
+    let mut collector = CalleeCollector {
+        callees: HashSet::new(),
+    };
+    collector.visit_expr(expr.clone()).ok();
+    collector.callees
 }
 
 /// Filter a program to only include reachable definitions
