@@ -266,8 +266,7 @@ impl SpvBuilder {
                         };
                         let elem_type = self.ast_type_to_spirv(&args[2]);
                         let col_vec_type = self.get_or_create_vec_type(elem_type, rows);
-                        let cols_const = self.const_i32(cols as i32);
-                        self.builder.type_array(col_vec_type, cols_const)
+                        self.builder.type_matrix(col_vec_type, cols)
                     }
                     TypeName::Record(fields) => {
                         // Record becomes a struct, filtering out phantom fields like __lambda_name
