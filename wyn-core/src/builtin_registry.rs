@@ -753,27 +753,39 @@ impl BuiltinRegistry {
 
     /// Register matrix operations
     fn register_matrix_operations(&mut self, ctx: &mut impl TypeVarGenerator) {
-        let mat_t = Self::ty("mat"); // Placeholder
-        let vec_t = Self::ty("vec");
-
-        self.register(
+        // determinant : ∀n a. mat<n,n,a> -> a (square matrix only)
+        let n = ctx.new_variable();
+        let a = ctx.new_variable();
+        let mat_n_n_a = Type::Constructed(TypeName::Mat, vec![n, a.clone(), a.clone()]);
+        self.register_poly(
             "determinant",
-            vec![mat_t.clone()],
-            Self::ty("f32"),
+            vec![mat_n_n_a.clone()],
+            a,
             BuiltinImpl::PrimOp(PrimOp::GlslExt(33)),
         );
 
-        self.register(
+        // inverse : ∀n a. mat<n,n,a> -> mat<n,n,a> (square matrix only)
+        let n = ctx.new_variable();
+        let a = ctx.new_variable();
+        let mat_n_n_a = Type::Constructed(TypeName::Mat, vec![n, a.clone(), a]);
+        self.register_poly(
             "inverse",
-            vec![mat_t.clone()],
-            mat_t.clone(),
+            vec![mat_n_n_a.clone()],
+            mat_n_n_a,
             BuiltinImpl::PrimOp(PrimOp::GlslExt(34)),
         );
 
-        self.register(
+        // outer : ∀n m a. vec<n,a> -> vec<m,a> -> mat<n,m,a>
+        let n = ctx.new_variable();
+        let m = ctx.new_variable();
+        let a = ctx.new_variable();
+        let vec_n_a = Type::Constructed(TypeName::Vec, vec![n.clone(), a.clone()]);
+        let vec_m_a = Type::Constructed(TypeName::Vec, vec![m.clone(), a.clone()]);
+        let mat_n_m_a = Type::Constructed(TypeName::Mat, vec![n, m, a]);
+        self.register_poly(
             "outer",
-            vec![vec_t.clone(), vec_t],
-            mat_t,
+            vec![vec_n_a, vec_m_a],
+            mat_n_m_a,
             BuiltinImpl::PrimOp(PrimOp::OuterProduct),
         );
 
