@@ -977,3 +977,14 @@ def test : f32 =
         "Type table should not contain unresolved type variables after type checking"
     );
 }
+
+#[test]
+fn test_unique_return_from_non_unique_param() {
+    // Returning *[4]f32 from a function that takes [4]f32 should be an error
+    // because we're claiming to return a unique/owned value but we only borrowed it
+    let result = try_typecheck_program("def id (a: [4]f32) : *[4]f32 = a");
+    assert!(
+        result.is_err(),
+        "Should error: cannot return unique type from non-unique parameter"
+    );
+}
