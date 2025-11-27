@@ -218,6 +218,83 @@ pub type Expression = Node<ExprKind>;
 /// - `Named`: Type names parsed from user source code (e.g., "vec3", "MyType")
 ///            Could refer to built-in types, type aliases, or user-defined types
 ///            Uses owned String since the name comes from parsed input
+
+/// Record fields that preserve source order but have order-independent equality.
+#[derive(Debug, Clone, Hash)]
+pub struct RecordFields(pub Vec<(String, Type)>);
+
+impl RecordFields {
+    pub fn new(fields: Vec<(String, Type)>) -> Self {
+        RecordFields(fields)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &(String, Type)> {
+        self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn into_vec(self) -> Vec<(String, Type)> {
+        self.0
+    }
+
+    pub fn get(&self, key: &str) -> Option<&Type> {
+        self.0.iter().find(|(name, _)| name == key).map(|(_, ty)| ty)
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.0.iter().map(|(name, _)| name)
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &Type> {
+        self.0.iter().map(|(_, ty)| ty)
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.0.iter().any(|(name, _)| name == key)
+    }
+}
+
+impl From<Vec<(String, Type)>> for RecordFields {
+    fn from(fields: Vec<(String, Type)>) -> Self {
+        RecordFields(fields)
+    }
+}
+
+impl FromIterator<(String, Type)> for RecordFields {
+    fn from_iter<T: IntoIterator<Item = (String, Type)>>(iter: T) -> Self {
+        RecordFields(iter.into_iter().collect())
+    }
+}
+
+impl PartialEq for RecordFields {
+    fn eq(&self, other: &Self) -> bool {
+        // Order-independent equality: check same fields exist with same types
+        if self.0.len() != other.0.len() {
+            return false;
+        }
+        for (name, ty) in &self.0 {
+            match other.0.iter().find(|(n, _)| n == name) {
+                Some((_, other_ty)) => {
+                    if ty != other_ty {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+        true
+    }
+}
+
+impl Eq for RecordFields {}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeName {
     /// Primitive type names hardcoded in compiler: "->", "tuple", "bool", etc.
@@ -249,8 +326,8 @@ pub enum TypeName {
     /// Uniqueness/consuming type marker (corresponds to "*" prefix)
     Unique,
     /// Record type: {field1: type1, field2: type2}
-    /// Uses BTreeMap for order-independent structural equality with deterministic iteration
-    Record(std::collections::BTreeMap<String, Type>),
+    /// Preserves source order of fields, but equality is order-independent
+    Record(RecordFields),
     /// Sum type: Constructor1 type* | Constructor2 type*
     Sum(Vec<(String, Vec<Type>)>),
     /// Existential size: ?[n][m]. type

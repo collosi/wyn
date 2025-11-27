@@ -533,9 +533,8 @@ impl Flattener {
                 )];
 
                 // Build the closure type
-                let mut type_fields = BTreeMap::new();
-                type_fields.insert("__lambda_name".to_string(), string_type);
-                let closure_type = Type::Constructed(TypeName::Record(type_fields), vec![]);
+                let type_fields = vec![("__lambda_name".to_string(), string_type)];
+                let closure_type = Type::Constructed(TypeName::Record(type_fields.into()), vec![]);
 
                 // Build parameters: closure, x, y
                 let params = vec![
@@ -983,11 +982,9 @@ impl Flattener {
         }
 
         // Build the record type from the fields
-        let mut type_fields = BTreeMap::new();
-        for (name, expr) in &record_fields {
-            type_fields.insert(name.clone(), expr.ty.clone());
-        }
-        let closure_type = Type::Constructed(TypeName::Record(type_fields), vec![]);
+        let type_fields: Vec<_> =
+            record_fields.iter().map(|(name, expr)| (name.clone(), expr.ty.clone())).collect();
+        let closure_type = Type::Constructed(TypeName::Record(type_fields.into()), vec![]);
 
         // Build parameters: closure first, then lambda params
         let mut params = vec![mir::Param {
