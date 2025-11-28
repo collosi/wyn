@@ -522,18 +522,16 @@ impl Flattener {
                     ));
                 };
 
-                // Build the closure record with __lambda_name field (no free variables)
+                // Build the closure tuple with __lambda_name at the end (no free variables)
                 let string_type = Type::Constructed(TypeName::Str("string".into()), vec![]);
-                let record_fields = vec![(
-                    "__lambda_name".to_string(),
-                    Expr::new(
-                        string_type.clone(),
-                        mir::ExprKind::Literal(mir::Literal::String(func_name.clone())),
-                        span,
-                    ),
+                let tuple_elems = vec![Expr::new(
+                    string_type.clone(),
+                    mir::ExprKind::Literal(mir::Literal::String(func_name.clone())),
+                    span,
                 )];
 
-                // Build the closure type
+                // Build the closure type (still a record type for field name lookup during lowering)
+                // __lambda_name goes last so capture indices match SPIR-V struct indices
                 let type_fields = vec![("__lambda_name".to_string(), string_type)];
                 let closure_type = types::record(type_fields);
 
@@ -582,10 +580,10 @@ impl Flattener {
                 };
                 self.generated_functions.push(func);
 
-                // Return the closure record with static value indicating it's a known closure
+                // Return the closure tuple with static value indicating it's a known closure
                 let sv = StaticValue::Closure { lam_name: func_name };
 
-                (mir::ExprKind::Literal(mir::Literal::Record(record_fields)), sv)
+                (mir::ExprKind::Literal(mir::Literal::Tuple(tuple_elems)), sv)
             }
             ExprKind::BinaryOp(op, lhs, rhs) => {
                 let (lhs, _) = self.flatten_expr(lhs)?;
@@ -642,12 +640,11 @@ impl Flattener {
                 )
             }
             ExprKind::RecordLiteral(fields) => {
-                let fields: Result<Vec<_>> = fields
-                    .iter()
-                    .map(|(name, expr)| Ok((name.clone(), self.flatten_expr(expr)?.0)))
-                    .collect();
+                // Records become tuples with fields in source order
+                let elems: Result<Vec<_>> =
+                    fields.iter().map(|(_, expr)| Ok(self.flatten_expr(expr)?.0)).collect();
                 (
-                    mir::ExprKind::Literal(mir::Literal::Record(fields?)),
+                    mir::ExprKind::Literal(mir::Literal::Tuple(elems?)),
                     StaticValue::Dyn,
                 )
             }
@@ -673,18 +670,37 @@ impl Flattener {
                                 "Internal error: __closure accessed outside of lambda body".to_string(),
                             )
                         })?;
+
+                        // Resolve field name to index from closure type
+                        let idx = match &closure_type {
+                            Type::Constructed(TypeName::Record(fields), _) => {
+                                fields.get_index(field).ok_or_else(|| {
+                                    CompilerError::FlatteningError(format!(
+                                        "Unknown closure field: {}",
+                                        field
+                                    ))
+                                })?
+                            }
+                            _ => {
+                                return Err(CompilerError::FlatteningError(
+                                    "Closure type is not a record".to_string(),
+                                ));
+                            }
+                        };
+
                         let obj =
                             Expr::new(closure_type, mir::ExprKind::Var("__closure".to_string()), span);
+                        let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
                         return Ok((
                             Expr::new(
                                 ty,
                                 mir::ExprKind::Intrinsic {
-                                    name: "record_access".to_string(),
+                                    name: "tuple_access".to_string(),
                                     args: vec![
                                         obj,
                                         Expr::new(
-                                            Type::Constructed(TypeName::Str("string".into()), vec![]),
-                                            mir::ExprKind::Literal(mir::Literal::String(field.clone())),
+                                            i32_type,
+                                            mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
                                             span,
                                         ),
                                     ],
@@ -955,36 +971,41 @@ impl Flattener {
         let arity = lambda.params.len();
         self.add_lambda(func_name.clone(), arity);
 
-        // Build the closure record fields first so we can construct the type
+        // Build the closure tuple elements (and record field info for type)
+        // Layout: [free_var_1, free_var_2, ..., __lambda_name] (free vars sorted alphabetically)
+        // __lambda_name goes LAST so that capture indices (0, 1, 2...) match SPIR-V struct indices
         let string_type = Type::Constructed(TypeName::Str("string"), vec![]);
-        let mut record_fields = vec![(
-            "__lambda_name".to_string(),
-            Expr::new(
-                string_type,
-                mir::ExprKind::Literal(mir::Literal::String(func_name.clone())),
-                span,
-            ),
-        )];
+
+        let mut tuple_elems = vec![];
+        let mut type_fields = vec![];
 
         let mut sorted_vars: Vec<_> = free_vars.iter().collect();
         sorted_vars.sort();
         for var in &sorted_vars {
             // Look up the type of the free variable from the lambda body
-            // We need to find an Identifier node with this name and get its type
             let var_type = self
                 .find_var_type_in_expr(&lambda.body, var)
                 .unwrap_or_else(|| {
                     panic!("BUG: Free variable '{}' in lambda has no type. Type checking should ensure all variables have types.", var)
                 });
-            record_fields.push((
-                (*var).clone(),
-                Expr::new(var_type, mir::ExprKind::Var((*var).clone()), span),
+            tuple_elems.push(Expr::new(
+                var_type.clone(),
+                mir::ExprKind::Var((*var).clone()),
+                span,
             ));
+            type_fields.push(((*var).clone(), var_type));
         }
 
-        // Build the record type from the fields
-        let type_fields: Vec<_> =
-            record_fields.iter().map(|(name, expr)| (name.clone(), expr.ty.clone())).collect();
+        // Last element: lambda name (phantom field, not lowered to SPIR-V)
+        let lambda_name_expr = Expr::new(
+            string_type.clone(),
+            mir::ExprKind::Literal(mir::Literal::String(func_name.clone())),
+            span,
+        );
+        tuple_elems.push(lambda_name_expr);
+        type_fields.push(("__lambda_name".to_string(), string_type));
+
+        // Build the record type (keeps field names for index lookup during __closure access)
         let closure_type = types::record(type_fields);
 
         // Build parameters: closure first, then lambda params
@@ -1034,10 +1055,10 @@ impl Flattener {
         };
         self.generated_functions.push(func);
 
-        // Return the closure record along with the static value indicating it's a known closure
+        // Return the closure tuple along with the static value indicating it's a known closure
         let sv = StaticValue::Closure { lam_name: func_name };
 
-        Ok((mir::ExprKind::Literal(mir::Literal::Record(record_fields)), sv))
+        Ok((mir::ExprKind::Literal(mir::Literal::Tuple(tuple_elems)), sv))
     }
 
     /// Find the type of a variable by searching for its use in an expression

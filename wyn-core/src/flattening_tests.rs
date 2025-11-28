@@ -105,9 +105,10 @@ fn test_array_literal() {
 
 #[test]
 fn test_record_literal() {
+    // Records are now represented as tuples in MIR, with fields in source order
     let mir = flatten_to_string("def r = {x: 1, y: 2}");
-    assert!(mir.contains("x=1"));
-    assert!(mir.contains("y=2"));
+    // Expect tuple representation (1, 2) instead of {x=1, y=2}
+    assert!(mir.contains("(1, 2)"));
 }
 
 #[test]

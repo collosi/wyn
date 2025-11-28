@@ -343,10 +343,10 @@ impl Monomorphizer {
                         self.ensure_in_worklist(lambda_name, def);
                     }
                 }
-                // Also process field expressions recursively if this is a record
-                if let crate::mir::Literal::Record(fields) = lit {
-                    for (_, field_expr) in fields {
-                        let _ = self.process_expr(field_expr.clone())?;
+                // Also process tuple elements recursively (for closure captures)
+                if let crate::mir::Literal::Tuple(elems) = lit {
+                    for elem in elems {
+                        let _ = self.process_expr(elem.clone())?;
                     }
                 }
                 expr.kind

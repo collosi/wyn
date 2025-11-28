@@ -800,16 +800,6 @@ impl Display for mir::Literal {
                 }
                 write!(f, "]")
             }
-            mir::Literal::Record(fields) => {
-                write!(f, "{{")?;
-                for (i, (name, expr)) in fields.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}={}", name, expr)?;
-                }
-                write!(f, "}}")
-            }
         }
     }
 }

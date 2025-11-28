@@ -194,10 +194,6 @@ pub trait MirVisitor: Sized {
         walk_literal_array(self, elements)
     }
 
-    fn visit_literal_record(&mut self, fields: Vec<(String, Expr)>) -> Result<Literal, Self::Error> {
-        walk_literal_record(self, fields)
-    }
-
     // --- Loops ---
 
     fn visit_loop_kind(&mut self, kind: LoopKind) -> Result<LoopKind, Self::Error> {
@@ -608,7 +604,6 @@ pub fn walk_literal<V: MirVisitor>(v: &mut V, lit: Literal) -> Result<Literal, V
         Literal::String(s) => v.visit_literal_string(s),
         Literal::Tuple(elems) => v.visit_literal_tuple(elems),
         Literal::Array(elems) => v.visit_literal_array(elems),
-        Literal::Record(fields) => v.visit_literal_record(fields),
     }
 }
 
@@ -620,17 +615,6 @@ pub fn walk_literal_tuple<V: MirVisitor>(v: &mut V, elements: Vec<Expr>) -> Resu
 pub fn walk_literal_array<V: MirVisitor>(v: &mut V, elements: Vec<Expr>) -> Result<Literal, V::Error> {
     let elements = elements.into_iter().map(|e| v.visit_expr(e)).collect::<Result<Vec<_>, _>>()?;
     Ok(Literal::Array(elements))
-}
-
-pub fn walk_literal_record<V: MirVisitor>(
-    v: &mut V,
-    fields: Vec<(String, Expr)>,
-) -> Result<Literal, V::Error> {
-    let fields = fields
-        .into_iter()
-        .map(|(name, expr)| Ok((name, v.visit_expr(expr)?)))
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(Literal::Record(fields))
 }
 
 // --- Loop kinds ---

@@ -100,10 +100,10 @@ impl MirVisitor for CalleeCollector {
             self.callees.insert(lambda_name.to_string());
         }
 
-        // Continue traversal into literal subexpressions
-        if let Literal::Record(ref fields) = lit {
-            for (_, field_expr) in fields {
-                self.visit_expr(field_expr.clone()).ok();
+        // Continue traversal into tuple subexpressions (closures are tuples now)
+        if let Literal::Tuple(ref elems) = lit {
+            for elem in elems {
+                self.visit_expr(elem.clone()).ok();
             }
         }
 

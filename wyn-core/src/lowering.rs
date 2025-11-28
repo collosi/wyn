@@ -613,14 +613,14 @@ impl<'a> LowerCtx<'a> {
                 self.ensure_deps_lowered(expr)?;
             }
             ExprKind::Literal(lit) => {
-                // Check for closure records with __lambda_name field
+                // Check for closure tuples with __lambda_name at index 0
                 if let Some(lambda_name) = crate::mir::extract_lambda_name(expr) {
                     self.ensure_lowered(lambda_name)?;
                 }
-                // Recurse into record field values
-                if let crate::mir::Literal::Record(fields) = lit {
-                    for (_, field_expr) in fields {
-                        self.ensure_deps_lowered(field_expr)?;
+                // Recurse into tuple element values (for closure captures)
+                if let crate::mir::Literal::Tuple(elems) = lit {
+                    for elem in elems {
+                        self.ensure_deps_lowered(elem)?;
                     }
                 }
             }
@@ -1269,31 +1269,25 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             // Special case for map - extract lambda name from closure before lowering
             if func == "map" {
                 // map closure array -> array
-                // args[0] is closure record {__lambda_name: "...", captures...}
+                // args[0] is closure tuple (captures..., __lambda_name)
                 // args[1] is input array
                 if args.len() != 2 {
                     bail_spirv!("map requires 2 args (closure, array), got {}", args.len());
                 }
 
-                // Extract lambda name from closure record's __lambda_name field
+                // Extract lambda name from closure tuple's last index
                 let lambda_name = match &args[0].kind {
-                    ExprKind::Literal(mir::Literal::Record(fields)) => {
-                        // Find __lambda_name field
-                        fields
-                            .iter()
-                            .find(|(name, _)| name == "__lambda_name")
-                            .and_then(|(_, expr)| match &expr.kind {
-                                ExprKind::Literal(mir::Literal::String(s)) => Some(s.clone()),
-                                _ => None,
-                            })
-                            .ok_or_else(|| {
-                                CompilerError::SpirvError(
-                                    "Closure record missing __lambda_name field".to_string(),
-                                )
-                            })?
+                    ExprKind::Literal(mir::Literal::Tuple(elems)) if !elems.is_empty() => {
+                        // Lambda name is at the last index
+                        match &elems.last().expect("BUG: elems is non-empty but last() failed").kind {
+                            ExprKind::Literal(mir::Literal::String(s)) => s.clone(),
+                            _ => {
+                                bail_spirv!("Closure tuple last element must be lambda name string");
+                            }
+                        }
                     }
                     _ => {
-                        bail_spirv!("map closure argument must be a record literal");
+                        bail_spirv!("map closure argument must be a tuple literal");
                     }
                 };
 
@@ -1733,44 +1727,6 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                     // Load the element
                     Ok(constructor.builder.load(result_type, None, elem_ptr, None, [])?)
                 }
-                "record_access" => {
-                    // Record field access by name
-                    // args[0] is the record, args[1] is a string literal with field name
-                    if args.len() != 2 {
-                        bail_spirv!("record_access requires 2 args");
-                    }
-                    let composite_id = lower_expr(constructor, &args[0])?;
-
-                    // Get field name from string literal
-                    let field_name = match &args[1].kind {
-                        ExprKind::Literal(Literal::String(s)) => s.clone(),
-                        _ => bail_spirv!("record_access field must be string literal"),
-                    };
-
-                    // Look up the field index from the record type, skipping phantom fields
-                    let record_type = &args[0].ty;
-                    let index = match record_type {
-                        PolyType::Constructed(TypeName::Record(fields), _) => {
-                            // Filter out phantom fields and find the index
-                            let real_fields: Vec<_> =
-                                fields.iter().filter(|name| name.as_str() != "__lambda_name").collect();
-                            real_fields
-                                .iter()
-                                .enumerate()
-                                .find(|(_, name)| name.as_str() == field_name)
-                                .map(|(idx, _)| idx as u32)
-                                .ok_or_else(|| {
-                                    CompilerError::SpirvError(format!(
-                                        "Unknown record field: {}",
-                                        field_name
-                                    ))
-                                })?
-                        }
-                        _ => bail_spirv!("record_access on non-record type: {:?}", record_type),
-                    };
-
-                    Ok(constructor.builder.composite_extract(result_type, None, composite_id, [index])?)
-                }
                 "assert" => {
                     // Assertions are no-ops in release, return body
                     if args.len() >= 2 {
@@ -1809,13 +1765,26 @@ fn lower_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::
             "String literals not supported in SPIR-V".to_string(),
         )),
         Literal::Tuple(elems) => {
+            // Check if this is a closure tuple (has __lambda_name at last index)
+            // Closures have a string literal at the end which can't be lowered to SPIR-V
+            let is_closure = elems.last().map_or(false, |e| {
+                matches!(&e.kind, ExprKind::Literal(mir::Literal::String(_)))
+            });
+
+            // For closures, skip the last element (the __lambda_name string)
+            let real_elems: Vec<_> = if is_closure {
+                elems.iter().take(elems.len() - 1).collect()
+            } else {
+                elems.iter().collect()
+            };
+
             // Lower all elements
             let elem_ids: Vec<spirv::Word> =
-                elems.iter().map(|e| lower_expr(constructor, e)).collect::<Result<Vec<_>>>()?;
+                real_elems.iter().map(|e| lower_expr(constructor, *e)).collect::<Result<Vec<_>>>()?;
 
             // Create struct type for tuple from element types
             let elem_types: Vec<spirv::Word> =
-                elems.iter().map(|e| constructor.ast_type_to_spirv(&e.ty)).collect();
+                real_elems.iter().map(|e| constructor.ast_type_to_spirv(&e.ty)).collect();
             let tuple_type = constructor.builder.type_struct(elem_types);
 
             // Construct the composite
@@ -1839,22 +1808,6 @@ fn lower_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::
             // Construct the composite
 
             Ok(constructor.builder.composite_construct(array_type, None, elem_ids)?)
-        }
-        Literal::Record(fields) => {
-            // Filter out phantom fields that only exist for compile-time dispatch
-            let real_fields: Vec<_> = fields.iter().filter(|(name, _)| name != "__lambda_name").collect();
-
-            // Records are represented as structs with fields in order
-            let field_ids: Vec<spirv::Word> =
-                real_fields.iter().map(|(_, e)| lower_expr(constructor, e)).collect::<Result<Vec<_>>>()?;
-
-            // Create struct type for record from field types
-            let field_types: Vec<spirv::Word> =
-                real_fields.iter().map(|(_, e)| constructor.ast_type_to_spirv(&e.ty)).collect();
-            let record_type = constructor.builder.type_struct(field_types);
-
-            // Construct the composite
-            Ok(constructor.builder.composite_construct(record_type, None, field_ids)?)
         }
     }
 }
@@ -1967,7 +1920,7 @@ def get_x (r:{x:i32, y:i32}) : i32 = r.x
 
     #[test]
     fn test_closure_capture_access() {
-        // This test requires record_access intrinsic for closure field access
+        // This test uses tuple_access intrinsic for closure field access
         let spirv = compile_to_spirv(
             r#"
 def test (x:i32) : i32 =
