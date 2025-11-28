@@ -747,8 +747,12 @@ impl<'a> LowerCtx<'a> {
         // Emit entry points with interface variables
         for (name, model) in &self.entry_points {
             if let Some(&func_id) = self.constructor.functions.get(name) {
-                let interfaces =
+                let mut interfaces =
                     self.constructor.entry_point_interfaces.get(name).cloned().unwrap_or_default();
+                // Add debug buffer to interface if present
+                if let Some((debug_buffer_var, _)) = self.constructor.debug_buffer {
+                    interfaces.push(debug_buffer_var);
+                }
                 self.constructor.builder.entry_point(*model, func_id, name, interfaces);
 
                 // Add execution mode for fragment shaders

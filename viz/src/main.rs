@@ -118,7 +118,7 @@ impl State {
             .request_device(&DeviceDescriptor {
                 label: None,
                 required_features,
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                required_limits: wgpu::Limits::default(),
                 memory_hints: wgpu::MemoryHints::Performance,
                 trace: Trace::Off,
             })
