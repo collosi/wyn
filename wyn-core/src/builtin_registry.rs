@@ -117,6 +117,12 @@ pub enum Intrinsic {
     /// Functional array update: immutable copy-with-update
     /// TODO: Move to prelude as normal function
     ArrayUpdate,
+    /// Debug output: write i32 to debug ring buffer
+    DebugI32,
+    /// Debug output: write f32 to debug ring buffer (6 decimal places)
+    DebugF32,
+    /// Debug output: write string literal to debug ring buffer
+    DebugStr,
 }
 
 /// Unified builtin entry with TypeScheme
@@ -264,6 +270,7 @@ impl BuiltinRegistry {
         registry.register_vector_constructors();
         registry.register_higher_order_functions(ctx);
         registry.register_matav_variants();
+        registry.register_debug_intrinsics();
 
         registry
     }
@@ -407,6 +414,8 @@ impl BuiltinRegistry {
             "u16" => TypeName::UInt(16),
             "u32" => TypeName::UInt(32),
             "u64" => TypeName::UInt(64),
+            // Unit type
+            "()" => TypeName::Unit,
             // All other types remain as Str
             _ => TypeName::Str(name),
         };
@@ -1103,6 +1112,34 @@ impl BuiltinRegistry {
                 }
             }
         }
+    }
+
+    /// Register debug output intrinsics
+    /// These write to a ring buffer for shader debugging
+    fn register_debug_intrinsics(&mut self) {
+        // debug_i32: i32 -> ()
+        self.register(
+            "debug_i32",
+            vec![Self::ty("i32")],
+            Self::ty("()"),
+            BuiltinImpl::Intrinsic(Intrinsic::DebugI32),
+        );
+
+        // debug_f32: f32 -> ()
+        self.register(
+            "debug_f32",
+            vec![Self::ty("f32")],
+            Self::ty("()"),
+            BuiltinImpl::Intrinsic(Intrinsic::DebugF32),
+        );
+
+        // debug_str: string -> ()
+        self.register(
+            "debug_str",
+            vec![Self::ty("string")],
+            Self::ty("()"),
+            BuiltinImpl::Intrinsic(Intrinsic::DebugStr),
+        );
     }
 }
 

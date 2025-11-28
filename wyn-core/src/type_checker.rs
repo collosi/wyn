@@ -1618,6 +1618,7 @@ impl TypeChecker {
                                     TypeName::Named(name) => name.clone(),
                                     TypeName::Unique => "unique".to_string(),
                                     TypeName::Record(_) => "record".to_string(),
+                                    TypeName::Unit => "unit".to_string(),
                                     TypeName::Tuple(_) => "tuple".to_string(),
                                     TypeName::Sum(_) => "sum".to_string(),
                                     TypeName::Existential(_, _) => "existential".to_string(),

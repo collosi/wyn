@@ -318,6 +318,8 @@ pub enum TypeName {
     /// Record type: {field1: type1, field2: type2}
     /// Preserves source order of fields, but equality is order-independent
     Record(RecordFields),
+    /// Unit type: () - the empty tuple, used for side-effect-only functions
+    Unit,
     /// Tuple type with arity (size). Field types stored in Type::Constructed args.
     Tuple(usize),
     /// Sum type: Constructor1 type* | Constructor2 type*
@@ -354,6 +356,7 @@ impl std::fmt::Display for TypeName {
                 }
                 write!(f, "}}")
             }
+            TypeName::Unit => write!(f, "()"),
             TypeName::Tuple(n) => write!(f, "Tuple({})", n),
             TypeName::Sum(variants) => {
                 for (i, (name, types)) in variants.iter().enumerate() {
@@ -405,6 +408,7 @@ impl polytype::Name for TypeName {
                 let field_strs: Vec<String> = fields.iter().map(|name| name.clone()).collect();
                 format!("{{{}}}", field_strs.join(", "))
             }
+            TypeName::Unit => "()".to_string(),
             TypeName::Tuple(n) => format!("Tuple({})", n),
             TypeName::Sum(variants) => {
                 let variant_strs: Vec<String> = variants

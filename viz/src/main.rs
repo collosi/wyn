@@ -8,10 +8,13 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use wgpu::{
-    Color, ColorTargetState, CommandEncoderDescriptor, DeviceDescriptor, FragmentState, Instance,
-    InstanceDescriptor, LoadOp, MultisampleState, Operations, PipelineLayoutDescriptor, PowerPreference,
-    PresentMode, PrimitiveState, RenderPipeline, RequestAdapterOptions, ShaderModuleDescriptor,
-    ShaderModuleDescriptorPassthrough, StoreOp, SurfaceConfiguration, TextureUsages, Trace, VertexState,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
+    BindingResource, BindingType, BufferBindingType, BufferDescriptor, BufferUsages, Color,
+    ColorTargetState, CommandEncoderDescriptor, DeviceDescriptor, FragmentState, Instance,
+    InstanceDescriptor, LoadOp, MultisampleState, Operations, PipelineLayoutDescriptor,
+    PowerPreference, PresentMode, PrimitiveState, RenderPipeline, RequestAdapterOptions,
+    ShaderModuleDescriptor, ShaderModuleDescriptorPassthrough, ShaderStages, StoreOp,
+    SurfaceConfiguration, TextureUsages, Trace, VertexState,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -59,6 +62,10 @@ enum PipelineSpec {
 
 // --- App state ---------------------------------------------------------------
 
+/// Debug buffer size: 16KB = 4096 u32s
+/// Layout: { write_head: u32, read_head: u32, data: [4094]u32 }
+const DEBUG_BUFFER_SIZE: u64 = 16384;
+
 struct State {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -66,6 +73,10 @@ struct State {
     queue: wgpu::Queue,
     config: SurfaceConfiguration,
     pipeline: RenderPipeline,
+    // Debug buffer support (optional - only present when shader uses debug intrinsics)
+    debug_buffer: Option<wgpu::Buffer>,
+    debug_staging_buffer: Option<wgpu::Buffer>,
+    debug_bind_group: Option<BindGroup>,
 }
 
 impl State {
@@ -131,6 +142,52 @@ impl State {
         };
         surface.configure(&device, &config);
 
+        // === Create debug buffer (always, shader may or may not use it) =========
+        let debug_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("debug_buffer"),
+            size: DEBUG_BUFFER_SIZE,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Initialize debug buffer to zeros (write_head=0, read_head=0, data=zeros)
+        queue.write_buffer(&debug_buffer, 0, &[0u8; DEBUG_BUFFER_SIZE as usize]);
+
+        let debug_staging_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("debug_staging_buffer"),
+            size: DEBUG_BUFFER_SIZE,
+            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Create bind group layout for debug buffer at set=0, binding=0
+        let debug_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("debug_bind_group_layout"),
+            entries: &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::VERTEX_FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let debug_bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("debug_bind_group"),
+            layout: &debug_bind_group_layout,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &debug_buffer,
+                    offset: 0,
+                    size: None,
+                }),
+            }],
+        });
+
         // === Build pipeline from the chosen mode ==============================
         let pipeline = match spec {
             PipelineSpec::VertexFragment {
@@ -143,7 +200,7 @@ impl State {
 
                 let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
                     label: Some("layout"),
-                    bind_group_layouts: &[],
+                    bind_group_layouts: &[&debug_bind_group_layout],
                     push_constant_ranges: &[],
                 });
 
@@ -182,6 +239,9 @@ impl State {
             queue,
             config,
             pipeline,
+            debug_buffer: Some(debug_buffer),
+            debug_staging_buffer: Some(debug_staging_buffer),
+            debug_bind_group: Some(debug_bind_group),
         })
     }
 
@@ -224,10 +284,25 @@ impl State {
                     });
 
                     rpass.set_pipeline(&self.pipeline);
+                    // Set debug bind group if available
+                    if let Some(ref bind_group) = self.debug_bind_group {
+                        rpass.set_bind_group(0, bind_group, &[]);
+                    }
                     rpass.draw(0..3, 0..1);
                 }
 
+                // Copy debug buffer to staging buffer for readback
+                if let (Some(ref debug_buffer), Some(ref staging_buffer)) =
+                    (&self.debug_buffer, &self.debug_staging_buffer)
+                {
+                    encoder.copy_buffer_to_buffer(debug_buffer, 0, staging_buffer, 0, DEBUG_BUFFER_SIZE);
+                }
+
                 self.queue.submit(Some(encoder.finish()));
+
+                // Read back debug buffer and print any debug output
+                self.read_debug_buffer();
+
                 frame.present();
             }
             Err(e @ wgpu::SurfaceError::Lost) | Err(e @ wgpu::SurfaceError::Outdated) => {
@@ -249,6 +324,64 @@ impl State {
             Err(wgpu::SurfaceError::Other) => {
                 // Non-fatal miscellaneous error; skip this frame.
                 eprintln!("surface error: Other; skipping frame");
+            }
+        }
+    }
+
+    /// Read the debug buffer and print any new debug output
+    fn read_debug_buffer(&mut self) {
+        let staging_buffer = match &self.debug_staging_buffer {
+            Some(b) => b,
+            None => return,
+        };
+        let debug_buffer = match &self.debug_buffer {
+            Some(b) => b,
+            None => return,
+        };
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+
+        // Wait for the GPU to finish
+        self.device.poll(wgpu::Maintain::Wait);
+
+        if rx.recv().unwrap().is_ok() {
+            let data = buffer_slice.get_mapped_range();
+            let u32_data: &[u32] = bytemuck::cast_slice(&data);
+
+            // Buffer layout: [write_head, read_head, data[4094]]
+            let write_head = u32_data[0] as usize;
+            let read_head = u32_data[1] as usize;
+
+            if write_head != read_head {
+                // Print new debug values
+                let data_start = 2; // Skip write_head and read_head
+                let data_len = 4094;
+
+                let mut current = read_head;
+                while current != write_head {
+                    let index = current % data_len;
+                    let value = u32_data[data_start + index];
+                    // Print as both i32 and f32 (user can interpret)
+                    let as_i32 = value as i32;
+                    let as_f32 = f32::from_bits(value);
+                    println!("[DEBUG] raw=0x{:08x} i32={} f32={}", value, as_i32, as_f32);
+                    current += 1;
+                }
+
+                // Update read_head to match write_head
+                drop(data);
+                staging_buffer.unmap();
+
+                // Write updated read_head back to the debug buffer
+                let new_read_head = write_head as u32;
+                self.queue.write_buffer(debug_buffer, 4, bytemuck::bytes_of(&new_read_head));
+            } else {
+                drop(data);
+                staging_buffer.unmap();
             }
         }
     }

@@ -95,6 +95,10 @@ fn format_constructed_type(name: &TypeName, args: &[PolyType<TypeName>]) -> Stri
                 .collect();
             format!("{{{}}}", items.join(", "))
         }
+        TypeName::Unit => {
+            // Unit type - ()
+            "()".to_string()
+        }
         TypeName::Tuple(_n) => {
             // (T1, T2, ...)
             // Tuple arity is in n, field types are in args

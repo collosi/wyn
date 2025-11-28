@@ -97,6 +97,9 @@ struct Constructor {
 
     // Builtin function registry
     builtin_registry: BuiltinRegistry,
+
+    // Debug mode: when Some, contains (buffer_var_id, u32_ptr_type) for debug ring buffer
+    debug_buffer: Option<(spirv::Word, spirv::Word)>,
 }
 
 impl Constructor {
@@ -138,7 +141,96 @@ impl Constructor {
             pending_constant_inits: Vec::new(),
             lambda_registry: Vec::new(),
             builtin_registry: BuiltinRegistry::default(),
+            debug_buffer: None,
         }
+    }
+
+    /// Set up the debug ring buffer for shader debugging.
+    /// Creates a storage buffer with layout: { write_head: u32, read_head: u32, data: [4094 x u32] }
+    /// Total size: 16KB (16384 bytes = 4096 u32s)
+    fn setup_debug_buffer(&mut self) {
+        // We need these decorations/capabilities for storage buffers
+        use spirv::Decoration;
+
+        // Create the runtime array type for u32 data (4094 elements after the two header u32s)
+        let u32_type = self.i32_type; // In SPIR-V, i32 and u32 share the same type_int(32, _)
+        let array_length = self.const_i32(4094);
+        let data_array_type = self.builder.type_array(u32_type, array_length);
+
+        // Decorate array stride (4 bytes per u32)
+        self.builder.decorate(
+            data_array_type,
+            Decoration::ArrayStride,
+            [Operand::LiteralBit32(4)],
+        );
+
+        // Create the struct type: { write_head: u32, read_head: u32, data: [4094]u32 }
+        let struct_type = self.builder.type_struct([u32_type, u32_type, data_array_type]);
+
+        // Decorate struct as Block (required for storage buffers)
+        self.builder.decorate(struct_type, Decoration::Block, []);
+
+        // Decorate struct member offsets
+        self.builder.member_decorate(struct_type, 0, Decoration::Offset, [Operand::LiteralBit32(0)]);
+        self.builder.member_decorate(struct_type, 1, Decoration::Offset, [Operand::LiteralBit32(4)]);
+        self.builder.member_decorate(struct_type, 2, Decoration::Offset, [Operand::LiteralBit32(8)]);
+
+        // Create pointer type for the struct in StorageBuffer storage class
+        let ptr_type = self.builder.type_pointer(None, StorageClass::StorageBuffer, struct_type);
+
+        // Create the storage buffer variable
+        let buffer_var = self.builder.variable(ptr_type, None, StorageClass::StorageBuffer, None);
+
+        // Decorate with binding and descriptor set
+        self.builder.decorate(buffer_var, Decoration::Binding, [Operand::LiteralBit32(0)]);
+        self.builder.decorate(buffer_var, Decoration::DescriptorSet, [Operand::LiteralBit32(0)]);
+
+        // Create pointer type for u32 in StorageBuffer (for accessing array elements)
+        let u32_ptr_type = self.builder.type_pointer(None, StorageClass::StorageBuffer, u32_type);
+
+        self.debug_buffer = Some((buffer_var, u32_ptr_type));
+    }
+
+    /// Emit code to write a u32 value to the debug ring buffer.
+    /// Uses atomic add on write_head to reserve a slot, then stores the value.
+    fn emit_debug_write_u32(
+        &mut self,
+        buffer_var: spirv::Word,
+        u32_ptr_type: spirv::Word,
+        value: spirv::Word,
+    ) -> Result<()> {
+        // Constants for memory scope and semantics
+        // Scope::Device = 1, MemorySemantics::UniformMemory = 0x40
+        let scope_device = self.const_i32(1);
+        let semantics_relaxed = self.const_i32(0x40); // UniformMemory
+
+        // Get pointer to write_head (member 0 of the struct)
+        let const_0 = self.const_i32(0);
+        let write_head_ptr = self.builder.access_chain(u32_ptr_type, None, buffer_var, [const_0])?;
+
+        // Atomic add 1 to write_head to reserve a slot, returns old value
+        let const_1 = self.const_i32(1);
+        let old_head = self.builder.atomic_i_add(
+            self.i32_type,
+            None,
+            write_head_ptr,
+            scope_device,
+            semantics_relaxed,
+            const_1,
+        )?;
+
+        // Compute wrapped index: old_head % 4094 (size of data array)
+        let array_size = self.const_i32(4094);
+        let index = self.builder.u_mod(self.i32_type, None, old_head, array_size)?;
+
+        // Get pointer to data[index] (member 2 of struct, then index into array)
+        let const_2 = self.const_i32(2);
+        let data_elem_ptr = self.builder.access_chain(u32_ptr_type, None, buffer_var, [const_2, index])?;
+
+        // Store the value
+        self.builder.store(data_elem_ptr, value, None, [])?;
+
+        Ok(())
     }
 
     /// Get or create a pointer type
@@ -181,6 +273,10 @@ impl Constructor {
                     TypeName::UInt(bits) => self.builder.type_int(*bits as u32, 0),
                     TypeName::Float(bits) => self.builder.type_float(*bits as u32),
                     TypeName::Str(s) if *s == "bool" => self.bool_type,
+                    TypeName::Unit => {
+                        // Unit type - represented as an empty struct in SPIR-V
+                        self.get_or_create_struct_type(vec![])
+                    }
                     TypeName::Tuple(_) => {
                         // Tuple becomes struct
                         let field_types: Vec<spirv::Word> =
@@ -452,9 +548,12 @@ impl Constructor {
 }
 
 impl<'a> LowerCtx<'a> {
-    fn new(program: &'a Program) -> Self {
+    fn new(program: &'a Program, debug_enabled: bool) -> Self {
         let mut constructor = Constructor::new();
         constructor.lambda_registry = program.lambda_registry.clone();
+        if debug_enabled {
+            constructor.setup_debug_buffer();
+        }
 
         // Build index from name to def position
         let mut def_index = HashMap::new();
@@ -668,8 +767,8 @@ impl<'a> LowerCtx<'a> {
 }
 
 /// Lower a MIR program to SPIR-V
-pub fn lower(program: &mir::Program) -> Result<Vec<u32>> {
-    let ctx = LowerCtx::new(program);
+pub fn lower(program: &mir::Program, debug_enabled: bool) -> Result<Vec<u32>> {
+    let ctx = LowerCtx::new(program, debug_enabled);
     ctx.run()
 }
 
@@ -1606,6 +1705,48 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                             func
                                         )
                                     }
+                                    Intrinsic::DebugI32 => {
+                                        // Debug intrinsic: write i32 to ring buffer
+                                        if let Some((buffer_var, u32_ptr_type)) = constructor.debug_buffer {
+                                            let value = arg_ids[0];
+                                            constructor.emit_debug_write_u32(
+                                                buffer_var,
+                                                u32_ptr_type,
+                                                value,
+                                            )?;
+                                            Ok(constructor.const_i32(0)) // void return
+                                        } else {
+                                            // Debug not enabled, no-op
+                                            Ok(constructor.const_i32(0))
+                                        }
+                                    }
+                                    Intrinsic::DebugF32 => {
+                                        // Debug intrinsic: write f32 to ring buffer (as bits)
+                                        if let Some((buffer_var, u32_ptr_type)) = constructor.debug_buffer {
+                                            let value = arg_ids[0];
+                                            // Bitcast f32 to u32 for storage
+                                            let u32_value = constructor.builder.bitcast(
+                                                constructor.i32_type,
+                                                None,
+                                                value,
+                                            )?;
+                                            constructor.emit_debug_write_u32(
+                                                buffer_var,
+                                                u32_ptr_type,
+                                                u32_value,
+                                            )?;
+                                            Ok(constructor.const_i32(0)) // void return
+                                        } else {
+                                            // Debug not enabled, no-op
+                                            Ok(constructor.const_i32(0))
+                                        }
+                                    }
+                                    Intrinsic::DebugStr => {
+                                        // Debug intrinsic: write string literal to ring buffer
+                                        // For now, this is a no-op since we don't have string literals in MIR
+                                        // TODO: Implement when string literals are supported
+                                        Ok(constructor.const_i32(0))
+                                    }
                                 }
                             }
                             BuiltinImpl::CoreFn(core_fn_name) => {
@@ -1789,7 +1930,7 @@ mod tests {
             .expect("Flattening failed")
             .mir;
 
-        lower(&mir)
+        lower(&mir, false)
     }
 
     #[test]

@@ -46,6 +46,10 @@ enum Commands {
         #[arg(long, value_name = "FILE")]
         output_annotated: Option<PathBuf>,
 
+        /// Enable debug mode: include debug ring buffer for debug_i32/debug_f32/debug_str
+        #[arg(long)]
+        debug: bool,
+
         /// Print verbose output
         #[arg(short, long)]
         verbose: bool,
@@ -86,9 +90,10 @@ fn main() -> Result<(), DriverError> {
             output,
             output_mir,
             output_annotated,
+            debug,
             verbose,
         } => {
-            compile_file(input, output, output_mir, output_annotated, verbose)?;
+            compile_file(input, output, output_mir, output_annotated, debug, verbose)?;
         }
         Commands::Check {
             input,
@@ -107,6 +112,7 @@ fn compile_file(
     output: Option<PathBuf>,
     output_mir: Option<PathBuf>,
     output_annotated: Option<PathBuf>,
+    debug: bool,
     verbose: bool,
 ) -> Result<(), DriverError> {
     if verbose {
@@ -142,7 +148,7 @@ fn compile_file(
     let monomorphized = time("monomorphize", verbose, || flattened.monomorphize())?;
     let reachable = time("filter_reachable", verbose, || monomorphized.filter_reachable());
     let folded = time("fold_constants", verbose, || reachable.fold_constants())?;
-    let lowered = time("lower", verbose, || folded.lower())?;
+    let lowered = time("lower", verbose, || folded.lower_with_options(debug))?;
 
     // Determine output path
     let output_path = output.unwrap_or_else(|| {

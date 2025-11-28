@@ -256,7 +256,12 @@ pub struct Folded {
 impl Folded {
     /// Lower MIR to SPIR-V
     pub fn lower(self) -> Result<Lowered> {
-        let spirv = lowering::lower(&self.mir)?;
+        self.lower_with_options(false)
+    }
+
+    /// Lower MIR to SPIR-V with debug mode option
+    pub fn lower_with_options(self, debug_enabled: bool) -> Result<Lowered> {
+        let spirv = lowering::lower(&self.mir, debug_enabled)?;
         Ok(Lowered { mir: self.mir, spirv })
     }
 }

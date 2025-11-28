@@ -10,3 +10,4 @@ wgpu = { version = "26.0.1", features = ["dx12", "spirv"] }
 pollster = "0.3"
 anyhow = "1"
 clap = { version = "4.5", features = ["derive"] }
+bytemuck = { version = "1.14", features = ["derive"] }
