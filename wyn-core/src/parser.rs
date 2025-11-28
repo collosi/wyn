@@ -431,6 +431,7 @@ impl Parser {
                     "vertex_index" => spirv::BuiltIn::VertexIndex,
                     "instance_index" => spirv::BuiltIn::InstanceIndex,
                     "front_facing" => spirv::BuiltIn::FrontFacing,
+                    "frag_coord" => spirv::BuiltIn::FragCoord,
                     "frag_depth" => spirv::BuiltIn::FragDepth,
                     _ => {
                         return Err(CompilerError::ParseError(format!(
