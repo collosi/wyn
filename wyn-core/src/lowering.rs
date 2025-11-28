@@ -55,6 +55,7 @@ struct Constructor {
     void_type: spirv::Word,
     bool_type: spirv::Word,
     i32_type: spirv::Word,
+    u32_type: spirv::Word,
     f32_type: spirv::Word,
 
     // Constant caching
@@ -105,13 +106,14 @@ struct Constructor {
 impl Constructor {
     fn new() -> Self {
         let mut builder = Builder::new();
-        builder.set_version(1, 0);
+        builder.set_version(1, 5);
         builder.capability(Capability::Shader);
         builder.memory_model(AddressingModel::Logical, MemoryModel::GLSL450);
 
         let void_type = builder.type_void();
         let bool_type = builder.type_bool();
         let i32_type = builder.type_int(32, 1);
+        let u32_type = builder.type_int(32, 0);
         let f32_type = builder.type_float(32);
         let glsl_ext_inst_id = builder.ext_inst_import("GLSL.std.450");
 
@@ -120,6 +122,7 @@ impl Constructor {
             void_type,
             bool_type,
             i32_type,
+            u32_type,
             f32_type,
             int_const_cache: HashMap::new(),
             float_const_cache: HashMap::new(),
@@ -152,8 +155,11 @@ impl Constructor {
         // We need these decorations/capabilities for storage buffers
         use spirv::Decoration;
 
+        // Add required extension for StorageBuffer storage class
+        self.builder.extension("SPV_KHR_storage_buffer_storage_class");
+
         // Create the runtime array type for u32 data (4094 elements after the two header u32s)
-        let u32_type = self.i32_type; // In SPIR-V, i32 and u32 share the same type_int(32, _)
+        let u32_type = self.u32_type;
         let array_length = self.const_i32(4094);
         let data_array_type = self.builder.type_array(u32_type, array_length);
 
@@ -199,7 +205,7 @@ impl Constructor {
         u32_ptr_type: spirv::Word,
         value: spirv::Word,
     ) -> Result<()> {
-        // Constants for memory scope and semantics
+        // Constants for memory scope and semantics (these are i32 per SPIR-V spec)
         // Scope::Device = 1, MemorySemantics::UniformMemory = 0x40
         let scope_device = self.const_i32(1);
         let semantics_relaxed = self.const_i32(0x40); // UniformMemory
@@ -209,26 +215,28 @@ impl Constructor {
         let write_head_ptr = self.builder.access_chain(u32_ptr_type, None, buffer_var, [const_0])?;
 
         // Atomic add 1 to write_head to reserve a slot, returns old value
-        let const_1 = self.const_i32(1);
+        // The value to add must match the pointee type (u32)
+        let const_1_u32 = self.builder.constant_bit32(self.u32_type, 1);
         let old_head = self.builder.atomic_i_add(
-            self.i32_type,
+            self.u32_type,
             None,
             write_head_ptr,
             scope_device,
             semantics_relaxed,
-            const_1,
+            const_1_u32,
         )?;
 
         // Compute wrapped index: old_head % 4094 (size of data array)
-        let array_size = self.const_i32(4094);
-        let index = self.builder.u_mod(self.i32_type, None, old_head, array_size)?;
+        let array_size_u32 = self.builder.constant_bit32(self.u32_type, 4094);
+        let index = self.builder.u_mod(self.u32_type, None, old_head, array_size_u32)?;
 
         // Get pointer to data[index] (member 2 of struct, then index into array)
         let const_2 = self.const_i32(2);
         let data_elem_ptr = self.builder.access_chain(u32_ptr_type, None, buffer_var, [const_2, index])?;
 
-        // Store the value
-        self.builder.store(data_elem_ptr, value, None, [])?;
+        // Store the value (bitcast to u32 if needed)
+        let value_u32 = self.builder.bitcast(self.u32_type, None, value)?;
+        self.builder.store(data_elem_ptr, value_u32, None, [])?;
 
         Ok(())
     }
@@ -1728,16 +1736,11 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                         // Debug intrinsic: write f32 to ring buffer (as bits)
                                         if let Some((buffer_var, u32_ptr_type)) = constructor.debug_buffer {
                                             let value = arg_ids[0];
-                                            // Bitcast f32 to u32 for storage
-                                            let u32_value = constructor.builder.bitcast(
-                                                constructor.i32_type,
-                                                None,
-                                                value,
-                                            )?;
+                                            // emit_debug_write_u32 will bitcast to u32
                                             constructor.emit_debug_write_u32(
                                                 buffer_var,
                                                 u32_ptr_type,
-                                                u32_value,
+                                                value,
                                             )?;
                                             Ok(constructor.const_i32(0)) // void return
                                         } else {
