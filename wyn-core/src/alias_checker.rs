@@ -506,7 +506,7 @@ fn is_copy_type(ty: &polytype::Type<TypeName>) -> bool {
             TypeName::Vec => false,
             TypeName::Mat => false,
             TypeName::Unique => false,
-            TypeName::Str("tuple") => args.iter().all(is_copy_type),
+            TypeName::Tuple(_) => args.iter().all(is_copy_type),
             TypeName::Str("->") => true, // Functions are copy
             _ => true,                   // Conservative: treat unknown as copy
         },

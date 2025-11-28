@@ -83,8 +83,12 @@ impl TypeKey {
                 match name {
                     TypeName::Size(n) => return TypeKey::Size(*n),
                     TypeName::Record(fields) => {
-                        let mut key_fields: Vec<_> =
-                            fields.iter().map(|(k, v)| (k.clone(), TypeKey::from_type(v))).collect();
+                        // Field names are in RecordFields, field types are in args
+                        let mut key_fields: Vec<_> = fields
+                            .iter()
+                            .zip(args.iter())
+                            .map(|(k, v)| (k.clone(), TypeKey::from_type(v)))
+                            .collect();
                         key_fields.sort_by(|a, b| a.0.cmp(&b.0));
                         return TypeKey::Record(key_fields);
                     }
@@ -486,9 +490,9 @@ fn contains_variables(ty: &Type) -> bool {
             // Check for unresolved variables in TypeName itself
             match name {
                 TypeName::SizeVar(_) | TypeName::UserVar(_) => return true,
-                TypeName::Record(fields) => {
-                    // Check types inside record fields
-                    if fields.values().any(contains_variables) {
+                TypeName::Record(_fields) => {
+                    // Check types inside record fields (stored in args)
+                    if args.iter().any(contains_variables) {
                         return true;
                     }
                 }
@@ -550,9 +554,9 @@ fn apply_subst(ty: &Type, subst: &Substitution) -> Type {
             // Also apply substitution to types nested inside TypeName
             let new_name = match name {
                 TypeName::Record(fields) => {
-                    let new_fields =
-                        fields.iter().map(|(k, v)| (k.clone(), apply_subst(v, subst))).collect();
-                    TypeName::Record(new_fields)
+                    // Field names don't contain types, so no substitution needed
+                    // Types are in args which are already substituted above
+                    TypeName::Record(fields.clone())
                 }
                 TypeName::Sum(variants) => {
                     let new_variants = variants

@@ -5,13 +5,13 @@
 //! - Pattern flattening: complex patterns become simple let bindings
 //! - Lambda lifting: all functions become top-level Def entries
 
-use crate::ast::{self, ExprKind, Expression, NodeId, PatternKind, Span, Type, TypeName};
+use crate::ast::{self, ExprKind, Expression, NodeId, PatternKind, Span, Type, TypeName, types};
 use crate::error::{CompilerError, Result};
 use crate::mir::{self, Expr};
 use crate::pattern;
 use crate::scope::ScopeStack;
 use polytype::TypeScheme;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 /// Shape classification for desugaring decisions
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,15 +247,16 @@ impl Flattener {
             },
             // Record types: look up field by name
             Type::Constructed(TypeName::Record(fields), _) => fields
-                .keys()
+                .iter()
                 .enumerate()
                 .find(|(_, name)| name.as_str() == field)
                 .map(|(idx, _)| idx)
                 .ok_or_else(|| CompilerError::FlatteningError(format!("Unknown record field: {}", field))),
             // Tuple types: should use numeric access
-            Type::Constructed(TypeName::Str(s), _) if *s == "tuple" => Err(CompilerError::FlatteningError(
-                format!("Tuple access must use numeric index, not '{}'", field),
-            )),
+            Type::Constructed(TypeName::Tuple(_), _) => Err(CompilerError::FlatteningError(format!(
+                "Tuple access must use numeric index, not '{}'",
+                field
+            ))),
             _ => Err(CompilerError::FlatteningError(format!(
                 "Cannot access field '{}' on type {:?}",
                 field, obj_type
@@ -534,7 +535,7 @@ impl Flattener {
 
                 // Build the closure type
                 let type_fields = vec![("__lambda_name".to_string(), string_type)];
-                let closure_type = Type::Constructed(TypeName::Record(type_fields.into()), vec![]);
+                let closure_type = types::record(type_fields);
 
                 // Build parameters: closure, x, y
                 let params = vec![
@@ -848,7 +849,7 @@ impl Flattener {
                 // Get the tuple type and element types
                 let tuple_ty = self.get_pattern_type(&let_in.pattern);
                 let elem_types: Vec<Type> = match &tuple_ty {
-                    Type::Constructed(TypeName::Str(s), args) if *s == "tuple" => args.clone(),
+                    Type::Constructed(TypeName::Tuple(_), args) => args.clone(),
                     _ => {
                         // Fallback: use unknown types
                         patterns.iter().map(|p| self.get_pattern_type(p)).collect()
@@ -984,7 +985,7 @@ impl Flattener {
         // Build the record type from the fields
         let type_fields: Vec<_> =
             record_fields.iter().map(|(name, expr)| (name.clone(), expr.ty.clone())).collect();
-        let closure_type = Type::Constructed(TypeName::Record(type_fields.into()), vec![]);
+        let closure_type = types::record(type_fields);
 
         // Build parameters: closure first, then lambda params
         let mut params = vec![mir::Param {
@@ -1300,7 +1301,7 @@ impl Flattener {
     ) -> Result<Vec<(String, Expr)>> {
         // Get element types from tuple type
         let elem_types: Vec<Type> = match tuple_ty {
-            Type::Constructed(TypeName::Str(s), args) if *s == "tuple" => args.clone(),
+            Type::Constructed(TypeName::Tuple(_), args) => args.clone(),
             _ => {
                 return Err(CompilerError::FlatteningError(format!(
                     "Expected tuple type for tuple pattern, got {:?}",

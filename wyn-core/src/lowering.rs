@@ -181,7 +181,7 @@ impl Constructor {
                     TypeName::UInt(bits) => self.builder.type_int(*bits as u32, 0),
                     TypeName::Float(bits) => self.builder.type_float(*bits as u32),
                     TypeName::Str(s) if *s == "bool" => self.bool_type,
-                    TypeName::Str(s) if *s == "tuple" => {
+                    TypeName::Tuple(_) => {
                         // Tuple becomes struct
                         let field_types: Vec<spirv::Word> =
                             args.iter().map(|a| self.ast_type_to_spirv(a)).collect();
@@ -254,10 +254,13 @@ impl Constructor {
                     }
                     TypeName::Record(fields) => {
                         // Record becomes a struct, filtering out phantom fields like __lambda_name
-                        let real_fields: Vec<_> =
-                            fields.iter().filter(|(name, _)| name.as_str() != "__lambda_name").collect();
-                        let field_types: Vec<spirv::Word> =
-                            real_fields.iter().map(|(_, ty)| self.ast_type_to_spirv(ty)).collect();
+                        // Field names are in RecordFields, field types are in args
+                        let field_types: Vec<spirv::Word> = fields
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, name)| name.as_str() != "__lambda_name")
+                            .map(|(i, _)| self.ast_type_to_spirv(&args[i]))
+                            .collect();
                         self.get_or_create_struct_type(field_types)
                     }
                     _ => {
@@ -767,8 +770,8 @@ fn lower_entry_point(
 
     if !is_void {
         // Check if return is a tuple (multiple outputs)
-        if let PolyType::Constructed(TypeName::Str(s), component_types) = ret_type {
-            if *s == "tuple" && !return_attributes.is_empty() {
+        if let PolyType::Constructed(TypeName::Tuple(_), component_types) = ret_type {
+            if !return_attributes.is_empty() {
                 // Multiple outputs - one variable per component
                 for (i, comp_ty) in component_types.iter().enumerate() {
                     let comp_type_id = constructor.ast_type_to_spirv(comp_ty);
@@ -936,8 +939,8 @@ fn lower_entry_point(
     // Store result to output variables
     if !constructor.current_output_vars.is_empty() {
         // Check if result is a tuple that needs to be decomposed
-        if let PolyType::Constructed(TypeName::Str(s), component_types) = ret_type {
-            if *s == "tuple" && constructor.current_output_vars.len() > 1 {
+        if let PolyType::Constructed(TypeName::Tuple(_), component_types) = ret_type {
+            if constructor.current_output_vars.len() > 1 {
                 // Extract each component and store
                 for (i, &output_var) in constructor.current_output_vars.clone().iter().enumerate() {
                     let comp_type_id = constructor.ast_type_to_spirv(&component_types[i]);
@@ -1750,7 +1753,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                         PolyType::Constructed(TypeName::Record(fields), _) => {
                             // Filter out phantom fields and find the index
                             let real_fields: Vec<_> =
-                                fields.keys().filter(|name| name.as_str() != "__lambda_name").collect();
+                                fields.iter().filter(|name| name.as_str() != "__lambda_name").collect();
                             real_fields
                                 .iter()
                                 .enumerate()

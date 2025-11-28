@@ -213,22 +213,24 @@ pub type Expression = Node<ExprKind>;
 ///
 /// Note on type name variants:
 /// - `Float/Int/SInt`: Numeric primitive types with bit widths (e.g., Float(32), SInt(32))
-/// - `Str`: Other primitive type names hardcoded in the compiler (e.g., "->", "tuple", "bool")
+/// - `Str`: Other primitive type names hardcoded in the compiler (e.g., "->", "bool")
 ///          Uses static strings for efficiency
+/// - `Tuple`: Tuple type constructor with arity (number of fields)
 /// - `Named`: Type names parsed from user source code (e.g., "vec3", "MyType")
 ///            Could refer to built-in types, type aliases, or user-defined types
 ///            Uses owned String since the name comes from parsed input
 
-/// Record fields that preserve source order but have order-independent equality.
+/// Record field names that preserve source order but have order-independent equality.
+/// The actual field types are stored in Type::Constructed's type argument vector.
 #[derive(Debug, Clone, Hash)]
-pub struct RecordFields(pub Vec<(String, Type)>);
+pub struct RecordFields(pub Vec<String>);
 
 impl RecordFields {
-    pub fn new(fields: Vec<(String, Type)>) -> Self {
+    pub fn new(fields: Vec<String>) -> Self {
         RecordFields(fields)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &(String, Type)> {
+    pub fn iter(&self) -> impl Iterator<Item = &String> {
         self.0.iter()
     }
 
@@ -240,53 +242,40 @@ impl RecordFields {
         self.0.is_empty()
     }
 
-    pub fn into_vec(self) -> Vec<(String, Type)> {
+    pub fn into_vec(self) -> Vec<String> {
         self.0
     }
 
-    pub fn get(&self, key: &str) -> Option<&Type> {
-        self.0.iter().find(|(name, _)| name == key).map(|(_, ty)| ty)
+    pub fn contains(&self, key: &str) -> bool {
+        self.0.iter().any(|name| name == key)
     }
 
-    pub fn keys(&self) -> impl Iterator<Item = &String> {
-        self.0.iter().map(|(name, _)| name)
-    }
-
-    pub fn values(&self) -> impl Iterator<Item = &Type> {
-        self.0.iter().map(|(_, ty)| ty)
-    }
-
-    pub fn contains_key(&self, key: &str) -> bool {
-        self.0.iter().any(|(name, _)| name == key)
+    pub fn get_index(&self, key: &str) -> Option<usize> {
+        self.0.iter().position(|name| name == key)
     }
 }
 
-impl From<Vec<(String, Type)>> for RecordFields {
-    fn from(fields: Vec<(String, Type)>) -> Self {
+impl From<Vec<String>> for RecordFields {
+    fn from(fields: Vec<String>) -> Self {
         RecordFields(fields)
     }
 }
 
-impl FromIterator<(String, Type)> for RecordFields {
-    fn from_iter<T: IntoIterator<Item = (String, Type)>>(iter: T) -> Self {
+impl FromIterator<String> for RecordFields {
+    fn from_iter<T: IntoIterator<Item = String>>(iter: T) -> Self {
         RecordFields(iter.into_iter().collect())
     }
 }
 
 impl PartialEq for RecordFields {
     fn eq(&self, other: &Self) -> bool {
-        // Order-independent equality: check same fields exist with same types
+        // Order-independent equality: check same field names exist
         if self.0.len() != other.0.len() {
             return false;
         }
-        for (name, ty) in &self.0 {
-            match other.0.iter().find(|(n, _)| n == name) {
-                Some((_, other_ty)) => {
-                    if ty != other_ty {
-                        return false;
-                    }
-                }
-                None => return false,
+        for name in &self.0 {
+            if !other.0.contains(name) {
+                return false;
             }
         }
         true
@@ -297,8 +286,9 @@ impl Eq for RecordFields {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeName {
-    /// Primitive type names hardcoded in compiler: "->", "tuple", "bool", etc.
+    /// Primitive type names hardcoded in compiler: "->", "bool", etc.
     /// Numeric types use dedicated Float/Int/SInt variants instead.
+    /// Tuples use the dedicated Tuple(usize) variant.
     Str(&'static str),
     /// Floating point types: f16, f32, f64, etc.
     Float(usize),
@@ -328,6 +318,8 @@ pub enum TypeName {
     /// Record type: {field1: type1, field2: type2}
     /// Preserves source order of fields, but equality is order-independent
     Record(RecordFields),
+    /// Tuple type with arity (size). Field types stored in Type::Constructed args.
+    Tuple(usize),
     /// Sum type: Constructor1 type* | Constructor2 type*
     Sum(Vec<(String, Vec<Type>)>),
     /// Existential size: ?[n][m]. type
@@ -354,15 +346,15 @@ impl std::fmt::Display for TypeName {
             TypeName::Unique => write!(f, "*"),
             TypeName::Record(fields) => {
                 write!(f, "{{")?;
-                // BTreeMap maintains sorted order
-                for (i, (name, ty)) in fields.iter().enumerate() {
+                for (i, name) in fields.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}: {}", name, ty)?;
+                    write!(f, "{}", name)?;
                 }
                 write!(f, "}}")
             }
+            TypeName::Tuple(n) => write!(f, "Tuple({})", n),
             TypeName::Sum(variants) => {
                 for (i, (name, types)) in variants.iter().enumerate() {
                     if i > 0 {
@@ -410,11 +402,10 @@ impl polytype::Name for TypeName {
             TypeName::Named(name) => name.clone(),
             TypeName::Unique => "*".to_string(),
             TypeName::Record(fields) => {
-                // BTreeMap maintains sorted order
-                let field_strs: Vec<String> =
-                    fields.iter().map(|(name, ty)| format!("{}: {}", name, ty)).collect();
+                let field_strs: Vec<String> = fields.iter().map(|name| name.clone()).collect();
                 format!("{{{}}}", field_strs.join(", "))
             }
+            TypeName::Tuple(n) => format!("Tuple({})", n),
             TypeName::Sum(variants) => {
                 let variant_strs: Vec<String> = variants
                     .iter()
@@ -816,7 +807,7 @@ pub struct RecordPatternField {
 
 // Helper module for creating common polytype Types
 pub mod types {
-    use super::{Type, TypeName};
+    use super::{RecordFields, Type, TypeName};
 
     pub fn i32() -> Type {
         Type::Constructed(TypeName::Int(32), vec![])
@@ -934,7 +925,8 @@ pub mod types {
     }
 
     pub fn tuple(types: Vec<Type>) -> Type {
-        Type::Constructed(TypeName::Str("tuple"), types)
+        let arity = types.len();
+        Type::Constructed(TypeName::Tuple(arity), types)
     }
 
     pub fn function(arg: Type, ret: Type) -> Type {
@@ -967,7 +959,8 @@ pub mod types {
 
     /// Create a record type: {field1: type1, field2: type2}
     pub fn record(fields: Vec<(String, Type)>) -> Type {
-        Type::Constructed(TypeName::Record(fields.into_iter().collect()), vec![])
+        let (field_names, field_types): (Vec<String>, Vec<Type>) = fields.into_iter().unzip();
+        Type::Constructed(TypeName::Record(RecordFields::new(field_names)), field_types)
     }
 
     /// Create a sum type: Constructor1 type* | Constructor2 type*

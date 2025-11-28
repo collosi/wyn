@@ -22,11 +22,6 @@ fn format_constructed_type(name: &TypeName, args: &[PolyType<TypeName>]) -> Stri
     match name {
         TypeName::Str(s) => {
             match *s {
-                "tuple" => {
-                    // (T1, T2, ...)
-                    let items: Vec<_> = args.iter().map(format_type).collect();
-                    format!("({})", items.join(", "))
-                }
                 "->" => {
                     // T1 -> T2
                     if args.len() == 2 {
@@ -92,9 +87,19 @@ fn format_constructed_type(name: &TypeName, args: &[PolyType<TypeName>]) -> Stri
         }
         TypeName::Record(fields) => {
             // {field1: T1, field2: T2}
-            let items: Vec<_> =
-                fields.iter().map(|(name, ty)| format!("{}: {}", name, format_type(ty))).collect();
+            // Field names are in RecordFields, field types are in args
+            let items: Vec<_> = fields
+                .iter()
+                .zip(args.iter())
+                .map(|(name, ty)| format!("{}: {}", name, format_type(ty)))
+                .collect();
             format!("{{{}}}", items.join(", "))
+        }
+        TypeName::Tuple(_n) => {
+            // (T1, T2, ...)
+            // Tuple arity is in n, field types are in args
+            let items: Vec<_> = args.iter().map(format_type).collect();
+            format!("({})", items.join(", "))
         }
         TypeName::Sum(variants) => {
             // Variant1 T1 | Variant2 T2

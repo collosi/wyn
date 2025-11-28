@@ -127,7 +127,7 @@ impl TypeChecker {
                 // Special case for arrow types
                 format!("{} -> {}", self.format_type(&args[0]), self.format_type(&args[1]))
             }
-            Type::Constructed(TypeName::Str(s), args) if *s == "tuple" => {
+            Type::Constructed(TypeName::Tuple(_), args) => {
                 // Special case for tuple types
                 let arg_strs: Vec<String> = args.iter().map(|a| self.format_type(a)).collect();
                 format!("({})", arg_strs.join(", "))
@@ -313,7 +313,7 @@ impl TypeChecker {
                 let expected_applied = expected_type.apply(&self.context);
 
                 match expected_applied {
-                    Type::Constructed(TypeName::Str("tuple"), ref elem_types) => {
+                    Type::Constructed(TypeName::Tuple(_), ref elem_types) => {
                         if elem_types.len() != patterns.len() {
                             return Err(CompilerError::TypeError(
                                 format!(
@@ -1134,10 +1134,7 @@ impl TypeChecker {
                     let field_ty = self.infer_expression(field_expr)?;
                     field_types.push((field_name.clone(), field_ty));
                 }
-                Ok(Type::Constructed(
-                    TypeName::Record(field_types.into_iter().collect()),
-                    vec![],
-                ))
+                Ok(types::record(field_types))
             }
             ExprKind::TypeHole => {
                 // Record this hole for warning emission after type inference completes
@@ -1494,10 +1491,13 @@ impl TypeChecker {
 
                     // Extract the type name from the expression type
                     // First check if it's a record with the requested field
-                    if let Type::Constructed(TypeName::Record(fields), _) = &expr_type {
-                        if let Some(field_type) = fields.get(field) {
-                            self.type_table.insert(expr.h.id, TypeScheme::Monotype(field_type.clone()));
-                            return Ok(field_type.clone());
+                    if let Type::Constructed(TypeName::Record(fields), field_types) = &expr_type {
+                        if let Some(field_index) = fields.get_index(field) {
+                            if field_index < field_types.len() {
+                                let field_type = &field_types[field_index];
+                                self.type_table.insert(expr.h.id, TypeScheme::Monotype(field_type.clone()));
+                                return Ok(field_type.clone());
+                            }
                         }
                     }
 
@@ -1505,7 +1505,7 @@ impl TypeChecker {
                     if let Ok(index) = field.parse::<usize>() {
                         // Tuple field access: t.0, t.1, etc.
                         // The expr_type should be a tuple
-                        if let Type::Constructed(TypeName::Str("tuple"), elem_types) = &expr_type {
+                        if let Type::Constructed(TypeName::Tuple(_), elem_types) = &expr_type {
                             if index < elem_types.len() {
                                 let field_type = elem_types[index].clone();
                                 self.type_table.insert(expr.h.id, TypeScheme::Monotype(field_type.clone()));
@@ -1585,16 +1585,19 @@ impl TypeChecker {
                                 }
                             } else if let TypeName::Record(fields) = &type_name {
                                 // Handle Record type specially - look up field in the record's field map
-                                if let Some(field_type) = fields.get(field) {
-                                    self.type_table.insert(expr.h.id, TypeScheme::Monotype(field_type.clone()));
-                                    return Ok(field_type.clone());
+                                if let Some(field_index) = fields.get_index(field) {
+                                    if field_index < args.len() {
+                                        let field_type = &args[field_index];
+                                        self.type_table.insert(expr.h.id, TypeScheme::Monotype(field_type.clone()));
+                                        return Ok(field_type.clone());
+                                    }
                                 }
                                 // Field not found in record
                                 return Err(CompilerError::TypeError(
                                     format!(
                                         "Record type has no field '{}'. Available fields: {}",
                                         field,
-                                        fields.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+                                        fields.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
                                     ),
                                     expr.h.span
                                 ));
@@ -1615,6 +1618,7 @@ impl TypeChecker {
                                     TypeName::Named(name) => name.clone(),
                                     TypeName::Unique => "unique".to_string(),
                                     TypeName::Record(_) => "record".to_string(),
+                                    TypeName::Tuple(_) => "tuple".to_string(),
                                     TypeName::Sum(_) => "sum".to_string(),
                                     TypeName::Existential(_, _) => "existential".to_string(),
                                     TypeName::NamedParam(_, _) => "named_param".to_string(),
@@ -1995,12 +1999,12 @@ impl TypeChecker {
         match (&a, &b) {
             // tuple matches attributed_tuple if component types match
             (
-                Type::Constructed(TypeName::Str("tuple"), types1),
+                Type::Constructed(TypeName::Tuple(_), types1),
                 Type::Constructed(TypeName::Str("attributed_tuple"), types2),
             )
             | (
                 Type::Constructed(TypeName::Str("attributed_tuple"), types1),
-                Type::Constructed(TypeName::Str("tuple"), types2),
+                Type::Constructed(TypeName::Tuple(_), types2),
             ) => {
                 types1.len() == types2.len()
                     && types1.iter().zip(types2.iter()).all(|(t1, t2)| self.types_equal(t1, t2))
