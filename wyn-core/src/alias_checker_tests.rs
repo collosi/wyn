@@ -158,19 +158,7 @@ def main(t: (bool, [4]i32)): i32 =
     );
 }
 
-// TODO: test_return_aliases_non_consumed_params and test_return_aliases_shared_backing_store
-// test the rule: "If the return type is not unique (*), the result aliases all arguments
-// passed to non-consumed parameters."
-//
-// Currently the alias checker doesn't implement this - it only tracks:
-// 1. Direct consumption (passing to * param)
-// 2. Let bindings creating aliases
-//
-// To fix: In visit_call, when the return type is not unique, the result's AliasInfo
-// should include the backing stores of all arguments passed to non-* parameters.
-
 #[test]
-#[ignore = "TODO: alias checker doesn't yet track return value aliasing non-consumed params"]
 fn test_return_aliases_non_consumed_params() {
     // id3 takes: a (consumed via *), b (not consumed), c (not consumed)
     // Returns non-unique [4]i32, which should alias b and c
@@ -192,32 +180,32 @@ def main(): i32 =
     let result_x = check_alias(&source_x);
     assert!(result_x.has_errors(), "Expected error: x was consumed by id3");
 
-    // Try consuming y - should error (y is aliased by result)
-    let source_y = format!("{}    consume(y)", base);
-    let result_y = check_alias(&source_y);
+    // Consume result, then try to use y - should error (result aliases y)
+    let source_result_then_y = format!("{}    let _ = consume(result) in y[0]", base);
+    let result_y = check_alias(&source_result_then_y);
     assert!(
         result_y.has_errors(),
-        "Expected error: y is aliased by result (non-consumed param)"
+        "Expected error: result aliases y, consuming result invalidates y"
     );
 
-    // Try consuming z - should error (z is aliased by result)
-    let source_z = format!("{}    consume(z)", base);
-    let result_z = check_alias(&source_z);
+    // Consume result, then try to use z - should error (result aliases z)
+    let source_result_then_z = format!("{}    let _ = consume(result) in z[0]", base);
+    let result_z = check_alias(&source_result_then_z);
     assert!(
         result_z.has_errors(),
-        "Expected error: z is aliased by result (non-consumed param)"
+        "Expected error: result aliases z, consuming result invalidates z"
     );
 }
 
 #[test]
 fn test_return_aliases_shared_backing_store() {
-    // Same as above but using tuple destructuring - all three variables share
-    // a backing store from the tuple. This currently "works" but for the wrong
-    // reason: it reports errors because x, y, z all alias the same tuple backing
-    // store, not because result aliases the non-consumed params.
+    // Using tuple destructuring - all three variables share a backing store
+    // from the tuple. x, y, z all reference the same underlying memory.
     //
-    // TODO: The error messages are misleading - they all say "consumed_var: x"
-    // even for y and z. This is a cosmetic bug in error reporting.
+    // TODO: Error messages are misleading - all say "consumed_var: x" even when
+    // consuming y or z. This is because the backing store was first consumed via x,
+    // and that name is recorded. Could improve by tracking all variable names that
+    // reference each backing store.
 
     let base = r#"
 def id3 (a: *[4]i32) (b: [4]i32) (c: [4]i32) : [4]i32 = c
@@ -227,8 +215,8 @@ def main(t: ([4]i32, [4]i32, [4]i32)): i32 =
     let result = id3(x)(y)(z) in
 "#;
 
-    // All three should error - but currently for the wrong reason
-    // (shared backing store from tuple, not return value aliasing)
+    // All three should error because they share a backing store with x,
+    // which was consumed by id3
     let source_x = format!("{}    consume(x)", base);
     let result_x = check_alias(&source_x);
     assert!(result_x.has_errors(), "Expected error: x was consumed by id3");

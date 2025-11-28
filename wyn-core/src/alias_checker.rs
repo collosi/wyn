@@ -419,8 +419,10 @@ impl<'a> Visitor for AliasChecker<'a> {
         // Visit function
         self.visit_expression(func)?;
 
-        // Collect alias info for non-consumed arguments
-        let mut observing_stores = HashSet::new();
+        // Start with any alias info the function itself carries
+        // (important for curried calls where partial applications carry aliasing)
+        let func_info = self.get_result(func.h.id);
+        let mut observing_stores: HashSet<BackingStoreId> = func_info.stores.clone();
 
         // Visit and process each argument
         for (i, arg) in args.iter().enumerate() {
@@ -453,7 +455,7 @@ impl<'a> Visitor for AliasChecker<'a> {
         } else if observing_stores.is_empty() {
             self.set_result(id, AliasInfo::copy());
         } else {
-            // Result aliases all observing arguments
+            // Result aliases all observing arguments (including those from partial applications)
             self.set_result(id, AliasInfo::references(observing_stores));
         }
 
