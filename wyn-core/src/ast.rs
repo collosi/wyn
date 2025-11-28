@@ -631,6 +631,8 @@ pub enum ExprKind {
     IntLiteral(i32),
     FloatLiteral(f32),
     BoolLiteral(bool),
+    StringLiteral(String),
+    Unit,
     Identifier(String),
     QualifiedName(Vec<String>, String), // quals, name - e.g., f32.sin is (["f32"], "sin")
     OperatorSection(String),            // e.g., (+), (-), (*) - operator as a value
@@ -822,6 +824,14 @@ pub mod types {
 
     pub fn bool_type() -> Type {
         Type::Constructed(TypeName::Str("bool"), vec![])
+    }
+
+    pub fn string() -> Type {
+        Type::Constructed(TypeName::Str("string"), vec![])
+    }
+
+    pub fn unit() -> Type {
+        Type::Constructed(TypeName::Unit, vec![])
     }
 
     /// All valid SPIR-V scalar element types for vectors and matrices

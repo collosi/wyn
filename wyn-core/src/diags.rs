@@ -313,6 +313,12 @@ impl AstFormatter {
             ExprKind::BoolLiteral(b) => {
                 self.write_line(&b.to_string());
             }
+            ExprKind::StringLiteral(s) => {
+                self.write_line(&format!("{:?}", s));
+            }
+            ExprKind::Unit => {
+                self.write_line("()");
+            }
             ExprKind::Identifier(name) => {
                 self.write_line(name);
             }
@@ -493,6 +499,8 @@ impl AstFormatter {
             ExprKind::IntLiteral(_)
                 | ExprKind::FloatLiteral(_)
                 | ExprKind::BoolLiteral(_)
+                | ExprKind::StringLiteral(_)
+                | ExprKind::Unit
                 | ExprKind::Identifier(_)
                 | ExprKind::QualifiedName(_, _)
                 | ExprKind::TypeHole
@@ -504,6 +512,8 @@ impl AstFormatter {
             ExprKind::IntLiteral(n) => n.to_string(),
             ExprKind::FloatLiteral(f) => format!("{}", f),
             ExprKind::BoolLiteral(b) => b.to_string(),
+            ExprKind::StringLiteral(s) => format!("{:?}", s),
+            ExprKind::Unit => "()".to_string(),
             ExprKind::Identifier(name) => name.clone(),
             ExprKind::OperatorSection(op) => format!("({})", op),
             ExprKind::QualifiedName(quals, name) => {
@@ -693,6 +703,7 @@ impl Display for mir::ExprKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             mir::ExprKind::Literal(lit) => write!(f, "{}", lit),
+            mir::ExprKind::Unit => write!(f, "()"),
             mir::ExprKind::Var(name) => write!(f, "{}", name),
             mir::ExprKind::BinOp { op, lhs, rhs } => {
                 write!(f, "({} {} {})", lhs, op, rhs)

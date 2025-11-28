@@ -367,9 +367,15 @@ impl State {
                 let value = u32_data[data_start + index];
                 let as_i32 = value as i32;
                 let as_f32 = f32::from_bits(value);
+                // Try to decode as 4 ASCII chars
+                let bytes = value.to_le_bytes();
+                let as_str: String = bytes
+                    .iter()
+                    .map(|&b| if b.is_ascii_graphic() || b == b' ' { b as char } else { '.' })
+                    .collect();
                 println!(
-                    "[DEBUG {:5}] raw=0x{:08x} i32={:11} f32={}",
-                    i, value, as_i32, as_f32
+                    "[DEBUG {:5}] raw=0x{:08x} i32={:11} f32={:14} str=\"{}\"",
+                    i, value, as_i32, as_f32, as_str
                 );
             }
 

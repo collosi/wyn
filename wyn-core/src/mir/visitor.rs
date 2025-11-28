@@ -357,6 +357,11 @@ pub fn walk_expr<V: MirVisitor>(v: &mut V, e: Expr) -> Result<Expr, V::Error> {
             };
             v.visit_expr_literal(lit, expr)
         }
+        ExprKind::Unit => Ok(Expr {
+            ty,
+            kind: ExprKind::Unit,
+            span,
+        }),
         ExprKind::Var(ref name) => {
             let expr = Expr {
                 ty,

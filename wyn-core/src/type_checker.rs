@@ -1144,6 +1144,8 @@ impl TypeChecker {
             ExprKind::IntLiteral(_) => Ok(types::i32()),
             ExprKind::FloatLiteral(_) => Ok(types::f32()),
             ExprKind::BoolLiteral(_) => Ok(types::bool_type()),
+            ExprKind::StringLiteral(_) => Ok(types::string()),
+            ExprKind::Unit => Ok(types::unit()),
             ExprKind::OperatorSection(_op) => {
                 // Operator sections like (+), (-), etc. are functions
                 // Their specific type depends on context and will be resolved via unification

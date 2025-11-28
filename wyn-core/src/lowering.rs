@@ -735,6 +735,9 @@ impl<'a> LowerCtx<'a> {
                     }
                 }
             }
+            ExprKind::Unit => {
+                // Unit has no dependencies
+            }
         }
         Ok(())
     }
@@ -1073,6 +1076,11 @@ fn lower_entry_point(
 fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word> {
     match &expr.kind {
         ExprKind::Literal(lit) => lower_literal(constructor, lit),
+
+        ExprKind::Unit => {
+            // Unit is represented as a dummy i32 constant 0
+            Ok(constructor.const_i32(0))
+        }
 
         ExprKind::Var(name) => {
             // First check local environment
@@ -1750,9 +1758,38 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                     }
                                     Intrinsic::DebugStr => {
                                         // Debug intrinsic: write string literal to ring buffer
-                                        // For now, this is a no-op since we don't have string literals in MIR
-                                        // TODO: Implement when string literals are supported
-                                        Ok(constructor.const_i32(0))
+                                        // Pack first 4 bytes of string into a u32
+                                        if let Some((buffer_var, u32_ptr_type)) = constructor.debug_buffer {
+                                            // Extract string from the literal argument
+                                            let str_value = match &args[0].kind {
+                                                ExprKind::Literal(Literal::String(s)) => s.clone(),
+                                                _ => {
+                                                    // Not a string literal, use placeholder
+                                                    "????".to_string()
+                                                }
+                                            };
+
+                                            // Pack first 4 bytes into u32 (pad with spaces if shorter)
+                                            let bytes = str_value.as_bytes();
+                                            let packed: u32 = (bytes.first().copied().unwrap_or(b' ')
+                                                as u32)
+                                                | ((bytes.get(1).copied().unwrap_or(b' ') as u32) << 8)
+                                                | ((bytes.get(2).copied().unwrap_or(b' ') as u32) << 16)
+                                                | ((bytes.get(3).copied().unwrap_or(b' ') as u32) << 24);
+
+                                            let str_const = constructor
+                                                .builder
+                                                .constant_bit32(constructor.u32_type, packed);
+                                            constructor.emit_debug_write_u32(
+                                                buffer_var,
+                                                u32_ptr_type,
+                                                str_const,
+                                            )?;
+                                            Ok(constructor.const_i32(0)) // void return
+                                        } else {
+                                            // Debug not enabled, no-op
+                                            Ok(constructor.const_i32(0))
+                                        }
                                     }
                                 }
                             }
@@ -1866,9 +1903,23 @@ fn lower_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::
             Ok(constructor.const_f32(value))
         }
         Literal::Bool(b) => Ok(constructor.const_bool(*b)),
-        Literal::String(_) => Err(CompilerError::SpirvError(
-            "String literals not supported in SPIR-V".to_string(),
-        )),
+        Literal::String(s) => {
+            // Lower string to a zero-terminated array of u8 values
+            let u8_type = constructor.builder.type_int(8, 0); // unsigned 8-bit
+            let bytes: Vec<u8> = s.bytes().chain(std::iter::once(0u8)).collect();
+            let len = bytes.len();
+
+            // Create constants for each byte
+            let byte_ids: Vec<spirv::Word> =
+                bytes.iter().map(|&b| constructor.builder.constant_bit32(u8_type, b as u32)).collect();
+
+            // Create array type [N]u8
+            let len_const = constructor.builder.constant_bit32(constructor.i32_type, len as u32);
+            let array_type = constructor.builder.type_array(u8_type, len_const);
+
+            // Construct the composite array
+            Ok(constructor.builder.composite_construct(array_type, None, byte_ids)?)
+        }
         Literal::Tuple(elems) => {
             // Check if this is a closure tuple (has __lambda_name at last index)
             // Closures have a string literal at the end which can't be lowered to SPIR-V

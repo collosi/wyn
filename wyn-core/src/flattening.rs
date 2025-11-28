@@ -462,6 +462,11 @@ impl Flattener {
                 StaticValue::Dyn,
             ),
             ExprKind::BoolLiteral(b) => (mir::ExprKind::Literal(mir::Literal::Bool(*b)), StaticValue::Dyn),
+            ExprKind::StringLiteral(s) => (
+                mir::ExprKind::Literal(mir::Literal::String(s.clone())),
+                StaticValue::Dyn,
+            ),
+            ExprKind::Unit => (mir::ExprKind::Unit, StaticValue::Dyn),
             ExprKind::Identifier(name) => {
                 // Look up static value for this variable
                 let sv = self.static_values.lookup(name).ok().cloned().unwrap_or(StaticValue::Dyn);
@@ -1369,6 +1374,8 @@ impl Flattener {
             ExprKind::IntLiteral(_)
             | ExprKind::FloatLiteral(_)
             | ExprKind::BoolLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::Unit
             | ExprKind::OperatorSection(_)
             | ExprKind::TypeHole => {}
             ExprKind::QualifiedName(_, _) => {}
@@ -1498,6 +1505,8 @@ impl Flattener {
             | ExprKind::IntLiteral(_)
             | ExprKind::FloatLiteral(_)
             | ExprKind::BoolLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::Unit
             | ExprKind::OperatorSection(_)
             | ExprKind::TypeHole
             | ExprKind::QualifiedName(_, _) => {

@@ -351,6 +351,7 @@ impl Monomorphizer {
                 }
                 expr.kind
             }
+            ExprKind::Unit => ExprKind::Unit,
         };
 
         Ok(Expr {

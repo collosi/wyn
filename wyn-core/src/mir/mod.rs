@@ -105,6 +105,9 @@ pub enum ExprKind {
     /// A literal value.
     Literal(Literal),
 
+    /// Unit value ().
+    Unit,
+
     /// A variable reference by name.
     Var(String),
 

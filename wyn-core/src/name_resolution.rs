@@ -177,6 +177,8 @@ impl NameResolver {
             ExprKind::IntLiteral(_)
             | ExprKind::FloatLiteral(_)
             | ExprKind::BoolLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::Unit
             | ExprKind::Identifier(_)
             | ExprKind::OperatorSection(_)
             | ExprKind::QualifiedName(_, _)

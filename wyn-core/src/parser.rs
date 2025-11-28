@@ -1138,6 +1138,7 @@ impl Parser {
             self.peek(),
             Some(Token::IntLiteral(_)) |
             Some(Token::FloatLiteral(_)) |
+            Some(Token::StringLiteral(_)) |
             Some(Token::True) |
             Some(Token::False) |
             Some(Token::Identifier(_)) |
@@ -1256,6 +1257,12 @@ impl Parser {
                 self.advance();
                 Ok(self.node_counter.mk_node(ExprKind::BoolLiteral(false), span))
             }
+            Some(Token::StringLiteral(s)) => {
+                let s = s.clone();
+                let span = self.current_span();
+                self.advance();
+                Ok(self.node_counter.mk_node(ExprKind::StringLiteral(s), span))
+            }
             Some(Token::Identifier(name)) => {
                 let name = name.clone();
                 let span = self.current_span();
@@ -1267,12 +1274,12 @@ impl Parser {
                 let start_span = self.current_span();
                 self.advance(); // consume '('
 
-                // Check for empty tuple
+                // Check for unit ()
                 if self.check(&Token::RightParen) {
                     self.advance();
                     let end_span = self.previous_span();
                     let span = start_span.merge(&end_span);
-                    return Ok(self.node_counter.mk_node(ExprKind::Tuple(vec![]), span));
+                    return Ok(self.node_counter.mk_node(ExprKind::Unit, span));
                 }
 
                 // Check for operator section: (+), (-), (*), etc.

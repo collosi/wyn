@@ -1,8 +1,12 @@
 -- Test shader that uses debug intrinsics
 
 #[vertex] def vertex_main(#[builtin(vertex_index)] vertex_index: i32): (#[builtin(position)] vec4f32, #[location(0)] vec3f32) =
-  -- Debug output the vertex index
-  let _ = debug_i32 vertex_index in
+  -- Only debug output for first 3 vertices
+  let _ = if vertex_index < 3 then
+      let _ = debug_str "vtx:" in
+      debug_i32 vertex_index
+    else
+      () in
   let position: vec4f32 = if vertex_index == 0 then
       vec4 -0.5f32 -0.5f32 0.0f32 1.0f32
     else if vertex_index == 1 then
