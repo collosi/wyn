@@ -105,15 +105,19 @@ impl State {
             spirv_passthrough_supported
         );
 
+        // Build required features
+        let mut required_features = wgpu::Features::empty();
+        if spirv_passthrough_supported {
+            required_features |= wgpu::Features::SPIRV_SHADER_PASSTHROUGH;
+        }
+        // Need writable storage from vertex shader for debug buffer
+        required_features |= wgpu::Features::VERTEX_WRITABLE_STORAGE;
+
         // v26: request_device takes a single descriptor; trace is in the descriptor
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor {
                 label: None,
-                required_features: if spirv_passthrough_supported {
-                    wgpu::Features::SPIRV_SHADER_PASSTHROUGH
-                } else {
-                    wgpu::Features::empty()
-                },
+                required_features,
                 required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
                 memory_hints: wgpu::MemoryHints::Performance,
                 trace: Trace::Off,
