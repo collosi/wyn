@@ -647,7 +647,6 @@ pub enum ExprKind {
     Pipe(Box<Expression>, Box<Expression>),   // |> pipe operator
     TypeAscription(Box<Expression>, Type),    // exp : type
     TypeCoercion(Box<Expression>, Type),      // exp :> type
-    Unsafe(Box<Expression>),                  // unsafe exp
     Assert(Box<Expression>, Box<Expression>), // assert cond exp
     TypeHole,                                 // ??? - placeholder for any expression
 }

@@ -57,7 +57,6 @@ pub enum Token {
     Type,
     Include,
     With,
-    Unsafe,
     Assert,
 
     // Identifiers and literals
@@ -133,7 +132,6 @@ fn parse_keyword(input: &str) -> IResult<&str, Token> {
             keyword("module", Token::Module),
             keyword("import", Token::Import),
             keyword("include", Token::Include),
-            keyword("unsafe", Token::Unsafe),
             keyword("assert", Token::Assert),
             keyword("match", Token::Match),
             keyword("case", Token::Case),
@@ -616,7 +614,7 @@ mod tests {
 
     #[test]
     fn test_new_keywords() {
-        let input = "loop for while do match case unsafe assert";
+        let input = "loop for while do match case assert";
         let tokens = tokens_only(input);
         assert_eq!(
             tokens,
@@ -627,7 +625,6 @@ mod tests {
                 Token::Do,
                 Token::Match,
                 Token::Case,
-                Token::Unsafe,
                 Token::Assert,
             ]
         );

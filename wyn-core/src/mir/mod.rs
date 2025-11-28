@@ -76,12 +76,13 @@ pub struct Param {
 }
 
 /// An attribute that can be attached to functions or expressions.
-#[derive(Debug, Clone)]
-pub struct Attribute {
-    /// Attribute name (e.g., "entry", "trace", "unsafe", "unroll").
-    pub name: String,
-    /// Optional attribute arguments.
-    pub args: Vec<String>,
+#[derive(Debug, Clone, PartialEq)]
+pub enum Attribute {
+    BuiltIn(spirv::BuiltIn),
+    Location(u32),
+    Vertex,
+    Fragment,
+    Uniform,
 }
 
 /// The main expression type with source location and type.

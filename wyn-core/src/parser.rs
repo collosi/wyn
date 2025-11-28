@@ -1316,7 +1316,6 @@ impl Parser {
             Some(Token::If) => self.parse_if_then_else(),
             Some(Token::Loop) => self.parse_loop(),
             Some(Token::Match) => self.parse_match(),
-            Some(Token::Unsafe) => self.parse_unsafe(),
             Some(Token::Assert) => self.parse_assert(),
             _ => {
                 let span = self.current_span();
@@ -1614,15 +1613,6 @@ impl Parser {
 
         let span = start_span.merge(&last_span);
         Ok(self.node_counter.mk_node(ExprKind::Match(MatchExpr { scrutinee, cases }), span))
-    }
-
-    fn parse_unsafe(&mut self) -> Result<Expression> {
-        trace!("parse_unsafe: next token = {:?}", self.peek());
-        let start_span = self.current_span();
-        self.expect(Token::Unsafe)?;
-        let expr = Box::new(self.parse_expression()?);
-        let span = start_span.merge(&expr.h.span);
-        Ok(self.node_counter.mk_node(ExprKind::Unsafe(expr), span))
     }
 
     fn parse_assert(&mut self) -> Result<Expression> {

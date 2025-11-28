@@ -383,7 +383,6 @@ pub fn walk_expression<V: Visitor>(v: &mut V, e: &Expression) -> ControlFlow<V::
         }
         ExprKind::TypeAscription(expr, _) => v.visit_expression(expr),
         ExprKind::TypeCoercion(expr, _) => v.visit_expression(expr),
-        ExprKind::Unsafe(expr) => v.visit_expression(expr),
         ExprKind::Assert(cond, expr) => {
             v.visit_expression(cond)?;
             v.visit_expression(expr)

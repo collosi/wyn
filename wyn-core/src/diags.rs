@@ -470,12 +470,6 @@ impl AstFormatter {
                 let inner_str = self.format_simple_expr(inner);
                 self.write_line(&format!("{} :> {}", inner_str, ty));
             }
-            ExprKind::Unsafe(inner) => {
-                self.write_line("unsafe");
-                self.indent += 1;
-                self.write_expression(inner);
-                self.indent -= 1;
-            }
             ExprKind::Assert(cond, body) => {
                 let cond_str = self.format_simple_expr(cond);
                 self.write_line(&format!("assert {}", cond_str));
@@ -675,18 +669,13 @@ impl Display for mir::Param {
 
 impl Display for mir::Attribute {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "#[{}", self.name)?;
-        if !self.args.is_empty() {
-            write!(f, "(")?;
-            for (i, arg) in self.args.iter().enumerate() {
-                if i > 0 {
-                    write!(f, ", ")?;
-                }
-                write!(f, "{}", arg)?;
-            }
-            write!(f, ")")?;
+        match self {
+            mir::Attribute::BuiltIn(builtin) => write!(f, "#[builtin({:?})]", builtin),
+            mir::Attribute::Location(loc) => write!(f, "#[location({})]", loc),
+            mir::Attribute::Vertex => write!(f, "#[vertex]"),
+            mir::Attribute::Fragment => write!(f, "#[fragment]"),
+            mir::Attribute::Uniform => write!(f, "#[uniform]"),
         }
-        write!(f, "]")
     }
 }
 

@@ -1870,10 +1870,6 @@ impl TypeChecker {
                 todo!("TypeCoercion not yet implemented in type checker")
             }
 
-            ExprKind::Unsafe(_) => {
-                todo!("Unsafe not yet implemented in type checker")
-            }
-
             ExprKind::Assert(_, _) => {
                 todo!("Assert not yet implemented in type checker")
             }

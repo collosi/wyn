@@ -465,9 +465,11 @@ impl<'a> LowerCtx<'a> {
                 Def::Function { name, attributes, .. } => {
                     // Collect entry points
                     for attr in attributes {
-                        match attr.name.as_str() {
-                            "vertex" => entry_points.push((name.clone(), spirv::ExecutionModel::Vertex)),
-                            "fragment" => {
+                        match attr {
+                            mir::Attribute::Vertex => {
+                                entry_points.push((name.clone(), spirv::ExecutionModel::Vertex))
+                            }
+                            mir::Attribute::Fragment => {
                                 entry_points.push((name.clone(), spirv::ExecutionModel::Fragment))
                             }
                             _ => {}
@@ -531,7 +533,9 @@ impl<'a> LowerCtx<'a> {
                 self.ensure_deps_lowered(body)?;
 
                 // Check if this is an entry point
-                let is_entry = attributes.iter().any(|a| a.name == "vertex" || a.name == "fragment");
+                let is_entry = attributes
+                    .iter()
+                    .any(|a| matches!(a, mir::Attribute::Vertex | mir::Attribute::Fragment));
 
                 if is_entry {
                     lower_entry_point(
@@ -731,28 +735,20 @@ fn lower_entry_point(
         // Add decorations from attributes
         if i < param_attributes.len() {
             for attr in &param_attributes[i] {
-                match attr.name.as_str() {
-                    "location" => {
-                        if let Some(loc_str) = attr.args.first() {
-                            if let Ok(loc) = loc_str.parse::<u32>() {
-                                constructor.builder.decorate(
-                                    var_id,
-                                    spirv::Decoration::Location,
-                                    [rspirv::dr::Operand::LiteralBit32(loc)],
-                                );
-                            }
-                        }
+                match attr {
+                    mir::Attribute::Location(loc) => {
+                        constructor.builder.decorate(
+                            var_id,
+                            spirv::Decoration::Location,
+                            [rspirv::dr::Operand::LiteralBit32(*loc)],
+                        );
                     }
-                    "builtin" => {
-                        if let Some(builtin_str) = attr.args.first() {
-                            if let Some(builtin) = parse_builtin(builtin_str) {
-                                constructor.builder.decorate(
-                                    var_id,
-                                    spirv::Decoration::BuiltIn,
-                                    [rspirv::dr::Operand::BuiltIn(builtin)],
-                                );
-                            }
-                        }
+                    mir::Attribute::BuiltIn(builtin) => {
+                        constructor.builder.decorate(
+                            var_id,
+                            spirv::Decoration::BuiltIn,
+                            [rspirv::dr::Operand::BuiltIn(*builtin)],
+                        );
                     }
                     _ => {}
                 }
@@ -783,28 +779,20 @@ fn lower_entry_point(
                     // Add decorations
                     if i < return_attributes.len() {
                         for attr in &return_attributes[i] {
-                            match attr.name.as_str() {
-                                "location" => {
-                                    if let Some(loc_str) = attr.args.first() {
-                                        if let Ok(loc) = loc_str.parse::<u32>() {
-                                            constructor.builder.decorate(
-                                                var_id,
-                                                spirv::Decoration::Location,
-                                                [rspirv::dr::Operand::LiteralBit32(loc)],
-                                            );
-                                        }
-                                    }
+                            match attr {
+                                mir::Attribute::Location(loc) => {
+                                    constructor.builder.decorate(
+                                        var_id,
+                                        spirv::Decoration::Location,
+                                        [rspirv::dr::Operand::LiteralBit32(*loc)],
+                                    );
                                 }
-                                "builtin" => {
-                                    if let Some(builtin_str) = attr.args.first() {
-                                        if let Some(builtin) = parse_builtin(builtin_str) {
-                                            constructor.builder.decorate(
-                                                var_id,
-                                                spirv::Decoration::BuiltIn,
-                                                [rspirv::dr::Operand::BuiltIn(builtin)],
-                                            );
-                                        }
-                                    }
+                                mir::Attribute::BuiltIn(builtin) => {
+                                    constructor.builder.decorate(
+                                        var_id,
+                                        spirv::Decoration::BuiltIn,
+                                        [rspirv::dr::Operand::BuiltIn(*builtin)],
+                                    );
                                 }
                                 _ => {}
                             }
@@ -822,28 +810,20 @@ fn lower_entry_point(
                 // Add decorations from first return attribute set
                 if let Some(attrs) = return_attributes.first() {
                     for attr in attrs {
-                        match attr.name.as_str() {
-                            "location" => {
-                                if let Some(loc_str) = attr.args.first() {
-                                    if let Ok(loc) = loc_str.parse::<u32>() {
-                                        constructor.builder.decorate(
-                                            var_id,
-                                            spirv::Decoration::Location,
-                                            [rspirv::dr::Operand::LiteralBit32(loc)],
-                                        );
-                                    }
-                                }
+                        match attr {
+                            mir::Attribute::Location(loc) => {
+                                constructor.builder.decorate(
+                                    var_id,
+                                    spirv::Decoration::Location,
+                                    [rspirv::dr::Operand::LiteralBit32(*loc)],
+                                );
                             }
-                            "builtin" => {
-                                if let Some(builtin_str) = attr.args.first() {
-                                    if let Some(builtin) = parse_builtin(builtin_str) {
-                                        constructor.builder.decorate(
-                                            var_id,
-                                            spirv::Decoration::BuiltIn,
-                                            [rspirv::dr::Operand::BuiltIn(builtin)],
-                                        );
-                                    }
-                                }
+                            mir::Attribute::BuiltIn(builtin) => {
+                                constructor.builder.decorate(
+                                    var_id,
+                                    spirv::Decoration::BuiltIn,
+                                    [rspirv::dr::Operand::BuiltIn(*builtin)],
+                                );
                             }
                             _ => {}
                         }
@@ -860,28 +840,20 @@ fn lower_entry_point(
 
             if let Some(attrs) = return_attributes.first() {
                 for attr in attrs {
-                    match attr.name.as_str() {
-                        "location" => {
-                            if let Some(loc_str) = attr.args.first() {
-                                if let Ok(loc) = loc_str.parse::<u32>() {
-                                    constructor.builder.decorate(
-                                        var_id,
-                                        spirv::Decoration::Location,
-                                        [rspirv::dr::Operand::LiteralBit32(loc)],
-                                    );
-                                }
-                            }
+                    match attr {
+                        mir::Attribute::Location(loc) => {
+                            constructor.builder.decorate(
+                                var_id,
+                                spirv::Decoration::Location,
+                                [rspirv::dr::Operand::LiteralBit32(*loc)],
+                            );
                         }
-                        "builtin" => {
-                            if let Some(builtin_str) = attr.args.first() {
-                                if let Some(builtin) = parse_builtin(builtin_str) {
-                                    constructor.builder.decorate(
-                                        var_id,
-                                        spirv::Decoration::BuiltIn,
-                                        [rspirv::dr::Operand::BuiltIn(builtin)],
-                                    );
-                                }
-                            }
+                        mir::Attribute::BuiltIn(builtin) => {
+                            constructor.builder.decorate(
+                                var_id,
+                                spirv::Decoration::BuiltIn,
+                                [rspirv::dr::Operand::BuiltIn(*builtin)],
+                            );
                         }
                         _ => {}
                     }
@@ -985,21 +957,6 @@ fn lower_entry_point(
     constructor.env.clear();
 
     Ok(())
-}
-
-/// Parse a builtin string like "Position" into a SPIR-V BuiltIn
-fn parse_builtin(s: &str) -> Option<spirv::BuiltIn> {
-    match s {
-        "Position" => Some(spirv::BuiltIn::Position),
-        "VertexIndex" => Some(spirv::BuiltIn::VertexIndex),
-        "InstanceIndex" => Some(spirv::BuiltIn::InstanceIndex),
-        "FragCoord" => Some(spirv::BuiltIn::FragCoord),
-        "PointSize" => Some(spirv::BuiltIn::PointSize),
-        "ClipDistance" => Some(spirv::BuiltIn::ClipDistance),
-        "CullDistance" => Some(spirv::BuiltIn::CullDistance),
-        "FragDepth" => Some(spirv::BuiltIn::FragDepth),
-        _ => None,
-    }
 }
 
 fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word> {

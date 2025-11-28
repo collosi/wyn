@@ -331,10 +331,10 @@ impl Flattener {
                     let param_attrs = self.extract_param_attributes(&e.params);
                     let (body, _) = self.flatten_expr(&e.body)?;
                     let ret_type = self.get_expr_type(&e.body);
-                    let entry_kind = if e.entry_type.is_vertex() { "vertex" } else { "fragment" };
-                    let attrs = vec![mir::Attribute {
-                        name: entry_kind.to_string(),
-                        args: vec![],
+                    let attrs = vec![if e.entry_type.is_vertex() {
+                        mir::Attribute::Vertex
+                    } else {
+                        mir::Attribute::Fragment
                     }];
 
                     // Extract return attributes from EntryDecl
@@ -394,26 +394,11 @@ impl Flattener {
     /// Convert a single AST attribute to MIR attribute
     fn convert_attribute(&self, attr: &ast::Attribute) -> mir::Attribute {
         match attr {
-            ast::Attribute::BuiltIn(builtin) => mir::Attribute {
-                name: "builtin".to_string(),
-                args: vec![format!("{:?}", builtin)],
-            },
-            ast::Attribute::Location(loc) => mir::Attribute {
-                name: "location".to_string(),
-                args: vec![loc.to_string()],
-            },
-            ast::Attribute::Vertex => mir::Attribute {
-                name: "vertex".to_string(),
-                args: vec![],
-            },
-            ast::Attribute::Fragment => mir::Attribute {
-                name: "fragment".to_string(),
-                args: vec![],
-            },
-            ast::Attribute::Uniform => mir::Attribute {
-                name: "uniform".to_string(),
-                args: vec![],
-            },
+            ast::Attribute::BuiltIn(builtin) => mir::Attribute::BuiltIn(*builtin),
+            ast::Attribute::Location(loc) => mir::Attribute::Location(*loc),
+            ast::Attribute::Vertex => mir::Attribute::Vertex,
+            ast::Attribute::Fragment => mir::Attribute::Fragment,
+            ast::Attribute::Uniform => mir::Attribute::Uniform,
         }
     }
 
@@ -763,19 +748,6 @@ impl Flattener {
             ExprKind::TypeAscription(inner, _) | ExprKind::TypeCoercion(inner, _) => {
                 // Type annotations don't affect runtime, just flatten inner
                 return self.flatten_expr(inner);
-            }
-            ExprKind::Unsafe(inner) => {
-                let (inner, _) = self.flatten_expr(inner)?;
-                (
-                    mir::ExprKind::Attributed {
-                        attributes: vec![mir::Attribute {
-                            name: "unsafe".to_string(),
-                            args: vec![],
-                        }],
-                        expr: Box::new(inner),
-                    },
-                    StaticValue::Dyn,
-                )
             }
             ExprKind::Assert(cond, body) => {
                 let (cond, _) = self.flatten_expr(cond)?;
@@ -1481,9 +1453,7 @@ impl Flattener {
                 self.collect_free_vars(lhs, bound, free);
                 self.collect_free_vars(rhs, bound, free);
             }
-            ExprKind::TypeAscription(inner, _)
-            | ExprKind::TypeCoercion(inner, _)
-            | ExprKind::Unsafe(inner) => {
+            ExprKind::TypeAscription(inner, _) | ExprKind::TypeCoercion(inner, _) => {
                 self.collect_free_vars(inner, bound, free);
             }
             ExprKind::Assert(cond, body) => {

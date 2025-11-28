@@ -159,7 +159,7 @@ impl NameResolver {
                 self.resolve_expr(lhs)?;
                 self.resolve_expr(rhs)?;
             }
-            ExprKind::TypeAscription(e, _) | ExprKind::TypeCoercion(e, _) | ExprKind::Unsafe(e) => {
+            ExprKind::TypeAscription(e, _) | ExprKind::TypeCoercion(e, _) => {
                 self.resolve_expr(e)?;
             }
             ExprKind::Assert(cond, body) => {

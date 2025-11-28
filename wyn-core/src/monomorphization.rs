@@ -14,7 +14,7 @@
 use crate::ast::{Type, TypeName};
 use crate::error::Result;
 use crate::mir::visitor::MirVisitor;
-use crate::mir::{Def, Expr, ExprKind, Param, Program};
+use crate::mir::{Attribute, Def, Expr, ExprKind, Param, Program};
 use polytype::Type as PolyType;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -144,7 +144,7 @@ impl Monomorphizer {
             // Check if this is an entry point
             if let Def::Function { attributes, .. } = &def {
                 for attr in attributes {
-                    if attr.name == "vertex" || attr.name == "fragment" {
+                    if matches!(attr, Attribute::Vertex | Attribute::Fragment) {
                         entry_points.push(WorkItem {
                             name: name.clone(),
                             def: def.clone(),

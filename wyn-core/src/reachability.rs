@@ -5,7 +5,7 @@
 //! This allows the lowerer to skip unused library functions.
 
 use crate::mir::visitor::MirVisitor;
-use crate::mir::{Def, Expr, ExprKind, Literal, Program};
+use crate::mir::{Attribute, Def, Expr, ExprKind, Literal, Program};
 use std::collections::{HashSet, VecDeque};
 
 /// Find all functions reachable from entry points
@@ -15,7 +15,7 @@ pub fn reachable_functions(program: &Program) -> HashSet<String> {
     for def in &program.defs {
         if let Def::Function { name, attributes, .. } = def {
             for attr in attributes {
-                if attr.name == "vertex" || attr.name == "fragment" {
+                if matches!(attr, Attribute::Vertex | Attribute::Fragment) {
                     entry_points.push(name.clone());
                     break;
                 }
