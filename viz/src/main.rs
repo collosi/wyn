@@ -346,7 +346,7 @@ impl State {
         });
 
         // Wait for the GPU to finish
-        self.device.poll(wgpu::Maintain::Wait);
+        self.device.poll(wgpu::PollType::Wait);
 
         if rx.recv().unwrap().is_ok() {
             let data = buffer_slice.get_mapped_range();
@@ -355,6 +355,18 @@ impl State {
             // Buffer layout: [write_head, read_head, data[4094]]
             let write_head = u32_data[0] as usize;
             let read_head = u32_data[1] as usize;
+
+            // Debug: print heads on first few frames
+            static FRAME_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let frame = FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if frame < 5 {
+                eprintln!("[viz debug] frame={} write_head={} read_head={}", frame, write_head, read_head);
+            }
+
+            // Always print at least once on first frame
+            if frame == 0 {
+                eprintln!("[viz debug] first frame - checking for debug data...");
+            }
 
             if write_head != read_head {
                 // Print new debug values
