@@ -154,8 +154,14 @@ impl State {
             mapped_at_creation: false,
         });
 
-        // Initialize debug buffer to zeros (write_head=0, read_head=0, data=zeros)
-        queue.write_buffer(&debug_buffer, 0, &[0u8; DEBUG_BUFFER_SIZE as usize]);
+        // Initialize debug buffer with test pattern to verify copy pipeline works
+        // write_head=42, read_head=0, data[0]=0xDEADBEEF
+        let mut init_data = vec![0u8; DEBUG_BUFFER_SIZE as usize];
+        init_data[0..4].copy_from_slice(&42u32.to_le_bytes()); // write_head = 42
+        init_data[4..8].copy_from_slice(&0u32.to_le_bytes());  // read_head = 0
+        init_data[8..12].copy_from_slice(&0xDEADBEEFu32.to_le_bytes()); // data[0] = sentinel
+        queue.write_buffer(&debug_buffer, 0, &init_data);
+        eprintln!("[viz init] Wrote test pattern: write_head=42, data[0]=0xDEADBEEF");
 
         let debug_staging_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("debug_staging_buffer"),
@@ -360,16 +366,15 @@ impl State {
             let write_head = u32_data[0] as usize;
             let read_head = u32_data[1] as usize;
 
-            // Debug: print heads on first few frames
+            // Debug: print heads and data[0] on first few frames
             static FRAME_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
             let frame = FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let data_0 = u32_data[2]; // data[0] is at index 2 (after write_head, read_head)
             if frame < 5 {
-                eprintln!("[viz debug] frame={} write_head={} read_head={}", frame, write_head, read_head);
-            }
-
-            // Always print at least once on first frame
-            if frame == 0 {
-                eprintln!("[viz debug] first frame - checking for debug data...");
+                eprintln!(
+                    "[viz debug] frame={} write_head={} read_head={} data[0]=0x{:08x}",
+                    frame, write_head, read_head, data_0
+                );
             }
 
             if write_head != read_head {
