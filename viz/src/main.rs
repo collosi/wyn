@@ -11,10 +11,10 @@ use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
     BindingResource, BindingType, BufferBindingType, BufferDescriptor, BufferUsages, Color,
     ColorTargetState, CommandEncoderDescriptor, DeviceDescriptor, FragmentState, Instance,
-    InstanceDescriptor, LoadOp, MultisampleState, Operations, PipelineLayoutDescriptor,
-    PowerPreference, PresentMode, PrimitiveState, RenderPipeline, RequestAdapterOptions,
-    ShaderModuleDescriptor, ShaderModuleDescriptorPassthrough, ShaderStages, StoreOp,
-    SurfaceConfiguration, TextureUsages, Trace, VertexState,
+    InstanceDescriptor, LoadOp, MultisampleState, Operations, PipelineLayoutDescriptor, PowerPreference,
+    PresentMode, PrimitiveState, RenderPipeline, RequestAdapterOptions, ShaderModuleDescriptor,
+    ShaderModuleDescriptorPassthrough, ShaderStages, StoreOp, SurfaceConfiguration, TextureUsages, Trace,
+    VertexState,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -303,10 +303,6 @@ impl State {
                 }
 
                 self.queue.submit(Some(encoder.finish()));
-
-                // Read back debug buffer and print any debug output
-                self.read_debug_buffer();
-
                 frame.present();
             }
             Err(e @ wgpu::SurfaceError::Lost) | Err(e @ wgpu::SurfaceError::Outdated) => {
@@ -332,13 +328,9 @@ impl State {
         }
     }
 
-    /// Read the debug buffer and print any new debug output
-    fn read_debug_buffer(&mut self) {
+    /// Read and print all debug output from the buffer (call on exit)
+    fn print_debug_output(&mut self) {
         let staging_buffer = match &self.debug_staging_buffer {
-            Some(b) => b,
-            None => return,
-        };
-        let debug_buffer = match &self.debug_buffer {
             Some(b) => b,
             None => return,
         };
@@ -350,7 +342,7 @@ impl State {
         });
 
         // Wait for the GPU to finish
-        self.device.poll(wgpu::PollType::Wait);
+        let _ = self.device.poll(wgpu::PollType::Wait);
 
         if rx.recv().unwrap().is_ok() {
             let data = buffer_slice.get_mapped_range();
@@ -358,47 +350,31 @@ impl State {
 
             // Buffer layout: [write_head, read_head, data[4094]]
             let write_head = u32_data[0] as usize;
-            let read_head = u32_data[1] as usize;
+            let data_start = 2;
+            let data_len = 4094;
 
-            // Debug: print heads on first few frames
-            static FRAME_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-            let frame = FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if frame < 5 {
-                eprintln!("[viz debug] frame={} write_head={} read_head={}", frame, write_head, read_head);
+            if write_head == 0 {
+                eprintln!("[DEBUG] No debug output recorded");
+                return;
             }
 
-            // Always print at least once on first frame
-            if frame == 0 {
-                eprintln!("[viz debug] first frame - checking for debug data...");
+            eprintln!("[DEBUG] {} values recorded:", write_head);
+
+            // Print all values from the ring buffer (from 0 to write_head, wrapping)
+            let count = write_head.min(data_len); // Don't print more than buffer size
+            for i in 0..count {
+                let index = i % data_len;
+                let value = u32_data[data_start + index];
+                let as_i32 = value as i32;
+                let as_f32 = f32::from_bits(value);
+                println!(
+                    "[DEBUG {:5}] raw=0x{:08x} i32={:11} f32={}",
+                    i, value, as_i32, as_f32
+                );
             }
 
-            if write_head != read_head {
-                // Print new debug values
-                let data_start = 2; // Skip write_head and read_head
-                let data_len = 4094;
-
-                let mut current = read_head;
-                while current != write_head {
-                    let index = current % data_len;
-                    let value = u32_data[data_start + index];
-                    // Print as both i32 and f32 (user can interpret)
-                    let as_i32 = value as i32;
-                    let as_f32 = f32::from_bits(value);
-                    println!("[DEBUG] raw=0x{:08x} i32={} f32={}", value, as_i32, as_f32);
-                    current += 1;
-                }
-
-                // Update read_head to match write_head
-                drop(data);
-                staging_buffer.unmap();
-
-                // Write updated read_head back to the debug buffer
-                let new_read_head = write_head as u32;
-                self.queue.write_buffer(debug_buffer, 4, bytemuck::bytes_of(&new_read_head));
-            } else {
-                drop(data);
-                staging_buffer.unmap();
-            }
+            drop(data);
+            staging_buffer.unmap();
         }
     }
 }
@@ -497,7 +473,10 @@ impl ApplicationHandler for App {
         if let Some(state) = &mut self.state {
             if state.window.id() == window_id {
                 match event {
-                    WindowEvent::CloseRequested => std::process::exit(0),
+                    WindowEvent::CloseRequested => {
+                        state.print_debug_output();
+                        std::process::exit(0);
+                    }
                     WindowEvent::Resized(size) => state.resize(size),
                     WindowEvent::RedrawRequested => state.render(),
                     WindowEvent::ScaleFactorChanged {

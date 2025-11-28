@@ -13,6 +13,4 @@
   (position, color)
 
 #[fragment] def fragment_main(#[location(0)] color: vec3f32): #[location(0)] vec4f32 =
-  -- Debug output a float value
-  let _ = debug_f32 color.x in
   vec4 color.x color.y color.z 1.0f32
