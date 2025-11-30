@@ -12,9 +12,8 @@ use wgpu::{
     BindingResource, BindingType, BufferBindingType, BufferDescriptor, BufferUsages, Color,
     ColorTargetState, CommandEncoderDescriptor, DeviceDescriptor, FragmentState, Instance,
     InstanceDescriptor, LoadOp, MultisampleState, Operations, PipelineLayoutDescriptor, PowerPreference,
-    PresentMode, PrimitiveState, RenderPipeline, RequestAdapterOptions, ShaderModuleDescriptor,
-    ShaderModuleDescriptorPassthrough, ShaderStages, StoreOp, SurfaceConfiguration, TextureUsages, Trace,
-    VertexState,
+    PresentMode, PrimitiveState, RenderPipeline, RequestAdapterOptions, ShaderModuleDescriptorPassthrough,
+    ShaderStages, StoreOp, SurfaceConfiguration, TextureUsages, Trace, VertexState,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -350,34 +349,41 @@ impl State {
 
             // Buffer layout: [write_head, read_head, data[4094]]
             let write_head = u32_data[0] as usize;
+            let _read_head = u32_data[1] as usize;
             let data_start = 2;
             let data_len = 4094;
 
             if write_head == 0 {
-                eprintln!("[DEBUG] No debug output recorded");
+                eprintln!("[DEBUG] No output");
                 return;
             }
 
-            eprintln!("[DEBUG] {} values recorded:", write_head);
+            eprintln!("\n=== Debug Output ({} values) ===", write_head);
 
-            // Print all values from the ring buffer (from 0 to write_head, wrapping)
-            let count = write_head.min(data_len); // Don't print more than buffer size
-            for i in 0..count {
-                let index = i % data_len;
-                let value = u32_data[data_start + index];
-                let as_i32 = value as i32;
-                let as_f32 = f32::from_bits(value);
-                // Try to decode as 4 ASCII chars
-                let bytes = value.to_le_bytes();
-                let as_str: String = bytes
-                    .iter()
-                    .map(|&b| if b.is_ascii_graphic() || b == b' ' { b as char } else { '.' })
-                    .collect();
-                println!(
-                    "[DEBUG {:5}] raw=0x{:08x} i32={:11} f32={:14} str=\"{}\"",
-                    i, value, as_i32, as_f32, as_str
-                );
+            // Extract data portion (skip write_head and read_head)
+            let data_slice = &u32_data[data_start..data_start + data_len];
+            let mut decoder = gdp::GdpDecoder::new(data_slice);
+
+            // Decode and print values
+            let mut count = 0;
+            while !decoder.is_empty() && count < write_head.min(data_len) {
+                match decoder.decode_value() {
+                    Ok(value) => {
+                        match value {
+                            gdp::GdpValue::String(s) => eprintln!("{}", s),
+                            gdp::GdpValue::Int(i) => eprintln!("{}", i),
+                            gdp::GdpValue::UInt(u) => eprintln!("{}", u),
+                            gdp::GdpValue::Bool(b) => eprintln!("{}", b),
+                        }
+                        count += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("Decode error: {}", e);
+                        break;
+                    }
+                }
             }
+            eprintln!("=================================\n");
 
             drop(data);
             staging_buffer.unmap();

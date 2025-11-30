@@ -380,4 +380,29 @@ def fragment_main (#[builtin(frag_coord)] pos:vec4f32) : #[location(0)] vec4f32 
   let width = 800.0f32 in
   let height = 600.0f32 in
   let time = 1.0f32 in
-  main_image [width, height] time (vec2 pos.x pos.y)
+  -- Debug output for center pixel only
+  let is_center = if pos.x > 399.0f32 then
+      if pos.x < 401.0f32 then
+        if pos.y > 299.0f32 then
+          if pos.y < 301.0f32 then true else false
+        else false
+      else false
+    else false in
+  let _ = if is_center then
+      let _ = debug_str "frag:" in
+      let _ = debug_f32 pos.x in
+      let _ = debug_f32 pos.y in
+      ()
+    else
+      () in
+  let result = main_image [width, height] time (vec2 pos.x pos.y) in
+  -- Debug the final color for center pixel
+  let _ = if is_center then
+      let _ = debug_str "col:" in
+      let _ = debug_f32 result.x in
+      let _ = debug_f32 result.y in
+      let _ = debug_f32 result.z in
+      ()
+    else
+      () in
+  result
