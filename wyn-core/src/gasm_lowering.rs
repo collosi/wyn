@@ -324,10 +324,28 @@ impl GasmLowering {
             }
 
             // Arithmetic operations
+            Operation::Add(lhs, rhs) => {
+                let lhs_id = self.get_value(lhs)?;
+                let rhs_id = self.get_value(rhs)?;
+                let result_id = self.builder.i_add(self.u32_type, None, lhs_id, rhs_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
+                return Ok(());
+            }
+
             Operation::Sub(lhs, rhs) => {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
                 let result_id = self.builder.i_sub(self.u32_type, None, lhs_id, rhs_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
+                return Ok(());
+            }
+
+            Operation::Rem(lhs, rhs) => {
+                let lhs_id = self.get_value(lhs)?;
+                let rhs_id = self.get_value(rhs)?;
+                let result_id = self.builder.u_mod(self.u32_type, None, lhs_id, rhs_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
@@ -361,6 +379,62 @@ impl GasmLowering {
                 // TODO: Get proper result type
                 let result_id = self.builder.bitcast(self.u32_type, None, val_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
+                return Ok(());
+            }
+
+            // Memory operations
+            Operation::Load(ptr) => {
+                let ptr_id = self.get_value(ptr)?;
+                // TODO: Get proper result type
+                let result_id = self.builder.load(self.u32_type, None, ptr_id, None, [])
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
+                return Ok(());
+            }
+
+            Operation::Store(ptr, value) => {
+                let ptr_id = self.get_value(ptr)?;
+                let value_id = self.get_value(value)?;
+                self.builder.store(ptr_id, value_id, None, [])
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                return Ok(());
+            }
+
+            Operation::Gep { base, index, stride } => {
+                let base_id = self.get_value(base)?;
+                let index_id = self.get_value(index)?;
+                // SPIR-V AccessChain: access an element of a composite
+                // For now, simple pointer arithmetic
+                // TODO: Implement proper GEP
+                let result_id = self.builder.access_chain(self.u32_type, None, base_id, [index_id])
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
+                return Ok(());
+            }
+
+            // Atomic operations
+            Operation::AtomicRmw { op, ptr, value, ordering, scope } => {
+                use gasm::AtomicOp;
+                let ptr_id = self.get_value(ptr)?;
+                let value_id = self.get_value(value)?;
+                let scope_id = self.lower_memory_scope(scope);
+                let ordering_id = self.lower_memory_ordering(ordering);
+
+                let result_id = match op {
+                    AtomicOp::Add => {
+                        self.builder.atomic_i_add(
+                            self.u32_type,
+                            None,
+                            ptr_id,
+                            scope_id,
+                            ordering_id,
+                            value_id,
+                        ).map_err(|e| format!("SPIR-V error: {:?}", e))?
+                    }
+                    _ => return Err(format!("Atomic operation {:?} not yet implemented", op)),
+                };
+
                 self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
             }
@@ -436,6 +510,32 @@ impl GasmLowering {
                 Err("Constants should be lowered separately".to_string())
             }
         }
+    }
+
+    /// Convert GASM memory ordering to SPIR-V constant
+    fn lower_memory_ordering(&mut self, ordering: &gasm::MemoryOrdering) -> Word {
+        use gasm::MemoryOrdering;
+        let semantics = match ordering {
+            MemoryOrdering::Relaxed => spirv::MemorySemantics::NONE,
+            MemoryOrdering::Acquire => spirv::MemorySemantics::ACQUIRE,
+            MemoryOrdering::Release => spirv::MemorySemantics::RELEASE,
+            MemoryOrdering::AcqRel => spirv::MemorySemantics::ACQUIRE_RELEASE,
+            MemoryOrdering::SeqCst => spirv::MemorySemantics::SEQUENTIALLY_CONSISTENT,
+        };
+        self.builder.constant_bit32(self.u32_type, semantics.bits())
+    }
+
+    /// Convert GASM memory scope to SPIR-V constant
+    fn lower_memory_scope(&mut self, scope: &gasm::MemoryScope) -> Word {
+        use gasm::MemoryScope;
+        let scope_val = match scope {
+            MemoryScope::Invocation => spirv::Scope::Invocation,
+            MemoryScope::Subgroup => spirv::Scope::Subgroup,
+            MemoryScope::Workgroup => spirv::Scope::Workgroup,
+            MemoryScope::Device => spirv::Scope::Device,
+            MemoryScope::System => spirv::Scope::CrossDevice,
+        };
+        self.builder.constant_bit32(self.u32_type, scope_val as u32)
     }
 
     /// Lower a terminator instruction
