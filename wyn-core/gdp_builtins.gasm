@@ -1,0 +1,172 @@
+; GDP (GPU Debug Protocol) Builtin Functions
+; These functions implement the core GDP encoding operations for GPU debugging
+
+; Global variables for GDP ring buffer
+; The ring buffer has the following structure:
+; - Word 0: cursor (current write position)
+; - Words 1-4093: data buffer (4093 u32 words)
+global @gdp_buffer : ptr[global]<u32>
+
+; Constants for ring buffer
+; RING_BUFFER_DATA_SIZE = 4093
+; RING_BUFFER_CURSOR_OFFSET = 0
+
+; ============================================================================
+; gdp_encode_float32: Encode a f32 value into the GDP ring buffer
+;
+; This function:
+; 1. Bitcasts f32 to u32
+; 2. Byte-reverses the bits (for gob encoding efficiency)
+; 3. Determines the number of significant bytes
+; 4. Writes the GDP type tag (0x03) followed by gob-encoded uint
+; 5. Handles ring buffer wraparound for multi-word writes
+;
+; Arguments:
+;   %f: f32 - The float value to encode
+;
+; GDP Float32 encoding format:
+;   Type byte: 0x03 (inline=0, type=0b11)
+;   Data: byte-reversed f32 bits encoded as gob uint
+; ============================================================================
+func @gdp_encode_float32(%f: f32) -> void {
+entry:
+  ; 1. Bitcast f32 to u32
+  %bits = bitcast %f
+
+  ; 2. Byte-reverse: swap bytes in SPIR-V
+  ; Extract bytes from the u32 value
+  %const_8 = uconst 8u
+  %const_16 = uconst 16u
+  %const_24 = uconst 24u
+  %const_0xFF = uconst 0xFFu
+
+  %byte0 = and %bits, %const_0xFF
+  %shr_8 = shr %bits, %const_8
+  %byte1 = and %shr_8, %const_0xFF
+  %shr_16 = shr %bits, %const_16
+  %byte2 = and %shr_16, %const_0xFF
+  %shr_24 = shr %bits, %const_24
+  %byte3 = mov %shr_24
+
+  ; Rebuild in reversed order
+  %b1_shift = shl %byte2, %const_8
+  %b2_shift = shl %byte1, %const_16
+  %b3_shift = shl %byte0, %const_24
+
+  %temp1 = or %byte3, %b1_shift
+  %temp2 = or %temp1, %b2_shift
+  %reversed = or %temp2, %b3_shift
+
+  ; 3. Determine byte count for gob encoding
+  %const_0x100 = uconst 0x100u
+  %const_0x10000 = uconst 0x10000u
+  %const_0x1000000 = uconst 0x1000000u
+
+  %lt_100 = ucmp.lt %reversed, %const_0x100
+  %lt_10000 = ucmp.lt %reversed, %const_0x10000
+  %lt_1000000 = ucmp.lt %reversed, %const_0x1000000
+
+  %const_1 = uconst 1u
+  %const_2 = uconst 2u
+  %const_3 = uconst 3u
+  %const_4 = uconst 4u
+
+  ; Select byte count using nested selects
+  %count_if_3_or_4 = select %lt_1000000, %const_3, %const_4
+  %count_if_2_or_more = select %lt_10000, %const_2, %count_if_3_or_4
+  %byte_count = select %lt_100, %const_1, %count_if_2_or_more
+
+  ; Negated count for gob encoding
+  %const_0 = uconst 0u
+  %negated_count = sub %const_0, %byte_count
+  %negated_count_byte = and %negated_count, %const_0xFF
+
+  ; Extract bytes from reversed value for big-endian gob encoding
+  %rev_byte0 = and %reversed, %const_0xFF
+  %rev_shr_8 = shr %reversed, %const_8
+  %rev_byte1 = and %rev_shr_8, %const_0xFF
+  %rev_shr_16 = shr %reversed, %const_16
+  %rev_byte2 = and %rev_shr_16, %const_0xFF
+  %rev_shr_24 = shr %reversed, %const_24
+  %rev_byte3 = mov %rev_shr_24
+
+  ; Pack into first word: [0x03, negated_count, rev_byte3, rev_byte2]
+  %const_0x03 = uconst 0x03u
+  %word0_b0 = mov %const_0x03
+  %word0_b1 = shl %negated_count_byte, %const_8
+  %word0_b2 = shl %rev_byte3, %const_16
+  %word0_b3 = shl %rev_byte2, %const_24
+
+  %word0_temp1 = or %word0_b0, %word0_b1
+  %word0_temp2 = or %word0_temp1, %word0_b2
+  %word0 = or %word0_temp2, %word0_b3
+
+  ; Pack into second word: [rev_byte1, rev_byte0, 0x00, 0x00]
+  %word1_b0 = mov %rev_byte1
+  %word1_b1 = shl %rev_byte0, %const_8
+  %word1 = or %word1_b0, %word1_b1
+
+  ; Write to ring buffer
+  ; TODO: Implement ring buffer write with wraparound
+  ; For now, this is a placeholder - actual implementation will:
+  ; 1. Load cursor from gdp_buffer[0]
+  ; 2. Calculate write positions with modulo 4093
+  ; 3. Atomic increment cursor
+  ; 4. Store word0 and word1 at calculated positions
+
+  ret
+}
+
+; ============================================================================
+; gdp_encode_uint: Encode an unsigned integer into the GDP ring buffer
+;
+; Arguments:
+;   %value: u32 - The unsigned integer to encode
+;
+; GDP Uint encoding format:
+;   For small values (0-63): single byte with inline value
+;   For larger values: type byte 0x00 + gob-encoded uint
+; ============================================================================
+func @gdp_encode_uint(%value: u32) -> void {
+entry:
+  ; Check if value fits in inline encoding (0-63)
+  %const_64 = uconst 64u
+  %is_small = ucmp.lt %value, %const_64
+
+  br_if %is_small, encode_inline, encode_full
+
+encode_inline:
+  ; Inline encoding: shift value left by 2
+  %const_2 = uconst 2u
+  %inline_word = shl %value, %const_2
+
+  ; TODO: Write single word to ring buffer
+  ret
+
+encode_full:
+  ; Full encoding: type byte 0x00 + gob uint
+  ; TODO: Implement full gob encoding
+  ret
+}
+
+; ============================================================================
+; gdp_encode_string: Encode a string into the GDP ring buffer
+;
+; Arguments:
+;   %str_ptr: ptr[global]<u8> - Pointer to string data
+;   %str_len: u32 - Length of string in bytes
+;
+; GDP String encoding format:
+;   Type byte: 0x02 (inline=0, type=0b10)
+;   Length: gob-encoded uint
+;   Data: UTF-8 bytes, word-aligned
+; ============================================================================
+func @gdp_encode_string(%str_ptr: ptr[global]<u8>, %str_len: u32) -> void {
+entry:
+  ; TODO: Implement string encoding
+  ; 1. Encode type byte 0x02
+  ; 2. Encode length as gob uint
+  ; 3. Pack bytes into words (little-endian)
+  ; 4. Write to ring buffer with wraparound
+  ret
+}

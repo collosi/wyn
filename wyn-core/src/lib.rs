@@ -18,6 +18,7 @@ pub mod visitor;
 
 pub mod alias_checker;
 pub mod constant_folding;
+pub mod gasm_lowering;
 pub mod lowering;
 pub mod module;
 pub mod monomorphization;

@@ -54,7 +54,7 @@ pub struct BasicBlock {
 }
 
 /// Types
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     I8,
     I16,
@@ -70,13 +70,13 @@ pub enum Type {
     Pointer(Box<PointerType>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PointerType {
     pub address_space: AddressSpace,
     pub pointee: Box<Type>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AddressSpace {
     Generic,
     Global,
