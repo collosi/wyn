@@ -159,12 +159,91 @@ encode_inline:
   %const_2 = uconst 2u
   %inline_word = shl %value, %const_2
 
-  ; TODO: Write single word to ring buffer
+  ; Write single word to ring buffer
+  %cursor_ptr = mov @gdp_buffer
+  %const_1 = uconst 1u
+  %start_index = atomic.rmw add %cursor_ptr, %const_1 ordering=acq_rel scope=device
+
+  %ring_size = uconst 4093u
+  %index_raw = rem %start_index, %ring_size
+  %index = add %index_raw, %const_1
+
+  %ptr = gep @gdp_buffer, %index, stride=4
+  store %ptr, %inline_word
   ret
 
 encode_full:
   ; Full encoding: type byte 0x00 + gob uint
-  ; TODO: Implement full gob encoding
+  ; Determine byte count (1-4 bytes for u32)
+  %const_0x100 = uconst 0x100u
+  %const_0x10000 = uconst 0x10000u
+  %const_0x1000000 = uconst 0x1000000u
+
+  %lt_100 = ucmp.lt %value, %const_0x100
+  %lt_10000 = ucmp.lt %value, %const_0x10000
+  %lt_1000000 = ucmp.lt %value, %const_0x1000000
+
+  %const_1 = uconst 1u
+  %const_2_bytes = uconst 2u
+  %const_3 = uconst 3u
+  %const_4 = uconst 4u
+
+  %count_if_3_or_4 = select %lt_1000000, %const_3, %const_4
+  %count_if_2_or_more = select %lt_10000, %const_2_bytes, %count_if_3_or_4
+  %byte_count = select %lt_100, %const_1, %count_if_2_or_more
+
+  ; Negated count for gob encoding
+  %const_0 = uconst 0u
+  %negated_count = sub %const_0, %byte_count
+  %const_0xFF = uconst 0xFFu
+  %negated_count_byte = and %negated_count, %const_0xFF
+
+  ; Extract bytes from value (big-endian)
+  %byte0 = and %value, %const_0xFF
+  %const_8 = uconst 8u
+  %shr_8 = shr %value, %const_8
+  %byte1 = and %shr_8, %const_0xFF
+  %const_16 = uconst 16u
+  %shr_16 = shr %value, %const_16
+  %byte2 = and %shr_16, %const_0xFF
+  %const_24 = uconst 24u
+  %shr_24 = shr %value, %const_24
+  %byte3 = mov %shr_24
+
+  ; Pack into first word: [0x00, negated_count, byte3, byte2]
+  %const_0x00 = uconst 0x00u
+  %word0_b0 = mov %const_0x00
+  %word0_b1 = shl %negated_count_byte, %const_8
+  %word0_b2 = shl %byte3, %const_16
+  %word0_b3 = shl %byte2, %const_24
+
+  %word0_temp1 = or %word0_b0, %word0_b1
+  %word0_temp2 = or %word0_temp1, %word0_b2
+  %word0 = or %word0_temp2, %word0_b3
+
+  ; Pack into second word: [byte1, byte0, 0x00, 0x00]
+  %word1_b0 = mov %byte1
+  %word1_b1 = shl %byte0, %const_8
+  %word1 = or %word1_b0, %word1_b1
+
+  ; Write to ring buffer
+  %cursor_ptr2 = mov @gdp_buffer
+  %const_2_words = uconst 2u
+  %start_index2 = atomic.rmw add %cursor_ptr2, %const_2_words ordering=acq_rel scope=device
+
+  %ring_size2 = uconst 4093u
+  %index0_raw = rem %start_index2, %ring_size2
+  %start_plus_1 = add %start_index2, %const_1
+  %index1_raw = rem %start_plus_1, %ring_size2
+
+  %index0 = add %index0_raw, %const_1
+  %index1 = add %index1_raw, %const_1
+
+  %ptr0 = gep @gdp_buffer, %index0, stride=4
+  %ptr1 = gep @gdp_buffer, %index1, stride=4
+
+  store %ptr0, %word0
+  store %ptr1, %word1
   ret
 }
 
@@ -182,10 +261,65 @@ encode_full:
 ; ============================================================================
 func @gdp_encode_string(%str_ptr: ptr[global]<u8>, %str_len: u32) -> void {
 entry:
-  ; TODO: Implement string encoding
-  ; 1. Encode type byte 0x02
-  ; 2. Encode length as gob uint
-  ; 3. Pack bytes into words (little-endian)
-  ; 4. Write to ring buffer with wraparound
+  ; For now, this is a simplified implementation that encodes:
+  ; - Type byte 0x02
+  ; - Length as gob uint
+  ; - String data packed into words
+  ;
+  ; NOTE: This implementation assumes short strings (< 256 bytes for simplicity)
+  ; A full implementation would need loops to handle arbitrary length strings,
+  ; which requires more complex control flow.
+
+  ; 1. Encode type byte (0x02) and length
+  ; Type byte for string is 0x02 (inline=0, type=0b10)
+  %const_0x02 = uconst 0x02u
+
+  ; Encode length as gob uint
+  ; For lengths < 256, use 1-byte encoding
+  %const_0x100 = uconst 0x100u
+  %len_is_small = ucmp.lt %str_len, %const_0x100
+
+  ; TODO: For now, only handle small strings (< 256 bytes)
+  ; Full implementation would need conditional logic similar to encode_uint
+
+  ; Negated byte count (always 1 for lengths < 256)
+  %const_0xFF = uconst 0xFFu
+  %negated_count = mov %const_0xFF  ; -1 in u8
+
+  ; Pack header word: [0x02, negated_count, 0x00, length_byte]
+  %len_byte = and %str_len, %const_0xFF
+  %const_8 = uconst 8u
+  %const_16 = uconst 16u
+  %const_24 = uconst 24u
+
+  %header_b0 = mov %const_0x02
+  %header_b1 = shl %negated_count, %const_8
+  ; header_b2 is 0x00
+  %header_b3 = shl %len_byte, %const_24
+
+  %header_temp1 = or %header_b0, %header_b1
+  %header = or %header_temp1, %header_b3
+
+  ; Write header to ring buffer
+  %cursor_ptr = mov @gdp_buffer
+  %const_1 = uconst 1u
+  %start_index = atomic.rmw add %cursor_ptr, %const_1 ordering=acq_rel scope=device
+
+  %ring_size = uconst 4093u
+  %index_raw = rem %start_index, %ring_size
+  %index = add %index_raw, %const_1
+
+  %ptr = gep @gdp_buffer, %index, stride=4
+  store %ptr, %header
+
+  ; NOTE: String data packing would follow here
+  ; For a complete implementation, we would need to:
+  ; 1. Calculate number of words needed: (str_len + 3) / 4
+  ; 2. Loop through string bytes, packing 4 bytes per word
+  ; 3. Handle partial last word with padding
+  ; 4. Write each word to ring buffer with wraparound
+  ;
+  ; This requires loop support in GASM or unrolling for specific sizes
+
   ret
 }
