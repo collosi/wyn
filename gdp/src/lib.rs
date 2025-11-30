@@ -230,9 +230,18 @@ impl<'a> GdpDecoder<'a> {
                 Ok(GdpValue::String(string))
             }
             0x03 => {
-                // Boolean
+                // Type tag 0b11: Float32
+                // inline_value should always be 0 for float32
+                if inline_value != 0 {
+                    return Err("float32 type byte must have inline value 0");
+                }
+                // Decode gob uint, byte-reverse, bitcast to f32
+                let reversed = self.decode_uint_internal()? as u32;
+                // Byte-reverse: swap_bytes
+                let bits = reversed.swap_bytes();
+                let value = f32::from_bits(bits);
                 self.align_to_word();
-                Ok(GdpValue::Bool(inline_value != 0))
+                Ok(GdpValue::Float32(value))
             }
             _ => unreachable!(),
         }
@@ -245,5 +254,6 @@ pub enum GdpValue {
     UInt(u64),
     Int(i64),
     String(String),
-    Bool(bool),
+    Bool(bool), // Booleans are decoded as UInt, but kept for backwards compatibility
+    Float32(f32),
 }

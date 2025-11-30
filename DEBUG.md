@@ -40,8 +40,10 @@ GDP supports a minimal set of types sufficient for debug output:
 
 - **Unsigned integers** (`uint`) - arbitrary precision
 - **Signed integers** (`int`) - arbitrary precision
-- **Booleans** (`bool`)
 - **Strings** (`string`) - UTF-8 encoded
+- **32-bit floats** (`float32`) - IEEE 754 single precision
+
+**Note:** Booleans are encoded as unsigned integers (0 for false, 1 for true).
 
 ## Physical Layout
 
@@ -75,11 +77,12 @@ Bits 0-1 (TT): Type tag
   00 = unsigned integer (uint)
   01 = signed integer (int)
   10 = string
-  11 = boolean
+  11 = float32
 
 Bits 2-7 (VVVVVV): Inline value/length (6 bits, range 0-63)
-  0 = Full value/length follows (encoded as GDP uint)
-  1-63 = Inline value/length (optimization for small values)
+  For uint/int: 0 = full value follows, 1-63 = inline value
+  For string: 0 = length follows, 1-63 = inline length
+  For float32: always 0 (full encoding follows)
 ```
 
 **Examples:**
@@ -162,16 +165,38 @@ let result = if (u & 1) != 0 {
 -129    → (!128 << 1) | 1 = 257    → [0xFE 0x01 0x01 0x00]
 ```
 
-### Booleans
+### Float32
 
-Encoded as unsigned integers:
-- `false` → 0
-- `true` → 1
+Type tag: `0b11` (with inline=0)
+
+Following the gob specification for floats, but adapted for f32:
+
+1. Bitcast f32 to u32 (IEEE 754 bits)
+2. Byte-reverse the u32 (so exponent and high-precision mantissa come first)
+3. Encode the reversed value as a GDP unsigned integer
+4. Prefix with type byte `0x03` (inline=0, type=0b11)
+
+**Encoding algorithm:**
+1. Bitcast f32 to u32 (IEEE 754 bits)
+2. Byte-reverse the u32 (swap byte order)
+3. Encode type byte `0x03` (inline=0, type=0b11)
+4. Encode the reversed value as a GDP unsigned integer
+
+**Why byte-reversal?** The exponent and high-precision mantissa bits are in the most significant bytes. By reversing, these significant bytes come first in the encoding. Since the least significant bytes are often zero, this saves space in the gob uint encoding.
 
 **Examples:**
 ```
-false   → [0x00 0x00 0x00 0x00]
-true    → [0x01 0x00 0x00 0x00]
+17.0f32 = 0x41880000
+  → reversed: 0x00008841
+  → as gob uint: [0xFE 0x88 0x41] (FE = -2 bytes, then 0x8841 big-endian)
+  → full encoding: [0x03 0xFE 0x88 0x41]
+  → with word alignment: [0x03 0xFE 0x88 0x41]
+
+0.5f32 = 0x3F000000
+  → reversed: 0x0000003F
+  → as gob uint: [0x3F] (single byte, < 128)
+  → full encoding: [0x03 0x3F 0x00 0x00]
+  → with word alignment: [0x03 0x3F 0x00 0x00]
 ```
 
 ### Strings
@@ -236,56 +261,24 @@ As u32 buffer:
 [0x6C616704, 0x0000003A, 0x00000054, 0x6E6F6404, 0x00000065]
 ```
 
-## Implementation Notes
-
-### Decoder
-
-The decoder (`gdp` crate) provides:
-
-```rust
-pub struct GdpDecoder<'a> {
-    data: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> GdpDecoder<'a> {
-    pub fn new(buffer: &'a [u32]) -> Self;
-    pub fn decode_uint(&mut self) -> Result<u64, &'static str>;
-    pub fn decode_int(&mut self) -> Result<i64, &'static str>;
-    pub fn decode_bool(&mut self) -> Result<bool, &'static str>;
-    pub fn decode_string(&mut self) -> Result<String, &'static str>;
-}
-```
-
-### Encoder (To Be Implemented)
-
-The encoder will be implemented in SPIR-V/shader code to write debug data from GPU:
-
-```glsl
-// Conceptual interface (actual implementation in Wyn compiler)
-void debug_uint(uint value);
-void debug_int(int value);
-void debug_bool(bool value);
-void debug_str(string value);
-```
-
 ## Differences from Gob
 
 GDP differs from full gob in the following ways:
 
-1. **Reduced type set**: Only uint, int, bool, string (no structs, arrays, maps, etc.)
+1. **Reduced type set**: Only uint, int, string, float32 (no bool, structs, arrays, maps, etc.)
 2. **No type definitions**: All values are self-describing at the primitive level
 3. **Word alignment**: Required for GPU compatibility, not present in gob
 4. **No streaming overhead**: No message byte counts or type IDs
 5. **Fixed encoding**: No optimization for type reuse across messages
+6. **Float32 instead of Float64**: Uses 32-bit floats instead of 64-bit for GPU efficiency
+7. **No separate boolean type**: Booleans encoded as uint (0 or 1)
 
 ## Future Extensions
 
 Potential additions while maintaining compatibility:
 
-1. **Float encoding**: IEEE 754 following gob's float64 encoding
-2. **Array encoding**: Length prefix + elements (with alignment)
-3. **Structured records**: Field count + (field_id, value) pairs
+1. **Array encoding**: Length prefix + elements (with alignment)
+2. **Structured records**: Field count + (field_id, value) pairs
 
 All extensions must maintain the word alignment invariant.
 

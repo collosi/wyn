@@ -62,8 +62,9 @@ enum PipelineSpec {
 // --- App state ---------------------------------------------------------------
 
 /// Debug buffer size: 16KB = 4096 u32s
-/// Layout: { write_head: u32, read_head: u32, data: [4094]u32 }
+/// Layout: { write_head: u32, read_head: u32, max_loops: u32, data: [4093]u32 }
 const DEBUG_BUFFER_SIZE: u64 = 16384;
+const DEFAULT_MAX_LOOPS: u32 = 100; // Limit debug output to prevent GPU lockup
 
 struct State {
     window: Arc<Window>,
@@ -153,8 +154,10 @@ impl State {
             mapped_at_creation: false,
         });
 
-        // Initialize debug buffer to zeros (write_head=0, read_head=0, data=zeros)
-        queue.write_buffer(&debug_buffer, 0, &[0u8; DEBUG_BUFFER_SIZE as usize]);
+        // Initialize debug buffer: [write_head=0, read_head=0, max_loops=DEFAULT_MAX_LOOPS, data=zeros]
+        let mut init_data = vec![0u32; (DEBUG_BUFFER_SIZE / 4) as usize];
+        init_data[2] = DEFAULT_MAX_LOOPS; // Set max_loops
+        queue.write_buffer(&debug_buffer, 0, bytemuck::cast_slice(&init_data));
 
         let debug_staging_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("debug_staging_buffer"),
@@ -347,26 +350,44 @@ impl State {
             let data = buffer_slice.get_mapped_range();
             let u32_data: &[u32] = bytemuck::cast_slice(&data);
 
-            // Buffer layout: [write_head, read_head, data[4094]]
-            let write_head = u32_data[0] as usize;
+            // Buffer layout: [write_head, read_head, max_loops, data[4093]]
+            let write_head_global = u32_data[0] as usize;  // Unbounded counter
             let _read_head = u32_data[1] as usize;
-            let data_start = 2;
-            let data_len = 4094;
+            let max_loops = u32_data[2] as usize;
+            let data_start = 3;
+            let data_len = 4093;
 
-            if write_head == 0 {
+            if write_head_global == 0 {
                 eprintln!("[DEBUG] No output");
                 return;
             }
 
-            eprintln!("\n=== Debug Output ({} values) ===", write_head);
+            // Calculate actual position in ring buffer and number of loops
+            let loop_count = write_head_global / data_len;
+            let values_to_read = write_head_global.min(data_len);
 
-            // Extract data portion (skip write_head and read_head)
+            eprintln!("\n=== Debug Output ({} values written, loops={}/{}) ===",
+                write_head_global, loop_count, max_loops);
+
+            // Print raw hex data (first 100 words)
+            eprintln!("Raw buffer hex (first 100 u32s):");
+            for i in 0..100.min(u32_data.len()) {
+                if i % 16 == 0 {
+                    eprint!("\n{:04x}: ", i);
+                }
+                eprint!("{:08x} ", u32_data[i]);
+            }
+            eprintln!("\n");
+
+            // Extract data from read_head to write_head (handling wrap)
+            // For simplicity, just read the whole ring buffer and let GDP decoder parse it
             let data_slice = &u32_data[data_start..data_start + data_len];
             let mut decoder = gdp::GdpDecoder::new(data_slice);
 
-            // Decode and print values
+            // Decode values from the ring buffer
+            // If buffer wrapped, newest data may have overwritten oldest
             let mut count = 0;
-            while !decoder.is_empty() && count < write_head.min(data_len) {
+            while !decoder.is_empty() && count < values_to_read {
                 match decoder.decode_value() {
                     Ok(value) => {
                         match value {
@@ -374,6 +395,7 @@ impl State {
                             gdp::GdpValue::Int(i) => eprintln!("{}", i),
                             gdp::GdpValue::UInt(u) => eprintln!("{}", u),
                             gdp::GdpValue::Bool(b) => eprintln!("{}", b),
+                            gdp::GdpValue::Float32(f) => eprintln!("{}", f),
                         }
                         count += 1;
                     }
