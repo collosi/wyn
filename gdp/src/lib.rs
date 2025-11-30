@@ -26,9 +26,7 @@ impl<'a> GdpDecoder<'a> {
     /// The u32 buffer is immediately transmuted to a byte slice for processing.
     pub fn new(buffer: &'a [u32]) -> Self {
         // Transmute u32 slice to bytes (big-endian layout assumed)
-        let data = unsafe {
-            std::slice::from_raw_parts(buffer.as_ptr() as *const u8, buffer.len() * 4)
-        };
+        let data = unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const u8, buffer.len() * 4) };
 
         GdpDecoder { data, pos: 0 }
     }
@@ -173,11 +171,7 @@ impl<'a> GdpDecoder<'a> {
 
     /// Get remaining bytes available
     pub fn remaining(&self) -> usize {
-        if self.pos >= self.data.len() {
-            0
-        } else {
-            self.data.len() - self.pos
-        }
+        if self.pos >= self.data.len() { 0 } else { self.data.len() - self.pos }
     }
 
     /// Decode a type-tagged value
@@ -192,11 +186,7 @@ impl<'a> GdpDecoder<'a> {
         match type_tag {
             0x00 => {
                 // Unsigned integer
-                let value = if inline_value == 0 {
-                    self.decode_uint_internal()?
-                } else {
-                    inline_value
-                };
+                let value = if inline_value == 0 { self.decode_uint_internal()? } else { inline_value };
                 self.align_to_word();
                 Ok(GdpValue::UInt(value))
             }
@@ -236,8 +226,7 @@ impl<'a> GdpDecoder<'a> {
                 self.pos += len;
                 self.align_to_word();
 
-                let string = String::from_utf8(bytes.to_vec())
-                    .map_err(|_| "invalid UTF-8 in string")?;
+                let string = String::from_utf8(bytes.to_vec()).map_err(|_| "invalid UTF-8 in string")?;
                 Ok(GdpValue::String(string))
             }
             0x03 => {

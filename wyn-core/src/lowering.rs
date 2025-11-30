@@ -217,7 +217,8 @@ impl Constructor {
 
         // Get pointer to write_head (index 0 in the buffer array)
         let const_0 = self.const_i32(0);
-        let write_head_ptr = self.builder.access_chain(u32_ptr_type, None, buffer_var, [const_0, const_0])?;
+        let write_head_ptr =
+            self.builder.access_chain(u32_ptr_type, None, buffer_var, [const_0, const_0])?;
 
         // Atomic add count to write_head, returns old value (our starting index)
         let count_u32 = self.builder.constant_bit32(self.u32_type, count);
@@ -255,7 +256,8 @@ impl Constructor {
 
         // Get pointer to buffer[0][final_index]
         let const_0 = self.const_i32(0);
-        let data_elem_ptr = self.builder.access_chain(u32_ptr_type, None, buffer_var, [const_0, final_index])?;
+        let data_elem_ptr =
+            self.builder.access_chain(u32_ptr_type, None, buffer_var, [const_0, final_index])?;
 
         // Store the value (bitcast to u32 if needed)
         let value_u32 = self.builder.bitcast(self.u32_type, None, value)?;
@@ -304,7 +306,8 @@ impl Constructor {
 
         let value_unsigned = self.builder.bitcast(self.u32_type, None, value)?;
         let const_2 = self.builder.constant_bit32(self.u32_type, 2);
-        let shifted_value = self.builder.shift_left_logical(self.u32_type, None, value_unsigned, const_2)?;
+        let shifted_value =
+            self.builder.shift_left_logical(self.u32_type, None, value_unsigned, const_2)?;
         let const_1 = self.builder.constant_bit32(self.u32_type, 1);
         let type_byte = self.builder.bitwise_or(self.u32_type, None, shifted_value, const_1)?;
 
@@ -412,7 +415,16 @@ impl Constructor {
                         self.void_type
                     }
                     TypeName::Tuple(_) => {
-                        // Tuple becomes struct
+                        // Empty tuples should not reach lowering:
+                        // - Unit values are bound to _ (not stored)
+                        // - Empty closures are handled specially in map (dummy i32 passed directly)
+                        if args.is_empty() {
+                            panic!(
+                                "BUG: Empty tuple type reached lowering. Empty tuples/unit values should be \
+                                handled at call sites (let _ = ..., map with empty closures, etc.)"
+                            );
+                        }
+                        // Non-empty tuple becomes struct
                         let field_types: Vec<spirv::Word> =
                             args.iter().map(|a| self.ast_type_to_spirv(a)).collect();
                         self.get_or_create_struct_type(field_types)
@@ -491,6 +503,13 @@ impl Constructor {
                             .filter(|(_, name)| name.as_str() != "__lambda_name")
                             .map(|(i, _)| self.ast_type_to_spirv(&args[i]))
                             .collect();
+                        // Empty records should not reach lowering (same as empty tuples)
+                        if field_types.is_empty() {
+                            panic!(
+                                "BUG: Empty record type (closure with no captures) reached lowering. \
+                                Empty closures should be handled at call sites."
+                            );
+                        }
                         self.get_or_create_struct_type(field_types)
                     }
                     _ => {
@@ -942,9 +961,16 @@ fn lower_regular_function(
     ret_type: &PolyType<TypeName>,
     body: &Expr,
 ) -> Result<()> {
-    let param_names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+    // Check if first parameter is an empty closure (lambda with no captures)
+    // If so, skip it - don't include in SPIR-V function signature
+    let skip_first_param =
+        if let Some(first_param) = params.first() { is_empty_closure_type(&first_param.ty) } else { false };
+
+    let params_to_lower = if skip_first_param { &params[1..] } else { params };
+
+    let param_names: Vec<&str> = params_to_lower.iter().map(|p| p.name.as_str()).collect();
     let param_types: Vec<spirv::Word> =
-        params.iter().map(|p| constructor.ast_type_to_spirv(&p.ty)).collect();
+        params_to_lower.iter().map(|p| constructor.ast_type_to_spirv(&p.ty)).collect();
     let return_type = constructor.ast_type_to_spirv(ret_type);
     constructor.begin_function(name, &param_names, &param_types, return_type)?;
 
@@ -953,6 +979,18 @@ fn lower_regular_function(
 
     constructor.end_function()?;
     Ok(())
+}
+
+/// Check if a type is an empty closure (tuple/record with no real fields)
+fn is_empty_closure_type(ty: &PolyType<TypeName>) -> bool {
+    match ty {
+        PolyType::Constructed(TypeName::Tuple(_), args) => args.is_empty(),
+        PolyType::Constructed(TypeName::Record(fields), _) => {
+            // Empty if only field is __lambda_name
+            fields.iter().all(|name| name == "__lambda_name")
+        }
+        _ => false,
+    }
 }
 
 fn lower_entry_point(
@@ -1374,11 +1412,17 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
         }
 
         ExprKind::Let { name, value, body } => {
-            let value_id = lower_expr(constructor, value)?;
-            constructor.env.insert(name.clone(), value_id);
-            let result = lower_expr(constructor, body)?;
-            constructor.env.remove(name);
-            Ok(result)
+            // If binding to _, evaluate value for side effects but don't store it
+            if name == "_" {
+                let _ = lower_expr(constructor, value)?;
+                lower_expr(constructor, body)
+            } else {
+                let value_id = lower_expr(constructor, value)?;
+                constructor.env.insert(name.clone(), value_id);
+                let result = lower_expr(constructor, body)?;
+                constructor.env.remove(name);
+                Ok(result)
+            }
         }
 
         ExprKind::Loop {
@@ -1489,24 +1533,33 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                     bail_spirv!("map requires 2 args (closure, array), got {}", args.len());
                 }
 
-                // Extract lambda name from closure tuple's last index
-                let lambda_name = match &args[0].kind {
+                // Extract lambda name and check if closure is empty
+                let (lambda_name, is_empty_closure) = match &args[0].kind {
                     ExprKind::Literal(mir::Literal::Tuple(elems)) if !elems.is_empty() => {
                         // Lambda name is at the last index
-                        match &elems.last().expect("BUG: elems is non-empty but last() failed").kind {
-                            ExprKind::Literal(mir::Literal::String(s)) => s.clone(),
-                            _ => {
-                                bail_spirv!("Closure tuple last element must be lambda name string");
-                            }
-                        }
+                        let name =
+                            match &elems.last().expect("BUG: elems is non-empty but last() failed").kind {
+                                ExprKind::Literal(mir::Literal::String(s)) => s.clone(),
+                                _ => {
+                                    bail_spirv!("Closure tuple last element must be lambda name string");
+                                }
+                            };
+                        // Empty closure: only has lambda name (len == 1)
+                        let is_empty = elems.len() == 1;
+                        (name, is_empty)
                     }
                     _ => {
                         bail_spirv!("map closure argument must be a tuple literal");
                     }
                 };
 
-                // Now lower both args normally
-                let closure_val = lower_expr(constructor, &args[0])?;
+                // For empty closures, use dummy i32(0) instead of lowering the tuple
+                // This avoids creating empty SPIR-V structs
+                let closure_val = if is_empty_closure {
+                    constructor.const_i32(0)
+                } else {
+                    lower_expr(constructor, &args[0])?
+                };
                 let array_val = lower_expr(constructor, &args[1])?;
 
                 // Get input array element type from args[1]
@@ -1543,8 +1596,9 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                     let input_elem =
                         constructor.builder.composite_extract(input_elem_type, None, array_val, [i])?;
 
-                    // Call lambda with closure and element
-                    let args = vec![closure_val, input_elem];
+                    // Call lambda: for empty closures, only pass element; otherwise pass both
+                    let args =
+                        if is_empty_closure { vec![input_elem] } else { vec![closure_val, input_elem] };
                     let result_elem =
                         constructor.builder.function_call(output_elem_type, None, lambda_func_id, args)?;
                     result_elements.push(result_elem);
@@ -1557,8 +1611,11 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             // Special case for debug_str - handle without lowering string argument
             if func == "debug_str" {
                 use crate::builtin_registry::{BuiltinLookup, Intrinsic};
-                if let Some(BuiltinLookup::Single(builtin)) = constructor.builtin_registry.get("debug_str") {
-                    if let crate::builtin_registry::BuiltinImpl::Intrinsic(Intrinsic::DebugStr) = builtin.implementation {
+                if let Some(BuiltinLookup::Single(builtin)) = constructor.builtin_registry.get("debug_str")
+                {
+                    if let crate::builtin_registry::BuiltinImpl::Intrinsic(Intrinsic::DebugStr) =
+                        builtin.implementation
+                    {
                         if let Some((buffer_var, cursor_var, u32_ptr_type)) = constructor.debug_buffer {
                             // Extract string from the literal argument without lowering
                             let str_value = match &args[0].kind {
@@ -1895,7 +1952,9 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                     }
                                     Intrinsic::DebugI32 => {
                                         // Debug intrinsic: write i32 to debug buffer using GDP encoding
-                                        if let Some((buffer_var, cursor_var, u32_ptr_type)) = constructor.debug_buffer {
+                                        if let Some((buffer_var, cursor_var, u32_ptr_type)) =
+                                            constructor.debug_buffer
+                                        {
                                             let value = arg_ids[0];
                                             constructor.emit_gdp_encode_int(
                                                 buffer_var,
@@ -1911,10 +1970,16 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                     }
                                     Intrinsic::DebugF32 => {
                                         // Debug intrinsic: write f32 to debug buffer using GDP encoding (as uint bits)
-                                        if let Some((buffer_var, cursor_var, u32_ptr_type)) = constructor.debug_buffer {
+                                        if let Some((buffer_var, cursor_var, u32_ptr_type)) =
+                                            constructor.debug_buffer
+                                        {
                                             let value = arg_ids[0];
                                             // Bitcast f32 to u32 then encode as unsigned integer
-                                            let u32_value = constructor.builder.bitcast(constructor.u32_type, None, value)?;
+                                            let u32_value = constructor.builder.bitcast(
+                                                constructor.u32_type,
+                                                None,
+                                                value,
+                                            )?;
                                             constructor.emit_gdp_encode_uint(
                                                 buffer_var,
                                                 cursor_var,
@@ -1929,7 +1994,9 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                     }
                                     Intrinsic::DebugStr => {
                                         // Debug intrinsic: write string literal to debug buffer using GDP encoding
-                                        if let Some((buffer_var, cursor_var, u32_ptr_type)) = constructor.debug_buffer {
+                                        if let Some((buffer_var, cursor_var, u32_ptr_type)) =
+                                            constructor.debug_buffer
+                                        {
                                             // Extract string from the literal argument
                                             let str_value = match &args[0].kind {
                                                 ExprKind::Literal(Literal::String(s)) => s.clone(),
@@ -2101,6 +2168,16 @@ fn lower_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::
             // Create struct type for tuple from element types
             let elem_types: Vec<spirv::Word> =
                 real_elems.iter().map(|e| constructor.ast_type_to_spirv(&e.ty)).collect();
+
+            // Empty tuples should not be lowered as literals.
+            // They occur from closures with no captures, which are handled specially in map.
+            if elem_types.is_empty() {
+                panic!(
+                    "BUG: Attempting to lower empty tuple literal. Empty closures should be \
+                    handled at call sites (map special case), not lowered as literals."
+                );
+            }
+
             let tuple_type = constructor.builder.type_struct(elem_types);
 
             // Construct the composite
