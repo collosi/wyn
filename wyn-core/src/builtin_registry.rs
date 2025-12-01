@@ -257,12 +257,16 @@ pub struct BuiltinRegistry {
     /// All builtins: maps name to list of overloads
     /// Each name can have multiple entries with different type schemes (for overloading)
     builtins: HashMap<String, Vec<BuiltinEntry>>,
+    /// GASM functions that can be called directly from SPIR-V lowering
+    /// This includes functions with pointer parameters that can't be registered as Wyn builtins
+    gasm_functions: HashMap<String, gasm::Function>,
 }
 
 impl BuiltinRegistry {
     pub fn new(ctx: &mut impl TypeVarGenerator) -> Self {
         let mut registry = BuiltinRegistry {
             builtins: HashMap::new(),
+            gasm_functions: HashMap::new(),
         };
 
         registry.register_from_prim_module();
@@ -345,14 +349,23 @@ impl BuiltinRegistry {
 
     /// Register a GASM function as a builtin
     fn register_gasm_function(&mut self, function: gasm::Function) {
+        // Strip "@" prefix from GASM function name
+        let name = function.name.strip_prefix('@')
+            .unwrap_or(&function.name)
+            .to_string();
+
+        // Store the function in gasm_functions map for direct SPIR-V access
+        self.gasm_functions.insert(name.clone(), function.clone());
+
         // Convert GASM function signature to Wyn type
-        // Check if all parameters can be converted - if not, skip this function
+        // Check if all parameters can be converted - if not, skip Wyn builtin registration
         let mut param_types: Vec<Type> = Vec::new();
         for param in &function.params {
             match self.gasm_type_to_wyn(&param.ty) {
                 Some(ty) => param_types.push(ty),
                 None => {
-                    // Skip functions with unsupported parameter types
+                    // Can't register as Wyn builtin (e.g., has pointer parameters)
+                    // But it's still available via gasm_functions map
                     return;
                 }
             }
@@ -376,11 +389,6 @@ impl BuiltinRegistry {
         for param_type in param_types.iter().rev() {
             func_type = Type::arrow(param_type.clone(), func_type);
         }
-
-        // Strip "@" prefix from GASM function name for Wyn lookup
-        let name = function.name.strip_prefix('@')
-            .unwrap_or(&function.name)
-            .to_string();
 
         let entry = BuiltinEntry {
             scheme: TypeScheme::Monotype(func_type),
@@ -434,6 +442,12 @@ impl BuiltinRegistry {
                 BuiltinLookup::Overloaded(OverloadSet { entries, arity })
             }
         })
+    }
+
+    /// Get a GASM function directly by name (without going through Wyn type system)
+    /// This is used for functions with pointer parameters that can't be registered as Wyn builtins
+    pub fn get_gasm_function(&self, name: &str) -> Option<&gasm::Function> {
+        self.gasm_functions.get(name)
     }
 
     /// Add an overload for a builtin.

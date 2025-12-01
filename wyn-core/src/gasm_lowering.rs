@@ -575,3 +575,38 @@ pub fn lower_gasm_module(module: &Module) -> Result<Vec<u32>, String> {
     let mut lowering = GasmLowering::new();
     lowering.lower_module(module)
 }
+
+/// Lower a single GASM function into an existing SPIR-V Builder
+/// Returns the SPIR-V function ID
+///
+/// globals: Map from GASM global names (like "gdp_buffer", without @ prefix) to SPIR-V variable IDs
+pub fn lower_function_into_builder(
+    builder: &mut Builder,
+    function: &Function,
+    globals: HashMap<String, Word>,
+) -> Result<Word, String> {
+    // Create a minimal GasmLowering context for this function
+    let u32_type = builder.type_int(32, 0);
+
+    let mut lowering = GasmLowering {
+        builder: std::mem::replace(builder, Builder::new()), // Temporarily take ownership
+        u32_type,
+        registers: HashMap::new(),
+        globals, // Use provided globals map
+        functions: HashMap::new(),
+        labels: HashMap::new(),
+        type_cache: HashMap::new(),
+    };
+
+    // First, declare the function to get its ID
+    let fn_id = lowering.builder.id();
+    lowering.functions.insert(function.name.clone(), fn_id);
+
+    // Now lower the function (this will reference the ID we just created)
+    lowering.lower_function(function)?;
+
+    // Return the builder
+    *builder = lowering.builder;
+
+    Ok(fn_id)
+}
