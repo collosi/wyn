@@ -6,7 +6,10 @@ pub enum ParseError {
     UnexpectedEof,
 
     #[error("Expected {expected}, found {found}")]
-    ExpectedToken { expected: String, found: String },
+    ExpectedToken {
+        expected: String,
+        found: String,
+    },
 
     #[error("Invalid type: {0}")]
     InvalidType(String),

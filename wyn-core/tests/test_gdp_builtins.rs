@@ -3,8 +3,7 @@ use std::fs;
 
 #[test]
 fn test_parse_gdp_encode_float32() {
-    let gasm_code = fs::read_to_string("gdp_builtins.gasm")
-        .expect("Failed to read gdp_builtins.gasm");
+    let gasm_code = fs::read_to_string("gdp_builtins.gasm").expect("Failed to read gdp_builtins.gasm");
 
     // Extract just the gdp_encode_float32 function
     let start = gasm_code.find("func @gdp_encode_float32").expect("Function not found");
@@ -26,8 +25,7 @@ fn test_parse_gdp_encode_float32() {
 
 #[test]
 fn test_parse_gdp_encode_uint() {
-    let gasm_code = fs::read_to_string("gdp_builtins.gasm")
-        .expect("Failed to read gdp_builtins.gasm");
+    let gasm_code = fs::read_to_string("gdp_builtins.gasm").expect("Failed to read gdp_builtins.gasm");
 
     // Extract gdp_encode_uint function
     let start = gasm_code.find("func @gdp_encode_uint").expect("Function not found");
@@ -50,8 +48,7 @@ fn test_parse_gdp_encode_uint() {
 
 #[test]
 fn test_parse_gdp_encode_string() {
-    let gasm_code = fs::read_to_string("gdp_builtins.gasm")
-        .expect("Failed to read gdp_builtins.gasm");
+    let gasm_code = fs::read_to_string("gdp_builtins.gasm").expect("Failed to read gdp_builtins.gasm");
 
     // Extract gdp_encode_string function (goes to end of file)
     let start = gasm_code.find("func @gdp_encode_string").expect("Function not found");

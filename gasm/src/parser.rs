@@ -1,13 +1,11 @@
 use nom::{
+    IResult,
     branch::alt,
     bytes::complete::{tag, take_while, take_while1},
-    character::complete::{
-        char, digit1, hex_digit1, multispace0, multispace1,
-    },
+    character::complete::{char, digit1, hex_digit1, multispace0, multispace1},
     combinator::{map, map_res, opt, recognize, value as nom_value},
     multi::{many0, separated_list0, separated_list1},
     sequence::{delimited, pair, preceded, separated_pair, terminated, tuple},
-    IResult,
 };
 
 use crate::error::{ParseError, Result};
@@ -98,47 +96,37 @@ fn pointer_type(input: &str) -> ParseResult<'_, PointerType> {
 }
 
 fn type_parser(input: &str) -> ParseResult<'_, Type> {
-    alt((
-        map(pointer_type, |pt| Type::Pointer(Box::new(pt))),
-        scalar_type,
-    ))(input)
+    alt((map(pointer_type, |pt| Type::Pointer(Box::new(pt))), scalar_type))(input)
 }
 
 // Literals and Constants
 fn parse_i32_literal(input: &str) -> ParseResult<'_, i32> {
-    map_res(
-        recognize(pair(opt(char('-')), digit1)),
-        |s: &str| s.parse::<i32>(),
-    )(input)
+    map_res(recognize(pair(opt(char('-')), digit1)), |s: &str| {
+        s.parse::<i32>()
+    })(input)
 }
 
 fn parse_u32_literal(input: &str) -> ParseResult<'_, u32> {
     alt((
-        map_res(
-            preceded(tag("0x"), hex_digit1),
-            |s: &str| u32::from_str_radix(s, 16),
-        ),
+        map_res(preceded(tag("0x"), hex_digit1), |s: &str| {
+            u32::from_str_radix(s, 16)
+        }),
         map_res(digit1, |s: &str| s.parse::<u32>()),
     ))(input)
 }
 
 fn parse_u64_literal(input: &str) -> ParseResult<'_, u64> {
     alt((
-        map_res(
-            preceded(tag("0x"), hex_digit1),
-            |s: &str| u64::from_str_radix(s, 16),
-        ),
+        map_res(preceded(tag("0x"), hex_digit1), |s: &str| {
+            u64::from_str_radix(s, 16)
+        }),
         map_res(digit1, |s: &str| s.parse::<u64>()),
     ))(input)
 }
 
 fn parse_f32_literal(input: &str) -> ParseResult<'_, f32> {
     map_res(
-        recognize(tuple((
-            opt(char('-')),
-            digit1,
-            opt(pair(char('.'), digit1)),
-        ))),
+        recognize(tuple((opt(char('-')), digit1, opt(pair(char('.'), digit1))))),
         |s: &str| s.parse::<f32>(),
     )(input)
 }
@@ -288,12 +276,12 @@ fn basic_ops(input: &str) -> ParseResult<'_, Operation> {
         binary_op("sub", Operation::Sub),
         binary_op("mul", Operation::Mul),
         // Division and remainder - support both signed/unsigned and generic forms
-        binary_op("udiv", Operation::Div),  // Unsigned division
-        binary_op("sdiv", Operation::Div),  // Signed division
-        binary_op("urem", Operation::Rem),  // Unsigned remainder
-        binary_op("srem", Operation::Rem),  // Signed remainder
-        binary_op("div", Operation::Div),   // Generic division
-        binary_op("rem", Operation::Rem),   // Generic remainder
+        binary_op("udiv", Operation::Div), // Unsigned division
+        binary_op("sdiv", Operation::Div), // Signed division
+        binary_op("urem", Operation::Rem), // Unsigned remainder
+        binary_op("srem", Operation::Rem), // Signed remainder
+        binary_op("div", Operation::Div),  // Generic division
+        binary_op("rem", Operation::Rem),  // Generic remainder
         unary_op("neg", Operation::Neg),
         // Bitwise
         binary_op("and", Operation::And),
@@ -466,11 +454,7 @@ fn memory_and_convert_ops(input: &str) -> ParseResult<'_, Operation> {
                     parse_u32_literal,
                 ),
             )),
-            |(_, base, index, stride)| Operation::Gep {
-                base,
-                index,
-                stride,
-            },
+            |(_, base, index, stride)| Operation::Gep { base, index, stride },
         ),
         // Type conversions
         unary_op("bitcast", Operation::Bitcast),
@@ -526,11 +510,7 @@ fn parse_atomic_load(input: &str) -> ParseResult<'_, Operation> {
             preceded(tuple((ws(tag("ordering")), ws(char('=')))), ws(memory_ordering)),
             preceded(tuple((ws(tag("scope")), ws(char('=')))), ws(memory_scope)),
         )),
-        |(_, ptr, ordering, scope)| Operation::AtomicLoad {
-            ptr,
-            ordering,
-            scope,
-        },
+        |(_, ptr, ordering, scope)| Operation::AtomicLoad { ptr, ordering, scope },
     )(input)
 }
 
@@ -589,15 +569,13 @@ fn parse_atomic_cmpxchg(input: &str) -> ParseResult<'_, Operation> {
             ),
             preceded(tuple((ws(tag("scope")), ws(char('=')))), ws(memory_scope)),
         )),
-        |(_, ptr, expected, desired, ordering_succ, ordering_fail, scope)| {
-            Operation::AtomicCmpXchg {
-                ptr,
-                expected,
-                desired,
-                ordering_succ,
-                ordering_fail,
-                scope,
-            }
+        |(_, ptr, expected, desired, ordering_succ, ordering_fail, scope)| Operation::AtomicCmpXchg {
+            ptr,
+            expected,
+            desired,
+            ordering_succ,
+            ordering_fail,
+            scope,
         },
     )(input)
 }
@@ -623,10 +601,7 @@ fn parse_phi(input: &str) -> ParseResult<'_, Operation> {
 // Instructions
 fn instruction(input: &str) -> ParseResult<'_, Instruction> {
     map(
-        tuple((
-            opt(terminated(register_name, ws(char('=')))),
-            ws(operation),
-        )),
+        tuple((opt(terminated(register_name, ws(char('=')))), ws(operation))),
         |(result, op)| Instruction { result, op },
     )(input)
 }
@@ -657,7 +632,10 @@ fn basic_block(input: &str) -> ParseResult<'_, BasicBlock> {
     map(
         tuple((
             terminated(ws(label_name), ws(char(':'))),
-            many0(preceded(opt(ws_with_comments), terminated(instruction, opt(ws_with_comments)))),
+            many0(preceded(
+                opt(ws_with_comments),
+                terminated(instruction, opt(ws_with_comments)),
+            )),
             preceded(opt(ws_with_comments), ws(terminator)),
         )),
         |(label, instructions, terminator)| BasicBlock {
@@ -725,7 +703,10 @@ fn function(input: &str) -> ParseResult<'_, Function> {
 // Globals
 fn initializer(input: &str) -> ParseResult<'_, Initializer> {
     map(
-        preceded(tuple((tag("addr"), ws(char('(')))), terminated(hex_literal, ws(char(')')))),
+        preceded(
+            tuple((tag("addr"), ws(char('(')))),
+            terminated(hex_literal, ws(char(')'))),
+        ),
         Initializer::Addr,
     )(input)
 }
@@ -753,7 +734,10 @@ pub fn module(input: &str) -> ParseResult<'_, Module> {
             opt(ws_with_comments),
             many0(preceded(
                 opt(ws_with_comments),
-                alt((map(global, |g| (Some(g), None)), map(function, |f| (None, Some(f))))),
+                alt((
+                    map(global, |g| (Some(g), None)),
+                    map(function, |f| (None, Some(f))),
+                )),
             )),
         ),
         |items| {

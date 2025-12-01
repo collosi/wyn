@@ -219,7 +219,7 @@ impl Constructor {
 
         // Constants
         let scope_device = self.const_i32(1);
-        let semantics_acq_rel = self.const_i32(0x8);  // AcquireRelease for storage buffer atomics
+        let semantics_acq_rel = self.const_i32(0x8); // AcquireRelease for storage buffer atomics
         let const_0 = self.const_i32(0);
         let const_2 = self.const_i32(2);
         let count_u32 = self.builder.constant_bit32(self.u32_type, count);
@@ -744,7 +744,9 @@ impl Constructor {
             gasm_func,
             self.gasm_globals.clone(),
         )
-        .map_err(|e| CompilerError::SpirvError(format!("Failed to lower GASM function {}: {}", gasm_func.name, e)))?;
+        .map_err(|e| {
+            CompilerError::SpirvError(format!("Failed to lower GASM function {}: {}", gasm_func.name, e))
+        })?;
 
         // Cache it
         self.gasm_function_cache.insert(gasm_func.name.clone(), func_id);
@@ -1085,7 +1087,8 @@ impl<'a> LowerCtx<'a> {
                         &mut constructor.builder,
                         &gasm_func,
                         constructor.gasm_globals.clone(),
-                    ).expect(&format!("Failed to pre-lower GASM function {}", func_name));
+                    )
+                    .expect(&format!("Failed to pre-lower GASM function {}", func_name));
                     constructor.gasm_function_cache.insert(gasm_func.name.clone(), func_id);
                 }
             }
@@ -2313,8 +2316,14 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                                 arg_ids[0],
                                             )?;
                                             // Call @gdp_encode_uint GASM builtin
-                                            let gasm_func = constructor.builtin_registry.get_gasm_function("gdp_encode_uint")
-                                                .ok_or_else(|| CompilerError::SpirvError("gdp_encode_uint not found".to_string()))?
+                                            let gasm_func = constructor
+                                                .builtin_registry
+                                                .get_gasm_function("gdp_encode_uint")
+                                                .ok_or_else(|| {
+                                                    CompilerError::SpirvError(
+                                                        "gdp_encode_uint not found".to_string(),
+                                                    )
+                                                })?
                                                 .clone();
                                             let func_id = constructor.lower_gasm_function(&gasm_func)?;
                                             constructor.builder.function_call(
@@ -2333,8 +2342,14 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                         // Debug intrinsic: call GASM @gdp_encode_float32
                                         if constructor.debug_buffer.is_some() {
                                             // Call @gdp_encode_float32 GASM builtin
-                                            let gasm_func = constructor.builtin_registry.get_gasm_function("gdp_encode_float32")
-                                                .ok_or_else(|| CompilerError::SpirvError("gdp_encode_float32 not found".to_string()))?
+                                            let gasm_func = constructor
+                                                .builtin_registry
+                                                .get_gasm_function("gdp_encode_float32")
+                                                .ok_or_else(|| {
+                                                    CompilerError::SpirvError(
+                                                        "gdp_encode_float32 not found".to_string(),
+                                                    )
+                                                })?
                                                 .clone();
                                             let func_id = constructor.lower_gasm_function(&gasm_func)?;
                                             constructor.builder.function_call(
@@ -2360,33 +2375,65 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
 
                                             // Create a global constant array for the string bytes
                                             let u8_type = constructor.builder.type_int(8, 0);
-                                            let str_bytes: Vec<u32> = str_value.bytes().map(|b| b as u32).collect();
+                                            let str_bytes: Vec<u32> =
+                                                str_value.bytes().map(|b| b as u32).collect();
                                             let array_len = str_bytes.len() as u32;
-                                            let array_len_const = constructor.builder.constant_bit32(constructor.u32_type, array_len);
-                                            let array_type = constructor.builder.type_array(u8_type, array_len_const);
+                                            let array_len_const = constructor
+                                                .builder
+                                                .constant_bit32(constructor.u32_type, array_len);
+                                            let array_type =
+                                                constructor.builder.type_array(u8_type, array_len_const);
 
                                             // Create constants for each byte
-                                            let byte_constants: Vec<spirv::Word> = str_bytes.iter()
+                                            let byte_constants: Vec<spirv::Word> = str_bytes
+                                                .iter()
                                                 .map(|&b| constructor.builder.constant_bit32(u8_type, b))
                                                 .collect();
 
                                             // Create array constant
-                                            let array_const = constructor.builder.constant_composite(array_type, byte_constants);
+                                            let array_const = constructor
+                                                .builder
+                                                .constant_composite(array_type, byte_constants);
 
                                             // Create global variable for the array
-                                            let ptr_type = constructor.builder.type_pointer(None, spirv::StorageClass::Private, array_type);
-                                            let global_var = constructor.builder.variable(ptr_type, None, spirv::StorageClass::Private, Some(array_const));
+                                            let ptr_type = constructor.builder.type_pointer(
+                                                None,
+                                                spirv::StorageClass::Private,
+                                                array_type,
+                                            );
+                                            let global_var = constructor.builder.variable(
+                                                ptr_type,
+                                                None,
+                                                spirv::StorageClass::Private,
+                                                Some(array_const),
+                                            );
 
                                             // Cast to pointer to u8
-                                            let u8_ptr_type = constructor.builder.type_pointer(None, spirv::StorageClass::Private, u8_type);
-                                            let str_ptr = constructor.builder.bitcast(u8_ptr_type, None, global_var)?;
+                                            let u8_ptr_type = constructor.builder.type_pointer(
+                                                None,
+                                                spirv::StorageClass::Private,
+                                                u8_type,
+                                            );
+                                            let str_ptr = constructor.builder.bitcast(
+                                                u8_ptr_type,
+                                                None,
+                                                global_var,
+                                            )?;
 
                                             // Length as u32
-                                            let str_len = constructor.builder.constant_bit32(constructor.u32_type, array_len);
+                                            let str_len = constructor
+                                                .builder
+                                                .constant_bit32(constructor.u32_type, array_len);
 
                                             // Call @gdp_encode_string GASM builtin
-                                            let gasm_func = constructor.builtin_registry.get_gasm_function("gdp_encode_string")
-                                                .ok_or_else(|| CompilerError::SpirvError("gdp_encode_string not found".to_string()))?
+                                            let gasm_func = constructor
+                                                .builtin_registry
+                                                .get_gasm_function("gdp_encode_string")
+                                                .ok_or_else(|| {
+                                                    CompilerError::SpirvError(
+                                                        "gdp_encode_string not found".to_string(),
+                                                    )
+                                                })?
                                                 .clone();
                                             let func_id = constructor.lower_gasm_function(&gasm_func)?;
                                             constructor.builder.function_call(
@@ -2430,7 +2477,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                 Ok(constructor.builder.function_call(
                                     result_type,
                                     None,
-                                        func_id,
+                                    func_id,
                                     arg_ids,
                                 )?)
                             }

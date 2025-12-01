@@ -323,7 +323,7 @@ impl BuiltinRegistry {
             Err(e) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!("GASM parse error: {:?}", e)
+                    format!("GASM parse error: {:?}", e),
                 ));
             }
         };
@@ -350,9 +350,7 @@ impl BuiltinRegistry {
     /// Register a GASM function as a builtin
     fn register_gasm_function(&mut self, function: gasm::Function) {
         // Strip "@" prefix from GASM function name
-        let name = function.name.strip_prefix('@')
-            .unwrap_or(&function.name)
-            .to_string();
+        let name = function.name.strip_prefix('@').unwrap_or(&function.name).to_string();
 
         // Store the function in gasm_functions map for direct SPIR-V access
         self.gasm_functions.insert(name.clone(), function.clone());
@@ -373,15 +371,16 @@ impl BuiltinRegistry {
 
         let return_type = match &function.return_type {
             gasm::ReturnType::Void => Self::ty("()"),
-            gasm::ReturnType::Type(t) => {
-                match self.gasm_type_to_wyn(t) {
-                    Some(ty) => ty,
-                    None => {
-                        eprintln!("Warning: unsupported return type in GASM function {}", function.name);
-                        return;
-                    }
+            gasm::ReturnType::Type(t) => match self.gasm_type_to_wyn(t) {
+                Some(ty) => ty,
+                None => {
+                    eprintln!(
+                        "Warning: unsupported return type in GASM function {}",
+                        function.name
+                    );
+                    return;
                 }
-            }
+            },
         };
 
         // Build function type

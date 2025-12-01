@@ -2,10 +2,9 @@
 ///
 /// This module provides lowering from GASM (Graphics Assembly) IR to SPIR-V.
 /// GASM is a low-level SSA-based IR that closely mirrors SPIR-V operations.
-
 use gasm::{
-    AddressSpace, BasicBlock, Constant, Function, Global, Module, Operation, ReturnType,
-    Terminator, Type, Value,
+    AddressSpace, BasicBlock, Constant, Function, Global, Module, Operation, ReturnType, Terminator, Type,
+    Value,
 };
 use rspirv::binary::Assemble;
 use rspirv::dr::Builder;
@@ -59,10 +58,7 @@ impl GasmLowering {
         // Set up SPIR-V header
         self.builder.capability(spirv::Capability::Shader);
         self.builder.capability(spirv::Capability::VulkanMemoryModel);
-        self.builder.memory_model(
-            spirv::AddressingModel::Logical,
-            spirv::MemoryModel::Vulkan,
-        );
+        self.builder.memory_model(spirv::AddressingModel::Logical, spirv::MemoryModel::Vulkan);
 
         // Lower globals
         for global in &module.globals {
@@ -138,11 +134,8 @@ impl GasmLowering {
     /// Declare a function (create its type and ID)
     fn declare_function(&mut self, function: &Function) -> Result<(), String> {
         // Build parameter types
-        let param_types: Vec<Word> = function
-            .params
-            .iter()
-            .map(|p| self.get_or_create_type(&p.ty))
-            .collect();
+        let param_types: Vec<Word> =
+            function.params.iter().map(|p| self.get_or_create_type(&p.ty)).collect();
 
         // Build return type
         let return_type_id = match &function.return_type {
@@ -156,12 +149,7 @@ impl GasmLowering {
         // Create function
         let fn_id = self
             .builder
-            .begin_function(
-                return_type_id,
-                None,
-                spirv::FunctionControl::NONE,
-                fn_type,
-            )
+            .begin_function(return_type_id, None, spirv::FunctionControl::NONE, fn_type)
             .unwrap();
 
         self.functions.insert(function.name.clone(), fn_id);
@@ -179,15 +167,14 @@ impl GasmLowering {
         self.labels.clear();
 
         // Get function ID
-        let fn_id = *self.functions.get(&function.name)
+        let fn_id = *self
+            .functions
+            .get(&function.name)
             .ok_or_else(|| format!("Function {} not declared", function.name))?;
 
         // Build parameter types and return type again
-        let param_types: Vec<Word> = function
-            .params
-            .iter()
-            .map(|p| self.get_or_create_type(&p.ty))
-            .collect();
+        let param_types: Vec<Word> =
+            function.params.iter().map(|p| self.get_or_create_type(&p.ty)).collect();
 
         let return_type_id = match &function.return_type {
             ReturnType::Void => self.builder.type_void(),
@@ -197,12 +184,9 @@ impl GasmLowering {
         let fn_type = self.builder.type_function(return_type_id, param_types.clone());
 
         // Begin function
-        self.builder.begin_function(
-            return_type_id,
-            Some(fn_id),
-            spirv::FunctionControl::NONE,
-            fn_type,
-        ).unwrap();
+        self.builder
+            .begin_function(return_type_id, Some(fn_id), spirv::FunctionControl::NONE, fn_type)
+            .unwrap();
 
         // Create parameters
         for param in &function.params {
@@ -231,8 +215,8 @@ impl GasmLowering {
     /// Lower a basic block
     fn lower_basic_block(&mut self, block: &BasicBlock) -> Result<(), String> {
         // Get the label ID
-        let label_id = *self.labels.get(&block.label)
-            .ok_or_else(|| format!("Label {} not found", block.label))?;
+        let label_id =
+            *self.labels.get(&block.label).ok_or_else(|| format!("Label {} not found", block.label))?;
 
         // Begin basic block
         self.builder.begin_block(Some(label_id)).unwrap();
@@ -250,11 +234,7 @@ impl GasmLowering {
 
     /// Lower an instruction
     fn lower_instruction(&mut self, inst: &gasm::Instruction) -> Result<(), String> {
-        let _result_id = if let Some(_result_name) = &inst.result {
-            Some(self.builder.id())
-        } else {
-            None
-        };
+        let _result_id = if let Some(_result_name) = &inst.result { Some(self.builder.id()) } else { None };
 
         // Lower the operation
         match &inst.op {
@@ -290,7 +270,9 @@ impl GasmLowering {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
                 // TODO: Get result type properly
-                let result_id = self.builder.bitwise_and(self.u32_type, None, lhs_id, rhs_id)
+                let result_id = self
+                    .builder
+                    .bitwise_and(self.u32_type, None, lhs_id, rhs_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
@@ -299,7 +281,9 @@ impl GasmLowering {
             Operation::Or(lhs, rhs) => {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
-                let result_id = self.builder.bitwise_or(self.u32_type, None, lhs_id, rhs_id)
+                let result_id = self
+                    .builder
+                    .bitwise_or(self.u32_type, None, lhs_id, rhs_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
@@ -308,7 +292,9 @@ impl GasmLowering {
             Operation::Shl(lhs, rhs) => {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
-                let result_id = self.builder.shift_left_logical(self.u32_type, None, lhs_id, rhs_id)
+                let result_id = self
+                    .builder
+                    .shift_left_logical(self.u32_type, None, lhs_id, rhs_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
@@ -317,7 +303,9 @@ impl GasmLowering {
             Operation::Shr(lhs, rhs) => {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
-                let result_id = self.builder.shift_right_logical(self.u32_type, None, lhs_id, rhs_id)
+                let result_id = self
+                    .builder
+                    .shift_right_logical(self.u32_type, None, lhs_id, rhs_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
@@ -327,7 +315,9 @@ impl GasmLowering {
             Operation::Add(lhs, rhs) => {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
-                let result_id = self.builder.i_add(self.u32_type, None, lhs_id, rhs_id)
+                let result_id = self
+                    .builder
+                    .i_add(self.u32_type, None, lhs_id, rhs_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
@@ -336,7 +326,9 @@ impl GasmLowering {
             Operation::Sub(lhs, rhs) => {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
-                let result_id = self.builder.i_sub(self.u32_type, None, lhs_id, rhs_id)
+                let result_id = self
+                    .builder
+                    .i_sub(self.u32_type, None, lhs_id, rhs_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
@@ -345,7 +337,9 @@ impl GasmLowering {
             Operation::Rem(lhs, rhs) => {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
-                let result_id = self.builder.u_mod(self.u32_type, None, lhs_id, rhs_id)
+                let result_id = self
+                    .builder
+                    .u_mod(self.u32_type, None, lhs_id, rhs_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
@@ -356,7 +350,9 @@ impl GasmLowering {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
                 let bool_type = self.builder.type_bool();
-                let result_id = self.builder.u_less_than(bool_type, None, lhs_id, rhs_id)
+                let result_id = self
+                    .builder
+                    .u_less_than(bool_type, None, lhs_id, rhs_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
@@ -367,7 +363,9 @@ impl GasmLowering {
                 let cond_id = self.get_value(cond)?;
                 let true_id = self.get_value(true_val)?;
                 let false_id = self.get_value(false_val)?;
-                let result_id = self.builder.select(self.u32_type, None, cond_id, true_id, false_id)
+                let result_id = self
+                    .builder
+                    .select(self.u32_type, None, cond_id, true_id, false_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
@@ -377,7 +375,9 @@ impl GasmLowering {
             Operation::Bitcast(val) => {
                 let val_id = self.get_value(val)?;
                 // TODO: Get proper result type
-                let result_id = self.builder.bitcast(self.u32_type, None, val_id)
+                let result_id = self
+                    .builder
+                    .bitcast(self.u32_type, None, val_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
@@ -387,7 +387,9 @@ impl GasmLowering {
             Operation::Load(ptr) => {
                 let ptr_id = self.get_value(ptr)?;
                 // TODO: Get proper result type
-                let result_id = self.builder.load(self.u32_type, None, ptr_id, None, [])
+                let result_id = self
+                    .builder
+                    .load(self.u32_type, None, ptr_id, None, [])
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
@@ -396,7 +398,8 @@ impl GasmLowering {
             Operation::Store(ptr, value) => {
                 let ptr_id = self.get_value(ptr)?;
                 let value_id = self.get_value(value)?;
-                self.builder.store(ptr_id, value_id, None, [])
+                self.builder
+                    .store(ptr_id, value_id, None, [])
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 return Ok(());
             }
@@ -407,14 +410,36 @@ impl GasmLowering {
                 // SPIR-V AccessChain: access an element of a composite
                 // For now, simple pointer arithmetic
                 // TODO: Implement proper GEP
-                let result_id = self.builder.access_chain(self.u32_type, None, base_id, [index_id])
+                let result_id = self
+                    .builder
+                    .access_chain(self.u32_type, None, base_id, [index_id])
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
             }
 
             // Atomic operations
-            Operation::AtomicRmw { op, ptr, value, ordering, scope } => {
+            Operation::AtomicLoad { ptr, ordering, scope } => {
+                let ptr_id = self.get_value(ptr)?;
+                let scope_id = self.lower_memory_scope(scope);
+                let ordering_id = self.lower_memory_ordering(ordering);
+
+                let result_id = self
+                    .builder
+                    .atomic_load(self.u32_type, None, ptr_id, scope_id, ordering_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+
+                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
+                return Ok(());
+            }
+
+            Operation::AtomicRmw {
+                op,
+                ptr,
+                value,
+                ordering,
+                scope,
+            } => {
                 use gasm::AtomicOp;
                 let ptr_id = self.get_value(ptr)?;
                 let value_id = self.get_value(value)?;
@@ -422,16 +447,10 @@ impl GasmLowering {
                 let ordering_id = self.lower_memory_ordering(ordering);
 
                 let result_id = match op {
-                    AtomicOp::Add => {
-                        self.builder.atomic_i_add(
-                            self.u32_type,
-                            None,
-                            ptr_id,
-                            scope_id,
-                            ordering_id,
-                            value_id,
-                        ).map_err(|e| format!("SPIR-V error: {:?}", e))?
-                    }
+                    AtomicOp::Add => self
+                        .builder
+                        .atomic_i_add(self.u32_type, None, ptr_id, scope_id, ordering_id, value_id)
+                        .map_err(|e| format!("SPIR-V error: {:?}", e))?,
                     _ => return Err(format!("Atomic operation {:?} not yet implemented", op)),
                 };
 
@@ -498,17 +517,13 @@ impl GasmLowering {
     /// Get the SPIR-V ID for a GASM value
     fn get_value(&self, value: &Value) -> Result<Word, String> {
         match value {
-            Value::Register(name) => self.registers
-                .get(name)
-                .copied()
-                .ok_or_else(|| format!("Register {} not found", name)),
-            Value::Global(name) => self.globals
-                .get(name)
-                .copied()
-                .ok_or_else(|| format!("Global {} not found", name)),
-            Value::Constant(_) => {
-                Err("Constants should be lowered separately".to_string())
+            Value::Register(name) => {
+                self.registers.get(name).copied().ok_or_else(|| format!("Register {} not found", name))
             }
+            Value::Global(name) => {
+                self.globals.get(name).copied().ok_or_else(|| format!("Global {} not found", name))
+            }
+            Value::Constant(_) => Err("Constants should be lowered separately".to_string()),
         }
     }
 
@@ -551,16 +566,24 @@ impl GasmLowering {
             }
 
             Terminator::Br(label) => {
-                let label_id = *self.labels.get(label)
-                    .ok_or_else(|| format!("Label {} not found", label))?;
+                let label_id =
+                    *self.labels.get(label).ok_or_else(|| format!("Label {} not found", label))?;
                 self.builder.branch(label_id).unwrap();
             }
 
-            Terminator::BrIf { cond, true_label, false_label } => {
+            Terminator::BrIf {
+                cond,
+                true_label,
+                false_label,
+            } => {
                 let cond_id = self.get_value(cond)?;
-                let true_id = *self.labels.get(true_label)
+                let true_id = *self
+                    .labels
+                    .get(true_label)
                     .ok_or_else(|| format!("Label {} not found", true_label))?;
-                let false_id = *self.labels.get(false_label)
+                let false_id = *self
+                    .labels
+                    .get(false_label)
                     .ok_or_else(|| format!("Label {} not found", false_label))?;
                 self.builder.branch_conditional(cond_id, true_id, false_id, []).unwrap();
             }

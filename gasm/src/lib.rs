@@ -139,7 +139,11 @@ entry:
 "#;
 
         let result = parse_function(input);
-        assert!(result.is_ok(), "Failed to parse gdp_encode_float32: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to parse gdp_encode_float32: {:?}",
+            result.err()
+        );
         let func = result.unwrap();
 
         // Validate function structure
@@ -149,10 +153,7 @@ entry:
         assert!(matches!(func.params[0].ty, Type::F32));
 
         // Validate return type
-        assert!(matches!(
-            func.return_type,
-            ReturnType::Type(Type::U32)
-        ));
+        assert!(matches!(func.return_type, ReturnType::Type(Type::U32)));
 
         // Validate basic block exists
         assert_eq!(func.blocks.len(), 1);
@@ -163,15 +164,10 @@ entry:
         assert!(instructions.len() > 40); // Should have many instructions
 
         // Validate first instruction is bitcast
-        assert!(matches!(
-            instructions[0].op,
-            Operation::Bitcast(_)
-        ));
+        assert!(matches!(instructions[0].op, Operation::Bitcast(_)));
 
         // Validate we have select operations for byte count determination
-        let has_select = instructions
-            .iter()
-            .any(|inst| matches!(inst.op, Operation::Select(_, _, _)));
+        let has_select = instructions.iter().any(|inst| matches!(inst.op, Operation::Select(_, _, _)));
         assert!(has_select);
 
         // Validate terminator is ret
@@ -208,7 +204,11 @@ entry:
 "#;
 
         let result = parse_function(input);
-        assert!(result.is_ok(), "Failed to parse byte_reversal: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to parse byte_reversal: {:?}",
+            result.err()
+        );
         let func = result.unwrap();
         assert_eq!(func.name, "swap_bytes_u32");
         assert_eq!(func.blocks[0].instructions.len(), 16);
@@ -308,10 +308,7 @@ done:
         let done_block = &func.blocks[2];
         assert_eq!(done_block.label, "done");
         assert_eq!(done_block.instructions.len(), 1);
-        assert!(matches!(
-            done_block.instructions[0].op,
-            Operation::Phi { .. }
-        ));
+        assert!(matches!(done_block.instructions[0].op, Operation::Phi { .. }));
     }
 
     #[test]
@@ -519,7 +516,10 @@ full_exit:
         if let Err(e) = &result {
             eprintln!("Parse error: {:?}", e);
         }
-        assert!(result.is_ok(), "Should parse last 5 instructions from gdp_encode_float32");
+        assert!(
+            result.is_ok(),
+            "Should parse last 5 instructions from gdp_encode_float32"
+        );
     }
 
     #[test]
@@ -580,13 +580,19 @@ entry:
             if let Some(func_start) = content.find("func @gdp_encode_float32") {
                 if let Some(next_func_pos) = content[func_start..].find("\nfunc @") {
                     // Find the last closing brace before the next function
-                    let before_next = &content[func_start..func_start+next_func_pos];
+                    let before_next = &content[func_start..func_start + next_func_pos];
                     if let Some(closing_brace_offset) = before_next.rfind('}') {
                         // Extract from the beginning (including global) to end of first function
-                        let module_content = &content[..func_start+closing_brace_offset+1];
+                        let module_content = &content[..func_start + closing_brace_offset + 1];
                         eprintln!("Extracted module with {} bytes", module_content.len());
-                        eprintln!("Starts with: {:?}", &module_content[..100.min(module_content.len())]);
-                        eprintln!("Ends with: {:?}", &module_content[module_content.len().saturating_sub(100)..]);
+                        eprintln!(
+                            "Starts with: {:?}",
+                            &module_content[..100.min(module_content.len())]
+                        );
+                        eprintln!(
+                            "Ends with: {:?}",
+                            &module_content[module_content.len().saturating_sub(100)..]
+                        );
 
                         // Try parsing with parse_module
                         let result = parse_module(module_content);
@@ -594,11 +600,17 @@ entry:
                             eprintln!("Parse error with parse_module: {:?}", e);
                             panic!("Failed to parse module: {:?}", e);
                         } else {
-                            eprintln!("parse_module succeeded! Got {} globals and {} functions",
+                            eprintln!(
+                                "parse_module succeeded! Got {} globals and {} functions",
                                 result.as_ref().unwrap().globals.len(),
-                                result.as_ref().unwrap().functions.len());
+                                result.as_ref().unwrap().functions.len()
+                            );
                             assert_eq!(result.as_ref().unwrap().globals.len(), 1, "Should have 1 global");
-                            assert_eq!(result.as_ref().unwrap().functions.len(), 1, "Should have 1 function");
+                            assert_eq!(
+                                result.as_ref().unwrap().functions.len(),
+                                1,
+                                "Should have 1 function"
+                            );
                         }
                     } else {
                         panic!("Could not find closing brace for first function");
@@ -937,7 +949,11 @@ full_exit2:
         assert_eq!(func.name, "gdp_encode_uint");
         assert_eq!(func.params.len(), 1);
         // Should have: entry, encode_inline, exit_inline, reserve_inline, encode_full, check_wrap2, wrap_to_zero2, normal_reserve2, write_data2, full_exit2
-        assert!(func.blocks.len() >= 8, "Expected at least 8 blocks, got {}", func.blocks.len());
+        assert!(
+            func.blocks.len() >= 8,
+            "Expected at least 8 blocks, got {}",
+            func.blocks.len()
+        );
     }
 
     #[test]
@@ -1068,7 +1084,10 @@ encode_exit:
         assert_eq!(func.name, "gdp_encode_string");
         assert_eq!(func.params.len(), 2);
         // Should have: entry, encode_short, pack_loop, pack_byte, pack_continue, write_word, finalize, write_final, encode_exit
-        assert!(func.blocks.len() >= 8, "Expected at least 8 blocks, got {}", func.blocks.len());
+        assert!(
+            func.blocks.len() >= 8,
+            "Expected at least 8 blocks, got {}",
+            func.blocks.len()
+        );
     }
 }
-
