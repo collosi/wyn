@@ -92,10 +92,8 @@ struct Constructor {
     current_input_vars: Vec<(spirv::Word, String, spirv::Word)>, // (var_id, param_name, type_id)
     current_used_globals: Vec<spirv::Word>, // Global constants accessed in current entry point
 
-    // Global constants: name -> (var_id, type_id)
-    global_constants: HashMap<String, (spirv::Word, spirv::Word)>,
-    // Pending constant initializations: (var_id, body_expr)
-    pending_constant_inits: Vec<(spirv::Word, Expr)>,
+    // Global constants: name -> constant_id (SPIR-V OpConstant)
+    global_constants: HashMap<String, spirv::Word>,
 
     // Lambda registry: tag index -> (function_name, arity)
     lambda_registry: Vec<(String, usize)>,
@@ -106,9 +104,6 @@ struct Constructor {
     // Debug mode: when Some, contains buffer_var_id for the @gdp_buffer global
     // The buffer is a StorageBuffer with layout: [write_head, read_head, max_loops, data[4093]]
     debug_buffer: Option<spirv::Word>,
-
-    // Init guard buffer: StorageBuffer for atomic guard used in _init function
-    init_guard_buffer: Option<spirv::Word>,
 
     // GASM globals: maps GASM global names (like "@gdp_buffer") to SPIR-V variable IDs
     gasm_globals: HashMap<String, spirv::Word>,
@@ -157,11 +152,9 @@ impl Constructor {
             current_input_vars: Vec::new(),
             current_used_globals: Vec::new(),
             global_constants: HashMap::new(),
-            pending_constant_inits: Vec::new(),
             lambda_registry: Vec::new(),
             builtin_registry: BuiltinRegistry::default(),
             debug_buffer: None,
-            init_guard_buffer: None,
             gasm_globals: HashMap::new(),
             gasm_type_cache: HashMap::new(),
         }
@@ -706,18 +699,16 @@ impl<'a> LowerCtx<'a> {
                     lower_regular_function(&mut self.constructor, name, params, ret_type, body)?;
                 }
             }
-            Def::Constant { name, ty, body, .. } => {
+            Def::Constant { name, body, .. } => {
                 // First, ensure all dependencies are lowered
                 self.ensure_deps_lowered(body)?;
 
-                // Create global variable for constant (Private storage class)
-                let value_type = self.constructor.ast_type_to_spirv(ty);
-                let ptr_type = self.constructor.get_or_create_ptr_type(StorageClass::Private, value_type);
-                let var_id = self.constructor.builder.variable(ptr_type, None, StorageClass::Private, None);
+                // Evaluate the constant expression at compile time
+                // TODO: Validate that body is a literal or compile-time foldable expression
+                let const_id = lower_const_expr(&mut self.constructor, body)?;
 
-                // Store for later initialization and lookup
-                self.constructor.global_constants.insert(name.clone(), (var_id, value_type));
-                self.constructor.pending_constant_inits.push((var_id, body.clone()));
+                // Store constant ID for lookup
+                self.constructor.global_constants.insert(name.clone(), const_id);
             }
         }
         Ok(())
@@ -792,35 +783,22 @@ impl<'a> LowerCtx<'a> {
 
     /// Run the lowering, starting from entry points
     fn run(mut self) -> Result<Vec<u32>> {
-        // Pre-declare _init function so entry points can call it
-        // We'll fill in the body after lowering all constants
-        declare_init_function(&mut self.constructor)?;
-
         // Lower all entry points (and their dependencies)
         let entry_names: Vec<String> = self.entry_points.iter().map(|(n, _)| n.clone()).collect();
         for name in entry_names {
             self.ensure_lowered(&name)?;
         }
 
-        // Generate _init function body to initialize global constants
-        generate_init_function_body(&mut self.constructor)?;
-
         // Emit entry points with interface variables
         for (name, model) in &self.entry_points {
             if let Some(&func_id) = self.constructor.functions.get(name) {
                 let mut interfaces =
                     self.constructor.entry_point_interfaces.get(name).cloned().unwrap_or_default();
-                // Add all global constants to interface (they may be used transitively)
-                for &(var_id, _) in self.constructor.global_constants.values() {
-                    interfaces.push(var_id);
-                }
+                // Global constants are now true OpConstants (not variables), so they don't need
+                // to be added to the interface list
                 // Add debug buffer to interface if present
                 if let Some(debug_buffer_var) = self.constructor.debug_buffer {
                     interfaces.push(debug_buffer_var);
-                }
-                // Add init guard buffer to interface if present
-                if let Some(guard_buffer_var) = self.constructor.init_guard_buffer {
-                    interfaces.push(guard_buffer_var);
                 }
                 self.constructor.builder.entry_point(*model, func_id, name, interfaces);
 
@@ -843,178 +821,6 @@ impl<'a> LowerCtx<'a> {
 pub fn lower(program: &mir::Program, debug_enabled: bool) -> Result<Vec<u32>> {
     let ctx = LowerCtx::new(program, debug_enabled);
     ctx.run()
-}
-
-/// Pre-declare _init function so entry points can call it
-fn declare_init_function(constructor: &mut Constructor) -> Result<()> {
-    let func_id = constructor.builder.id();
-    constructor.functions.insert("_init".to_string(), func_id);
-    Ok(())
-}
-
-/// Generate _init function body that initializes all global constants
-/// Uses an atomic guard with three states:
-///   0 = not initialized
-///   1 = initialization in progress
-///   2 = initialized
-fn generate_init_function_body(constructor: &mut Constructor) -> Result<()> {
-    // Take pending inits to avoid borrow issues
-    let inits = std::mem::take(&mut constructor.pending_constant_inits);
-
-    // Get the pre-declared function ID
-    let func_id = *constructor.functions.get("_init").unwrap();
-
-    // void(void) function type
-    let func_type = constructor.builder.type_function(constructor.void_type, vec![]);
-
-    // Create guard variable in StorageBuffer (required for atomics)
-    // Structure: { guard: u32 }
-    let guard_struct_type = constructor.builder.type_struct([constructor.u32_type]);
-    constructor.builder.decorate(
-        guard_struct_type,
-        spirv::Decoration::Block,
-        [],
-    );
-    constructor.builder.member_decorate(
-        guard_struct_type,
-        0,
-        spirv::Decoration::Offset,
-        [rspirv::dr::Operand::LiteralBit32(0)],
-    );
-
-    let ptr_struct_type = constructor
-        .builder
-        .type_pointer(None, StorageClass::StorageBuffer, guard_struct_type);
-    let guard_buffer = constructor
-        .builder
-        .variable(ptr_struct_type, None, StorageClass::StorageBuffer, None);
-
-    // Store guard buffer for entry point interface
-    constructor.init_guard_buffer = Some(guard_buffer);
-
-    // Bind to descriptor set 0, binding 1 (assuming debug buffer is binding 0)
-    constructor.builder.decorate(
-        guard_buffer,
-        spirv::Decoration::DescriptorSet,
-        [rspirv::dr::Operand::LiteralBit32(0)],
-    );
-    constructor.builder.decorate(
-        guard_buffer,
-        spirv::Decoration::Binding,
-        [rspirv::dr::Operand::LiteralBit32(1)],
-    );
-
-    // Get pointer to the guard field
-    let ptr_u32_type = constructor
-        .builder
-        .type_pointer(None, StorageClass::StorageBuffer, constructor.u32_type);
-
-    // Begin the function with the pre-declared ID
-    constructor.builder.begin_function(
-        constructor.void_type,
-        Some(func_id),
-        spirv::FunctionControl::NONE,
-        func_type,
-    )?;
-
-    // Block labels
-    let entry_block = constructor.builder.id();
-    let spin_header = constructor.builder.id();
-    let spin_body = constructor.builder.id();
-    let spin_merge = constructor.builder.id();
-    let do_init_block = constructor.builder.id();
-    let done_block = constructor.builder.id();
-
-    // Entry block: try to acquire (0 -> 1)
-    constructor.builder.begin_block(Some(entry_block))?;
-
-    let const_0 = constructor.const_u32(0);
-    let const_1 = constructor.const_u32(1);
-    let const_2 = constructor.const_u32(2);
-    let scope_device = constructor.const_u32(1); // Device scope
-    let mem_semantics_acq_rel = constructor.const_u32(0x8); // AcquireRelease
-    let mem_semantics_acquire = constructor.const_u32(0x2); // Acquire (for failure case)
-
-    // Get pointer to guard field (guard_buffer.guard)
-    let guard_ptr = constructor.builder.access_chain(
-        ptr_u32_type,
-        None,
-        guard_buffer,
-        [const_0],
-    )?;
-
-    // AtomicCompareExchange: try to swap 0 -> 1
-    let old_value = constructor.builder.atomic_compare_exchange(
-        constructor.u32_type,
-        None,
-        guard_ptr,
-        scope_device,
-        mem_semantics_acq_rel,
-        mem_semantics_acquire,
-        const_1,
-        const_0,
-    )?;
-
-    // If old == 0, we won the race -> do_init
-    // If old == 1, someone else is initializing -> spin
-    // If old == 2, already initialized -> done
-    let is_zero = constructor.builder.i_equal(constructor.bool_type, None, old_value, const_0)?;
-    constructor.builder.selection_merge(done_block, spirv::SelectionControl::NONE)?;
-    constructor.builder.branch_conditional(is_zero, do_init_block, spin_header, [])?;
-
-    // Spin loop header
-    constructor.builder.begin_block(Some(spin_header))?;
-    constructor.builder.loop_merge(spin_merge, spin_body, spirv::LoopControl::NONE, [])?;
-    constructor.builder.branch(spin_body)?;
-
-    // Spin loop body: check if guard == 2
-    constructor.builder.begin_block(Some(spin_body))?;
-    // Need to get guard_ptr again in this block
-    let guard_ptr_spin = constructor.builder.access_chain(
-        ptr_u32_type,
-        None,
-        guard_buffer,
-        [const_0],
-    )?;
-    let current = constructor.builder.atomic_load(
-        constructor.u32_type,
-        None,
-        guard_ptr_spin,
-        scope_device,
-        mem_semantics_acquire,
-    )?;
-    let is_done = constructor.builder.i_equal(constructor.bool_type, None, current, const_2)?;
-    constructor.builder.branch_conditional(is_done, spin_merge, spin_header, [])?;
-
-    // Spin merge: exit loop and go to done
-    constructor.builder.begin_block(Some(spin_merge))?;
-    constructor.builder.branch(done_block)?;
-
-    // Do init block: perform initialization, then set guard = 2
-    constructor.builder.begin_block(Some(do_init_block))?;
-
-    for (var_id, body) in inits {
-        let value = lower_expr(constructor, &body)?;
-        constructor.builder.store(var_id, value, None, [])?;
-    }
-
-    // Set guard to 2 (initialized)
-    let guard_ptr_init = constructor.builder.access_chain(
-        ptr_u32_type,
-        None,
-        guard_buffer,
-        [const_0],
-    )?;
-    let mem_semantics_release = constructor.const_u32(0x4); // Release
-    constructor.builder.atomic_store(guard_ptr_init, scope_device, mem_semantics_release, const_2)?;
-    constructor.builder.branch(done_block)?;
-
-    // Done block: return
-    constructor.builder.begin_block(Some(done_block))?;
-    constructor.builder.ret()?;
-    constructor.builder.end_function()?;
-
-    Ok(())
 }
 
 fn lower_regular_function(
@@ -1239,11 +1045,6 @@ fn lower_entry_point(
     constructor.builder.begin_block(Some(code_block_id))?;
     constructor.current_block = Some(code_block_id);
 
-    // Call _init to initialize global constants
-    if let Some(&init_func_id) = constructor.functions.get("_init") {
-        constructor.builder.function_call(constructor.void_type, None, init_func_id, [])?;
-    }
-
     // Load input variables into environment
     for (var_id, param_name, type_id) in constructor.current_input_vars.clone() {
         let loaded = constructor.builder.load(type_id, None, var_id, None, [])?;
@@ -1305,6 +1106,45 @@ fn lower_entry_point(
     Ok(())
 }
 
+/// Lower a constant expression at compile time.
+/// This is used for global constants which must be compile-time evaluable.
+/// Currently supports: literals, references to other constants, and basic arithmetic.
+fn lower_const_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word> {
+    match &expr.kind {
+        ExprKind::Literal(lit) => lower_literal(constructor, lit),
+
+        ExprKind::Var(name) => {
+            // Reference to another global constant
+            if let Some(&const_id) = constructor.global_constants.get(name) {
+                return Ok(const_id);
+            }
+            Err(CompilerError::SpirvError(format!(
+                "Global constant '{}' references undefined constant '{}'",
+                "?", name
+            )))
+        }
+
+        ExprKind::BinOp { op, .. } => {
+            // For now, we don't support constant folding of binary ops
+            // TODO: Implement constant folding for arithmetic operations
+            Err(CompilerError::SpirvError(format!(
+                "Global constants must be literals (found binary operation '{}'). \
+                 Constant folding not yet implemented.",
+                op
+            )))
+        }
+
+        ExprKind::UnaryOp { op, .. } => Err(CompilerError::SpirvError(format!(
+            "Global constants must be literals (found unary operation '{}')",
+            op
+        ))),
+
+        _ => Err(CompilerError::SpirvError(
+            "Global constants must be literals or compile-time foldable expressions".to_string(),
+        )),
+    }
+}
+
 fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word> {
     match &expr.kind {
         ExprKind::Literal(lit) => lower_literal(constructor, lit),
@@ -1319,9 +1159,9 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             if let Some(&id) = constructor.env.get(name) {
                 return Ok(id);
             }
-            // Then check global constants (load from global variable)
-            if let Some(&(var_id, type_id)) = constructor.global_constants.get(name) {
-                return Ok(constructor.builder.load(type_id, None, var_id, None, [])?);
+            // Then check global constants (these are now OpConstants, not variables)
+            if let Some(&const_id) = constructor.global_constants.get(name) {
+                return Ok(const_id);
             }
             Err(CompilerError::SpirvError(format!("Undefined variable: {}", name)))
         }

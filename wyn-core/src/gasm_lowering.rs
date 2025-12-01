@@ -835,7 +835,7 @@ pub fn lower_function_into_builder(
         builder: std::mem::replace(builder, Builder::new()), // Temporarily take ownership
         u32_type,
         registers: HashMap::new(),
-        globals, // Use provided globals map
+        globals,   // Use provided globals map
         functions, // Use provided functions map
         labels: HashMap::new(),
         type_cache: std::mem::take(type_cache), // Take ownership temporarily

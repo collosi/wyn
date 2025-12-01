@@ -439,13 +439,14 @@ entry:
     fn test_parse_gdp_builtins_file_directly() {
         // Try to parse the actual file
         if let Ok(content) = std::fs::read_to_string("../wyn-core/builtins/gdp_builtins.gasm") {
-            // Extract from start to end of first function (global + first function)
+            // Extract from start to end of gdp_encode_float32 function
+            // This now includes the helper function gdp_write_two_words
             if let Some(func_start) = content.find("func @gdp_encode_float32") {
                 if let Some(next_func_pos) = content[func_start..].find("\nfunc @") {
                     // Find the last closing brace before the next function
                     let before_next = &content[func_start..func_start + next_func_pos];
                     if let Some(closing_brace_offset) = before_next.rfind('}') {
-                        // Extract from the beginning (including global) to end of first function
+                        // Extract from the beginning (including global) to end of gdp_encode_float32
                         let module_content = &content[..func_start + closing_brace_offset + 1];
                         eprintln!("Extracted module with {} bytes", module_content.len());
                         eprintln!(
@@ -469,10 +470,11 @@ entry:
                                 result.as_ref().unwrap().functions.len()
                             );
                             assert_eq!(result.as_ref().unwrap().globals.len(), 1, "Should have 1 global");
+                            // Now includes gdp_write_two_words helper + gdp_encode_float32
                             assert_eq!(
                                 result.as_ref().unwrap().functions.len(),
-                                1,
-                                "Should have 1 function"
+                                2,
+                                "Should have 2 functions (helper + gdp_encode_float32)"
                             );
                         }
                     } else {
