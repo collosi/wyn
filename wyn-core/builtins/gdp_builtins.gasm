@@ -67,26 +67,48 @@ entry:
   %negated_count = sub 0u, %byte_count
   %negated_count_byte = and %negated_count, 0xFFu
 
-  ; Extract bytes from reversed value for big-endian gob encoding
-  %rev_byte0 = and %reversed, 0xFFu
-  %rev_shr_8 = shr %reversed, 8u
-  %rev_byte1 = and %rev_shr_8, 0xFFu
-  %rev_shr_16 = shr %reversed, 16u
-  %rev_byte2 = and %rev_shr_16, 0xFFu
-  %rev_byte3 = shr %reversed, 24u
+  ; Gob encoding emits bytes in big-endian order (MSB first).
+  ; For a value with N significant bytes, we need to emit those N bytes
+  ; starting right after the type byte and length byte.
+  ;
+  ; The 'reversed' value has the bytes we need in positions 0..(byte_count-1).
+  ; We need to emit them in big-endian order (high byte first).
+  ;
+  ; Strategy: shift the reversed value so its significant bytes align
+  ; to the high end, then extract for packing.
+  ;
+  ; For byte_count=1: shift left 24 bits, bytes at positions [3]
+  ; For byte_count=2: shift left 16 bits, bytes at positions [3,2]
+  ; For byte_count=3: shift left 8 bits, bytes at positions [3,2,1]
+  ; For byte_count=4: no shift, bytes at positions [3,2,1,0]
+  ;
+  ; shift_amount = (4 - byte_count) * 8
+  %shift_slots = sub 4u, %byte_count
+  %shift_amount = shl %shift_slots, 3u
+  %aligned = shl %reversed, %shift_amount
 
-  ; Pack into first word: [0x03, negated_count, rev_byte3, rev_byte2]
+  ; Now extract bytes from the aligned value (MSB-first order)
+  %aligned_byte3 = shr %aligned, 24u
+  %aligned_shr_16 = shr %aligned, 16u
+  %aligned_byte2 = and %aligned_shr_16, 0xFFu
+  %aligned_shr_8 = shr %aligned, 8u
+  %aligned_byte1 = and %aligned_shr_8, 0xFFu
+  %aligned_byte0 = and %aligned, 0xFFu
+
+  ; Pack into first word: [0x03, negated_count, aligned_byte3, aligned_byte2]
+  ; These are the first two data bytes (or zeros if byte_count < 2)
   %word0_b1 = shl %negated_count_byte, 8u
-  %word0_b2 = shl %rev_byte3, 16u
-  %word0_b3 = shl %rev_byte2, 24u
+  %word0_b2 = shl %aligned_byte3, 16u
+  %word0_b3 = shl %aligned_byte2, 24u
 
   %word0_temp1 = or 0x03u, %word0_b1
   %word0_temp2 = or %word0_temp1, %word0_b2
   %word0 = or %word0_temp2, %word0_b3
 
-  ; Pack into second word: [rev_byte1, rev_byte0, 0x00, 0x00]
-  %word1_b1 = shl %rev_byte0, 8u
-  %word1 = or %rev_byte1, %word1_b1
+  ; Pack into second word: [aligned_byte1, aligned_byte0, 0x00, 0x00]
+  ; These are bytes 3-4 of the data (or zeros if byte_count <= 2)
+  %word1_b1 = shl %aligned_byte0, 8u
+  %word1 = or %aligned_byte1, %word1_b1
 
   ; === Reserve 2 words with max_loops check and wrap-to-zero logic ===
   ; Get pointers
@@ -210,26 +232,33 @@ encode_full:
   %negated_count = sub 0u, %byte_count
   %negated_count_byte = and %negated_count, 0xFFu
 
-  ; Extract bytes from value (big-endian)
-  %byte0 = and %value, 0xFFu
-  %shr_8 = shr %value, 8u
-  %byte1 = and %shr_8, 0xFFu
-  %shr_16 = shr %value, 16u
-  %byte2 = and %shr_16, 0xFFu
-  %byte3 = shr %value, 24u
+  ; Gob encoding emits bytes in big-endian order (MSB first).
+  ; Shift the value so its significant bytes align to the high end.
+  ; shift_amount = (4 - byte_count) * 8
+  %shift_slots = sub 4u, %byte_count
+  %shift_amount = shl %shift_slots, 3u
+  %aligned = shl %value, %shift_amount
 
-  ; Pack into first word: [0x00, negated_count, byte3, byte2]
+  ; Extract bytes from the aligned value (MSB-first order)
+  %aligned_byte3 = shr %aligned, 24u
+  %aligned_shr_16 = shr %aligned, 16u
+  %aligned_byte2 = and %aligned_shr_16, 0xFFu
+  %aligned_shr_8 = shr %aligned, 8u
+  %aligned_byte1 = and %aligned_shr_8, 0xFFu
+  %aligned_byte0 = and %aligned, 0xFFu
+
+  ; Pack into first word: [0x00, negated_count, aligned_byte3, aligned_byte2]
   %word0_b1 = shl %negated_count_byte, 8u
-  %word0_b2 = shl %byte3, 16u
-  %word0_b3 = shl %byte2, 24u
+  %word0_b2 = shl %aligned_byte3, 16u
+  %word0_b3 = shl %aligned_byte2, 24u
 
   %word0_temp1 = or 0x00u, %word0_b1
   %word0_temp2 = or %word0_temp1, %word0_b2
   %word0 = or %word0_temp2, %word0_b3
 
-  ; Pack into second word: [byte1, byte0, 0x00, 0x00]
-  %word1_b1 = shl %byte0, 8u
-  %word1 = or %byte1, %word1_b1
+  ; Pack into second word: [aligned_byte1, aligned_byte0, 0x00, 0x00]
+  %word1_b1 = shl %aligned_byte0, 8u
+  %word1 = or %aligned_byte1, %word1_b1
 
   ; Reserve 2 words with wrap-to-zero logic (same as float32)
   %write_head_ptr2 = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
@@ -270,6 +299,159 @@ write_data2:
   ret
 
 full_exit2:
+  ret
+}
+
+; ============================================================================
+; gdp_encode_int32: Encode a signed i32 value into the GDP ring buffer
+;
+; This function implements gob signed integer encoding:
+; 1. If value < 0: encoded = (!value << 1) | 1
+; 2. If value >= 0: encoded = value << 1
+; 3. Encode the result with type tag 0x01 (signed int)
+;
+; Arguments:
+;   %value: i32 - The signed integer to encode
+;
+; GDP Int encoding format:
+;   For small values (encoded < 64): type byte is (encoded << 2) | 0x01
+;   For larger values: type byte 0x01 + gob-encoded uint
+; ============================================================================
+func @gdp_encode_int32(%value: i32) -> void {
+entry:
+  ; Gob signed int encoding:
+  ; if value < 0: u = (!value << 1) | 1
+  ; else: u = value << 1
+  ;
+  ; Check if negative using signed comparison
+  %is_negative = icmp.lt %value, 0i
+
+  ; Compute !value (bitwise NOT) = value XOR -1 (using ixor for i32 result)
+  %not_value = ixor %value, -1i
+
+  ; Select which base to use (iselect for i32 result type)
+  %base = iselect %is_negative, %not_value, %value
+
+  ; Bitcast to u32 for the shift and remaining operations
+  %base_u32 = bitcast %base
+
+  ; Shift left by 1
+  %shifted = shl %base_u32, 1u
+
+  ; OR with 1 if negative
+  %one = select %is_negative, 1u, 0u
+  %encoded = or %shifted, %one
+
+  ; Now encode %encoded as a GDP uint with type tag 0x01
+  ; Check if value fits in inline encoding (0-63)
+  %is_small = ucmp.lt %encoded, 64u
+  br_if %is_small, encode_inline_int, encode_full_int, encode_inline_int
+
+encode_inline_int:
+  ; Inline encoding: (encoded << 2) | 0x01
+  %inline_shifted = shl %encoded, 2u
+  %inline_word = or %inline_shifted, 0x01u
+
+  ; Reserve 1 word
+  %write_head_ptr_i = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
+  %max_loops_ptr_i = gep[ptr[global]<u32>] @gdp_buffer, 2u, stride=4
+  %max_loops_i = load %max_loops_ptr_i
+  %current_write_head_i = atomic.load %write_head_ptr_i ordering=acq_rel scope=device
+  %current_loop_i = udiv %current_write_head_i, 4093u
+  %is_full_i = ucmp.ge %current_loop_i, %max_loops_i
+  br_if %is_full_i, exit_inline_int, reserve_inline_int, reserve_inline_int
+
+reserve_inline_int:
+  %start_index_inline_i = atomic.rmw add %write_head_ptr_i, 1u ordering=acq_rel scope=device
+  %index_raw_i = urem %start_index_inline_i, 4093u
+  %index_i = add %index_raw_i, 3u
+  %ptr_i = gep[ptr[global]<u32>] @gdp_buffer, %index_i, stride=4
+  store %ptr_i, %inline_word
+  ret
+
+exit_inline_int:
+  ret
+
+encode_full_int:
+  ; Full encoding: type byte 0x01 + gob uint
+  ; Determine byte count (1-4 bytes for u32)
+  %lt_100_i = ucmp.lt %encoded, 0x100u
+  %lt_10000_i = ucmp.lt %encoded, 0x10000u
+  %lt_1000000_i = ucmp.lt %encoded, 0x1000000u
+
+  %count_if_3_or_4_i = select %lt_1000000_i, 3u, 4u
+  %count_if_2_or_more_i = select %lt_10000_i, 2u, %count_if_3_or_4_i
+  %byte_count_i = select %lt_100_i, 1u, %count_if_2_or_more_i
+
+  ; Negated count for gob encoding
+  %negated_count_i = sub 0u, %byte_count_i
+  %negated_count_byte_i = and %negated_count_i, 0xFFu
+
+  ; Shift value so significant bytes align to high end
+  %shift_slots_i = sub 4u, %byte_count_i
+  %shift_amount_i = shl %shift_slots_i, 3u
+  %aligned_i = shl %encoded, %shift_amount_i
+
+  ; Extract bytes from the aligned value (MSB-first order)
+  %aligned_byte3_i = shr %aligned_i, 24u
+  %aligned_shr_16_i = shr %aligned_i, 16u
+  %aligned_byte2_i = and %aligned_shr_16_i, 0xFFu
+  %aligned_shr_8_i = shr %aligned_i, 8u
+  %aligned_byte1_i = and %aligned_shr_8_i, 0xFFu
+  %aligned_byte0_i = and %aligned_i, 0xFFu
+
+  ; Pack into first word: [0x01, negated_count, aligned_byte3, aligned_byte2]
+  %word0_b1_i = shl %negated_count_byte_i, 8u
+  %word0_b2_i = shl %aligned_byte3_i, 16u
+  %word0_b3_i = shl %aligned_byte2_i, 24u
+
+  %word0_temp1_i = or 0x01u, %word0_b1_i
+  %word0_temp2_i = or %word0_temp1_i, %word0_b2_i
+  %word0_i = or %word0_temp2_i, %word0_b3_i
+
+  ; Pack into second word: [aligned_byte1, aligned_byte0, 0x00, 0x00]
+  %word1_b1_i = shl %aligned_byte0_i, 8u
+  %word1_i = or %aligned_byte1_i, %word1_b1_i
+
+  ; Reserve 2 words with wrap-to-zero logic
+  %write_head_ptr2_i = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
+  %max_loops_ptr2_i = gep[ptr[global]<u32>] @gdp_buffer, 2u, stride=4
+  %max_loops2_i = load %max_loops_ptr2_i
+  %current_write_head2_i = atomic.load %write_head_ptr2_i ordering=acq_rel scope=device
+  %current_loop2_i = udiv %current_write_head2_i, 4093u
+  %is_full2_i = ucmp.ge %current_loop2_i, %max_loops2_i
+  br_if %is_full2_i, full_exit2_i, check_wrap2_i, check_wrap2_i
+
+check_wrap2_i:
+  %ring_pos2_i = urem %current_write_head2_i, 4093u
+  %pos_plus_count2_i = add %ring_pos2_i, 2u
+  %would_cross2_i = ucmp.gt %pos_plus_count2_i, 4093u
+  br_if %would_cross2_i, wrap_to_zero2_i, normal_reserve2_i, write_data2_i
+
+wrap_to_zero2_i:
+  %skip_amount2_i = sub 4093u, %ring_pos2_i
+  %total_skip2_i = add %skip_amount2_i, 2u
+  %skipped_pos2_i = atomic.rmw add %write_head_ptr2_i, %total_skip2_i ordering=acq_rel scope=device
+  br write_data2_i
+
+normal_reserve2_i:
+  %global_pos2_i = atomic.rmw add %write_head_ptr2_i, 2u ordering=acq_rel scope=device
+  %normal_index2_i = urem %global_pos2_i, 4093u
+  br write_data2_i
+
+write_data2_i:
+  %start_index2_i = phi u32 [0u, wrap_to_zero2_i], [%normal_index2_i, normal_reserve2_i]
+  %data_index0_2_i = add %start_index2_i, 3u
+  %index_plus_1_2_i = add %start_index2_i, 1u
+  %index_plus_1_mod2_i = urem %index_plus_1_2_i, 4093u
+  %data_index1_2_i = add %index_plus_1_mod2_i, 3u
+  %ptr0_2_i = gep[ptr[global]<u32>] @gdp_buffer, %data_index0_2_i, stride=4
+  %ptr1_2_i = gep[ptr[global]<u32>] @gdp_buffer, %data_index1_2_i, stride=4
+  store %ptr0_2_i, %word0_i
+  store %ptr1_2_i, %word1_i
+  ret
+
+full_exit2_i:
   ret
 }
 

@@ -309,6 +309,7 @@ fn basic_ops(input: &str) -> ParseResult<'_, Operation> {
         binary_op("and", Operation::And),
         binary_op("or", Operation::Or),
         binary_op("xor", Operation::Xor),
+        binary_op("ixor", Operation::IXor),
         unary_op("not", Operation::Not),
         binary_op("shl", Operation::Shl),
         binary_op("shr", Operation::Shr),
@@ -455,6 +456,17 @@ fn memory_and_convert_ops(input: &str) -> ParseResult<'_, Operation> {
                 )),
             ),
             |(cond, t, f)| Operation::Select(cond, t, f),
+        ),
+        map(
+            preceded(
+                tag("iselect"),
+                tuple((
+                    ws(parse_value),
+                    preceded(ws(char(',')), ws(parse_value)),
+                    preceded(ws(char(',')), ws(parse_value)),
+                )),
+            ),
+            |(cond, t, f)| Operation::ISelect(cond, t, f),
         ),
         // Memory
         unary_op("load", Operation::Load),

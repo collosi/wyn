@@ -577,8 +577,12 @@ impl<'a> LowerCtx<'a> {
 
             // Pre-lower GASM builtin functions needed for debug output
             // This must be done before lowering user functions to avoid nested function definitions
-            let gasm_funcs_to_preload =
-                ["gdp_encode_uint", "gdp_encode_float32", "gdp_encode_string_local"];
+            let gasm_funcs_to_preload = [
+                "gdp_encode_uint",
+                "gdp_encode_int32",
+                "gdp_encode_float32",
+                "gdp_encode_string_local",
+            ];
             for func_name in &gasm_funcs_to_preload {
                 if let Some(gasm_func) = constructor.builtin_registry.get_gasm_function(func_name) {
                     let gasm_func = gasm_func.clone();
@@ -1807,21 +1811,15 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                         )
                                     }
                                     Intrinsic::DebugI32 => {
-                                        // Debug intrinsic: call GASM @gdp_encode_uint (bitcast i32→u32)
+                                        // Debug intrinsic: call GASM @gdp_encode_int32
                                         if constructor.debug_buffer.is_some() {
-                                            // Bitcast i32 to u32
-                                            let value_u32 = constructor.builder.bitcast(
-                                                constructor.u32_type,
-                                                None,
-                                                arg_ids[0],
-                                            )?;
-                                            // Call @gdp_encode_uint GASM builtin
+                                            // Call @gdp_encode_int32 GASM builtin
                                             let gasm_func = constructor
                                                 .builtin_registry
-                                                .get_gasm_function("gdp_encode_uint")
+                                                .get_gasm_function("gdp_encode_int32")
                                                 .ok_or_else(|| {
                                                     CompilerError::SpirvError(
-                                                        "gdp_encode_uint not found".to_string(),
+                                                        "gdp_encode_int32 not found".to_string(),
                                                     )
                                                 })?
                                                 .clone();
@@ -1830,7 +1828,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                                 constructor.void_type,
                                                 None,
                                                 func_id,
-                                                vec![value_u32],
+                                                vec![arg_ids[0]],
                                             )?;
                                             Ok(constructor.const_i32(0)) // void return
                                         } else {

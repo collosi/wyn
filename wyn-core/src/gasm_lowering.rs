@@ -306,6 +306,25 @@ impl GasmLowering {
                 return Ok(());
             }
 
+            Operation::Xor(lhs, rhs) => {
+                let lhs_id = self.get_value(lhs)?;
+                let rhs_id = self.get_value(rhs)?;
+                self.builder
+                    .bitwise_xor(self.u32_type, result_id, lhs_id, rhs_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                return Ok(());
+            }
+
+            Operation::IXor(lhs, rhs) => {
+                let lhs_id = self.get_value(lhs)?;
+                let rhs_id = self.get_value(rhs)?;
+                let i32_type = self.builder.type_int(32, 1);
+                self.builder
+                    .bitwise_xor(i32_type, result_id, lhs_id, rhs_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                return Ok(());
+            }
+
             Operation::Shl(lhs, rhs) => {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
@@ -422,13 +441,86 @@ impl GasmLowering {
                 return Ok(());
             }
 
-            // Select
+            // Signed integer comparisons
+            Operation::ICmpLt(lhs, rhs) => {
+                let lhs_id = self.get_value(lhs)?;
+                let rhs_id = self.get_value(rhs)?;
+                let bool_type = self.builder.type_bool();
+                self.builder
+                    .s_less_than(bool_type, result_id, lhs_id, rhs_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                return Ok(());
+            }
+
+            Operation::ICmpLe(lhs, rhs) => {
+                let lhs_id = self.get_value(lhs)?;
+                let rhs_id = self.get_value(rhs)?;
+                let bool_type = self.builder.type_bool();
+                self.builder
+                    .s_less_than_equal(bool_type, result_id, lhs_id, rhs_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                return Ok(());
+            }
+
+            Operation::ICmpGt(lhs, rhs) => {
+                let lhs_id = self.get_value(lhs)?;
+                let rhs_id = self.get_value(rhs)?;
+                let bool_type = self.builder.type_bool();
+                self.builder
+                    .s_greater_than(bool_type, result_id, lhs_id, rhs_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                return Ok(());
+            }
+
+            Operation::ICmpGe(lhs, rhs) => {
+                let lhs_id = self.get_value(lhs)?;
+                let rhs_id = self.get_value(rhs)?;
+                let bool_type = self.builder.type_bool();
+                self.builder
+                    .s_greater_than_equal(bool_type, result_id, lhs_id, rhs_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                return Ok(());
+            }
+
+            Operation::ICmpEq(lhs, rhs) => {
+                let lhs_id = self.get_value(lhs)?;
+                let rhs_id = self.get_value(rhs)?;
+                let bool_type = self.builder.type_bool();
+                self.builder
+                    .i_equal(bool_type, result_id, lhs_id, rhs_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                return Ok(());
+            }
+
+            Operation::ICmpNe(lhs, rhs) => {
+                let lhs_id = self.get_value(lhs)?;
+                let rhs_id = self.get_value(rhs)?;
+                let bool_type = self.builder.type_bool();
+                self.builder
+                    .i_not_equal(bool_type, result_id, lhs_id, rhs_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                return Ok(());
+            }
+
+            // Select (u32)
             Operation::Select(cond, true_val, false_val) => {
                 let cond_id = self.get_value(cond)?;
                 let true_id = self.get_value(true_val)?;
                 let false_id = self.get_value(false_val)?;
                 self.builder
                     .select(self.u32_type, result_id, cond_id, true_id, false_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                return Ok(());
+            }
+
+            // ISelect (i32)
+            Operation::ISelect(cond, true_val, false_val) => {
+                let cond_id = self.get_value(cond)?;
+                let true_id = self.get_value(true_val)?;
+                let false_id = self.get_value(false_val)?;
+                let i32_type = self.builder.type_int(32, 1);
+                self.builder
+                    .select(i32_type, result_id, cond_id, true_id, false_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 return Ok(());
             }

@@ -137,6 +137,8 @@ pub enum Operation {
     Not(Value),
     Shl(Value, Value),
     Shr(Value, Value),
+    // IXor - XOR with i32 result type
+    IXor(Value, Value),
 
     // Comparisons
     ICmpEq(Value, Value),
@@ -167,8 +169,10 @@ pub enum Operation {
     FCmpUGt(Value, Value),
     FCmpUGe(Value, Value),
 
-    // Select
+    // Select (u32 result type)
     Select(Value, Value, Value),
+    // ISelect (i32 result type)
+    ISelect(Value, Value, Value),
 
     // Memory
     Load(Value),

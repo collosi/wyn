@@ -192,21 +192,17 @@ impl<'a> GdpDecoder<'a> {
             }
             0x01 => {
                 // Signed integer
-                let result = if inline_value == 0 {
-                    // Full value follows, decode as gob int
-                    let u = self.decode_uint_internal()?;
-                    let value = (u >> 1) as i64;
-                    if (u & 1) != 0 { !value } else { value }
+                // Both inline and full encodings use gob signed int format:
+                // value = encoded >> 1, then complement if bit 0 is set
+                let encoded = if inline_value == 0 {
+                    // Full value follows
+                    self.decode_uint_internal()?
                 } else {
-                    // Inline value is stored directly (not gob-encoded for small values)
-                    // Treat as signed 6-bit value
-                    if inline_value < 32 {
-                        inline_value as i64
-                    } else {
-                        // Negative: treat as 6-bit two's complement
-                        (inline_value as i64) - 64
-                    }
+                    // Inline value (already gob-encoded)
+                    inline_value
                 };
+                let value = (encoded >> 1) as i64;
+                let result = if (encoded & 1) != 0 { !value } else { value };
                 self.align_to_word();
                 Ok(GdpValue::Int(result))
             }

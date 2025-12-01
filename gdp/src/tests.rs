@@ -211,3 +211,57 @@ fn test_error_string_too_long() {
 
     assert!(decoder.decode_string().is_err());
 }
+
+#[test]
+fn test_decode_raw_debug_output() {
+    // Raw hex from actual debug output (starting after header at word 3):
+    // 61726616 00003a67 c000fd03 000043c7 c000fd03 00004395 6c6f6312 0000003a 0000fe03 00007fc0
+    //
+    // Expected decoding:
+    // - "frag:" string
+    // - float (should be ~400.0 = pos.x)
+    // - float (should be ~300.0 = pos.y)
+    // - "col:" string
+    // - float (color.x)
+    // etc.
+
+    let buffer: [u32; 10] = [
+        0x61726616, // "frag:" - type byte 0x16 = (5 << 2) | 0x02 = 5-char string
+        0x00003a67, // "g:" + padding
+        0xc000fd03, // float: type 0x03, neg_count 0xfd (-3)
+        0x000043c7, 0xc000fd03, // second float
+        0x00004395, 0x6c6f6312, // "col:" - type byte 0x12 = (4 << 2) | 0x02 = 4-char string
+        0x0000003a, 0x0000fe03, // float: type 0x03, neg_count 0xfe (-2)
+        0x00007fc0,
+    ];
+
+    let mut decoder = GdpDecoder::new(&buffer);
+
+    // Decode and print each value
+    let val1 = decoder.decode_value().unwrap();
+    println!("val1: {:?}", val1);
+
+    let val2 = decoder.decode_value().unwrap();
+    println!("val2: {:?}", val2);
+
+    let val3 = decoder.decode_value().unwrap();
+    println!("val3: {:?}", val3);
+
+    let val4 = decoder.decode_value().unwrap();
+    println!("val4: {:?}", val4);
+
+    let val5 = decoder.decode_value().unwrap();
+    println!("val5: {:?}", val5);
+
+    // Check string decoding
+    assert!(matches!(val1, GdpValue::String(s) if s == "frag:"));
+    assert!(matches!(val4, GdpValue::String(s) if s == "col:"));
+
+    // Print float values to see what we're getting
+    if let GdpValue::Float32(f) = val2 {
+        println!("First float raw bits: 0x{:08X}, value: {}", f.to_bits(), f);
+    }
+    if let GdpValue::Float32(f) = val3 {
+        println!("Second float raw bits: 0x{:08X}, value: {}", f.to_bits(), f);
+    }
+}
