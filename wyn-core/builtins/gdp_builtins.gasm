@@ -68,19 +68,8 @@ entry:
   %negated_count_byte = and %negated_count, 0xFFu
 
   ; Gob encoding emits bytes in big-endian order (MSB first).
-  ; For a value with N significant bytes, we need to emit those N bytes
-  ; starting right after the type byte and length byte.
-  ;
-  ; The 'reversed' value has the bytes we need in positions 0..(byte_count-1).
-  ; We need to emit them in big-endian order (high byte first).
-  ;
   ; Strategy: shift the reversed value so its significant bytes align
   ; to the high end, then extract for packing.
-  ;
-  ; For byte_count=1: shift left 24 bits, bytes at positions [3]
-  ; For byte_count=2: shift left 16 bits, bytes at positions [3,2]
-  ; For byte_count=3: shift left 8 bits, bytes at positions [3,2,1]
-  ; For byte_count=4: no shift, bytes at positions [3,2,1,0]
   ;
   ; shift_amount = (4 - byte_count) * 8
   %shift_slots = sub 4u, %byte_count
@@ -96,7 +85,7 @@ entry:
   %aligned_byte0 = and %aligned, 0xFFu
 
   ; Pack into first word: [0x03, negated_count, aligned_byte3, aligned_byte2]
-  ; These are the first two data bytes (or zeros if byte_count < 2)
+  ; This holds type byte, length byte, and up to 2 data bytes
   %word0_b1 = shl %negated_count_byte, 8u
   %word0_b2 = shl %aligned_byte3, 16u
   %word0_b3 = shl %aligned_byte2, 24u
@@ -106,63 +95,67 @@ entry:
   %word0 = or %word0_temp2, %word0_b3
 
   ; Pack into second word: [aligned_byte1, aligned_byte0, 0x00, 0x00]
-  ; These are bytes 3-4 of the data (or zeros if byte_count <= 2)
+  ; Only needed if byte_count > 2
   %word1_b1 = shl %aligned_byte0, 8u
   %word1 = or %aligned_byte1, %word1_b1
 
-  ; === Reserve 2 words with max_loops check and wrap-to-zero logic ===
-  ; Get pointers
+  ; Decide how many words to write based on byte_count
+  ; byte_count <= 2 -> 1 word (type + len + 2 data bytes fit in 4 bytes)
+  ; byte_count > 2 -> 2 words
+  %needs_two_words = ucmp.gt %byte_count, 2u
+  br_if %needs_two_words, write_two_words, write_one_word, write_one_word
+
+write_one_word:
+  ; === Reserve 1 word ===
+  %write_head_ptr_1 = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
+  %max_loops_ptr_1 = gep[ptr[global]<u32>] @gdp_buffer, 2u, stride=4
+  %max_loops_1 = load %max_loops_ptr_1
+  %current_write_head_1 = atomic.load %write_head_ptr_1 ordering=acq_rel scope=device
+  %current_loop_1 = udiv %current_write_head_1, 4093u
+  %is_full_1 = ucmp.ge %current_loop_1, %max_loops_1
+  br_if %is_full_1, full_exit, reserve_one, reserve_one
+
+reserve_one:
+  %global_pos_1 = atomic.rmw add %write_head_ptr_1, 1u ordering=acq_rel scope=device
+  %index_1 = urem %global_pos_1, 4093u
+  %data_index_1 = add %index_1, 3u
+  %ptr_1 = gep[ptr[global]<u32>] @gdp_buffer, %data_index_1, stride=4
+  store %ptr_1, %word0
+  ret
+
+write_two_words:
+  ; === Reserve 2 words with wrap-to-zero logic ===
   %write_head_ptr = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
   %max_loops_ptr = gep[ptr[global]<u32>] @gdp_buffer, 2u, stride=4
-
-  ; Load max_loops
   %max_loops = load %max_loops_ptr
-
-  ; Atomic load current write_head to check if over limit
   %current_write_head = atomic.load %write_head_ptr ordering=acq_rel scope=device
-
-  ; Calculate loop count: current_write_head / ring_size
   %current_loop = udiv %current_write_head, 4093u
-
-  ; Check if we're over the limit
   %is_full = ucmp.ge %current_loop, %max_loops
   br_if %is_full, full_exit, check_wrap, check_wrap
 
 check_wrap:
-  ; Calculate ring position
   %ring_pos = urem %current_write_head, 4093u
-
-  ; Check if allocation would cross boundary: ring_pos + count > ring_size
   %pos_plus_count = add %ring_pos, 2u
   %would_cross = ucmp.gt %pos_plus_count, 4093u
-
   br_if %would_cross, wrap_to_zero, normal_reserve, write_data
 
 wrap_to_zero:
-  ; Skip to next ring: increment by (ring_size - ring_pos) + count
   %skip_amount = sub 4093u, %ring_pos
   %total_skip = add %skip_amount, 2u
   %skipped_pos = atomic.rmw add %write_head_ptr, %total_skip ordering=acq_rel scope=device
-  ; After skip, we're at position 0 in the ring
   br write_data
 
 normal_reserve:
-  ; Normal allocation: atomically increment and get position
   %global_pos = atomic.rmw add %write_head_ptr, 2u ordering=acq_rel scope=device
   %normal_index = urem %global_pos, 4093u
   br write_data
 
 write_data:
-  ; Phi to get the starting index
   %start_index = phi u32 [0u, wrap_to_zero], [%normal_index, normal_reserve]
-
-  ; Calculate actual buffer indices (add 3 for header)
   %data_index0 = add %start_index, 3u
   %index_plus_1 = add %start_index, 1u
   %index_plus_1_mod = urem %index_plus_1, 4093u
   %data_index1 = add %index_plus_1_mod, 3u
-
-  ; Get element pointers and store
   %ptr0 = gep[ptr[global]<u32>] @gdp_buffer, %data_index0, stride=4
   %ptr1 = gep[ptr[global]<u32>] @gdp_buffer, %data_index1, stride=4
   store %ptr0, %word0
@@ -170,7 +163,6 @@ write_data:
   ret
 
 full_exit:
-  ; Buffer full, skip write
   ret
 }
 
@@ -257,10 +249,34 @@ encode_full:
   %word0 = or %word0_temp2, %word0_b3
 
   ; Pack into second word: [aligned_byte1, aligned_byte0, 0x00, 0x00]
+  ; Only needed if byte_count > 2
   %word1_b1 = shl %aligned_byte0, 8u
   %word1 = or %aligned_byte1, %word1_b1
 
-  ; Reserve 2 words with wrap-to-zero logic (same as float32)
+  ; Decide how many words to write based on byte_count
+  %needs_two_words_u = ucmp.gt %byte_count, 2u
+  br_if %needs_two_words_u, write_two_words_u, write_one_word_u, write_one_word_u
+
+write_one_word_u:
+  ; === Reserve 1 word ===
+  %write_head_ptr_1u = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
+  %max_loops_ptr_1u = gep[ptr[global]<u32>] @gdp_buffer, 2u, stride=4
+  %max_loops_1u = load %max_loops_ptr_1u
+  %current_write_head_1u = atomic.load %write_head_ptr_1u ordering=acq_rel scope=device
+  %current_loop_1u = udiv %current_write_head_1u, 4093u
+  %is_full_1u = ucmp.ge %current_loop_1u, %max_loops_1u
+  br_if %is_full_1u, full_exit2, reserve_one_u, reserve_one_u
+
+reserve_one_u:
+  %global_pos_1u = atomic.rmw add %write_head_ptr_1u, 1u ordering=acq_rel scope=device
+  %index_1u = urem %global_pos_1u, 4093u
+  %data_index_1u = add %index_1u, 3u
+  %ptr_1u = gep[ptr[global]<u32>] @gdp_buffer, %data_index_1u, stride=4
+  store %ptr_1u, %word0
+  ret
+
+write_two_words_u:
+  ; === Reserve 2 words with wrap-to-zero logic ===
   %write_head_ptr2 = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
   %max_loops_ptr2 = gep[ptr[global]<u32>] @gdp_buffer, 2u, stride=4
   %max_loops2 = load %max_loops_ptr2
@@ -374,6 +390,7 @@ exit_inline_int:
 
 encode_full_int:
   ; Full encoding: type byte 0x01 + gob uint
+  ; TODO: refactor to share encoding logic with gdp_encode_uint (only type byte differs)
   ; Determine byte count (1-4 bytes for u32)
   %lt_100_i = ucmp.lt %encoded, 0x100u
   %lt_10000_i = ucmp.lt %encoded, 0x10000u
@@ -410,10 +427,34 @@ encode_full_int:
   %word0_i = or %word0_temp2_i, %word0_b3_i
 
   ; Pack into second word: [aligned_byte1, aligned_byte0, 0x00, 0x00]
+  ; Only needed if byte_count > 2
   %word1_b1_i = shl %aligned_byte0_i, 8u
   %word1_i = or %aligned_byte1_i, %word1_b1_i
 
-  ; Reserve 2 words with wrap-to-zero logic
+  ; Decide how many words to write based on byte_count
+  %needs_two_words_i = ucmp.gt %byte_count_i, 2u
+  br_if %needs_two_words_i, write_two_words_i, write_one_word_i, write_one_word_i
+
+write_one_word_i:
+  ; === Reserve 1 word ===
+  %write_head_ptr_1i = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
+  %max_loops_ptr_1i = gep[ptr[global]<u32>] @gdp_buffer, 2u, stride=4
+  %max_loops_1i = load %max_loops_ptr_1i
+  %current_write_head_1i = atomic.load %write_head_ptr_1i ordering=acq_rel scope=device
+  %current_loop_1i = udiv %current_write_head_1i, 4093u
+  %is_full_1i = ucmp.ge %current_loop_1i, %max_loops_1i
+  br_if %is_full_1i, full_exit2_i, reserve_one_i, reserve_one_i
+
+reserve_one_i:
+  %global_pos_1i = atomic.rmw add %write_head_ptr_1i, 1u ordering=acq_rel scope=device
+  %index_1i = urem %global_pos_1i, 4093u
+  %data_index_1i = add %index_1i, 3u
+  %ptr_1i = gep[ptr[global]<u32>] @gdp_buffer, %data_index_1i, stride=4
+  store %ptr_1i, %word0_i
+  ret
+
+write_two_words_i:
+  ; === Reserve 2 words with wrap-to-zero logic ===
   %write_head_ptr2_i = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
   %max_loops_ptr2_i = gep[ptr[global]<u32>] @gdp_buffer, 2u, stride=4
   %max_loops2_i = load %max_loops_ptr2_i

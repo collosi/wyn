@@ -377,6 +377,8 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
 -- Fragment shader entry point
 #[fragment]
 def fragment_main (#[builtin(frag_coord)] pos:vec4f32) : #[location(0)] vec4f32 =
+  -- Unconditional debug to see if fragment shader runs at all
+  let _ = debug_str "F" in
   let width = 800.0f32 in
   let height = 600.0f32 in
   let time = 1.0f32 in

@@ -391,11 +391,11 @@ impl State {
                 match decoder.decode_value() {
                     Ok(value) => {
                         match value {
-                            gdp::GdpValue::String(s) => eprintln!("{}", s),
-                            gdp::GdpValue::Int(i) => eprintln!("{}", i),
-                            gdp::GdpValue::UInt(u) => eprintln!("{}", u),
-                            gdp::GdpValue::Bool(b) => eprintln!("{}", b),
-                            gdp::GdpValue::Float32(f) => eprintln!("{}", f),
+                            gdp::GdpValue::String(s) => eprintln!("S: {}", s),
+                            gdp::GdpValue::Int(i) => eprintln!("I: {}", i),
+                            gdp::GdpValue::UInt(u) => eprintln!("U: {}", u),
+                            gdp::GdpValue::Bool(b) => eprintln!("B: {}", b),
+                            gdp::GdpValue::Float32(f) => eprintln!("F: {}", f),
                         }
                         count += 1;
                     }
