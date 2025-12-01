@@ -417,6 +417,10 @@ impl BuiltinRegistry {
                 // Skip functions with pointer parameters for now
                 None
             }
+            gasm::Type::Array(_, _) | gasm::Type::RuntimeArray(_) => {
+                // Arrays are not exposed in Wyn's surface type system
+                None
+            }
         }
     }
 

@@ -109,6 +109,9 @@ struct Constructor {
 
     // GASM globals: maps GASM global names (like "@gdp_buffer") to SPIR-V variable IDs
     gasm_globals: HashMap<String, spirv::Word>,
+
+    // GASM type cache: shared across GASM function lowerings to ensure type deduplication
+    gasm_type_cache: HashMap<gasm::Type, spirv::Word>,
 }
 
 impl Constructor {
@@ -156,6 +159,7 @@ impl Constructor {
             builtin_registry: BuiltinRegistry::default(),
             debug_buffer: None,
             gasm_globals: HashMap::new(),
+            gasm_type_cache: HashMap::new(),
         }
     }
 
@@ -739,10 +743,12 @@ impl Constructor {
 
         // Lower the GASM function to SPIR-V using gasm_lowering module
         // Pass gasm_globals so references like @gdp_buffer resolve correctly
+        // Pass gasm_type_cache to ensure type deduplication across functions
         let func_id = crate::gasm_lowering::lower_function_into_builder(
             &mut self.builder,
             gasm_func,
             self.gasm_globals.clone(),
+            &mut self.gasm_type_cache,
         )
         .map_err(|e| {
             CompilerError::SpirvError(format!("Failed to lower GASM function {}: {}", gasm_func.name, e))
@@ -1079,7 +1085,8 @@ impl<'a> LowerCtx<'a> {
 
             // Pre-lower GASM builtin functions needed for debug output
             // This must be done before lowering user functions to avoid nested function definitions
-            let gasm_funcs_to_preload = ["gdp_encode_uint", "gdp_encode_float32", "gdp_encode_string"];
+            let gasm_funcs_to_preload =
+                ["gdp_encode_uint", "gdp_encode_float32", "gdp_encode_string_local"];
             for func_name in &gasm_funcs_to_preload {
                 if let Some(gasm_func) = constructor.builtin_registry.get_gasm_function(func_name) {
                     let gasm_func = gasm_func.clone();
@@ -1087,6 +1094,7 @@ impl<'a> LowerCtx<'a> {
                         &mut constructor.builder,
                         &gasm_func,
                         constructor.gasm_globals.clone(),
+                        &mut constructor.gasm_type_cache,
                     )
                     .expect(&format!("Failed to pre-lower GASM function {}", func_name));
                     constructor.gasm_function_cache.insert(gasm_func.name.clone(), func_id);
@@ -2373,65 +2381,73 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                                 _ => "????".to_string(),
                                             };
 
-                                            // Create a global constant array for the string bytes
-                                            let u8_type = constructor.builder.type_int(8, 0);
-                                            let str_bytes: Vec<u32> =
-                                                str_value.bytes().map(|b| b as u32).collect();
-                                            let array_len = str_bytes.len() as u32;
-                                            let array_len_const = constructor
-                                                .builder
-                                                .constant_bit32(constructor.u32_type, array_len);
-                                            let array_type =
-                                                constructor.builder.type_array(u8_type, array_len_const);
+                                            // Pack string bytes into u32 words (little-endian)
+                                            // GASM function expects fixed 16-word array (max 64 bytes)
+                                            const MAX_WORDS: usize = 16;
+                                            let str_bytes: Vec<u8> = str_value.bytes().collect();
+                                            let byte_len = str_bytes.len().min(64) as u32; // Cap at 64 bytes
 
-                                            // Create constants for each byte
-                                            let byte_constants: Vec<spirv::Word> = str_bytes
+                                            // Pack bytes into u32 words, padding to 16 words
+                                            let mut packed_words: Vec<u32> = vec![0u32; MAX_WORDS];
+                                            for (i, chunk) in str_bytes.chunks(4).enumerate() {
+                                                if i >= MAX_WORDS {
+                                                    break;
+                                                }
+                                                let mut word: u32 = 0;
+                                                for (j, &byte) in chunk.iter().enumerate() {
+                                                    word |= (byte as u32) << (j * 8);
+                                                }
+                                                packed_words[i] = word;
+                                            }
+
+                                            // Use the same [16; u32] array type from GASM type cache
+                                            // This ensures type compatibility with the GASM function parameter
+                                            let gasm_array_type = gasm::Type::Array(
+                                                Box::new(gasm::Type::U32),
+                                                MAX_WORDS as u32,
+                                            );
+                                            let array_type = *constructor.gasm_type_cache.get(&gasm_array_type)
+                                                .expect("[16; u32] array type should be in GASM type cache after pre-lowering");
+
+                                            // Create constants for each packed word
+                                            let word_constants: Vec<spirv::Word> = packed_words
                                                 .iter()
-                                                .map(|&b| constructor.builder.constant_bit32(u8_type, b))
+                                                .map(|&w| {
+                                                    constructor
+                                                        .builder
+                                                        .constant_bit32(constructor.u32_type, w)
+                                                })
                                                 .collect();
 
                                             // Create array constant
                                             let array_const = constructor
                                                 .builder
-                                                .constant_composite(array_type, byte_constants);
+                                                .constant_composite(array_type, word_constants.clone());
 
-                                            // Create global variable for the array
-                                            let ptr_type = constructor.builder.type_pointer(
+                                            // Create function-local variable for the fixed-size array
+                                            let local_var =
+                                                constructor.declare_variable("__str_data", array_type)?;
+                                            // Initialize by storing the constant array
+                                            constructor.builder.store(
+                                                local_var,
+                                                array_const,
                                                 None,
-                                                spirv::StorageClass::Private,
-                                                array_type,
-                                            );
-                                            let global_var = constructor.builder.variable(
-                                                ptr_type,
                                                 None,
-                                                spirv::StorageClass::Private,
-                                                Some(array_const),
-                                            );
-
-                                            // Cast to pointer to u8
-                                            let u8_ptr_type = constructor.builder.type_pointer(
-                                                None,
-                                                spirv::StorageClass::Private,
-                                                u8_type,
-                                            );
-                                            let str_ptr = constructor.builder.bitcast(
-                                                u8_ptr_type,
-                                                None,
-                                                global_var,
                                             )?;
 
-                                            // Length as u32
+                                            // Length in bytes as u32
                                             let str_len = constructor
                                                 .builder
-                                                .constant_bit32(constructor.u32_type, array_len);
+                                                .constant_bit32(constructor.u32_type, byte_len);
 
-                                            // Call @gdp_encode_string GASM builtin
+                                            // Call @gdp_encode_string_local GASM builtin
+                                            // Pass the array pointer directly (not element pointer)
                                             let gasm_func = constructor
                                                 .builtin_registry
-                                                .get_gasm_function("gdp_encode_string")
+                                                .get_gasm_function("gdp_encode_string_local")
                                                 .ok_or_else(|| {
                                                     CompilerError::SpirvError(
-                                                        "gdp_encode_string not found".to_string(),
+                                                        "gdp_encode_string_local not found".to_string(),
                                                     )
                                                 })?
                                                 .clone();
@@ -2440,7 +2456,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                                 constructor.void_type,
                                                 None,
                                                 func_id,
-                                                vec![str_ptr, str_len],
+                                                vec![local_var, str_len],
                                             )?;
                                             Ok(constructor.const_i32(0))
                                         } else {
@@ -2574,21 +2590,32 @@ fn lower_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::
         }
         Literal::Bool(b) => Ok(constructor.const_bool(*b)),
         Literal::String(s) => {
-            // Lower string to a zero-terminated array of u8 values
-            let u8_type = constructor.builder.type_int(8, 0); // unsigned 8-bit
+            // Lower string to packed u32 words (little-endian, zero-terminated)
             let bytes: Vec<u8> = s.bytes().chain(std::iter::once(0u8)).collect();
-            let len = bytes.len();
+            let word_count = (bytes.len() + 3) / 4;
 
-            // Create constants for each byte
-            let byte_ids: Vec<spirv::Word> =
-                bytes.iter().map(|&b| constructor.builder.constant_bit32(u8_type, b as u32)).collect();
+            // Pack bytes into u32 words
+            let mut packed_words: Vec<u32> = Vec::with_capacity(word_count);
+            for chunk in bytes.chunks(4) {
+                let mut word: u32 = 0;
+                for (i, &byte) in chunk.iter().enumerate() {
+                    word |= (byte as u32) << (i * 8);
+                }
+                packed_words.push(word);
+            }
 
-            // Create array type [N]u8
-            let len_const = constructor.builder.constant_bit32(constructor.i32_type, len as u32);
-            let array_type = constructor.builder.type_array(u8_type, len_const);
+            // Create constants for each packed word
+            let word_ids: Vec<spirv::Word> = packed_words
+                .iter()
+                .map(|&w| constructor.builder.constant_bit32(constructor.u32_type, w))
+                .collect();
+
+            // Create array type [N]u32
+            let len_const = constructor.builder.constant_bit32(constructor.i32_type, word_count as u32);
+            let array_type = constructor.builder.type_array(constructor.u32_type, len_const);
 
             // Construct the composite array
-            Ok(constructor.builder.composite_construct(array_type, None, byte_ids)?)
+            Ok(constructor.builder.composite_construct(array_type, None, word_ids)?)
         }
         Literal::Tuple(elems) => {
             // Check if this is a closure tuple (has __lambda_name at last index)

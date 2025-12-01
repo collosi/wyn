@@ -1,10 +1,10 @@
-# GIR (GPU IR) Specification
+# GASM (GPU Assembly) Specification
 
 A typed, SSA-based intermediate representation for GPU code targeting SPIR-V and CUDA backends.
 
 ## 1. Overview
 
-GIR is a purpose-built GPU assembly/IR featuring:
+GASM is a purpose-built GPU assembly/IR featuring:
 - Strong typing (integers, unsigned integers, floats of various widths)
 - Functions with basic blocks (SSA form)
 - Branching and conditional control flow
@@ -49,16 +49,17 @@ ptr[AS]<T>
 
 Where `AS` is one of:
 - `generic`  - Generic address space
-- `global`   - Global device memory
-- `shared`   - Shared/workgroup memory
-- `local`    - Thread-local/function memory
-- `const`    - Constant memory
+- `global`   - Global device memory (SPIR-V: StorageBuffer)
+- `shared`   - Shared/workgroup memory (SPIR-V: Workgroup)
+- `local`    - Thread-local/function memory (SPIR-V: Function)
+- `private`  - Module-private memory (SPIR-V: Private)
+- `const`    - Constant memory (SPIR-V: UniformConstant)
 
 **Examples:**
 ```
 ptr[global]<u32>
 ptr[shared]<i32>
-ptr[const]<f32>
+ptr[private]<f32>
 ptr[global]<f64>
 ```
 
@@ -67,6 +68,8 @@ ptr[global]<f64>
 - **CUDA**: Maps to global/shared/local/constant memory spaces
 
 ## 4. Literals
+
+Literals can be used directly in any operand position. They do NOT define SSA values.
 
 ### Integer Literals (signed)
 ```
@@ -79,6 +82,12 @@ Examples: `42i32`, `-10i64`, `127i8`
 uint_lit ::= [0-9]+ ('u8' | 'u16' | 'u32' | 'u64')
 ```
 Examples: `42u32`, `255u8`, `1000u64`
+
+### Hex Literals
+```
+hex_lit ::= '0x' [0-9a-fA-F]+ ('u8' | 'u16' | 'u32' | 'u64')
+```
+Examples: `0xFFu32`, `0x1000u64`
 
 ### Floating Point Literals
 ```
@@ -179,23 +188,36 @@ done:
 ### 7.3 PHI Nodes
 
 ```
-%result = phi <type> [ %val1, label1 ], [ %val2, label2 ], ...
+%result = phi <type> [ <value>, label1 ], [ <value>, label2 ], ...
+```
+
+Where `<value>` can be an SSA register (`%name`) or a literal (`42u`).
+
+**Example with literals:**
+```
+func @count_loop(%n: u32) -> u32 {
+entry:
+  br loop
+
+loop:
+  %i = phi u32 [ 0u, entry ], [ %next, loop ]
+  %next = add %i, 1u
+  %done = ucmp.ge %next, %n
+  br_if %done, exit, loop
+
+exit:
+  ret %next
+}
 ```
 
 ## 8. Core Instructions
 
-All instructions operate on SSA values (`%ident`). Type checking is strict.
+All instructions operate on SSA values (`%ident`) or literals. Type checking is strict.
 
-### 8.1 Move / Constants
+**Important**: Every SSA value corresponds to a real instruction that produces a result.
+There are NO `mov`, `iconst`, `uconst`, or `fconst` instructions - use literals directly.
 
-```
-%v = mov %x                    ; copy value
-%v = iconst <int_lit>          ; signed integer constant
-%v = uconst <uint_lit>         ; unsigned integer constant
-%v = fconst <float_lit>        ; floating point constant
-```
-
-### 8.2 Arithmetic Operations
+### 8.1 Arithmetic Operations
 
 **Integer/Float arithmetic:**
 ```
@@ -203,15 +225,25 @@ All instructions operate on SSA values (`%ident`). Type checking is strict.
 %z = sub %x, %y        ; subtraction
 %z = mul %x, %y        ; multiplication
 %z = div %x, %y        ; division (signed/unsigned/float)
+%z = udiv %x, %y       ; unsigned division
+%z = sdiv %x, %y       ; signed division
 %z = rem %x, %y        ; remainder (int/uint only)
+%z = urem %x, %y       ; unsigned remainder
+%z = srem %x, %y       ; signed remainder
 %z = neg %x            ; arithmetic negation
+```
+
+**Using literals:**
+```
+%z = add %x, 1u        ; add literal 1
+%z = mul %x, 2u        ; multiply by literal 2
 ```
 
 **Backend mapping:**
 - **SPIR-V**: OpIAdd, OpFAdd, OpISub, OpFSub, OpIMul, OpFMul, OpSDiv, OpUDiv, OpFDiv, OpSRem, OpUMod
 - **CUDA**: Standard C operators (+, -, *, /, %)
 
-### 8.3 Bitwise Operations
+### 8.2 Bitwise Operations
 
 **Integer/unsigned types only:**
 ```
@@ -223,7 +255,13 @@ All instructions operate on SSA values (`%ident`). Type checking is strict.
 %z = shr %x, %y        ; shift right (logical for unsigned, arithmetic for signed)
 ```
 
-### 8.4 Comparison Operations
+**Using literals:**
+```
+%masked = and %x, 0xFFu      ; mask with literal
+%shifted = shr %x, 8u        ; shift by literal 8
+```
+
+### 8.3 Comparison Operations
 
 All comparisons produce `u32` result (0 for false, 1 for true).
 
@@ -247,6 +285,12 @@ All comparisons produce `u32` result (0 for false, 1 for true).
 %c = ucmp.ge  %x, %y   ; greater or equal (unsigned)
 ```
 
+**Using literals:**
+```
+%c = ucmp.lt %x, 64u   ; compare with literal
+%c = icmp.ge %x, 0i    ; compare with literal zero
+```
+
 **Floating point comparisons (ordered):**
 ```
 %c = fcmp.oeq %x, %y   ; ordered equal
@@ -267,7 +311,7 @@ All comparisons produce `u32` result (0 for false, 1 for true).
 %c = fcmp.uge %x, %y   ; unordered greater or equal
 ```
 
-### 8.5 Select Operation
+### 8.4 Select Operation
 
 **Conditional select (ternary operator):**
 ```
@@ -279,7 +323,7 @@ Selects between two values based on a condition without branching.
 - `%true_val` and `%false_val` must have the same type
 - Returns `%true_val` if `%cond` is non-zero, otherwise `%false_val`
 
-**Example:**
+**Example with literals:**
 ```
 %cmp = ucmp.lt %x, 10u
 %result = select %cmp, %x, 10u   ; clamp to maximum of 10
@@ -289,7 +333,7 @@ Selects between two values based on a condition without branching.
 - **SPIR-V**: OpSelect
 - **CUDA**: Ternary operator `?:` or branchless computation
 
-### 8.6 Memory Operations
+### 8.5 Memory Operations
 
 **Load:**
 ```
@@ -304,16 +348,26 @@ store %ptr, %v
 
 Memory space is encoded in the pointer type.
 
-### 8.7 Address Arithmetic
+### 8.6 Address Arithmetic
 
 **Get element pointer:**
 ```
-%p2 = gep %base, %index, stride=<uint_lit>
+%p2 = gep[ptr[AS]<T>] %base, %index, stride=<uint_lit>
 ```
 Where:
+- `ptr[AS]<T>` is the **explicit result type** (must match the base pointer's type)
 - `%base : ptr[AS]<T>`
 - `%index : u32` (or other unsigned integer type)
 - `stride` is in bytes
+
+The result type must be explicitly annotated to ensure correct storage class in SPIR-V lowering.
+
+**Examples:**
+```
+%p2 = gep[ptr[global]<u32>] @buffer, %idx, stride=4    ; global buffer access
+%p3 = gep[ptr[private]<u32>] %arr, %idx, stride=4      ; private array access
+%p4 = gep[ptr[global]<u32>] @buffer, 4u, stride=4      ; literal index
+```
 
 **Bitcast (type punning):**
 ```
@@ -321,7 +375,7 @@ Where:
 ```
 Changes pointer type while preserving address.
 
-### 8.8 Type Conversions
+### 8.7 Type Conversions
 
 **Bitcast (reinterpret bits):**
 ```
@@ -390,7 +444,7 @@ Truncates a float to lower precision. Example: `f64 → f32`, `f32 → f16`
 
 ## 9. Atomic Operations
 
-GIR provides a unified atomic model with explicit memory ordering and scope.
+GASM provides a unified atomic model with explicit memory ordering and scope.
 
 ### 9.1 Memory Ordering
 
@@ -441,6 +495,11 @@ atomic.store %ptr, %val ordering=<ordering> scope=<scope>
 ```
 
 Returns the old value at `%ptr`.
+
+**Using literals:**
+```
+%old = atomic.rmw add %ptr, 1u ordering=acq_rel scope=device
+```
 
 #### Integer/Unsigned Operations
 
@@ -494,10 +553,15 @@ Atomically:
 2. If equal to `%expected`, stores `%desired`
 3. Returns the loaded value
 
+**Using literals:**
+```
+%old = atomic.cmpxchg %ptr, 0u, 1u ordering_succ=acq_rel ordering_fail=acquire scope=device
+```
+
 Success check:
 ```
-%old     = atomic.cmpxchg %ptr, %expected, %desired ordering_succ=acq_rel ordering_fail=acquire scope=device
-%success = icmp.eq %old, %expected
+%old     = atomic.cmpxchg %ptr, 0u, 1u ordering_succ=acq_rel ordering_fail=acquire scope=device
+%success = ucmp.eq %old, 0u
 ```
 
 **Backend mapping:**
@@ -529,8 +593,7 @@ global @counter : ptr[global]<u32> = addr(0x0)
 
 func kernel @bump() -> void {
 entry:
-  %p   = mov @counter
-  %old = atomic.rmw add %p, 1u ordering=acq_rel scope=device
+  %old = atomic.rmw add @counter, 1u ordering=acq_rel scope=device
   ret
 }
 ```
@@ -570,8 +633,7 @@ global @sum : ptr[global]<f64>
 
 func kernel @accumulate(%value: f64) -> void {
 entry:
-  %p = mov @sum
-  %old = atomic.rmw fadd %p, %value ordering=acq_rel scope=device
+  %old = atomic.rmw fadd @sum, %value ordering=acq_rel scope=device
   ret
 }
 ```
@@ -591,23 +653,18 @@ entry:
 ```
 func @swap_bytes_u32(%x: u32) -> u32 {
 entry:
-  ; Extract individual bytes
-  %const_8  = uconst 8u
-  %const_16 = uconst 16u
-  %const_24 = uconst 24u
-  %const_ff = uconst 0xFFu
-
-  %byte0    = and %x, %const_ff
-  %shr_8    = shr %x, %const_8
-  %byte1    = and %shr_8, %const_ff
-  %shr_16   = shr %x, %const_16
-  %byte2    = and %shr_16, %const_ff
-  %byte3    = shr %x, %const_24
+  ; Extract individual bytes using literals directly
+  %byte0    = and %x, 0xFFu
+  %shr_8    = shr %x, 8u
+  %byte1    = and %shr_8, 0xFFu
+  %shr_16   = shr %x, 16u
+  %byte2    = and %shr_16, 0xFFu
+  %byte3    = shr %x, 24u
 
   ; Rebuild in reversed order
-  %b1_shift = shl %byte2, %const_8
-  %b2_shift = shl %byte1, %const_16
-  %b3_shift = shl %byte0, %const_24
+  %b1_shift = shl %byte2, 8u
+  %b2_shift = shl %byte1, 16u
+  %b3_shift = shl %byte0, 24u
 
   %temp1 = or %byte3, %b1_shift
   %temp2 = or %temp1, %b2_shift
@@ -642,22 +699,17 @@ entry:
   ; Convert float to u32 bit representation
   %bits = bitcast %f
 
-  ; Byte-reverse for endian conversion
-  %const_8  = uconst 8u
-  %const_16 = uconst 16u
-  %const_24 = uconst 24u
-  %const_ff = uconst 0xFFu
+  ; Byte-reverse for endian conversion using literals
+  %byte0 = and %bits, 0xFFu
+  %shr_8 = shr %bits, 8u
+  %byte1 = and %shr_8, 0xFFu
+  %shr_16 = shr %bits, 16u
+  %byte2 = and %shr_16, 0xFFu
+  %byte3 = shr %bits, 24u
 
-  %byte0 = and %bits, %const_ff
-  %shr_8 = shr %bits, %const_8
-  %byte1 = and %shr_8, %const_ff
-  %shr_16 = shr %bits, %const_16
-  %byte2 = and %shr_16, %const_ff
-  %byte3 = shr %bits, %const_24
-
-  %b1_shift = shl %byte2, %const_8
-  %b2_shift = shl %byte1, %const_16
-  %b3_shift = shl %byte0, %const_24
+  %b1_shift = shl %byte2, 8u
+  %b2_shift = shl %byte1, 16u
+  %b3_shift = shl %byte0, 24u
 
   %temp1 = or %byte3, %b1_shift
   %temp2 = or %temp1, %b2_shift
@@ -667,14 +719,37 @@ entry:
 }
 ```
 
+### 10.9 Loop with PHI using Literals
+
+```
+func @sum_to_n(%n: u32) -> u32 {
+entry:
+  br loop
+
+loop:
+  ; PHI nodes can use literals for initial values
+  %i   = phi u32 [ 0u, entry ], [ %next_i, loop ]
+  %sum = phi u32 [ 0u, entry ], [ %next_sum, loop ]
+
+  %next_sum = add %sum, %i
+  %next_i   = add %i, 1u
+  %done     = ucmp.ge %next_i, %n
+  br_if %done, exit, loop
+
+exit:
+  ret %next_sum
+}
+```
+
 ## 11. Backend Mapping Summary
 
 ### 11.1 SPIR-V
 
-| GIR Construct | SPIR-V Mapping |
+| GASM Construct | SPIR-V Mapping |
 |---------------|----------------|
 | Scalar types | OpTypeInt, OpTypeFloat with appropriate widths |
 | Pointer types | OpTypePointer with storage class from address space |
+| Literals | OpConstant (deduplicated in constant pool) |
 | Arithmetic | OpIAdd, OpFAdd, OpISub, OpFSub, OpIMul, OpFMul, OpSDiv, OpUDiv, OpFDiv |
 | Bitwise | OpBitwiseAnd, OpBitwiseOr, OpBitwiseXor, OpNot, OpShiftLeftLogical, OpShiftRightLogical/Arithmetic |
 | Comparisons | OpIEqual, OpINotEqual, OpSLessThan, OpULessThan, OpFOrdLessThan, etc. |
@@ -689,13 +764,14 @@ entry:
 
 ### 11.2 CUDA
 
-| GIR Construct | CUDA Mapping |
+| GASM Construct | CUDA Mapping |
 |---------------|--------------|
 | Scalar types | int8_t, uint8_t, int16_t, uint16_t, int32_t, uint32_t, int64_t, uint64_t, half, float, double |
 | ptr[global] | `T*` in global memory |
 | ptr[shared] | `__shared__ T*` |
 | ptr[local] | Local/register variables |
 | ptr[const] | `__constant__ T*` |
+| Literals | C literals with appropriate suffixes |
 | Arithmetic | Standard C operators |
 | Bitwise | Standard C bitwise operators (&, \|, ^, ~, <<, >>) |
 | Select | Ternary operator ?: or branchless computation |
@@ -725,7 +801,20 @@ entry:
 7. **Branchless operations**: Select instruction enables efficient GPU code patterns
 8. **Extensible**: Easy to add new types (vectors, matrices) or operations without changing core design
 
-### 12.2 Future Extensions
+### 12.2 SSA Invariant
+
+Every SSA value in GASM corresponds to exactly one of:
+- A function parameter
+- The result of an instruction that produces a SPIR-V result-id
+
+This means:
+- **No `mov` instruction** - use the original value directly
+- **No `iconst`/`uconst`/`fconst` instructions** - use literals directly in operands
+- **Literals are not SSA values** - they're immediates that get lowered to SPIR-V constants
+
+This invariant simplifies lowering: every SSA register maps 1:1 to a SPIR-V result-id.
+
+### 12.3 Future Extensions
 
 Possible additions without breaking core design:
 - Vector types: `vec2<f32>`, `vec4<u32>`, etc.

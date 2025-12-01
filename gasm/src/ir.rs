@@ -68,6 +68,8 @@ pub enum Type {
     F32,
     F64,
     Pointer(Box<PointerType>),
+    Array(Box<Type>, u32),   // Fixed-size array [N; T], for Private/Local storage
+    RuntimeArray(Box<Type>), // Unsized runtime array [*T], only for StorageBuffer (global)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -79,10 +81,11 @@ pub struct PointerType {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AddressSpace {
     Generic,
-    Global,
-    Shared,
-    Local,
-    Const,
+    Global,  // StorageBuffer
+    Shared,  // Workgroup
+    Local,   // Function
+    Private, // Private
+    Const,   // UniformConstant
 }
 
 /// Values (SSA)
@@ -117,12 +120,6 @@ pub struct Instruction {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operation {
-    // Move / Constants
-    Mov(Value),
-    IConst(Constant),
-    UConst(Constant),
-    FConst(Constant),
-
     // Arithmetic
     Add(Value, Value),
     Sub(Value, Value),
@@ -177,6 +174,7 @@ pub enum Operation {
 
     // Address arithmetic
     Gep {
+        result_type: PointerType,
         base: Value,
         index: Value,
         stride: u32,
@@ -282,6 +280,8 @@ pub enum Terminator {
         cond: Value,
         true_label: String,
         false_label: String,
+        /// Merge label for structured control flow (required for Vulkan SPIR-V)
+        merge_label: String,
     },
     Ret(Option<Value>),
 }

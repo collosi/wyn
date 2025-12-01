@@ -75,6 +75,7 @@ fn address_space(input: &str) -> ParseResult<'_, AddressSpace> {
         nom_value(AddressSpace::Global, tag("global")),
         nom_value(AddressSpace::Shared, tag("shared")),
         nom_value(AddressSpace::Local, tag("local")),
+        nom_value(AddressSpace::Private, tag("private")),
         nom_value(AddressSpace::Const, tag("const")),
     ))(input)
 }
@@ -95,8 +96,34 @@ fn pointer_type(input: &str) -> ParseResult<'_, PointerType> {
     )(input)
 }
 
+// Array type: [N; T] where N is length and T is element type (fixed-size, for Private/Local)
+fn array_type(input: &str) -> ParseResult<'_, Type> {
+    map(
+        tuple((
+            char('['),
+            ws(parse_u32_literal),
+            ws(char(';')),
+            ws(type_parser),
+            char(']'),
+        )),
+        |(_, len, _, element, _)| Type::Array(Box::new(element), len),
+    )(input)
+}
+
+// RuntimeArray type: [*T] where T is element type (unsized, for StorageBuffer only)
+fn runtime_array_type(input: &str) -> ParseResult<'_, Type> {
+    map(delimited(tag("[*"), ws(type_parser), char(']')), |element| {
+        Type::RuntimeArray(Box::new(element))
+    })(input)
+}
+
 fn type_parser(input: &str) -> ParseResult<'_, Type> {
-    alt((map(pointer_type, |pt| Type::Pointer(Box::new(pt))), scalar_type))(input)
+    alt((
+        map(pointer_type, |pt| Type::Pointer(Box::new(pt))),
+        runtime_array_type, // Must come before array_type since [* is more specific than [
+        array_type,
+        scalar_type,
+    ))(input)
 }
 
 // Literals and Constants
@@ -266,11 +293,6 @@ fn unary_op(
 
 fn basic_ops(input: &str) -> ParseResult<'_, Operation> {
     alt((
-        // Moves and constants
-        unary_op("mov", Operation::Mov),
-        map(preceded(tag("iconst"), ws(constant)), Operation::IConst),
-        map(preceded(tag("uconst"), ws(constant)), Operation::UConst),
-        map(preceded(tag("fconst"), ws(constant)), Operation::FConst),
         // Arithmetic
         binary_op("add", Operation::Add),
         binary_op("sub", Operation::Sub),
@@ -443,10 +465,11 @@ fn memory_and_convert_ops(input: &str) -> ParseResult<'_, Operation> {
             ),
             |(ptr, val)| Operation::Store(ptr, val),
         ),
-        // GEP
+        // GEP with explicit result type: gep[ptr[addr]<type>] base, index, stride=N
         map(
             tuple((
                 tag("gep"),
+                delimited(char('['), ws(pointer_type), char(']')),
                 ws(parse_value),
                 preceded(ws(char(',')), ws(parse_value)),
                 preceded(
@@ -454,7 +477,12 @@ fn memory_and_convert_ops(input: &str) -> ParseResult<'_, Operation> {
                     parse_u32_literal,
                 ),
             )),
-            |(_, base, index, stride)| Operation::Gep { base, index, stride },
+            |(_, result_type, base, index, stride)| Operation::Gep {
+                result_type,
+                base,
+                index,
+                stride,
+            },
         ),
         // Type conversions
         unary_op("bitcast", Operation::Bitcast),
@@ -615,11 +643,13 @@ fn terminator(input: &str) -> ParseResult<'_, Terminator> {
                 ws(parse_value),
                 preceded(ws(char(',')), ws(label_name)),
                 preceded(ws(char(',')), ws(label_name)),
+                preceded(ws(char(',')), ws(label_name)),
             )),
-            |(_, cond, true_label, false_label)| Terminator::BrIf {
+            |(_, cond, true_label, false_label, merge_label)| Terminator::BrIf {
                 cond,
                 true_label,
                 false_label,
+                merge_label,
             },
         ),
         map(preceded(tag("br"), ws(label_name)), Terminator::Br),

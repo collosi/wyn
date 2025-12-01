@@ -1,15 +1,17 @@
 //! Reachability analysis for MIR
 //!
-//! This module performs a simple reachability analysis on MIR to determine
+//! This module performs reachability analysis on MIR to determine
 //! which functions are actually called, starting from entry points.
-//! This allows the lowerer to skip unused library functions.
+//! It returns functions in topological order (callees before callers)
+//! so the lowerer can process them without forward references.
 
 use crate::mir::visitor::MirVisitor;
 use crate::mir::{Attribute, Def, Expr, ExprKind, Literal, Program};
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 
-/// Find all functions reachable from entry points
-pub fn reachable_functions(program: &Program) -> HashSet<String> {
+/// Find all functions reachable from entry points, in topological order.
+/// Returns a Vec with callees before callers (post-order DFS).
+pub fn reachable_functions_ordered(program: &Program) -> Vec<String> {
     // Find entry points (functions with #[vertex] or #[fragment] attributes)
     let mut entry_points = Vec::new();
     for def in &program.defs {
@@ -37,29 +39,49 @@ pub fn reachable_functions(program: &Program) -> HashSet<String> {
         }
     }
 
-    // BFS from entry points
-    let mut seen = HashSet::new();
-    let mut worklist = VecDeque::new();
+    // Post-order DFS from entry points
+    let mut visited = HashSet::new();
+    let mut in_stack = HashSet::new();
+    let mut order = Vec::new();
 
-    for name in entry_points {
-        if functions.contains_key(&name) {
-            seen.insert(name.clone());
-            worklist.push_back(name);
-        }
+    for entry in entry_points {
+        dfs_postorder(&entry, &functions, &mut visited, &mut in_stack, &mut order);
     }
 
-    while let Some(fname) = worklist.pop_front() {
-        if let Some(body) = functions.get(&fname) {
-            let callees = collect_callees(body);
-            for callee in callees {
-                if seen.insert(callee.clone()) && functions.contains_key(&callee) {
-                    worklist.push_back(callee);
-                }
+    order
+}
+
+fn dfs_postorder(
+    name: &str,
+    functions: &std::collections::HashMap<String, &Expr>,
+    visited: &mut HashSet<String>,
+    in_stack: &mut HashSet<String>,
+    order: &mut Vec<String>,
+) {
+    if visited.contains(name) || in_stack.contains(name) {
+        return;
+    }
+
+    in_stack.insert(name.to_string());
+
+    // Visit all callees first (if they exist in the program)
+    if let Some(body) = functions.get(name) {
+        let callees = collect_callees(body);
+        for callee in callees {
+            if functions.contains_key(&callee) {
+                dfs_postorder(&callee, functions, visited, in_stack, order);
             }
         }
     }
 
-    seen
+    in_stack.remove(name);
+    visited.insert(name.to_string());
+    order.push(name.to_string());
+}
+
+/// Find all functions reachable from entry points (unordered set).
+pub fn reachable_functions(program: &Program) -> HashSet<String> {
+    reachable_functions_ordered(program).into_iter().collect()
 }
 
 /// Visitor that collects function names called in expressions
@@ -123,21 +145,26 @@ fn collect_callees(expr: &Expr) -> HashSet<String> {
     collector.callees
 }
 
-/// Filter a program to only include reachable definitions
+/// Filter a program to only include reachable definitions, in topological order.
+/// Callees come before callers, so the lowerer can process them without forward references.
 pub fn filter_reachable(program: Program) -> Program {
-    let reachable = reachable_functions(&program);
+    let ordered = reachable_functions_ordered(&program);
 
-    let filtered_defs = program
+    // Build a map from name to def for reordering
+    let mut def_map: std::collections::HashMap<String, Def> = program
         .defs
         .into_iter()
-        .filter(|def| {
-            let name = match def {
-                Def::Function { name, .. } => name,
-                Def::Constant { name, .. } => name,
+        .map(|def| {
+            let name = match &def {
+                Def::Function { name, .. } => name.clone(),
+                Def::Constant { name, .. } => name.clone(),
             };
-            reachable.contains(name)
+            (name, def)
         })
         .collect();
+
+    // Collect defs in topological order
+    let filtered_defs: Vec<Def> = ordered.into_iter().filter_map(|name| def_map.remove(&name)).collect();
 
     Program {
         defs: filtered_defs,

@@ -14,6 +14,7 @@ use std::collections::HashMap;
 pub struct GasmLowering {
     builder: Builder,
     u32_type: Word,
+    u32_ptr_storage_buffer: Word,
 
     /// Map from GASM register names to SPIR-V IDs
     registers: HashMap<String, Word>,
@@ -38,6 +39,8 @@ impl GasmLowering {
 
         // Initialize with basic types
         let u32_type = builder.type_int(32, 0);
+        let u32_ptr_storage_buffer =
+            builder.type_pointer(None, spirv::StorageClass::StorageBuffer, u32_type);
 
         let mut type_cache = HashMap::new();
         type_cache.insert(Type::U32, u32_type);
@@ -45,6 +48,7 @@ impl GasmLowering {
         Self {
             builder,
             u32_type,
+            u32_ptr_storage_buffer,
             registers: HashMap::new(),
             globals: HashMap::new(),
             functions: HashMap::new(),
@@ -101,6 +105,17 @@ impl GasmLowering {
                 let storage_class = self.address_space_to_storage_class(&ptr_ty.address_space);
                 self.builder.type_pointer(None, storage_class, pointee_type)
             }
+            Type::Array(element_ty, len) => {
+                // Fixed-size array [N; T]
+                let element_type = self.get_or_create_type(element_ty);
+                let len_const = self.builder.constant_bit32(self.u32_type, *len);
+                self.builder.type_array(element_type, len_const)
+            }
+            Type::RuntimeArray(element_ty) => {
+                // Unsized runtime array, only for StorageBuffer
+                let element_type = self.get_or_create_type(element_ty);
+                self.builder.type_runtime_array(element_type)
+            }
         };
 
         self.type_cache.insert(ty.clone(), type_id);
@@ -114,6 +129,7 @@ impl GasmLowering {
             AddressSpace::Global => spirv::StorageClass::StorageBuffer,
             AddressSpace::Shared => spirv::StorageClass::Workgroup,
             AddressSpace::Local => spirv::StorageClass::Function,
+            AddressSpace::Private => spirv::StorageClass::Private,
             AddressSpace::Const => spirv::StorageClass::UniformConstant,
         }
     }
@@ -201,6 +217,21 @@ impl GasmLowering {
             self.labels.insert(block.label.clone(), label_id);
         }
 
+        // Pre-allocate IDs for all SSA register definitions.
+        // This is needed because phi nodes can reference values defined later.
+        // Now that we removed mov/uconst/iconst/fconst, every SSA def produces
+        // a real SPIR-V result-id, so this is straightforward.
+        for block in &function.blocks {
+            for inst in &block.instructions {
+                if let Some(result_name) = &inst.result {
+                    if !self.registers.contains_key(result_name) {
+                        let reg_id = self.builder.id();
+                        self.registers.insert(result_name.clone(), reg_id);
+                    }
+                }
+            }
+        }
+
         // Lower basic blocks
         for block in &function.blocks {
             self.lower_basic_block(block)?;
@@ -232,82 +263,52 @@ impl GasmLowering {
         Ok(())
     }
 
+    /// Get the pre-allocated result ID for an instruction
+    fn get_result_id(&self, inst: &gasm::Instruction) -> Option<spirv::Word> {
+        inst.result.as_ref().and_then(|name| self.registers.get(name).copied())
+    }
+
     /// Lower an instruction
     fn lower_instruction(&mut self, inst: &gasm::Instruction) -> Result<(), String> {
-        let _result_id = if let Some(_result_name) = &inst.result { Some(self.builder.id()) } else { None };
+        // Get the pre-allocated result ID (if this instruction produces a result)
+        let result_id = self.get_result_id(inst);
 
         // Lower the operation
         match &inst.op {
-            Operation::Mov(val) => {
-                let val_id = self.get_value(val)?;
-                // Mov is just a copy - we can use OpCopyObject
-                // But we need the type
-                // TODO: Track types for values
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), val_id);
-                return Ok(());
-            }
-
-            Operation::UConst(constant) => {
-                let const_id = self.lower_constant(constant)?;
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), const_id);
-                return Ok(());
-            }
-
-            Operation::IConst(constant) => {
-                let const_id = self.lower_constant(constant)?;
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), const_id);
-                return Ok(());
-            }
-
-            Operation::FConst(constant) => {
-                let const_id = self.lower_constant(constant)?;
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), const_id);
-                return Ok(());
-            }
-
             // Bitwise operations
             Operation::And(lhs, rhs) => {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
-                // TODO: Get result type properly
-                let result_id = self
-                    .builder
-                    .bitwise_and(self.u32_type, None, lhs_id, rhs_id)
+                self.builder
+                    .bitwise_and(self.u32_type, result_id, lhs_id, rhs_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
             }
 
             Operation::Or(lhs, rhs) => {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
-                let result_id = self
-                    .builder
-                    .bitwise_or(self.u32_type, None, lhs_id, rhs_id)
+                self.builder
+                    .bitwise_or(self.u32_type, result_id, lhs_id, rhs_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
             }
 
             Operation::Shl(lhs, rhs) => {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
-                let result_id = self
-                    .builder
-                    .shift_left_logical(self.u32_type, None, lhs_id, rhs_id)
+                self.builder
+                    .shift_left_logical(self.u32_type, result_id, lhs_id, rhs_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
             }
 
             Operation::Shr(lhs, rhs) => {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
-                let result_id = self
-                    .builder
-                    .shift_right_logical(self.u32_type, None, lhs_id, rhs_id)
+                self.builder
+                    .shift_right_logical(self.u32_type, result_id, lhs_id, rhs_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
             }
 
@@ -315,33 +316,36 @@ impl GasmLowering {
             Operation::Add(lhs, rhs) => {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
-                let result_id = self
-                    .builder
-                    .i_add(self.u32_type, None, lhs_id, rhs_id)
+                self.builder
+                    .i_add(self.u32_type, result_id, lhs_id, rhs_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
             }
 
             Operation::Sub(lhs, rhs) => {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
-                let result_id = self
-                    .builder
-                    .i_sub(self.u32_type, None, lhs_id, rhs_id)
+                self.builder
+                    .i_sub(self.u32_type, result_id, lhs_id, rhs_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
             }
 
             Operation::Rem(lhs, rhs) => {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
-                let result_id = self
-                    .builder
-                    .u_mod(self.u32_type, None, lhs_id, rhs_id)
+                self.builder
+                    .u_mod(self.u32_type, result_id, lhs_id, rhs_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
+                return Ok(());
+            }
+
+            Operation::Div(lhs, rhs) => {
+                let lhs_id = self.get_value(lhs)?;
+                let rhs_id = self.get_value(rhs)?;
+                self.builder
+                    .u_div(self.u32_type, result_id, lhs_id, rhs_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 return Ok(());
             }
 
@@ -350,11 +354,59 @@ impl GasmLowering {
                 let lhs_id = self.get_value(lhs)?;
                 let rhs_id = self.get_value(rhs)?;
                 let bool_type = self.builder.type_bool();
-                let result_id = self
-                    .builder
-                    .u_less_than(bool_type, None, lhs_id, rhs_id)
+                self.builder
+                    .u_less_than(bool_type, result_id, lhs_id, rhs_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
+                return Ok(());
+            }
+
+            Operation::UCmpLe(lhs, rhs) => {
+                let lhs_id = self.get_value(lhs)?;
+                let rhs_id = self.get_value(rhs)?;
+                let bool_type = self.builder.type_bool();
+                self.builder
+                    .u_less_than_equal(bool_type, result_id, lhs_id, rhs_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                return Ok(());
+            }
+
+            Operation::UCmpGt(lhs, rhs) => {
+                let lhs_id = self.get_value(lhs)?;
+                let rhs_id = self.get_value(rhs)?;
+                let bool_type = self.builder.type_bool();
+                self.builder
+                    .u_greater_than(bool_type, result_id, lhs_id, rhs_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                return Ok(());
+            }
+
+            Operation::UCmpGe(lhs, rhs) => {
+                let lhs_id = self.get_value(lhs)?;
+                let rhs_id = self.get_value(rhs)?;
+                let bool_type = self.builder.type_bool();
+                self.builder
+                    .u_greater_than_equal(bool_type, result_id, lhs_id, rhs_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                return Ok(());
+            }
+
+            Operation::UCmpEq(lhs, rhs) => {
+                let lhs_id = self.get_value(lhs)?;
+                let rhs_id = self.get_value(rhs)?;
+                let bool_type = self.builder.type_bool();
+                self.builder
+                    .i_equal(bool_type, result_id, lhs_id, rhs_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                return Ok(());
+            }
+
+            Operation::UCmpNe(lhs, rhs) => {
+                let lhs_id = self.get_value(lhs)?;
+                let rhs_id = self.get_value(rhs)?;
+                let bool_type = self.builder.type_bool();
+                self.builder
+                    .i_not_equal(bool_type, result_id, lhs_id, rhs_id)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 return Ok(());
             }
 
@@ -363,11 +415,9 @@ impl GasmLowering {
                 let cond_id = self.get_value(cond)?;
                 let true_id = self.get_value(true_val)?;
                 let false_id = self.get_value(false_val)?;
-                let result_id = self
-                    .builder
-                    .select(self.u32_type, None, cond_id, true_id, false_id)
+                self.builder
+                    .select(self.u32_type, result_id, cond_id, true_id, false_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
             }
 
@@ -375,11 +425,9 @@ impl GasmLowering {
             Operation::Bitcast(val) => {
                 let val_id = self.get_value(val)?;
                 // TODO: Get proper result type
-                let result_id = self
-                    .builder
-                    .bitcast(self.u32_type, None, val_id)
+                self.builder
+                    .bitcast(self.u32_type, result_id, val_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
             }
 
@@ -387,11 +435,9 @@ impl GasmLowering {
             Operation::Load(ptr) => {
                 let ptr_id = self.get_value(ptr)?;
                 // TODO: Get proper result type
-                let result_id = self
-                    .builder
-                    .load(self.u32_type, None, ptr_id, None, [])
+                self.builder
+                    .load(self.u32_type, result_id, ptr_id, None, [])
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
             }
 
@@ -404,17 +450,33 @@ impl GasmLowering {
                 return Ok(());
             }
 
-            Operation::Gep { base, index, stride } => {
+            Operation::Gep {
+                result_type,
+                base,
+                index,
+                stride: _,
+            } => {
                 let base_id = self.get_value(base)?;
                 let index_id = self.get_value(index)?;
-                // SPIR-V AccessChain: access an element of a composite
-                // For now, simple pointer arithmetic
-                // TODO: Implement proper GEP
-                let result_id = self
-                    .builder
-                    .access_chain(self.u32_type, None, base_id, [index_id])
-                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
+
+                // Get the SPIR-V pointer type from the explicit result_type
+                let ptr_type_id = self.get_or_create_type(&Type::Pointer(Box::new(result_type.clone())));
+
+                // SPIR-V AccessChain indexing depends on the base type:
+                // - For globals (storage buffers): base is ptr<Struct<RuntimeArray>>, need [0, index]
+                //   to first enter the struct member, then index into the array
+                // - For other pointers (ptr<Array> or ptr<RuntimeArray>): just need [index]
+                let is_global = matches!(base, Value::Global(_));
+                if is_global {
+                    let const_0 = self.builder.constant_bit32(self.u32_type, 0);
+                    self.builder
+                        .access_chain(ptr_type_id, result_id, base_id, [const_0, index_id])
+                        .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                } else {
+                    self.builder
+                        .access_chain(ptr_type_id, result_id, base_id, [index_id])
+                        .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                }
                 return Ok(());
             }
 
@@ -424,12 +486,9 @@ impl GasmLowering {
                 let scope_id = self.lower_memory_scope(scope);
                 let ordering_id = self.lower_memory_ordering(ordering);
 
-                let result_id = self
-                    .builder
-                    .atomic_load(self.u32_type, None, ptr_id, scope_id, ordering_id)
+                self.builder
+                    .atomic_load(self.u32_type, result_id, ptr_id, scope_id, ordering_id)
                     .map_err(|e| format!("SPIR-V error: {:?}", e))?;
-
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
                 return Ok(());
             }
 
@@ -446,15 +505,34 @@ impl GasmLowering {
                 let scope_id = self.lower_memory_scope(scope);
                 let ordering_id = self.lower_memory_ordering(ordering);
 
-                let result_id = match op {
+                match op {
                     AtomicOp::Add => self
                         .builder
-                        .atomic_i_add(self.u32_type, None, ptr_id, scope_id, ordering_id, value_id)
+                        .atomic_i_add(self.u32_type, result_id, ptr_id, scope_id, ordering_id, value_id)
                         .map_err(|e| format!("SPIR-V error: {:?}", e))?,
                     _ => return Err(format!("Atomic operation {:?} not yet implemented", op)),
                 };
+                return Ok(());
+            }
 
-                self.registers.insert(inst.result.as_ref().unwrap().clone(), result_id);
+            Operation::Phi { ty, incoming } => {
+                let result_type = self.get_or_create_type(ty);
+                let pairs: Result<Vec<_>, String> = incoming
+                    .iter()
+                    .map(|(val, label)| {
+                        let val_id = self.get_value(val)?;
+                        let label_id = self
+                            .labels
+                            .get(label)
+                            .copied()
+                            .ok_or_else(|| format!("Label {} not found in phi", label))?;
+                        Ok((val_id, label_id))
+                    })
+                    .collect();
+                let pairs = pairs?;
+                self.builder
+                    .phi(result_type, result_id, pairs)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
                 return Ok(());
             }
 
@@ -515,7 +593,7 @@ impl GasmLowering {
     }
 
     /// Get the SPIR-V ID for a GASM value
-    fn get_value(&self, value: &Value) -> Result<Word, String> {
+    fn get_value(&mut self, value: &Value) -> Result<Word, String> {
         match value {
             Value::Register(name) => {
                 self.registers.get(name).copied().ok_or_else(|| format!("Register {} not found", name))
@@ -523,7 +601,7 @@ impl GasmLowering {
             Value::Global(name) => {
                 self.globals.get(name).copied().ok_or_else(|| format!("Global {} not found", name))
             }
-            Value::Constant(_) => Err("Constants should be lowered separately".to_string()),
+            Value::Constant(c) => self.lower_constant(c),
         }
     }
 
@@ -575,6 +653,7 @@ impl GasmLowering {
                 cond,
                 true_label,
                 false_label,
+                merge_label,
             } => {
                 let cond_id = self.get_value(cond)?;
                 let true_id = *self
@@ -585,6 +664,12 @@ impl GasmLowering {
                     .labels
                     .get(false_label)
                     .ok_or_else(|| format!("Label {} not found", false_label))?;
+                let merge_id = *self
+                    .labels
+                    .get(merge_label)
+                    .ok_or_else(|| format!("Merge label {} not found", merge_label))?;
+                // Emit OpSelectionMerge before OpBranchConditional (required for Vulkan structured control flow)
+                self.builder.selection_merge(merge_id, spirv::SelectionControl::NONE).unwrap();
                 self.builder.branch_conditional(cond_id, true_id, false_id, []).unwrap();
             }
         }
@@ -603,22 +688,29 @@ pub fn lower_gasm_module(module: &Module) -> Result<Vec<u32>, String> {
 /// Returns the SPIR-V function ID
 ///
 /// globals: Map from GASM global names (like "gdp_buffer", without @ prefix) to SPIR-V variable IDs
+/// type_cache: Map from GASM types to SPIR-V type IDs (shared across multiple function lowerings)
 pub fn lower_function_into_builder(
     builder: &mut Builder,
     function: &Function,
     globals: HashMap<String, Word>,
+    type_cache: &mut HashMap<Type, Word>,
 ) -> Result<Word, String> {
     // Create a minimal GasmLowering context for this function
     let u32_type = builder.type_int(32, 0);
+    let u32_ptr_storage_buffer = builder.type_pointer(None, spirv::StorageClass::StorageBuffer, u32_type);
+
+    // Initialize type cache with basic types if not present
+    type_cache.entry(Type::U32).or_insert(u32_type);
 
     let mut lowering = GasmLowering {
         builder: std::mem::replace(builder, Builder::new()), // Temporarily take ownership
         u32_type,
+        u32_ptr_storage_buffer,
         registers: HashMap::new(),
         globals, // Use provided globals map
         functions: HashMap::new(),
         labels: HashMap::new(),
-        type_cache: HashMap::new(),
+        type_cache: std::mem::take(type_cache), // Take ownership temporarily
     };
 
     // First, declare the function to get its ID
@@ -628,8 +720,9 @@ pub fn lower_function_into_builder(
     // Now lower the function (this will reference the ID we just created)
     lowering.lower_function(function)?;
 
-    // Return the builder
+    // Return the builder and updated type cache
     *builder = lowering.builder;
+    *type_cache = lowering.type_cache;
 
     Ok(fn_id)
 }
