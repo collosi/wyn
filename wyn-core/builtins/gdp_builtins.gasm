@@ -1,5 +1,12 @@
 ; GDP (GPU Debug Protocol) Builtin Functions
-; These functions implement the core GDP encoding operations for GPU debugging
+; Simple encoding format - no gob complexity
+;
+; Word 0 (header): TTTTTTTT SSSSSSSS SSSSSSSS SSSSSSSS
+;   - Byte 0 (bits 0-7): Type tag (0x00=u32, 0x01=i32, 0x02=string, 0x03=f32)
+;   - Bytes 1-3 (bits 8-31): Size in data words (not including header)
+;
+; Scalars (u32/i32/f32): header + 1 raw value word
+; Strings: header + N padded data words
 
 ; Global variables for GDP ring buffer
 ; The ring buffer has the following structure:
@@ -14,117 +21,10 @@ global @gdp_buffer : ptr[global]<u32>
 ; RING_BUFFER_HEADER_SIZE = 3
 
 ; ============================================================================
-; gdp_encode_float32: Encode a f32 value into the GDP ring buffer
-;
-; This function:
-; 1. Bitcasts f32 to u32
-; 2. Byte-reverses the bits (for gob encoding efficiency)
-; 3. Determines the number of significant bytes
-; 4. Writes the GDP type tag (0x03) followed by gob-encoded uint
-; 5. Handles ring buffer wraparound for multi-word writes
-;
-; Arguments:
-;   %f: f32 - The float value to encode
-;
-; GDP Float32 encoding format:
-;   Type byte: 0x03 (inline=0, type=0b11)
-;   Data: byte-reversed f32 bits encoded as gob uint
+; gdp_write_two_words: Write two words to the GDP buffer with wrap handling
 ; ============================================================================
-func @gdp_encode_float32(%f: f32) -> void {
+func @gdp_write_two_words(%word0: u32, %word1: u32) -> void {
 entry:
-  ; 1. Bitcast f32 to u32
-  %bits = bitcast %f
-
-  ; 2. Byte-reverse: swap bytes in SPIR-V
-  ; Extract bytes from the u32 value
-  %byte0 = and %bits, 0xFFu
-  %shr_8 = shr %bits, 8u
-  %byte1 = and %shr_8, 0xFFu
-  %shr_16 = shr %bits, 16u
-  %byte2 = and %shr_16, 0xFFu
-  %byte3 = shr %bits, 24u
-
-  ; Rebuild in reversed order
-  %b1_shift = shl %byte2, 8u
-  %b2_shift = shl %byte1, 16u
-  %b3_shift = shl %byte0, 24u
-
-  %temp1 = or %byte3, %b1_shift
-  %temp2 = or %temp1, %b2_shift
-  %reversed = or %temp2, %b3_shift
-
-  ; 3. Determine byte count for gob encoding
-  %lt_100 = ucmp.lt %reversed, 0x100u
-  %lt_10000 = ucmp.lt %reversed, 0x10000u
-  %lt_1000000 = ucmp.lt %reversed, 0x1000000u
-
-  ; Select byte count using nested selects
-  %count_if_3_or_4 = select %lt_1000000, 3u, 4u
-  %count_if_2_or_more = select %lt_10000, 2u, %count_if_3_or_4
-  %byte_count = select %lt_100, 1u, %count_if_2_or_more
-
-  ; Negated count for gob encoding
-  %negated_count = sub 0u, %byte_count
-  %negated_count_byte = and %negated_count, 0xFFu
-
-  ; Gob encoding emits bytes in big-endian order (MSB first).
-  ; Strategy: shift the reversed value so its significant bytes align
-  ; to the high end, then extract for packing.
-  ;
-  ; shift_amount = (4 - byte_count) * 8
-  %shift_slots = sub 4u, %byte_count
-  %shift_amount = shl %shift_slots, 3u
-  %aligned = shl %reversed, %shift_amount
-
-  ; Now extract bytes from the aligned value (MSB-first order)
-  %aligned_byte3 = shr %aligned, 24u
-  %aligned_shr_16 = shr %aligned, 16u
-  %aligned_byte2 = and %aligned_shr_16, 0xFFu
-  %aligned_shr_8 = shr %aligned, 8u
-  %aligned_byte1 = and %aligned_shr_8, 0xFFu
-  %aligned_byte0 = and %aligned, 0xFFu
-
-  ; Pack into first word: [0x03, negated_count, aligned_byte3, aligned_byte2]
-  ; This holds type byte, length byte, and up to 2 data bytes
-  %word0_b1 = shl %negated_count_byte, 8u
-  %word0_b2 = shl %aligned_byte3, 16u
-  %word0_b3 = shl %aligned_byte2, 24u
-
-  %word0_temp1 = or 0x03u, %word0_b1
-  %word0_temp2 = or %word0_temp1, %word0_b2
-  %word0 = or %word0_temp2, %word0_b3
-
-  ; Pack into second word: [aligned_byte1, aligned_byte0, 0x00, 0x00]
-  ; Only needed if byte_count > 2
-  %word1_b1 = shl %aligned_byte0, 8u
-  %word1 = or %aligned_byte1, %word1_b1
-
-  ; Decide how many words to write based on byte_count
-  ; byte_count <= 2 -> 1 word (type + len + 2 data bytes fit in 4 bytes)
-  ; byte_count > 2 -> 2 words
-  %needs_two_words = ucmp.gt %byte_count, 2u
-  br_if %needs_two_words, write_two_words, write_one_word, write_one_word
-
-write_one_word:
-  ; === Reserve 1 word ===
-  %write_head_ptr_1 = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
-  %max_loops_ptr_1 = gep[ptr[global]<u32>] @gdp_buffer, 2u, stride=4
-  %max_loops_1 = load %max_loops_ptr_1
-  %current_write_head_1 = atomic.load %write_head_ptr_1 ordering=acq_rel scope=device
-  %current_loop_1 = udiv %current_write_head_1, 4093u
-  %is_full_1 = ucmp.ge %current_loop_1, %max_loops_1
-  br_if %is_full_1, full_exit, reserve_one, reserve_one
-
-reserve_one:
-  %global_pos_1 = atomic.rmw add %write_head_ptr_1, 1u ordering=acq_rel scope=device
-  %index_1 = urem %global_pos_1, 4093u
-  %data_index_1 = add %index_1, 3u
-  %ptr_1 = gep[ptr[global]<u32>] @gdp_buffer, %data_index_1, stride=4
-  store %ptr_1, %word0
-  ret
-
-write_two_words:
-  ; === Reserve 2 words with wrap-to-zero logic ===
   %write_head_ptr = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
   %max_loops_ptr = gep[ptr[global]<u32>] @gdp_buffer, 2u, stride=4
   %max_loops = load %max_loops_ptr
@@ -167,332 +67,46 @@ full_exit:
 }
 
 ; ============================================================================
+; gdp_encode_float32: Encode a f32 value into the GDP ring buffer
+;
+; Format: [header, bits]
+;   header = 0x03 | (1 << 8)  (type=f32, size=1)
+;   bits = bitcast f32 to u32
+; ============================================================================
+func @gdp_encode_float32(%f: f32) -> void {
+entry:
+  %bits = bitcast %f
+  %header = or 0x03u, 0x100u
+  call @gdp_write_two_words(%header, %bits)
+  ret
+}
+
+; ============================================================================
 ; gdp_encode_uint: Encode an unsigned integer into the GDP ring buffer
 ;
-; Arguments:
-;   %value: u32 - The unsigned integer to encode
-;
-; GDP Uint encoding format:
-;   For small values (0-63): single byte with inline value
-;   For larger values: type byte 0x00 + gob-encoded uint
+; Format: [header, value]
+;   header = 0x00 | (1 << 8)  (type=u32, size=1)
+;   value = raw u32
 ; ============================================================================
 func @gdp_encode_uint(%value: u32) -> void {
 entry:
-  ; Check if value fits in inline encoding (0-63)
-  %is_small = ucmp.lt %value, 64u
-
-  ; Both branches eventually return, so we need a dummy merge block
-  ; For SPIR-V structured CFG, use encode_inline as merge since it's the first branch
-  br_if %is_small, encode_inline, encode_full, encode_inline
-
-encode_inline:
-  ; Inline encoding: shift value left by 2
-  %inline_word = shl %value, 2u
-
-  ; Reserve 1 word with max_loops check (no wrap-to-zero needed for single word)
-  %write_head_ptr = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
-  %max_loops_ptr = gep[ptr[global]<u32>] @gdp_buffer, 2u, stride=4
-  %max_loops = load %max_loops_ptr
-  %current_write_head = atomic.load %write_head_ptr ordering=acq_rel scope=device
-  %current_loop = udiv %current_write_head, 4093u
-  %is_full = ucmp.ge %current_loop, %max_loops
-  br_if %is_full, exit_inline, reserve_inline, reserve_inline
-
-reserve_inline:
-  %start_index_inline = atomic.rmw add %write_head_ptr, 1u ordering=acq_rel scope=device
-  %index_raw = urem %start_index_inline, 4093u
-  %index = add %index_raw, 3u
-  %ptr = gep[ptr[global]<u32>] @gdp_buffer, %index, stride=4
-  store %ptr, %inline_word
-  ret
-
-exit_inline:
-  ret
-
-encode_full:
-  ; Full encoding: type byte 0x00 + gob uint
-  ; Determine byte count (1-4 bytes for u32)
-  %lt_100 = ucmp.lt %value, 0x100u
-  %lt_10000 = ucmp.lt %value, 0x10000u
-  %lt_1000000 = ucmp.lt %value, 0x1000000u
-
-  %count_if_3_or_4 = select %lt_1000000, 3u, 4u
-  %count_if_2_or_more = select %lt_10000, 2u, %count_if_3_or_4
-  %byte_count = select %lt_100, 1u, %count_if_2_or_more
-
-  ; Negated count for gob encoding
-  %negated_count = sub 0u, %byte_count
-  %negated_count_byte = and %negated_count, 0xFFu
-
-  ; Gob encoding emits bytes in big-endian order (MSB first).
-  ; Shift the value so its significant bytes align to the high end.
-  ; shift_amount = (4 - byte_count) * 8
-  %shift_slots = sub 4u, %byte_count
-  %shift_amount = shl %shift_slots, 3u
-  %aligned = shl %value, %shift_amount
-
-  ; Extract bytes from the aligned value (MSB-first order)
-  %aligned_byte3 = shr %aligned, 24u
-  %aligned_shr_16 = shr %aligned, 16u
-  %aligned_byte2 = and %aligned_shr_16, 0xFFu
-  %aligned_shr_8 = shr %aligned, 8u
-  %aligned_byte1 = and %aligned_shr_8, 0xFFu
-  %aligned_byte0 = and %aligned, 0xFFu
-
-  ; Pack into first word: [0x00, negated_count, aligned_byte3, aligned_byte2]
-  %word0_b1 = shl %negated_count_byte, 8u
-  %word0_b2 = shl %aligned_byte3, 16u
-  %word0_b3 = shl %aligned_byte2, 24u
-
-  %word0_temp1 = or 0x00u, %word0_b1
-  %word0_temp2 = or %word0_temp1, %word0_b2
-  %word0 = or %word0_temp2, %word0_b3
-
-  ; Pack into second word: [aligned_byte1, aligned_byte0, 0x00, 0x00]
-  ; Only needed if byte_count > 2
-  %word1_b1 = shl %aligned_byte0, 8u
-  %word1 = or %aligned_byte1, %word1_b1
-
-  ; Decide how many words to write based on byte_count
-  %needs_two_words_u = ucmp.gt %byte_count, 2u
-  br_if %needs_two_words_u, write_two_words_u, write_one_word_u, write_one_word_u
-
-write_one_word_u:
-  ; === Reserve 1 word ===
-  %write_head_ptr_1u = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
-  %max_loops_ptr_1u = gep[ptr[global]<u32>] @gdp_buffer, 2u, stride=4
-  %max_loops_1u = load %max_loops_ptr_1u
-  %current_write_head_1u = atomic.load %write_head_ptr_1u ordering=acq_rel scope=device
-  %current_loop_1u = udiv %current_write_head_1u, 4093u
-  %is_full_1u = ucmp.ge %current_loop_1u, %max_loops_1u
-  br_if %is_full_1u, full_exit2, reserve_one_u, reserve_one_u
-
-reserve_one_u:
-  %global_pos_1u = atomic.rmw add %write_head_ptr_1u, 1u ordering=acq_rel scope=device
-  %index_1u = urem %global_pos_1u, 4093u
-  %data_index_1u = add %index_1u, 3u
-  %ptr_1u = gep[ptr[global]<u32>] @gdp_buffer, %data_index_1u, stride=4
-  store %ptr_1u, %word0
-  ret
-
-write_two_words_u:
-  ; === Reserve 2 words with wrap-to-zero logic ===
-  %write_head_ptr2 = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
-  %max_loops_ptr2 = gep[ptr[global]<u32>] @gdp_buffer, 2u, stride=4
-  %max_loops2 = load %max_loops_ptr2
-  %current_write_head2 = atomic.load %write_head_ptr2 ordering=acq_rel scope=device
-  %current_loop2 = udiv %current_write_head2, 4093u
-  %is_full2 = ucmp.ge %current_loop2, %max_loops2
-  br_if %is_full2, full_exit2, check_wrap2, check_wrap2
-
-check_wrap2:
-  %ring_pos2 = urem %current_write_head2, 4093u
-  %pos_plus_count2 = add %ring_pos2, 2u
-  %would_cross2 = ucmp.gt %pos_plus_count2, 4093u
-  br_if %would_cross2, wrap_to_zero2, normal_reserve2, write_data2
-
-wrap_to_zero2:
-  %skip_amount2 = sub 4093u, %ring_pos2
-  %total_skip2 = add %skip_amount2, 2u
-  %skipped_pos2 = atomic.rmw add %write_head_ptr2, %total_skip2 ordering=acq_rel scope=device
-  br write_data2
-
-normal_reserve2:
-  %global_pos2 = atomic.rmw add %write_head_ptr2, 2u ordering=acq_rel scope=device
-  %normal_index2 = urem %global_pos2, 4093u
-  br write_data2
-
-write_data2:
-  %start_index2 = phi u32 [0u, wrap_to_zero2], [%normal_index2, normal_reserve2]
-  %data_index0_2 = add %start_index2, 3u
-  %index_plus_1_2 = add %start_index2, 1u
-  %index_plus_1_mod2 = urem %index_plus_1_2, 4093u
-  %data_index1_2 = add %index_plus_1_mod2, 3u
-  %ptr0_2 = gep[ptr[global]<u32>] @gdp_buffer, %data_index0_2, stride=4
-  %ptr1_2 = gep[ptr[global]<u32>] @gdp_buffer, %data_index1_2, stride=4
-  store %ptr0_2, %word0
-  store %ptr1_2, %word1
-  ret
-
-full_exit2:
+  %header = or 0x00u, 0x100u
+  call @gdp_write_two_words(%header, %value)
   ret
 }
 
 ; ============================================================================
 ; gdp_encode_int32: Encode a signed i32 value into the GDP ring buffer
 ;
-; This function implements gob signed integer encoding:
-; 1. If value < 0: encoded = (!value << 1) | 1
-; 2. If value >= 0: encoded = value << 1
-; 3. Encode the result with type tag 0x01 (signed int)
-;
-; Arguments:
-;   %value: i32 - The signed integer to encode
-;
-; GDP Int encoding format:
-;   For small values (encoded < 64): type byte is (encoded << 2) | 0x01
-;   For larger values: type byte 0x01 + gob-encoded uint
+; Format: [header, bits]
+;   header = 0x01 | (1 << 8)  (type=i32, size=1)
+;   bits = bitcast i32 to u32
 ; ============================================================================
 func @gdp_encode_int32(%value: i32) -> void {
 entry:
-  ; Gob signed int encoding:
-  ; if value < 0: u = (!value << 1) | 1
-  ; else: u = value << 1
-  ;
-  ; Check if negative using signed comparison
-  %is_negative = icmp.lt %value, 0i
-
-  ; Compute !value (bitwise NOT) = value XOR -1 (using ixor for i32 result)
-  %not_value = ixor %value, -1i
-
-  ; Select which base to use (iselect for i32 result type)
-  %base = iselect %is_negative, %not_value, %value
-
-  ; Bitcast to u32 for the shift and remaining operations
-  %base_u32 = bitcast %base
-
-  ; Shift left by 1
-  %shifted = shl %base_u32, 1u
-
-  ; OR with 1 if negative
-  %one = select %is_negative, 1u, 0u
-  %encoded = or %shifted, %one
-
-  ; Now encode %encoded as a GDP uint with type tag 0x01
-  ; Check if value fits in inline encoding (0-63)
-  %is_small = ucmp.lt %encoded, 64u
-  br_if %is_small, encode_inline_int, encode_full_int, encode_inline_int
-
-encode_inline_int:
-  ; Inline encoding: (encoded << 2) | 0x01
-  %inline_shifted = shl %encoded, 2u
-  %inline_word = or %inline_shifted, 0x01u
-
-  ; Reserve 1 word
-  %write_head_ptr_i = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
-  %max_loops_ptr_i = gep[ptr[global]<u32>] @gdp_buffer, 2u, stride=4
-  %max_loops_i = load %max_loops_ptr_i
-  %current_write_head_i = atomic.load %write_head_ptr_i ordering=acq_rel scope=device
-  %current_loop_i = udiv %current_write_head_i, 4093u
-  %is_full_i = ucmp.ge %current_loop_i, %max_loops_i
-  br_if %is_full_i, exit_inline_int, reserve_inline_int, reserve_inline_int
-
-reserve_inline_int:
-  %start_index_inline_i = atomic.rmw add %write_head_ptr_i, 1u ordering=acq_rel scope=device
-  %index_raw_i = urem %start_index_inline_i, 4093u
-  %index_i = add %index_raw_i, 3u
-  %ptr_i = gep[ptr[global]<u32>] @gdp_buffer, %index_i, stride=4
-  store %ptr_i, %inline_word
-  ret
-
-exit_inline_int:
-  ret
-
-encode_full_int:
-  ; Full encoding: type byte 0x01 + gob uint
-  ; TODO: refactor to share encoding logic with gdp_encode_uint (only type byte differs)
-  ; Determine byte count (1-4 bytes for u32)
-  %lt_100_i = ucmp.lt %encoded, 0x100u
-  %lt_10000_i = ucmp.lt %encoded, 0x10000u
-  %lt_1000000_i = ucmp.lt %encoded, 0x1000000u
-
-  %count_if_3_or_4_i = select %lt_1000000_i, 3u, 4u
-  %count_if_2_or_more_i = select %lt_10000_i, 2u, %count_if_3_or_4_i
-  %byte_count_i = select %lt_100_i, 1u, %count_if_2_or_more_i
-
-  ; Negated count for gob encoding
-  %negated_count_i = sub 0u, %byte_count_i
-  %negated_count_byte_i = and %negated_count_i, 0xFFu
-
-  ; Shift value so significant bytes align to high end
-  %shift_slots_i = sub 4u, %byte_count_i
-  %shift_amount_i = shl %shift_slots_i, 3u
-  %aligned_i = shl %encoded, %shift_amount_i
-
-  ; Extract bytes from the aligned value (MSB-first order)
-  %aligned_byte3_i = shr %aligned_i, 24u
-  %aligned_shr_16_i = shr %aligned_i, 16u
-  %aligned_byte2_i = and %aligned_shr_16_i, 0xFFu
-  %aligned_shr_8_i = shr %aligned_i, 8u
-  %aligned_byte1_i = and %aligned_shr_8_i, 0xFFu
-  %aligned_byte0_i = and %aligned_i, 0xFFu
-
-  ; Pack into first word: [0x01, negated_count, aligned_byte3, aligned_byte2]
-  %word0_b1_i = shl %negated_count_byte_i, 8u
-  %word0_b2_i = shl %aligned_byte3_i, 16u
-  %word0_b3_i = shl %aligned_byte2_i, 24u
-
-  %word0_temp1_i = or 0x01u, %word0_b1_i
-  %word0_temp2_i = or %word0_temp1_i, %word0_b2_i
-  %word0_i = or %word0_temp2_i, %word0_b3_i
-
-  ; Pack into second word: [aligned_byte1, aligned_byte0, 0x00, 0x00]
-  ; Only needed if byte_count > 2
-  %word1_b1_i = shl %aligned_byte0_i, 8u
-  %word1_i = or %aligned_byte1_i, %word1_b1_i
-
-  ; Decide how many words to write based on byte_count
-  %needs_two_words_i = ucmp.gt %byte_count_i, 2u
-  br_if %needs_two_words_i, write_two_words_i, write_one_word_i, write_one_word_i
-
-write_one_word_i:
-  ; === Reserve 1 word ===
-  %write_head_ptr_1i = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
-  %max_loops_ptr_1i = gep[ptr[global]<u32>] @gdp_buffer, 2u, stride=4
-  %max_loops_1i = load %max_loops_ptr_1i
-  %current_write_head_1i = atomic.load %write_head_ptr_1i ordering=acq_rel scope=device
-  %current_loop_1i = udiv %current_write_head_1i, 4093u
-  %is_full_1i = ucmp.ge %current_loop_1i, %max_loops_1i
-  br_if %is_full_1i, full_exit2_i, reserve_one_i, reserve_one_i
-
-reserve_one_i:
-  %global_pos_1i = atomic.rmw add %write_head_ptr_1i, 1u ordering=acq_rel scope=device
-  %index_1i = urem %global_pos_1i, 4093u
-  %data_index_1i = add %index_1i, 3u
-  %ptr_1i = gep[ptr[global]<u32>] @gdp_buffer, %data_index_1i, stride=4
-  store %ptr_1i, %word0_i
-  ret
-
-write_two_words_i:
-  ; === Reserve 2 words with wrap-to-zero logic ===
-  %write_head_ptr2_i = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
-  %max_loops_ptr2_i = gep[ptr[global]<u32>] @gdp_buffer, 2u, stride=4
-  %max_loops2_i = load %max_loops_ptr2_i
-  %current_write_head2_i = atomic.load %write_head_ptr2_i ordering=acq_rel scope=device
-  %current_loop2_i = udiv %current_write_head2_i, 4093u
-  %is_full2_i = ucmp.ge %current_loop2_i, %max_loops2_i
-  br_if %is_full2_i, full_exit2_i, check_wrap2_i, check_wrap2_i
-
-check_wrap2_i:
-  %ring_pos2_i = urem %current_write_head2_i, 4093u
-  %pos_plus_count2_i = add %ring_pos2_i, 2u
-  %would_cross2_i = ucmp.gt %pos_plus_count2_i, 4093u
-  br_if %would_cross2_i, wrap_to_zero2_i, normal_reserve2_i, write_data2_i
-
-wrap_to_zero2_i:
-  %skip_amount2_i = sub 4093u, %ring_pos2_i
-  %total_skip2_i = add %skip_amount2_i, 2u
-  %skipped_pos2_i = atomic.rmw add %write_head_ptr2_i, %total_skip2_i ordering=acq_rel scope=device
-  br write_data2_i
-
-normal_reserve2_i:
-  %global_pos2_i = atomic.rmw add %write_head_ptr2_i, 2u ordering=acq_rel scope=device
-  %normal_index2_i = urem %global_pos2_i, 4093u
-  br write_data2_i
-
-write_data2_i:
-  %start_index2_i = phi u32 [0u, wrap_to_zero2_i], [%normal_index2_i, normal_reserve2_i]
-  %data_index0_2_i = add %start_index2_i, 3u
-  %index_plus_1_2_i = add %start_index2_i, 1u
-  %index_plus_1_mod2_i = urem %index_plus_1_2_i, 4093u
-  %data_index1_2_i = add %index_plus_1_mod2_i, 3u
-  %ptr0_2_i = gep[ptr[global]<u32>] @gdp_buffer, %data_index0_2_i, stride=4
-  %ptr1_2_i = gep[ptr[global]<u32>] @gdp_buffer, %data_index1_2_i, stride=4
-  store %ptr0_2_i, %word0_i
-  store %ptr1_2_i, %word1_i
-  ret
-
-full_exit2_i:
+  %bits = bitcast %value
+  %header = or 0x01u, 0x100u
+  call @gdp_write_two_words(%header, %bits)
   ret
 }
 
@@ -503,126 +117,75 @@ full_exit2_i:
 ;   %str_arr: ptr[local]<[16; u32]> - Pointer to fixed-size array of 16 u32 words (max 64 bytes)
 ;   %str_len: u32 - Length of string in bytes (must be <= 64)
 ;
-; The string is stored as packed u32 words in little-endian byte order.
-; To extract byte i: load word at (i / 4), shift right by ((i % 4) * 8), mask with 0xFF
+; Format: [header, data words...]
+;   header = 0x02 | (word_count << 8)
+;   data = string bytes packed into u32s, with at least 1 trailing zero
 ;
-; GDP String encoding format:
-;   Type byte: 0x02 (inline=0, type=0b10)
-;   Length: gob-encoded uint
-;   Data: UTF-8 bytes
+; String bytes are packed little-endian: first byte in bits 0-7, etc.
+; If string length is multiple of 4, an extra word of zeros is added.
 ; ============================================================================
 func @gdp_encode_string_local(%str_arr: ptr[local]<[16; u32]>, %str_len: u32) -> void {
 entry:
-  ; For strings < 64 bytes: type byte is (length << 2) | 0x02
-  %is_short = ucmp.lt %str_len, 64u
-  br_if %is_short, encode_short, encode_exit, encode_exit
+  ; Calculate word count: (str_len + 4) / 4
+  ; This ensures at least 1 trailing zero byte
+  %len_plus_4 = add %str_len, 4u
+  %word_count = udiv %len_plus_4, 4u
 
-encode_short:
-  ; Type byte: (str_len << 2) | 0x02
-  %len_shifted = shl %str_len, 2u
-  %type_byte = or %len_shifted, 0x02u
+  ; Build header: type=0x02, size=word_count
+  %size_shifted = shl %word_count, 8u
+  %header = or 0x02u, %size_shifted
 
-  ; Calculate total bytes: 1 (type) + str_len
-  %total_bytes = add %str_len, 1u
+  ; Total words to reserve: 1 (header) + word_count
+  %total_words = add %word_count, 1u
 
-  ; Calculate words needed: (total_bytes + 3) / 4
-  %bytes_rounded = add %total_bytes, 3u
-  %total_words = udiv %bytes_rounded, 4u
-
-  ; Reserve space
+  ; Reserve space in ring buffer
   %write_head_ptr = gep[ptr[global]<u32>] @gdp_buffer, 0u, stride=4
-  %start_pos = atomic.rmw add %write_head_ptr, %total_words ordering=acq_rel scope=device
+  %max_loops_ptr = gep[ptr[global]<u32>] @gdp_buffer, 2u, stride=4
+  %max_loops = load %max_loops_ptr
+  %current_write_head = atomic.load %write_head_ptr ordering=acq_rel scope=device
+  %current_loop = udiv %current_write_head, 4093u
+  %is_full = ucmp.ge %current_loop, %max_loops
+  br_if %is_full, full_exit, reserve, reserve
 
-  ; Calculate ring position
+reserve:
+  %start_pos = atomic.rmw add %write_head_ptr, %total_words ordering=acq_rel scope=device
   %ring_pos = urem %start_pos, 4093u
 
-  ; Initialize loop: byte_idx = 0, word_idx = 0, current_word = type_byte
-  br pack_loop
+  ; Write header
+  %header_idx = add %ring_pos, 3u
+  %header_ptr = gep[ptr[global]<u32>] @gdp_buffer, %header_idx, stride=4
+  store %header_ptr, %header
 
-pack_loop [loop merge=finalize, continue=pack_continue]:
-  ; Phi: byte_idx, word_idx, current_word, shift
-  ; Values come from entry (encode_short) or continue block (pack_continue)
-  %byte_idx = phi u32 [0u, encode_short], [%cont_byte_idx, pack_continue]
-  %word_idx = phi u32 [0u, encode_short], [%cont_word_idx, pack_continue]
-  %current_word = phi u32 [%type_byte, encode_short], [%cont_current_word, pack_continue]
-  %shift = phi u32 [8u, encode_short], [%cont_shift, pack_continue]
+  ; Write string data words
+  ; The source array already has the string packed into u32s
+  br write_loop
 
-  ; Check if we're done with all bytes
-  ; No merge label needed - the loop header's OpLoopMerge handles structured CFG
-  %done = ucmp.ge %byte_idx, %str_len
-  br_if %done, finalize, pack_byte
-
-pack_byte:
-  ; Extract byte from packed u32 string data
-  ; word_index = byte_idx / 4, byte_offset = byte_idx % 4
-  %src_word_idx = udiv %byte_idx, 4u
-  %byte_offset = urem %byte_idx, 4u
-  %byte_shift = shl %byte_offset, 3u  ; byte_offset * 8
-
-  ; Load word containing the byte - GEP on the array pointer
-  %src_word_ptr = gep[ptr[local]<u32>] %str_arr, %src_word_idx, stride=4
-  %src_word = load %src_word_ptr
-
-  ; Extract byte: (word >> shift) & 0xFF
-  %byte_shifted_down = shr %src_word, %byte_shift
-  %byte_val = and %byte_shifted_down, 0xFFu
-
-  ; Shift byte and OR into current_word
-  %byte_shifted = shl %byte_val, %shift
-  %updated_word = or %current_word, %byte_shifted
-
-  ; Increment byte index
-  %next_byte_idx = add %byte_idx, 1u
-
-  ; Calculate next shift (shift + 8)
-  %next_shift = add %shift, 8u
-
-  ; Check if word is full (shift == 32)
-  %word_full = ucmp.eq %next_shift, 32u
-  br_if %word_full, write_word, pack_continue_normal, pack_continue_normal
-
-pack_continue_normal:
-  ; Continue without writing - carry forward updated values
-  br pack_continue
+write_loop [loop merge=done, continue=write_continue]:
+  %i = phi u32 [0u, reserve], [%next_i, write_continue]
+  %done_cond = ucmp.ge %i, %word_count
+  br_if %done_cond, done, write_word
 
 write_word:
-  ; Write current_word to buffer
-  %buffer_idx_base = add %ring_pos, %word_idx
-  %buffer_idx_wrapped = urem %buffer_idx_base, 4093u
-  %buffer_idx = add %buffer_idx_wrapped, 3u
-  %word_ptr = gep[ptr[global]<u32>] @gdp_buffer, %buffer_idx, stride=4
-  store %word_ptr, %updated_word
+  ; Load source word (may be partial/zero for padding)
+  %src_ptr = gep[ptr[local]<u32>] %str_arr, %i, stride=4
+  %src_word = load %src_ptr
 
-  ; Increment word index
-  %next_word_idx = add %word_idx, 1u
+  ; Calculate destination index
+  %data_offset = add %i, 1u
+  %dest_ring_idx = add %ring_pos, %data_offset
+  %dest_ring_wrapped = urem %dest_ring_idx, 4093u
+  %dest_idx = add %dest_ring_wrapped, 3u
+  %dest_ptr = gep[ptr[global]<u32>] @gdp_buffer, %dest_idx, stride=4
+  store %dest_ptr, %src_word
+  br write_continue
 
-  ; Go through continue block to loop back (SPIR-V requires single back-edge)
-  br pack_continue
+write_continue:
+  %next_i = add %i, 1u
+  br write_loop
 
-pack_continue:
-  ; Merge values from both paths to feed into loop header
-  %cont_byte_idx = phi u32 [%next_byte_idx, pack_continue_normal], [%next_byte_idx, write_word]
-  %cont_word_idx = phi u32 [%word_idx, pack_continue_normal], [%next_word_idx, write_word]
-  %cont_current_word = phi u32 [%updated_word, pack_continue_normal], [0u, write_word]
-  %cont_shift = phi u32 [%next_shift, pack_continue_normal], [0u, write_word]
-  br pack_loop
-
-finalize:
-  ; If there's a partial word, write it
-  %has_partial = ucmp.ne %shift, 0u
-  br_if %has_partial, write_final, finalize_done, finalize_done
-
-write_final:
-  %final_idx_base = add %ring_pos, %word_idx
-  %final_idx_wrapped = urem %final_idx_base, 4093u
-  %final_idx = add %final_idx_wrapped, 3u
-  %final_ptr = gep[ptr[global]<u32>] @gdp_buffer, %final_idx, stride=4
-  store %final_ptr, %current_word
-  br finalize_done
-
-finalize_done:
+done:
   ret
 
-encode_exit:
+full_exit:
   ret
 }

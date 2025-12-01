@@ -364,9 +364,9 @@ impl State {
 
             // Calculate actual position in ring buffer and number of loops
             let loop_count = write_head_global / data_len;
-            let values_to_read = write_head_global.min(data_len);
+            let words_to_read = write_head_global.min(data_len);
 
-            eprintln!("\n=== Debug Output ({} values written, loops={}/{}) ===",
+            eprintln!("\n=== Debug Output ({} words written, loops={}/{}) ===",
                 write_head_global, loop_count, max_loops);
 
             // Print raw hex data (first 100 words)
@@ -379,31 +379,70 @@ impl State {
             }
             eprintln!("\n");
 
-            // Extract data from read_head to write_head (handling wrap)
-            // For simplicity, just read the whole ring buffer and let GDP decoder parse it
+            // Simple GDP decoder - inline
+            // Format: header word + data words
+            // Header: type (bits 0-7) | size (bits 8-31)
+            // Type: 0x00=u32, 0x01=i32, 0x02=string, 0x03=f32
             let data_slice = &u32_data[data_start..data_start + data_len];
-            let mut decoder = gdp::GdpDecoder::new(data_slice);
-
-            // Decode values from the ring buffer
-            // If buffer wrapped, newest data may have overwritten oldest
+            let mut pos = 0;
             let mut count = 0;
-            while !decoder.is_empty() && count < values_to_read {
-                match decoder.decode_value() {
-                    Ok(value) => {
-                        match value {
-                            gdp::GdpValue::String(s) => eprintln!("S: {}", s),
-                            gdp::GdpValue::Int(i) => eprintln!("I: {}", i),
-                            gdp::GdpValue::UInt(u) => eprintln!("U: {}", u),
-                            gdp::GdpValue::Float32(f) => eprintln!("F: {}", f),
-                        }
-                        count += 1;
+
+            while pos < words_to_read {
+                let header = data_slice[pos];
+                let type_tag = header & 0xFF;
+                let size = (header >> 8) as usize;
+
+                if size == 0 || pos + 1 + size > data_len {
+                    // Invalid or incomplete - stop
+                    break;
+                }
+
+                match type_tag {
+                    0x00 => {
+                        // u32
+                        let value = data_slice[pos + 1];
+                        eprintln!("U: {}", value);
                     }
-                    Err(e) => {
-                        eprintln!("Decode error: {}", e);
+                    0x01 => {
+                        // i32
+                        let bits = data_slice[pos + 1];
+                        let value = bits as i32;
+                        eprintln!("I: {}", value);
+                    }
+                    0x02 => {
+                        // string
+                        let mut bytes = Vec::new();
+                        for i in 0..size {
+                            let word = data_slice[pos + 1 + i];
+                            bytes.push((word & 0xFF) as u8);
+                            bytes.push(((word >> 8) & 0xFF) as u8);
+                            bytes.push(((word >> 16) & 0xFF) as u8);
+                            bytes.push(((word >> 24) & 0xFF) as u8);
+                        }
+                        // Strip trailing zeros
+                        while bytes.last() == Some(&0) {
+                            bytes.pop();
+                        }
+                        let s = String::from_utf8_lossy(&bytes);
+                        eprintln!("S: {}", s);
+                    }
+                    0x03 => {
+                        // f32
+                        let bits = data_slice[pos + 1];
+                        let value = f32::from_bits(bits);
+                        eprintln!("F: {}", value);
+                    }
+                    _ => {
+                        eprintln!("Unknown type: 0x{:02x}", type_tag);
                         break;
                     }
                 }
+
+                pos += 1 + size;
+                count += 1;
             }
+
+            eprintln!("({} values decoded)", count);
             eprintln!("=================================\n");
 
             drop(data);
