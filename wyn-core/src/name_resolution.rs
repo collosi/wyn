@@ -118,7 +118,7 @@ impl NameResolver {
             ExprKind::UnaryOp(_, operand) => {
                 self.resolve_expr(operand)?;
             }
-            ExprKind::Tuple(exprs) | ExprKind::ArrayLiteral(exprs) => {
+            ExprKind::Tuple(exprs) | ExprKind::ArrayLiteral(exprs) | ExprKind::VecMatLiteral(exprs) => {
                 for e in exprs {
                     self.resolve_expr(e)?;
                 }

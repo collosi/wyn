@@ -609,6 +609,17 @@ pub fn walk_literal<V: MirVisitor>(v: &mut V, lit: Literal) -> Result<Literal, V
         Literal::String(s) => v.visit_literal_string(s),
         Literal::Tuple(elems) => v.visit_literal_tuple(elems),
         Literal::Array(elems) => v.visit_literal_array(elems),
+        Literal::Vector(elems) => {
+            let elems = elems.into_iter().map(|e| v.visit_expr(e)).collect::<Result<Vec<_>, _>>()?;
+            Ok(Literal::Vector(elems))
+        }
+        Literal::Matrix(rows) => {
+            let rows = rows
+                .into_iter()
+                .map(|row| row.into_iter().map(|e| v.visit_expr(e)).collect::<Result<Vec<_>, _>>())
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Literal::Matrix(rows))
+        }
     }
 }
 

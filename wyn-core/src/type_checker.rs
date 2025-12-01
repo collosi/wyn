@@ -1227,6 +1227,69 @@ impl TypeChecker {
                     Ok(types::sized_array(elements.len(), first_type))
                 }
             }
+            ExprKind::VecMatLiteral(elements) => {
+                // @[...] vector/matrix literal - type inferred from context
+                // Vector: @[1.0, 2.0, 3.0] - elements are scalars
+                // Matrix: @[[1,2,3], [4,5,6]] - elements are array literals (rows)
+                if elements.is_empty() {
+                    return Err(CompilerError::TypeError(
+                        "Cannot infer type of empty vector/matrix literal".to_string(),
+                        expr.h.span,
+                    ));
+                }
+
+                // Infer type of first element to determine if vector or matrix
+                let first_type = self.infer_expression(&elements[0])?;
+
+                // Check if first element is an array (matrix) or scalar (vector)
+                let is_matrix = matches!(
+                    first_type.apply(&self.context),
+                    Type::Constructed(TypeName::Array, _)
+                );
+
+                // Unify all element types
+                for elem in &elements[1..] {
+                    let elem_type = self.infer_expression(elem)?;
+                    self.context.unify(&elem_type, &first_type).map_err(|_| {
+                        CompilerError::TypeError(
+                            format!(
+                                "All elements must have the same type, expected {}, got {}",
+                                self.format_type(&first_type),
+                                self.format_type(&elem_type)
+                            ),
+                            elem.h.span,
+                        )
+                    })?;
+                }
+
+                if is_matrix {
+                    // Matrix: extract row size and element type from the array type
+                    let resolved = first_type.apply(&self.context);
+                    if let Type::Constructed(TypeName::Array, args) = resolved {
+                        if args.len() == 2 {
+                            if let Type::Constructed(TypeName::Size(cols), _) = &args[0] {
+                                let rows = elements.len();
+                                let elem_type = args[1].clone();
+                                return Ok(types::mat(rows, *cols, elem_type));
+                            }
+                        }
+                    }
+                    Err(CompilerError::TypeError(
+                        "Matrix rows must be fixed-size arrays".to_string(),
+                        expr.h.span,
+                    ))
+                } else {
+                    // Vector literal
+                    let size = elements.len();
+                    if size < 2 || size > 4 {
+                        return Err(CompilerError::TypeError(
+                            format!("Vector size must be 2, 3, or 4, got {}", size),
+                            expr.h.span,
+                        ));
+                    }
+                    Ok(types::vec(size, first_type))
+                }
+            }
             ExprKind::ArrayIndex(array_expr, index_expr) => {
                 let array_type = self.infer_expression(array_expr)?;
                 let index_type = self.infer_expression(index_expr)?;

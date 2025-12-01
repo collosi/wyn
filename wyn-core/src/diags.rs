@@ -346,6 +346,22 @@ impl AstFormatter {
                     self.write_line("]");
                 }
             }
+            ExprKind::VecMatLiteral(elems) => {
+                if elems.is_empty() {
+                    self.write_line("@[]");
+                } else if elems.len() <= 4 && elems.iter().all(|e| self.is_simple_expr(e)) {
+                    let items: Vec<String> = elems.iter().map(|e| self.format_simple_expr(e)).collect();
+                    self.write_line(&format!("@[{}]", items.join(", ")));
+                } else {
+                    self.write_line("@[");
+                    self.indent += 1;
+                    for elem in elems {
+                        self.write_expression(elem);
+                    }
+                    self.indent -= 1;
+                    self.write_line("]");
+                }
+            }
             ExprKind::ArrayIndex(arr, idx) => {
                 let arr_str = self.format_simple_expr(arr);
                 let idx_str = self.format_simple_expr(idx);
@@ -801,6 +817,33 @@ impl Display for mir::Literal {
                         write!(f, ", ")?;
                     }
                     write!(f, "{}", expr)?;
+                }
+                write!(f, "]")
+            }
+            mir::Literal::Vector(exprs) => {
+                write!(f, "@[")?;
+                for (i, expr) in exprs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", expr)?;
+                }
+                write!(f, "]")
+            }
+            mir::Literal::Matrix(rows) => {
+                write!(f, "@[")?;
+                for (i, row) in rows.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "[")?;
+                    for (j, expr) in row.iter().enumerate() {
+                        if j > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", expr)?;
+                    }
+                    write!(f, "]")?;
                 }
                 write!(f, "]")
             }

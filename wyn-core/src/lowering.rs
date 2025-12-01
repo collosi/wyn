@@ -82,6 +82,7 @@ struct Constructor {
 
     // Type cache: avoid recreating same types
     vec_type_cache: HashMap<(spirv::Word, u32), spirv::Word>,
+    mat_type_cache: HashMap<(spirv::Word, u32, u32), spirv::Word>, // (elem_type, rows, cols)
     struct_type_cache: HashMap<Vec<spirv::Word>, spirv::Word>,
     ptr_type_cache: HashMap<(spirv::StorageClass, spirv::Word), spirv::Word>,
 
@@ -144,6 +145,7 @@ impl Constructor {
             gasm_function_cache: HashMap::new(),
             glsl_ext_inst_id,
             vec_type_cache: HashMap::new(),
+            mat_type_cache: HashMap::new(),
             struct_type_cache: HashMap::new(),
             ptr_type_cache: HashMap::new(),
             entry_point_interfaces: HashMap::new(),
@@ -398,6 +400,21 @@ impl Constructor {
         }
         let ty = self.builder.type_vector(elem_type, size);
         self.vec_type_cache.insert(key, ty);
+        ty
+    }
+
+    /// Get or create a matrix type
+    /// SPIR-V matrices are column-major: mat<rows x cols> has `cols` column vectors of size `rows`
+    fn get_or_create_mat_type(&mut self, elem_type: spirv::Word, rows: u32, cols: u32) -> spirv::Word {
+        let key = (elem_type, rows, cols);
+        if let Some(&ty) = self.mat_type_cache.get(&key) {
+            return ty;
+        }
+        // Matrix column type is a vector with `rows` elements
+        let col_type = self.get_or_create_vec_type(elem_type, rows);
+        // Matrix has `cols` columns
+        let ty = self.builder.type_matrix(col_type, cols);
+        self.mat_type_cache.insert(key, ty);
         ty
     }
 
@@ -2174,6 +2191,55 @@ fn lower_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::
             // Construct the composite
 
             Ok(constructor.builder.composite_construct(array_type, None, elem_ids)?)
+        }
+        Literal::Vector(elems) => {
+            // Lower all elements
+            let elem_ids: Vec<spirv::Word> =
+                elems.iter().map(|e| lower_expr(constructor, e)).collect::<Result<Vec<_>>>()?;
+
+            // Get element type from first element
+            let elem_type =
+                elems.first().map(|e| constructor.ast_type_to_spirv(&e.ty)).unwrap_or(constructor.f32_type);
+
+            // Create vector type
+            let vec_type = constructor.get_or_create_vec_type(elem_type, elem_ids.len() as u32);
+
+            // Construct the vector
+            Ok(constructor.builder.composite_construct(vec_type, None, elem_ids)?)
+        }
+        Literal::Matrix(rows) => {
+            // Matrix literal: rows are the outer vec, columns are inner
+            // SPIR-V matrices are column-major, so we need to transpose
+            if rows.is_empty() || rows[0].is_empty() {
+                return Err(CompilerError::SpirvError("Empty matrix literal".to_string()));
+            }
+
+            let num_rows = rows.len();
+            let num_cols = rows[0].len();
+
+            // Get element type from first element
+            let elem_type = constructor.ast_type_to_spirv(&rows[0][0].ty);
+
+            // Create column vector type
+            let col_vec_type = constructor.get_or_create_vec_type(elem_type, num_rows as u32);
+
+            // Transpose: build column vectors from row data
+            let mut col_ids = Vec::with_capacity(num_cols);
+            for col in 0..num_cols {
+                let mut col_elem_ids = Vec::with_capacity(num_rows);
+                for row in rows {
+                    let elem_id = lower_expr(constructor, &row[col])?;
+                    col_elem_ids.push(elem_id);
+                }
+                let col_vec = constructor.builder.composite_construct(col_vec_type, None, col_elem_ids)?;
+                col_ids.push(col_vec);
+            }
+
+            // Create matrix type: mat<rows x cols>
+            let mat_type = constructor.get_or_create_mat_type(elem_type, num_rows as u32, num_cols as u32);
+
+            // Construct the matrix from column vectors
+            Ok(constructor.builder.composite_construct(mat_type, None, col_ids)?)
         }
     }
 }

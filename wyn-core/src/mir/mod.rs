@@ -209,6 +209,10 @@ pub enum Literal {
     Tuple(Vec<Expr>),
     /// Array literal.
     Array(Vec<Expr>),
+    /// Vector literal (@[1.0, 2.0, 3.0]).
+    Vector(Vec<Expr>),
+    /// Matrix literal (@[[1,2], [3,4]]) - outer vec is rows, inner is columns.
+    Matrix(Vec<Vec<Expr>>),
 }
 
 /// The kind of loop construct.

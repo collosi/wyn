@@ -637,6 +637,7 @@ pub enum ExprKind {
     QualifiedName(Vec<String>, String), // quals, name - e.g., f32.sin is (["f32"], "sin")
     OperatorSection(String),            // e.g., (+), (-), (*) - operator as a value
     ArrayLiteral(Vec<Expression>),
+    VecMatLiteral(Vec<Expression>), // @[...] - vector or matrix literal (type inferred from context)
     ArrayIndex(Box<Expression>, Box<Expression>),
     BinaryOp(BinaryOp, Box<Expression>, Box<Expression>),
     UnaryOp(UnaryOp, Box<Expression>), // Unary operations: -, !

@@ -2486,3 +2486,108 @@ fn test_ambiguity_chained_field_access() {
         other => panic!("Expected FieldAccess, got {:?}", other),
     }
 }
+
+// =============================================================================
+// Vector/Matrix Literal Tests (@[...] syntax)
+// =============================================================================
+
+#[test]
+fn test_parse_vector_literal_simple() {
+    let tokens = tokenize("@[1.0f32, 2.0f32, 3.0f32]").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let expr = parser.parse_expression().expect("Failed to parse vector literal");
+    match &expr.kind {
+        ExprKind::VecMatLiteral(elems) => {
+            assert_eq!(elems.len(), 3);
+            assert!(matches!(&elems[0].kind, ExprKind::FloatLiteral(_)));
+        }
+        other => panic!("Expected VecMatLiteral, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_vector_literal_two_elements() {
+    let tokens = tokenize("@[1, 2]").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let expr = parser.parse_expression().expect("Failed to parse vector literal");
+    match &expr.kind {
+        ExprKind::VecMatLiteral(elems) => {
+            assert_eq!(elems.len(), 2);
+        }
+        other => panic!("Expected VecMatLiteral, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_vector_literal_four_elements() {
+    let tokens = tokenize("@[1.0f32, 2.0f32, 3.0f32, 4.0f32]").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let expr = parser.parse_expression().expect("Failed to parse vector literal");
+    match &expr.kind {
+        ExprKind::VecMatLiteral(elems) => {
+            assert_eq!(elems.len(), 4);
+        }
+        other => panic!("Expected VecMatLiteral, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_matrix_literal_2x2() {
+    let tokens = tokenize("@[[1, 2], [3, 4]]").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let expr = parser.parse_expression().expect("Failed to parse matrix literal");
+    match &expr.kind {
+        ExprKind::VecMatLiteral(rows) => {
+            assert_eq!(rows.len(), 2);
+            // Each row should be an ArrayLiteral
+            for row in rows {
+                match &row.kind {
+                    ExprKind::ArrayLiteral(cols) => {
+                        assert_eq!(cols.len(), 2);
+                    }
+                    other => panic!("Expected ArrayLiteral for row, got {:?}", other),
+                }
+            }
+        }
+        other => panic!("Expected VecMatLiteral, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_matrix_literal_2x3() {
+    let tokens =
+        tokenize("@[[1.0f32, 2.0f32, 3.0f32], [4.0f32, 5.0f32, 6.0f32]]").expect("Failed to tokenize");
+    let mut parser = Parser::new(tokens);
+    let expr = parser.parse_expression().expect("Failed to parse matrix literal");
+    match &expr.kind {
+        ExprKind::VecMatLiteral(rows) => {
+            assert_eq!(rows.len(), 2);
+            for row in rows {
+                match &row.kind {
+                    ExprKind::ArrayLiteral(cols) => {
+                        assert_eq!(cols.len(), 3);
+                    }
+                    other => panic!("Expected ArrayLiteral for row, got {:?}", other),
+                }
+            }
+        }
+        other => panic!("Expected VecMatLiteral, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parse_vector_literal_in_function() {
+    let decl = single_decl("def test : vec3f32 = @[1.0f32, 2.0f32, 3.0f32]");
+    assert!(matches!(&decl.body.kind, ExprKind::VecMatLiteral(_)));
+}
+
+#[test]
+fn test_parse_matrix_literal_in_let() {
+    let decl = single_decl("def test : mat2x2f32 = let m = @[[1.0f32, 0.0f32], [0.0f32, 1.0f32]] in m");
+    match &decl.body.kind {
+        ExprKind::LetIn(let_in) => {
+            assert!(matches!(&let_in.value.kind, ExprKind::VecMatLiteral(_)));
+        }
+        other => panic!("Expected LetIn, got {:?}", other),
+    }
+}

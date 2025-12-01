@@ -988,3 +988,124 @@ fn test_unique_return_from_non_unique_param() {
         "Should error: cannot return unique type from non-unique parameter"
     );
 }
+
+// =============================================================================
+// Vector/Matrix Literal Tests (@[...] syntax)
+// =============================================================================
+
+#[test]
+fn test_vector_literal_vec2() {
+    typecheck_program("def test : vec2f32 = @[1.0f32, 2.0f32]");
+}
+
+#[test]
+fn test_vector_literal_vec3() {
+    typecheck_program("def test : vec3f32 = @[1.0f32, 2.0f32, 3.0f32]");
+}
+
+#[test]
+fn test_vector_literal_vec4() {
+    typecheck_program("def test : vec4f32 = @[1.0f32, 2.0f32, 3.0f32, 4.0f32]");
+}
+
+#[test]
+fn test_vector_literal_vec3i32() {
+    typecheck_program("def test : vec3i32 = @[1, 2, 3]");
+}
+
+#[test]
+fn test_vector_literal_type_mismatch() {
+    // vec3f32 requires floats, but we're providing integers
+    let result = try_typecheck_program("def test : vec3f32 = @[1, 2, 3]");
+    assert!(
+        result.is_err(),
+        "Should error: type mismatch between i32 and f32 elements"
+    );
+}
+
+#[test]
+fn test_vector_literal_wrong_size() {
+    // vec3f32 requires 3 elements, but we're providing 2
+    let result = try_typecheck_program("def test : vec3f32 = @[1.0f32, 2.0f32]");
+    assert!(result.is_err(), "Should error: wrong number of elements");
+}
+
+#[test]
+fn test_vector_literal_mixed_element_types() {
+    // All elements must have the same type
+    let result = try_typecheck_program("def test : vec3f32 = @[1.0f32, 2, 3.0f32]");
+    assert!(result.is_err(), "Should error: mixed element types");
+}
+
+// TODO: Parse error when using @[] as function argument - likely needs adjustment to
+// how application parsing handles the @[ token
+#[test]
+#[ignore = "Vector literal as function argument not yet supported"]
+fn test_vector_literal_in_expression() {
+    typecheck_program(
+        r#"
+        def add_vectors (a: vec3f32) (b: vec3f32) : vec3f32 =
+            vec3 (a.x + b.x) (a.y + b.y) (a.z + b.z)
+
+        def test : vec3f32 = add_vectors @[1.0f32, 0.0f32, 0.0f32] @[0.0f32, 1.0f32, 0.0f32]
+        "#,
+    );
+}
+
+// TODO: Matrix literal unification fails because mat2x2f32 (Named type from parser)
+// doesn't unify with Mat[2, 2, f32] (Constructed type from VecMatLiteral inference).
+// Need to either:
+// 1. Resolve Named("mat2x2f32") to Constructed(Mat, [Size(2), Size(2), f32]) during type checking
+// 2. Or have the type checker look up named types during unification
+#[test]
+#[ignore = "Matrix literal type unification not yet implemented"]
+fn test_matrix_literal_mat2x2() {
+    typecheck_program("def test : mat2x2f32 = @[[1.0f32, 2.0f32], [3.0f32, 4.0f32]]");
+}
+
+#[test]
+fn test_matrix_literal_mat2x3() {
+    typecheck_program("def test : mat2x3f32 = @[[1.0f32, 2.0f32, 3.0f32], [4.0f32, 5.0f32, 6.0f32]]");
+}
+
+#[test]
+#[ignore = "Matrix literal type unification not yet implemented"]
+fn test_matrix_literal_mat3x3() {
+    typecheck_program(
+        r#"
+        def identity : mat3x3f32 = @[
+            [1.0f32, 0.0f32, 0.0f32],
+            [0.0f32, 1.0f32, 0.0f32],
+            [0.0f32, 0.0f32, 1.0f32]
+        ]
+        "#,
+    );
+}
+
+#[test]
+fn test_matrix_literal_inconsistent_row_lengths() {
+    // All rows must have the same length
+    let result =
+        try_typecheck_program("def test : mat2x3f32 = @[[1.0f32, 2.0f32], [3.0f32, 4.0f32, 5.0f32]]");
+    assert!(result.is_err(), "Should error: inconsistent row lengths");
+}
+
+#[test]
+fn test_matrix_literal_wrong_element_type() {
+    let result = try_typecheck_program("def test : mat2x2f32 = @[[1, 2], [3, 4]]");
+    assert!(result.is_err(), "Should error: i32 elements for f32 matrix");
+}
+
+#[test]
+fn test_vector_literal_invalid_size() {
+    // Vector size must be 2, 3, or 4
+    let result = try_typecheck_program("def test : f32 = @[1.0f32]");
+    assert!(result.is_err(), "Should error: vector size 1 is invalid");
+}
+
+#[test]
+fn test_vector_literal_too_large() {
+    // Vector size must be 2, 3, or 4
+    let result = try_typecheck_program("def test : f32 = @[1.0f32, 2.0f32, 3.0f32, 4.0f32, 5.0f32]");
+    assert!(result.is_err(), "Should error: vector size 5 is invalid");
+}

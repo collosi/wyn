@@ -105,6 +105,9 @@ pub enum Token {
     // Attributes
     AttributeStart, // #[
 
+    // Vector/Matrix literals
+    AtBracket, // @[ for vector/matrix literals
+
     // Comments (to be skipped)
     Comment(String),
 }
@@ -236,6 +239,7 @@ fn parse_operator(input: &str) -> IResult<&str, Token> {
 fn parse_delimiter(input: &str) -> IResult<&str, Token> {
     alt((
         value(Token::AttributeStart, tag("#[")),
+        value(Token::AtBracket, tag("@[")),
         value(Token::LeftParen, char('(')),
         value(Token::RightParen, char(')')),
         value(Token::LeftBracket, char('[')),
@@ -259,8 +263,8 @@ fn parse_token(input: &str) -> IResult<&str, Token> {
             parse_type_variable,
             parse_identifier,
             parse_int_literal,
+            parse_delimiter, // Must come before parse_operator to match @[ before @
             parse_operator,
-            parse_delimiter,
         )),
     )(input)
 }

@@ -1270,6 +1270,7 @@ impl Parser {
                 Ok(self.node_counter.mk_node(ExprKind::Identifier(name), span))
             }
             Some(Token::LeftBracket) | Some(Token::LeftBracketSpaced) => self.parse_array_literal(),
+            Some(Token::AtBracket) => self.parse_vec_mat_literal(),
             Some(Token::LeftParen) => {
                 let start_span = self.current_span();
                 self.advance(); // consume '('
@@ -1361,6 +1362,31 @@ impl Parser {
         let end_span = self.previous_span();
         let span = start_span.merge(&end_span);
         Ok(self.node_counter.mk_node(ExprKind::ArrayLiteral(elements), span))
+    }
+
+    /// Parse @[...] vector/matrix literal
+    /// - @[1.0, 2.0, 3.0] -> vec3 (elements are scalars)
+    /// - @[[1,2,3], [4,5,6]] -> mat2x3 (elements are row arrays)
+    fn parse_vec_mat_literal(&mut self) -> Result<Expression> {
+        trace!("parse_vec_mat_literal: next token = {:?}", self.peek());
+        let start_span = self.current_span();
+        self.expect(Token::AtBracket)?;
+
+        let mut elements = Vec::new();
+        if !self.check(&Token::RightBracket) {
+            loop {
+                elements.push(self.parse_expression()?);
+                if !self.check(&Token::Comma) {
+                    break;
+                }
+                self.advance();
+            }
+        }
+
+        self.expect(Token::RightBracket)?;
+        let end_span = self.previous_span();
+        let span = start_span.merge(&end_span);
+        Ok(self.node_counter.mk_node(ExprKind::VecMatLiteral(elements), span))
     }
 
     fn parse_record_literal(&mut self) -> Result<Expression> {

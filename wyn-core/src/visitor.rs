@@ -389,6 +389,12 @@ pub fn walk_expression<V: Visitor>(v: &mut V, e: &Expression) -> ControlFlow<V::
             v.visit_expression(cond)?;
             v.visit_expression(expr)
         }
+        ExprKind::VecMatLiteral(elements) => {
+            for elem in elements {
+                v.visit_expression(elem)?;
+            }
+            ControlFlow::Continue(())
+        }
     } // NEWCASESHERE - add new cases before this closing brace
 }
 

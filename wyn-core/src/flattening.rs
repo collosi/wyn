@@ -629,6 +629,44 @@ impl Flattener {
                     StaticValue::Dyn,
                 )
             }
+            ExprKind::VecMatLiteral(elems) => {
+                // Check if first element is an array literal (matrix) or scalar (vector)
+                if elems.is_empty() {
+                    return Err(CompilerError::FlatteningError(
+                        "Empty vector/matrix literal".to_string(),
+                    ));
+                }
+
+                let is_matrix = matches!(&elems[0].kind, ExprKind::ArrayLiteral(_));
+
+                if is_matrix {
+                    // Matrix: extract rows
+                    let mut rows = Vec::new();
+                    for elem in elems {
+                        if let ExprKind::ArrayLiteral(row_elems) = &elem.kind {
+                            let row: Result<Vec<_>> =
+                                row_elems.iter().map(|e| self.flatten_expr(e).map(|(e, _)| e)).collect();
+                            rows.push(row?);
+                        } else {
+                            return Err(CompilerError::FlatteningError(
+                                "Matrix rows must be array literals".to_string(),
+                            ));
+                        }
+                    }
+                    (
+                        mir::ExprKind::Literal(mir::Literal::Matrix(rows)),
+                        StaticValue::Dyn,
+                    )
+                } else {
+                    // Vector
+                    let elems: Result<Vec<_>> =
+                        elems.iter().map(|e| self.flatten_expr(e).map(|(e, _)| e)).collect();
+                    (
+                        mir::ExprKind::Literal(mir::Literal::Vector(elems?)),
+                        StaticValue::Dyn,
+                    )
+                }
+            }
             ExprKind::RecordLiteral(fields) => {
                 // Records become tuples with fields in source order
                 let elems: Result<Vec<_>> =
@@ -1414,7 +1452,7 @@ impl Flattener {
                     self.collect_free_vars(arg, bound, free);
                 }
             }
-            ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => {
+            ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) | ExprKind::VecMatLiteral(elems) => {
                 for elem in elems {
                     self.collect_free_vars(elem, bound, free);
                 }
