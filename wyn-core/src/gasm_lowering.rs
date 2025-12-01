@@ -14,7 +14,6 @@ use std::collections::HashMap;
 pub struct GasmLowering {
     builder: Builder,
     u32_type: Word,
-    u32_ptr_storage_buffer: Word,
 
     /// Map from GASM register names to SPIR-V IDs
     registers: HashMap<String, Word>,
@@ -39,8 +38,6 @@ impl GasmLowering {
 
         // Initialize with basic types
         let u32_type = builder.type_int(32, 0);
-        let u32_ptr_storage_buffer =
-            builder.type_pointer(None, spirv::StorageClass::StorageBuffer, u32_type);
 
         let mut type_cache = HashMap::new();
         type_cache.insert(Type::U32, u32_type);
@@ -48,7 +45,6 @@ impl GasmLowering {
         Self {
             builder,
             u32_type,
-            u32_ptr_storage_buffer,
             registers: HashMap::new(),
             globals: HashMap::new(),
             functions: HashMap::new(),
@@ -699,7 +695,7 @@ impl GasmLowering {
 
 /// Lower a GASM module to SPIR-V bytecode
 pub fn lower_gasm_module(module: &Module) -> Result<Vec<u32>, String> {
-    let mut lowering = GasmLowering::new();
+    let lowering = GasmLowering::new();
     lowering.lower_module(module)
 }
 
@@ -716,15 +712,12 @@ pub fn lower_function_into_builder(
 ) -> Result<Word, String> {
     // Create a minimal GasmLowering context for this function
     let u32_type = builder.type_int(32, 0);
-    let u32_ptr_storage_buffer = builder.type_pointer(None, spirv::StorageClass::StorageBuffer, u32_type);
-
     // Initialize type cache with basic types if not present
     type_cache.entry(Type::U32).or_insert(u32_type);
 
     let mut lowering = GasmLowering {
         builder: std::mem::replace(builder, Builder::new()), // Temporarily take ownership
         u32_type,
-        u32_ptr_storage_buffer,
         registers: HashMap::new(),
         globals, // Use provided globals map
         functions: HashMap::new(),
