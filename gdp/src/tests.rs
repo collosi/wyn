@@ -86,20 +86,6 @@ fn test_decode_negative_129() {
 }
 
 #[test]
-fn test_decode_bool_false() {
-    let buffer = [0u32];
-    let mut decoder = GdpDecoder::new(&buffer);
-    assert_eq!(decoder.decode_bool().unwrap(), false);
-}
-
-#[test]
-fn test_decode_bool_true() {
-    let buffer = [1u32];
-    let mut decoder = GdpDecoder::new(&buffer);
-    assert_eq!(decoder.decode_bool().unwrap(), true);
-}
-
-#[test]
 fn test_decode_string_short() {
     // String "hi" = length 2, then 'h' (0x68), 'i' (0x69)
     // Bytes: 02 68 69 [padding to word]
@@ -144,29 +130,25 @@ fn test_word_alignment_between_values() {
 
 #[test]
 fn test_multiple_values_mixed() {
-    // Encode: uint(42), int(-5), bool(true), string("ok")
+    // Encode: uint(42), int(-5), string("ok")
     // 42: 0x2A
     // -5: !(-5i64) = 4, (4 << 1) | 1 = 9: 0x09
-    // true: 0x01
     // "ok": len=2, 'o'=0x6F, 'k'=0x6B: 02 6F 6B
 
     // Bytes with word alignment:
     // 0x2A [pad pad pad] = 4 bytes
     // 0x09 [pad pad pad] = 4 bytes
-    // 0x01 [pad pad pad] = 4 bytes
     // 0x02 0x6F 0x6B [pad] = 4 bytes
 
     let buffer = bytes_to_u32s(&[
         0x2A, 0x00, 0x00, 0x00, // uint(42)
         0x09, 0x00, 0x00, 0x00, // int(-5)
-        0x01, 0x00, 0x00, 0x00, // bool(true)
         0x02, 0x6F, 0x6B, 0x00, // string("ok")
     ]);
     let mut decoder = GdpDecoder::new(&buffer);
 
     assert_eq!(decoder.decode_uint().unwrap(), 42);
     assert_eq!(decoder.decode_int().unwrap(), -5);
-    assert_eq!(decoder.decode_bool().unwrap(), true);
     assert_eq!(decoder.decode_string().unwrap(), "ok");
 }
 

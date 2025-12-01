@@ -4,7 +4,7 @@
 //! Data is stored in u32 arrays (required for GPU storage buffers) but
 //! logically treated as a big-endian byte stream.
 //!
-//! Supported types: unsigned integers, signed integers, booleans, strings.
+//! Supported types: unsigned integers, signed integers, floats, strings.
 //!
 //! Key feature: word alignment - after each value, if not at a 4-byte boundary,
 //! skip to the next word boundary to prevent partial reads crossing GPU word boundaries.
@@ -133,14 +133,6 @@ impl<'a> GdpDecoder<'a> {
         }
     }
 
-    /// Decode boolean
-    ///
-    /// Encoded as unsigned integer: 0 for false, 1 for true.
-    pub fn decode_bool(&mut self) -> Result<bool, &'static str> {
-        let value = self.decode_uint()?;
-        Ok(value != 0)
-    }
-
     /// Decode string
     ///
     /// Encoded as unsigned count of bytes followed by that many UTF-8 bytes.
@@ -250,6 +242,5 @@ pub enum GdpValue {
     UInt(u64),
     Int(i64),
     String(String),
-    Bool(bool), // Booleans are decoded as UInt, but kept for backwards compatibility
     Float32(f32),
 }
