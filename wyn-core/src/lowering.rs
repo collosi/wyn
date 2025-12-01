@@ -236,11 +236,13 @@ impl Constructor {
         // Lower the GASM function to SPIR-V using gasm_lowering module
         // Pass gasm_globals so references like @gdp_buffer resolve correctly
         // Pass gasm_type_cache to ensure type deduplication across functions
+        // Pass gasm_function_cache so call instructions can reference other GASM functions
         let func_id = crate::gasm_lowering::lower_function_into_builder(
             &mut self.builder,
             gasm_func,
             self.gasm_globals.clone(),
             &mut self.gasm_type_cache,
+            self.gasm_function_cache.clone(),
         )
         .map_err(|e| {
             CompilerError::SpirvError(format!("Failed to lower GASM function {}: {}", gasm_func.name, e))
@@ -578,6 +580,7 @@ impl<'a> LowerCtx<'a> {
             // Pre-lower GASM builtin functions needed for debug output
             // This must be done before lowering user functions to avoid nested function definitions
             let gasm_funcs_to_preload = [
+                "gdp_write_two_words",
                 "gdp_encode_uint",
                 "gdp_encode_int32",
                 "gdp_encode_float32",
@@ -591,6 +594,7 @@ impl<'a> LowerCtx<'a> {
                         &gasm_func,
                         constructor.gasm_globals.clone(),
                         &mut constructor.gasm_type_cache,
+                        constructor.gasm_function_cache.clone(),
                     )
                     .expect(&format!("Failed to pre-lower GASM function {}", func_name));
                     constructor.gasm_function_cache.insert(gasm_func.name.clone(), func_id);

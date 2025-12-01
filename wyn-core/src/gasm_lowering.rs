@@ -640,6 +640,28 @@ impl GasmLowering {
                 return Ok(());
             }
 
+            Operation::Call { func, args } => {
+                // Look up the function ID
+                let func_id = self
+                    .functions
+                    .get(func)
+                    .copied()
+                    .ok_or_else(|| format!("Function {} not found", func))?;
+
+                // Lower arguments
+                let arg_ids: Result<Vec<Word>, String> =
+                    args.iter().map(|arg| self.get_value(arg)).collect();
+                let arg_ids = arg_ids?;
+
+                // For void functions, we don't need a result
+                // SPIR-V OpFunctionCall requires a result type
+                let void_type = self.builder.type_void();
+                self.builder
+                    .function_call(void_type, None, func_id, arg_ids)
+                    .map_err(|e| format!("SPIR-V error: {:?}", e))?;
+                return Ok(());
+            }
+
             _ => return Err(format!("Instruction {:?} not yet implemented", inst.op)),
         }
     }
@@ -796,11 +818,13 @@ pub fn lower_gasm_module(module: &Module) -> Result<Vec<u32>, String> {
 ///
 /// globals: Map from GASM global names (like "gdp_buffer", without @ prefix) to SPIR-V variable IDs
 /// type_cache: Map from GASM types to SPIR-V type IDs (shared across multiple function lowerings)
+/// functions: Map from GASM function names to SPIR-V function IDs (for calling other GASM functions)
 pub fn lower_function_into_builder(
     builder: &mut Builder,
     function: &Function,
     globals: HashMap<String, Word>,
     type_cache: &mut HashMap<Type, Word>,
+    functions: HashMap<String, Word>,
 ) -> Result<Word, String> {
     // Create a minimal GasmLowering context for this function
     let u32_type = builder.type_int(32, 0);
@@ -812,7 +836,7 @@ pub fn lower_function_into_builder(
         u32_type,
         registers: HashMap::new(),
         globals, // Use provided globals map
-        functions: HashMap::new(),
+        functions, // Use provided functions map
         labels: HashMap::new(),
         type_cache: std::mem::take(type_cache), // Take ownership temporarily
     };
