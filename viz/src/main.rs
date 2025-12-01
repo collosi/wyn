@@ -166,32 +166,65 @@ impl State {
             mapped_at_creation: false,
         });
 
-        // Create bind group layout for debug buffer at set=0, binding=0
+        // Create init guard buffer for _init function atomic guard (binding 1)
+        // Layout: { guard: u32 } initialized to 0
+        let init_guard_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("init_guard_buffer"),
+            size: 4, // Single u32
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // Initialize to 0
+        queue.write_buffer(&init_guard_buffer, 0, bytemuck::cast_slice(&[0u32]));
+
+        // Create bind group layout for debug buffer at set=0, binding=0 and init guard at binding=1
         let debug_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("debug_bind_group_layout"),
-            entries: &[BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::VERTEX_FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::VERTEX_FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::VERTEX_FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
 
         let debug_bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("debug_bind_group"),
             layout: &debug_bind_group_layout,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &debug_buffer,
-                    offset: 0,
-                    size: None,
-                }),
-            }],
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &debug_buffer,
+                        offset: 0,
+                        size: None,
+                    }),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &init_guard_buffer,
+                        offset: 0,
+                        size: None,
+                    }),
+                },
+            ],
         });
 
         // === Build pipeline from the chosen mode ==============================
