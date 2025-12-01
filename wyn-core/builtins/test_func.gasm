@@ -1,0 +1,10 @@
+func @gdp_encode_float32(%f: f32) -> void {
+entry:
+  %bits = bitcast %f
+  %const_8 = uconst 8u
+  %const_0xFF = uconst 0xFFu
+  %byte0 = and %bits, %const_0xFF
+  %shr_8 = shr %bits, %const_8
+  %byte1 = and %shr_8, %const_0xFF
+  ret
+}

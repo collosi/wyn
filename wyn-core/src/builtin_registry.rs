@@ -8,10 +8,11 @@ use std::collections::HashMap;
 
 /// Implementation strategy for a builtin function
 ///
-/// Builtins are organized into three semantic categories:
+/// Builtins are organized into four semantic categories:
 /// 1. Library-level (CoreFn): Can be written in the language itself
 /// 2. Core primitives (PrimOp): Map fairly directly to backend operations
 /// 3. Genuine intrinsics (Intrinsic): Require backend-specific lowering
+/// 4. GASM functions (GasmFn): GPU assembly implementations from builtins/*.gasm
 #[derive(Debug, Clone, PartialEq)]
 pub enum BuiltinImpl {
     /// Library-level builtin: implemented as normal function in prelude/core IR
@@ -26,6 +27,10 @@ pub enum BuiltinImpl {
     /// Genuine intrinsic: needs backend-specific lowering, can't be written in language
     /// Examples: atomics, barriers, subgroup ops, uninit/poison
     Intrinsic(Intrinsic),
+
+    /// GASM function: GPU assembly implementation loaded from builtins/*.gasm
+    /// These are lowered to SPIR-V once and called via OpFunctionCall
+    GasmFn(gasm::Function),
 }
 
 /// Core primitive operations that map fairly directly to SPIR-V/backend ops
@@ -271,8 +276,141 @@ impl BuiltinRegistry {
         registry.register_higher_order_functions(ctx);
         registry.register_matav_variants();
         registry.register_debug_intrinsics();
+        registry.load_gasm_builtins();
 
         registry
+    }
+
+    /// Load all GASM builtin functions from the builtins directory
+    fn load_gasm_builtins(&mut self) {
+        // Find the builtins directory relative to the crate root
+        let builtins_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("builtins");
+
+        if !builtins_dir.exists() {
+            eprintln!("Warning: builtins directory not found at {:?}", builtins_dir);
+            return;
+        }
+
+        // Read all .gasm files in the directory
+        let gasm_files = match std::fs::read_dir(&builtins_dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                eprintln!("Warning: failed to read builtins directory: {}", e);
+                return;
+            }
+        };
+
+        for entry in gasm_files.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("gasm") {
+                if let Err(e) = self.load_gasm_file(&path) {
+                    eprintln!("Warning: failed to load GASM builtin {:?}: {}", path, e);
+                }
+            }
+        }
+    }
+
+    /// Load a single GASM file and register its functions as builtins
+    fn load_gasm_file(&mut self, path: &std::path::Path) -> std::io::Result<()> {
+        let content = std::fs::read_to_string(path)?;
+
+        let module = match gasm::parse_module(&content) {
+            Ok(m) => m,
+            Err(e) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("GASM parse error: {:?}", e)
+                ));
+            }
+        };
+
+        // Check if we got any functions - if the file looks like it should have functions but doesn't, panic
+        if module.functions.is_empty() {
+            // Check if the file content looks like it should have functions
+            if content.contains("func @") {
+                panic!(
+                    "GASM parser failed silently! File {:?} contains 'func @' but parsed 0 functions. File has {} globals. This is a parser bug.",
+                    path.file_name().unwrap_or_default(),
+                    module.globals.len()
+                );
+            }
+        }
+
+        for function in module.functions {
+            self.register_gasm_function(function);
+        }
+
+        Ok(())
+    }
+
+    /// Register a GASM function as a builtin
+    fn register_gasm_function(&mut self, function: gasm::Function) {
+        // Convert GASM function signature to Wyn type
+        // Check if all parameters can be converted - if not, skip this function
+        let mut param_types: Vec<Type> = Vec::new();
+        for param in &function.params {
+            match self.gasm_type_to_wyn(&param.ty) {
+                Some(ty) => param_types.push(ty),
+                None => {
+                    // Skip functions with unsupported parameter types
+                    return;
+                }
+            }
+        }
+
+        let return_type = match &function.return_type {
+            gasm::ReturnType::Void => Self::ty("()"),
+            gasm::ReturnType::Type(t) => {
+                match self.gasm_type_to_wyn(t) {
+                    Some(ty) => ty,
+                    None => {
+                        eprintln!("Warning: unsupported return type in GASM function {}", function.name);
+                        return;
+                    }
+                }
+            }
+        };
+
+        // Build function type
+        let mut func_type = return_type;
+        for param_type in param_types.iter().rev() {
+            func_type = Type::arrow(param_type.clone(), func_type);
+        }
+
+        // Strip "@" prefix from GASM function name for Wyn lookup
+        let name = function.name.strip_prefix('@')
+            .unwrap_or(&function.name)
+            .to_string();
+
+        let entry = BuiltinEntry {
+            scheme: TypeScheme::Monotype(func_type),
+            implementation: BuiltinImpl::GasmFn(function),
+        };
+
+        self.add_overload(name, entry);
+    }
+
+    /// Convert GASM type to Wyn type
+    /// Returns None for unsupported types (like pointers)
+    fn gasm_type_to_wyn(&self, gasm_ty: &gasm::Type) -> Option<Type> {
+        match gasm_ty {
+            gasm::Type::I8 => Some(Self::ty("i8")),
+            gasm::Type::I16 => Some(Self::ty("i16")),
+            gasm::Type::I32 => Some(Self::ty("i32")),
+            gasm::Type::I64 => Some(Self::ty("i64")),
+            gasm::Type::U8 => Some(Self::ty("u8")),
+            gasm::Type::U16 => Some(Self::ty("u16")),
+            gasm::Type::U32 => Some(Self::ty("u32")),
+            gasm::Type::U64 => Some(Self::ty("u64")),
+            gasm::Type::F16 => Some(Self::ty("f16")),
+            gasm::Type::F32 => Some(Self::ty("f32")),
+            gasm::Type::F64 => Some(Self::ty("f64")),
+            gasm::Type::Pointer(_) => {
+                // Pointers are not exposed in Wyn's surface type system
+                // Skip functions with pointer parameters for now
+                None
+            }
+        }
     }
 
     /// Check if a name is a registered builtin

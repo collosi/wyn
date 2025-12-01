@@ -287,8 +287,13 @@ fn basic_ops(input: &str) -> ParseResult<'_, Operation> {
         binary_op("add", Operation::Add),
         binary_op("sub", Operation::Sub),
         binary_op("mul", Operation::Mul),
-        binary_op("div", Operation::Div),
-        binary_op("rem", Operation::Rem),
+        // Division and remainder - support both signed/unsigned and generic forms
+        binary_op("udiv", Operation::Div),  // Unsigned division
+        binary_op("sdiv", Operation::Div),  // Signed division
+        binary_op("urem", Operation::Rem),  // Unsigned remainder
+        binary_op("srem", Operation::Rem),  // Signed remainder
+        binary_op("div", Operation::Div),   // Generic division
+        binary_op("rem", Operation::Rem),   // Generic remainder
         unary_op("neg", Operation::Neg),
         // Bitwise
         binary_op("and", Operation::And),
@@ -652,7 +657,7 @@ fn basic_block(input: &str) -> ParseResult<'_, BasicBlock> {
     map(
         tuple((
             terminated(ws(label_name), ws(char(':'))),
-            many0(preceded(opt(ws_with_comments), terminated(ws(instruction), opt(ws_with_comments)))),
+            many0(preceded(opt(ws_with_comments), terminated(instruction, opt(ws_with_comments)))),
             preceded(opt(ws_with_comments), ws(terminator)),
         )),
         |(label, instructions, terminator)| BasicBlock {
@@ -770,14 +775,36 @@ pub fn module(input: &str) -> ParseResult<'_, Module> {
 // Public API
 pub fn parse_module(input: &str) -> Result<Module> {
     match module(input) {
-        Ok((_, module)) => Ok(module),
+        Ok((remaining, module)) => {
+            // Check that all input was consumed (only whitespace/comments allowed)
+            let (leftover, _) = opt(ws_with_comments)(remaining).unwrap_or((remaining, None));
+            if !leftover.is_empty() {
+                return Err(ParseError::NomError(format!(
+                    "Unexpected content after parsing module. Remaining input ({} bytes): {:?}...",
+                    leftover.len(),
+                    &leftover[..100.min(leftover.len())]
+                )));
+            }
+            Ok(module)
+        }
         Err(e) => Err(ParseError::NomError(e.to_string())),
     }
 }
 
 pub fn parse_function(input: &str) -> Result<Function> {
     match preceded(opt(ws_with_comments), function)(input) {
-        Ok((_, func)) => Ok(func),
+        Ok((remaining, func)) => {
+            // Check that all input was consumed (only whitespace/comments allowed)
+            let (leftover, _) = opt(ws_with_comments)(remaining).unwrap_or((remaining, None));
+            if !leftover.is_empty() {
+                return Err(ParseError::NomError(format!(
+                    "Unexpected content after parsing function. Remaining input ({} bytes): {:?}...",
+                    leftover.len(),
+                    &leftover[..100.min(leftover.len())]
+                )));
+            }
+            Ok(func)
+        }
         Err(e) => Err(ParseError::NomError(e.to_string())),
     }
 }
