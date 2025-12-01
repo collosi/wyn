@@ -919,9 +919,6 @@ fn generate_init_function_body(constructor: &mut Constructor) -> Result<()> {
 
     // Block labels
     let entry_block = constructor.builder.id();
-    let spin_header = constructor.builder.id();
-    let spin_body = constructor.builder.id();
-    let spin_merge = constructor.builder.id();
     let do_init_block = constructor.builder.id();
     let done_block = constructor.builder.id();
 
@@ -956,39 +953,10 @@ fn generate_init_function_body(constructor: &mut Constructor) -> Result<()> {
     )?;
 
     // If old == 0, we won the race -> do_init
-    // If old == 1, someone else is initializing -> spin
-    // If old == 2, already initialized -> done
+    // Otherwise skip (either already done or someone else is doing it)
     let is_zero = constructor.builder.i_equal(constructor.bool_type, None, old_value, const_0)?;
     constructor.builder.selection_merge(done_block, spirv::SelectionControl::NONE)?;
-    constructor.builder.branch_conditional(is_zero, do_init_block, spin_header, [])?;
-
-    // Spin loop header
-    constructor.builder.begin_block(Some(spin_header))?;
-    constructor.builder.loop_merge(spin_merge, spin_body, spirv::LoopControl::NONE, [])?;
-    constructor.builder.branch(spin_body)?;
-
-    // Spin loop body: check if guard == 2
-    constructor.builder.begin_block(Some(spin_body))?;
-    // Need to get guard_ptr again in this block
-    let guard_ptr_spin = constructor.builder.access_chain(
-        ptr_u32_type,
-        None,
-        guard_buffer,
-        [const_0],
-    )?;
-    let current = constructor.builder.atomic_load(
-        constructor.u32_type,
-        None,
-        guard_ptr_spin,
-        scope_device,
-        mem_semantics_acquire,
-    )?;
-    let is_done = constructor.builder.i_equal(constructor.bool_type, None, current, const_2)?;
-    constructor.builder.branch_conditional(is_done, spin_merge, spin_header, [])?;
-
-    // Spin merge: exit loop and go to done
-    constructor.builder.begin_block(Some(spin_merge))?;
-    constructor.builder.branch(done_block)?;
+    constructor.builder.branch_conditional(is_zero, do_init_block, done_block, [])?;
 
     // Do init block: perform initialization, then set guard = 2
     constructor.builder.begin_block(Some(do_init_block))?;
