@@ -257,6 +257,22 @@ impl GasmLowering {
             self.lower_instruction(inst)?;
         }
 
+        // If this is a loop header, emit OpLoopMerge right before the terminator
+        // (OpLoopMerge must be the second-to-last instruction in the block)
+        if let Some((merge_label, continue_label)) = &block.loop_header {
+            let merge_id = *self
+                .labels
+                .get(merge_label)
+                .ok_or_else(|| format!("Loop merge label {} not found", merge_label))?;
+            let continue_id = *self
+                .labels
+                .get(continue_label)
+                .ok_or_else(|| format!("Loop continue label {} not found", continue_label))?;
+            self.builder
+                .loop_merge(merge_id, continue_id, spirv::LoopControl::NONE, [])
+                .map_err(|e| format!("Failed to emit OpLoopMerge: {:?}", e))?;
+        }
+
         // Lower terminator
         self.lower_terminator(&block.terminator)?;
 
@@ -664,12 +680,15 @@ impl GasmLowering {
                     .labels
                     .get(false_label)
                     .ok_or_else(|| format!("Label {} not found", false_label))?;
-                let merge_id = *self
-                    .labels
-                    .get(merge_label)
-                    .ok_or_else(|| format!("Merge label {} not found", merge_label))?;
-                // Emit OpSelectionMerge before OpBranchConditional (required for Vulkan structured control flow)
-                self.builder.selection_merge(merge_id, spirv::SelectionControl::NONE).unwrap();
+                // Emit OpSelectionMerge before OpBranchConditional only if merge_label is provided
+                // (not needed when inside a loop header block, which has its own OpLoopMerge)
+                if let Some(merge_label) = merge_label {
+                    let merge_id = *self
+                        .labels
+                        .get(merge_label)
+                        .ok_or_else(|| format!("Merge label {} not found", merge_label))?;
+                    self.builder.selection_merge(merge_id, spirv::SelectionControl::NONE).unwrap();
+                }
                 self.builder.branch_conditional(cond_id, true_id, false_id, []).unwrap();
             }
         }

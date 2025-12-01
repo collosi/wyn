@@ -316,16 +316,18 @@ encode_short:
   ; Initialize loop: byte_idx = 0, word_idx = 0, current_word = type_byte
   br pack_loop
 
-pack_loop:
+pack_loop [loop merge=finalize, continue=pack_continue]:
   ; Phi: byte_idx, word_idx, current_word, shift
-  %byte_idx = phi u32 [0u, encode_short], [%next_byte_idx, pack_continue], [%next_byte_idx, write_word]
-  %word_idx = phi u32 [0u, encode_short], [%word_idx, pack_continue], [%next_word_idx, write_word]
-  %current_word = phi u32 [%type_byte, encode_short], [%updated_word, pack_continue], [0u, write_word]
-  %shift = phi u32 [8u, encode_short], [%next_shift, pack_continue], [0u, write_word]
+  ; Values come from entry (encode_short) or continue block (pack_continue)
+  %byte_idx = phi u32 [0u, encode_short], [%cont_byte_idx, pack_continue]
+  %word_idx = phi u32 [0u, encode_short], [%cont_word_idx, pack_continue]
+  %current_word = phi u32 [%type_byte, encode_short], [%cont_current_word, pack_continue]
+  %shift = phi u32 [8u, encode_short], [%cont_shift, pack_continue]
 
   ; Check if we're done with all bytes
+  ; No merge label needed - the loop header's OpLoopMerge handles structured CFG
   %done = ucmp.ge %byte_idx, %str_len
-  br_if %done, finalize, pack_byte, finalize
+  br_if %done, finalize, pack_byte
 
 pack_byte:
   ; Extract byte from packed u32 string data
@@ -354,10 +356,11 @@ pack_byte:
 
   ; Check if word is full (shift == 32)
   %word_full = ucmp.eq %next_shift, 32u
-  br_if %word_full, write_word, pack_continue, pack_continue
+  br_if %word_full, write_word, pack_continue_normal, pack_continue_normal
 
-pack_continue:
-  br pack_loop
+pack_continue_normal:
+  ; Continue without writing - carry forward updated values
+  br pack_continue
 
 write_word:
   ; Write current_word to buffer
@@ -370,13 +373,21 @@ write_word:
   ; Increment word index
   %next_word_idx = add %word_idx, 1u
 
-  ; Reset for next word
+  ; Go through continue block to loop back (SPIR-V requires single back-edge)
+  br pack_continue
+
+pack_continue:
+  ; Merge values from both paths to feed into loop header
+  %cont_byte_idx = phi u32 [%next_byte_idx, pack_continue_normal], [%next_byte_idx, write_word]
+  %cont_word_idx = phi u32 [%word_idx, pack_continue_normal], [%next_word_idx, write_word]
+  %cont_current_word = phi u32 [%updated_word, pack_continue_normal], [0u, write_word]
+  %cont_shift = phi u32 [%next_shift, pack_continue_normal], [0u, write_word]
   br pack_loop
 
 finalize:
   ; If there's a partial word, write it
   %has_partial = ucmp.ne %shift, 0u
-  br_if %has_partial, write_final, encode_exit, encode_exit
+  br_if %has_partial, write_final, finalize_done, finalize_done
 
 write_final:
   %final_idx_base = add %ring_pos, %word_idx
@@ -384,6 +395,9 @@ write_final:
   %final_idx = add %final_idx_wrapped, 3u
   %final_ptr = gep[ptr[global]<u32>] @gdp_buffer, %final_idx, stride=4
   store %final_ptr, %current_word
+  br finalize_done
+
+finalize_done:
   ret
 
 encode_exit:

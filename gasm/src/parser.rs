@@ -637,13 +637,14 @@ fn instruction(input: &str) -> ParseResult<'_, Instruction> {
 // Terminators
 fn terminator(input: &str) -> ParseResult<'_, Terminator> {
     alt((
+        // br_if with optional merge label (4th argument)
         map(
             tuple((
                 tag("br_if"),
                 ws(parse_value),
                 preceded(ws(char(',')), ws(label_name)),
                 preceded(ws(char(',')), ws(label_name)),
-                preceded(ws(char(',')), ws(label_name)),
+                opt(preceded(ws(char(',')), ws(label_name))),
             )),
             |(_, cond, true_label, false_label, merge_label)| Terminator::BrIf {
                 cond,
@@ -657,19 +658,37 @@ fn terminator(input: &str) -> ParseResult<'_, Terminator> {
     ))(input)
 }
 
+// Parse loop header annotation: [loop merge=label, continue=label]
+fn loop_header_annotation(input: &str) -> ParseResult<'_, (String, String)> {
+    delimited(
+        ws(char('[')),
+        preceded(
+            ws(tag("loop")),
+            tuple((
+                preceded(ws(tag("merge=")), ws(label_name)),
+                preceded(tuple((ws(char(',')), ws(tag("continue=")))), ws(label_name)),
+            )),
+        ),
+        ws(char(']')),
+    )(input)
+}
+
 // Basic blocks
 fn basic_block(input: &str) -> ParseResult<'_, BasicBlock> {
     map(
         tuple((
-            terminated(ws(label_name), ws(char(':'))),
+            ws(label_name),
+            opt(ws(loop_header_annotation)),
+            preceded(ws(char(':')), opt(ws_with_comments)),
             many0(preceded(
                 opt(ws_with_comments),
                 terminated(instruction, opt(ws_with_comments)),
             )),
             preceded(opt(ws_with_comments), ws(terminator)),
         )),
-        |(label, instructions, terminator)| BasicBlock {
+        |(label, loop_header, _, instructions, terminator)| BasicBlock {
             label,
+            loop_header,
             instructions,
             terminator,
         },

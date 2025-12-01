@@ -49,6 +49,8 @@ pub enum ReturnType {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BasicBlock {
     pub label: String,
+    /// If Some, this block is a loop header with (merge_label, continue_label)
+    pub loop_header: Option<(String, String)>,
     pub instructions: Vec<Instruction>,
     pub terminator: Terminator,
 }
@@ -280,8 +282,10 @@ pub enum Terminator {
         cond: Value,
         true_label: String,
         false_label: String,
-        /// Merge label for structured control flow (required for Vulkan SPIR-V)
-        merge_label: String,
+        /// Merge label for structured control flow.
+        /// None when inside a loop header (OpLoopMerge handles the merge).
+        /// Some when standalone selection (OpSelectionMerge needed).
+        merge_label: Option<String>,
     },
     Ret(Option<Value>),
 }
