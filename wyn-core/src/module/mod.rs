@@ -76,7 +76,7 @@ impl ModuleElaborator {
 
         Ok(Program {
             declarations: flat_decls,
-            library_declarations: Vec::new(),
+            library_modules: std::collections::HashMap::new(),
         })
     }
 

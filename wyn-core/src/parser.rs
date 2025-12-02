@@ -71,7 +71,7 @@ impl Parser {
 
         Ok(Program {
             declarations,
-            library_declarations: Vec::new(),
+            library_modules: std::collections::HashMap::new(),
         })
     }
 

@@ -442,9 +442,10 @@ impl From<&'static str> for TypeName {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub declarations: Vec<Declaration>,
-    /// Declarations from loaded modules (library code)
+    /// Declarations from loaded modules, organized by module name
+    /// Key is module name (e.g., "f32"), value is list of declarations from that module
     /// These should only be lowered if referenced by user code
-    pub library_declarations: Vec<Declaration>,
+    pub library_modules: std::collections::HashMap<String, Vec<Declaration>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

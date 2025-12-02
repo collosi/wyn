@@ -309,11 +309,13 @@ impl Flattener {
     pub fn flatten_program(&mut self, program: &ast::Program) -> Result<mir::Program> {
         let mut defs = Vec::new();
 
-        // Flatten library declarations first
-        for decl in &program.library_declarations {
-            if let ast::Declaration::Decl(d) = decl {
-                self.builtins.insert(d.name.clone());
-                self.flatten_single_decl(d, &mut defs)?;
+        // Flatten library module declarations first
+        for (_module_name, declarations) in &program.library_modules {
+            for decl in declarations {
+                if let ast::Declaration::Decl(d) = decl {
+                    self.builtins.insert(d.name.clone());
+                    self.flatten_single_decl(d, &mut defs)?;
+                }
             }
         }
 

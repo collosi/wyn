@@ -50,7 +50,8 @@ pub struct TypeChecker {
     scope_stack: ScopeStack<TypeScheme<TypeName>>, // Store polymorphic types
     context: Context<TypeName>,                    // Polytype unification context
     record_field_map: HashMap<(String, String), Type>, // Map (type_name, field_name) -> field_type
-    builtin_registry: crate::builtin_registry::BuiltinRegistry, // Centralized builtin registry
+    impl_source: crate::impl_source::ImplSource, // Implementation source for code generation
+    poly_builtins: crate::poly_builtins::PolyBuiltins, // Type registry for polymorphic builtins
     module_manager: crate::module_manager::ModuleManager, // Lazy module loading
     type_table: HashMap<crate::ast::NodeId, TypeScheme<TypeName>>, // Maps NodeId to type scheme
     warnings: Vec<TypeWarning>,                    // Collected warnings
@@ -230,13 +231,15 @@ impl TypeChecker {
 
     pub fn new() -> Self {
         let mut context = Context::default();
-        let builtin_registry = crate::builtin_registry::BuiltinRegistry::new(&mut context);
+        let impl_source = crate::impl_source::ImplSource::new();
+        let poly_builtins = crate::poly_builtins::PolyBuiltins::new(&mut context);
 
         TypeChecker {
             scope_stack: ScopeStack::new(),
             context,
             record_field_map: HashMap::new(),
-            builtin_registry,
+            impl_source,
+            poly_builtins,
             module_manager: crate::module_manager::ModuleManager::new(),
             type_table: HashMap::new(),
             warnings: Vec::new(),
@@ -563,7 +566,7 @@ impl TypeChecker {
     }
 
     // TODO: Polymorphic builtins (map, zip, length) need special handling
-    // They should either be added to BuiltinRegistry with TypeScheme support,
+    // They should either be added to ImplSource with TypeScheme support,
     // or kept separate with manual registration here
     pub fn load_builtins(&mut self) -> Result<()> {
         // Add builtin function types directly using manual construction
@@ -790,9 +793,12 @@ impl TypeChecker {
         &mut self,
         program: &Program,
     ) -> Result<HashMap<crate::ast::NodeId, TypeScheme<TypeName>>> {
-        // Process library declarations first (so they're available to user code)
-        for decl in &program.library_declarations {
-            self.check_declaration(decl)?;
+        // Process library modules first (so they're available to user code)
+        // Register each module's declarations with qualified names
+        for (module_name, declarations) in &program.library_modules {
+            for decl in declarations {
+                self.check_module_declaration(module_name, decl)?;
+            }
         }
 
         // Process user declarations
@@ -914,6 +920,28 @@ impl TypeChecker {
         self.scope_stack.pop_scope();
 
         Ok((param_types, body_type))
+    }
+
+    /// Check a declaration from a library module, registering it with a qualified name
+    fn check_module_declaration(&mut self, module_name: &str, decl: &Declaration) -> Result<()> {
+        match decl {
+            Declaration::Decl(decl_node) => {
+                debug!("Checking module {} declaration: {}.{}", module_name, module_name, decl_node.name);
+                // Check the declaration normally first
+                self.check_decl(decl_node)?;
+
+                // Now also register it with the qualified name
+                // The unqualified name was already registered in check_decl
+                let qualified_name = format!("{}.{}", module_name, decl_node.name);
+                if let Ok(type_scheme) = self.scope_stack.lookup(&decl_node.name) {
+                    self.scope_stack.insert(qualified_name.clone(), type_scheme.clone());
+                    debug!("Registered module function as '{}'", qualified_name);
+                }
+                Ok(())
+            }
+            // For other declaration types, just use normal checking
+            _ => self.check_declaration(decl),
+        }
     }
 
     fn check_declaration(&mut self, decl: &Declaration) -> Result<()> {
@@ -1163,10 +1191,10 @@ impl TypeChecker {
                     debug!("Found '{}' in scope stack with type: {:?}", name, type_scheme);
                     // Instantiate the type scheme to get a concrete type
                     Ok(type_scheme.instantiate(&mut self.context))
-                } else if let Some(lookup) = self.builtin_registry.get(name) {
-                    // Check builtin registry for builtin functions/constructors
-                    use crate::builtin_registry::BuiltinLookup;
-                    debug!("'{}' is a builtin", name);
+                } else if let Some(lookup) = self.poly_builtins.get(name) {
+                    // Check polymorphic builtins for polymorphic function types
+                    use crate::poly_builtins::BuiltinLookup;
+                    debug!("'{}' is a polymorphic builtin", name);
                     let func_type = match lookup {
                         BuiltinLookup::Single(entry) => entry.scheme.instantiate(&mut self.context),
                         BuiltinLookup::Overloaded(overloads) => overloads.fresh_type(&mut self.context),
@@ -1468,9 +1496,9 @@ impl TypeChecker {
                 // Check if the function is an overloaded builtin identifier
                 // If so, perform overload resolution based on argument types
                 if let ExprKind::Identifier(name) = &func.kind {
-                    use crate::builtin_registry::BuiltinLookup;
-                    // Clone entries to release the borrow on self.builtin_registry
-                    let overload_entries = match self.builtin_registry.get(name) {
+                    use crate::poly_builtins::BuiltinLookup;
+                    // Clone entries to release the borrow on self.poly_builtins
+                    let overload_entries = match self.poly_builtins.get(name) {
                         Some(BuiltinLookup::Overloaded(overload_set)) => {
                             Some(overload_set.entries().to_vec())
                         }
@@ -1491,7 +1519,6 @@ impl TypeChecker {
 
                             if let Some(return_type) = Self::try_unify_overload(&func_type, &arg_types, &mut self.context) {
                                 // Store the types in the type table
-                                // Each identifier node is unique, so storing the resolved type is correct
                                 let resolved_func_type = func_type.apply(&self.context);
                                 self.type_table.insert(func.h.id, TypeScheme::Monotype(resolved_func_type));
                                 self.type_table.insert(expr.h.id, TypeScheme::Monotype(return_type.clone()));
@@ -1534,9 +1561,9 @@ impl TypeChecker {
                         return Ok(ty);
                     }
 
-                    // Check if this is a builtin function (e.g., f32.sin)
-                    if let Some(lookup) = self.builtin_registry.get(&dotted) {
-                        use crate::builtin_registry::BuiltinLookup;
+                    // Check if this is a polymorphic builtin (e.g., magnitude, normalize)
+                    if let Some(lookup) = self.poly_builtins.get(&dotted) {
+                        use crate::poly_builtins::BuiltinLookup;
                         let ty = match lookup {
                             BuiltinLookup::Single(entry) => entry.scheme.instantiate(&mut self.context),
                             BuiltinLookup::Overloaded(overloads) => overloads.fresh_type(&mut self.context),
@@ -1545,7 +1572,7 @@ impl TypeChecker {
                         return Ok(ty);
                     }
 
-                    // Qualified name not found as builtin - fall through to field access
+                    // Qualified name not found - fall through to field access
                 }
 
                 // Not a qualified name (or wasn't found), treat as normal field access
@@ -1704,7 +1731,7 @@ impl TypeChecker {
 
                                 // Look up field in builtin registry (for vector types)
                                 if let Some(field_type) =
-                                    self.builtin_registry.get_field_type(&type_name_str, field)
+                                    self.impl_source.get_field_type(&type_name_str, field)
                                 {
                                     Ok(field_type)
                                 } else if let Some(field_type) =
@@ -1773,9 +1800,9 @@ impl TypeChecker {
 
                 debug!("Looking up qualified name '{}'", full_name);
 
-                // Check if it's a builtin first (e.g., f32.sqrt, f32.sin)
-                if let Some(lookup) = self.builtin_registry.get(&full_name) {
-                    use crate::builtin_registry::BuiltinLookup;
+                // Check if it's a polymorphic builtin first
+                if let Some(lookup) = self.poly_builtins.get(&full_name) {
+                    use crate::poly_builtins::BuiltinLookup;
                     let ty = match lookup {
                         BuiltinLookup::Single(entry) => entry.scheme.instantiate(&mut self.context),
                         BuiltinLookup::Overloaded(overloads) => overloads.fresh_type(&mut self.context),
