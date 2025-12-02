@@ -43,6 +43,9 @@ enum Command {
         /// Fragment shader entry point name (default: main)
         #[arg(long, default_value = "main")]
         fragment: String,
+        /// Enable Shadertoy-compatible uniforms (iResolution, iTime)
+        #[arg(long)]
+        shadertoy: bool,
     },
     /// Show device and driver information
     #[command(name = "info")]
@@ -56,6 +59,7 @@ enum PipelineSpec {
         path: PathBuf,
         vertex: String,
         fragment: String,
+        shadertoy: bool,
     },
 }
 
@@ -65,6 +69,21 @@ enum PipelineSpec {
 /// Layout: { write_head: u32, read_head: u32, max_loops: u32, data: [4093]u32 }
 const DEBUG_BUFFER_SIZE: u64 = 16384;
 const DEFAULT_MAX_LOOPS: u32 = 100; // Limit debug output to prevent GPU lockup
+
+// Uniform buffers - one per shader uniform
+// iResolution: [2]f32
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct ResolutionUniform {
+    resolution: [f32; 2],
+}
+
+// iTime: f32
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct TimeUniform {
+    time: f32,
+}
 
 struct State {
     window: Arc<Window>,
@@ -77,6 +96,11 @@ struct State {
     debug_buffer: Option<wgpu::Buffer>,
     debug_staging_buffer: Option<wgpu::Buffer>,
     debug_bind_group: Option<BindGroup>,
+    // Uniform support - separate buffers for iResolution and iTime (optional, enabled with --shadertoy)
+    resolution_buffer: Option<wgpu::Buffer>,
+    time_buffer: Option<wgpu::Buffer>,
+    uniform_bind_group: Option<BindGroup>,
+    start_time: std::time::Instant,
 }
 
 impl State {
@@ -227,19 +251,107 @@ impl State {
             ],
         });
 
+        // === Conditionally create uniform buffers (set=1) based on spec ======
+        let (resolution_buffer, time_buffer, uniform_bind_group, uniform_bind_group_layout) =
+            if let PipelineSpec::VertexFragment { shadertoy: true, .. } = spec {
+                // Binding 0: iResolution ([2]f32)
+                let resolution_buffer = device.create_buffer(&BufferDescriptor {
+                    label: Some("resolution_buffer"),
+                    size: std::mem::size_of::<ResolutionUniform>() as u64,
+                    usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let initial_resolution = ResolutionUniform {
+                    resolution: [800.0, 600.0],
+                };
+                queue.write_buffer(&resolution_buffer, 0, bytemuck::cast_slice(&[initial_resolution]));
+
+                // Binding 1: iTime (f32)
+                let time_buffer = device.create_buffer(&BufferDescriptor {
+                    label: Some("time_buffer"),
+                    size: std::mem::size_of::<TimeUniform>() as u64,
+                    usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let initial_time = TimeUniform { time: 0.0 };
+                queue.write_buffer(&time_buffer, 0, bytemuck::cast_slice(&[initial_time]));
+
+                let uniform_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                    label: Some("uniform_bind_group_layout"),
+                    entries: &[
+                        BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: ShaderStages::VERTEX_FRAGMENT,
+                            ty: BindingType::Buffer {
+                                ty: BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: ShaderStages::VERTEX_FRAGMENT,
+                            ty: BindingType::Buffer {
+                                ty: BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                    ],
+                });
+
+                let uniform_bind_group = device.create_bind_group(&BindGroupDescriptor {
+                    label: Some("uniform_bind_group"),
+                    layout: &uniform_bind_group_layout,
+                    entries: &[
+                        BindGroupEntry {
+                            binding: 0,
+                            resource: BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &resolution_buffer,
+                                offset: 0,
+                                size: None,
+                            }),
+                        },
+                        BindGroupEntry {
+                            binding: 1,
+                            resource: BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &time_buffer,
+                                offset: 0,
+                                size: None,
+                            }),
+                        },
+                    ],
+                });
+
+                (Some(resolution_buffer), Some(time_buffer), Some(uniform_bind_group), Some(uniform_bind_group_layout))
+            } else {
+                (None, None, None, None)
+            };
+
         // === Build pipeline from the chosen mode ==============================
         let pipeline = match spec {
             PipelineSpec::VertexFragment {
                 path,
                 vertex,
                 fragment,
+                shadertoy,
             } => {
                 let module = load_spirv_module(&device, path)
                     .with_context(|| format!("load SPIR-V module {:?}", path))?;
 
+                // Build bind group layout list conditionally
+                let mut bind_group_layouts_vec = vec![&debug_bind_group_layout];
+                if *shadertoy {
+                    if let Some(ref ubl) = uniform_bind_group_layout {
+                        bind_group_layouts_vec.push(ubl);
+                    }
+                }
+
                 let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
                     label: Some("layout"),
-                    bind_group_layouts: &[&debug_bind_group_layout],
+                    bind_group_layouts: &bind_group_layouts_vec,
                     push_constant_ranges: &[],
                 });
 
@@ -271,6 +383,8 @@ impl State {
             }
         };
 
+        let now = std::time::Instant::now();
+
         Ok(Self {
             window,
             surface,
@@ -281,6 +395,10 @@ impl State {
             debug_buffer: Some(debug_buffer),
             debug_staging_buffer: Some(debug_staging_buffer),
             debug_bind_group: Some(debug_bind_group),
+            resolution_buffer,
+            time_buffer,
+            uniform_bind_group,
+            start_time: now,
         })
     }
 
@@ -293,6 +411,22 @@ impl State {
     }
 
     fn render(&mut self) {
+        // Update uniform data for this frame if Shadertoy mode is enabled
+        if let (Some(ref resolution_buffer), Some(ref time_buffer)) = (&self.resolution_buffer, &self.time_buffer) {
+            let now = std::time::Instant::now();
+            let elapsed = now.duration_since(self.start_time).as_secs_f32();
+
+            // Update iResolution
+            let resolution = ResolutionUniform {
+                resolution: [self.config.width as f32, self.config.height as f32],
+            };
+            self.queue.write_buffer(resolution_buffer, 0, bytemuck::cast_slice(&[resolution]));
+
+            // Update iTime
+            let time = TimeUniform { time: elapsed };
+            self.queue.write_buffer(time_buffer, 0, bytemuck::cast_slice(&[time]));
+        }
+
         match self.surface.get_current_texture() {
             Ok(frame) => {
                 let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -323,9 +457,13 @@ impl State {
                     });
 
                     rpass.set_pipeline(&self.pipeline);
-                    // Set debug bind group if available
+                    // Set debug bind group if available (set=0)
                     if let Some(ref bind_group) = self.debug_bind_group {
                         rpass.set_bind_group(0, bind_group, &[]);
+                    }
+                    // Set uniform bind group if available (set=1)
+                    if let Some(ref bind_group) = self.uniform_bind_group {
+                        rpass.set_bind_group(1, bind_group, &[]);
                     }
                     rpass.draw(0..3, 0..1);
                 }
@@ -663,11 +801,13 @@ fn main() -> Result<()> {
             path,
             vertex,
             fragment,
+            shadertoy,
         } => {
             let spec = PipelineSpec::VertexFragment {
                 path,
                 vertex,
                 fragment,
+                shadertoy,
             };
 
             let event_loop = EventLoop::new().context("failed to create event loop")?;

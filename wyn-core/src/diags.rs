@@ -686,6 +686,9 @@ impl Display for mir::Def {
                 writeln!(f, "def {}: {} =", name, format_type(ty))?;
                 write!(f, "  {}", body)
             }
+            mir::Def::Uniform { name, ty } => {
+                write!(f, "#[uniform] def {}: {}", name, format_type(ty))
+            }
         }
     }
 }

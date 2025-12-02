@@ -139,6 +139,7 @@ impl Monomorphizer {
             let name = match &def {
                 Def::Function { name, .. } => name.clone(),
                 Def::Constant { name, .. } => name.clone(),
+                Def::Uniform { name, .. } => name.clone(),
             };
 
             // Check if this is an entry point
@@ -240,6 +241,10 @@ impl Monomorphizer {
                     body,
                     span,
                 })
+            }
+            Def::Uniform { name, ty } => {
+                // Uniforms have no body to process
+                Ok(Def::Uniform { name, ty })
             }
         }
     }
@@ -369,6 +374,7 @@ impl Monomorphizer {
         let param_types = match poly_def {
             Def::Function { params, .. } => params.iter().map(|p| &p.ty).collect::<Vec<_>>(),
             Def::Constant { .. } => return Ok(subst), // No parameters
+            Def::Uniform { .. } => return Ok(subst), // No parameters
         };
 
         // Match argument types against parameter types
@@ -478,6 +484,10 @@ impl Monomorphizer {
                 attributes,
                 body: apply_subst_expr(body, subst),
                 span,
+            }),
+            Def::Uniform { ty, .. } => Ok(Def::Uniform {
+                name: new_name.to_string(),
+                ty: apply_subst(&ty, subst),
             }),
         }
     }

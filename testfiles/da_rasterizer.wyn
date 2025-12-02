@@ -176,6 +176,10 @@
 
 
 
+-- Uniforms from host
+#[uniform] def iResolution: vec2f32
+#[uniform] def iTime: f32
+
 -- Vertex shader: full-screen triangle
 def verts: [3]vec4f32 =
   [@[-1.0, -1.0, 0.0, 1.0],
@@ -262,13 +266,13 @@ def fragment (p:vec3f32) (iTime:f32) : vec3f32 =
 --   iTime       : time in seconds
 --   fragCoord   : pixel coordinate [x, y]
 -- Output: vec4f32 color
-def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
-  let weight = 3.0 / iResolution[0] in
+def main_image (iResolution:vec2f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
+  let weight = 3.0 / iResolution.x in
 
   -- Normalized, centered UV with aspect correction
-  let uv0 : vec2f32 = vec2 (fragCoord.x / iResolution[0]) (fragCoord.y / iResolution[1]) in
+  let uv0 : vec2f32 = vec2 (fragCoord.x / iResolution.x) (fragCoord.y / iResolution.y) in
   let uv1 : vec2f32 = vec2 (uv0.x*2.0 - 1.0) (uv0.y*2.0 - 1.0) in
-  let uv  : vec2f32 = vec2 (uv1.x * (iResolution[0]/iResolution[1])) uv1.y in
+  let uv  : vec2f32 = vec2 (uv1.x * (iResolution.x/iResolution.y)) uv1.y in
 
   let line_width = 0.4 in
   let time = iTime * 0.31415 in
@@ -380,9 +384,9 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
 def fragment_main (#[builtin(frag_coord)] pos:vec4f32) : #[location(0)] vec4f32 =
   -- Unconditional debug to see if fragment shader runs at all
   let _ = debug_str "F" in
-  let width = 800.0 in
-  let height = 600.0 in
-  let time = 1.0 in
+  let width = iResolution.x in
+  let height = iResolution.y in
+  let time = iTime in
   -- Debug output for center pixel only
   let is_center = if pos.x > 399.0 then
       if pos.x < 401.0 then
@@ -398,7 +402,7 @@ def fragment_main (#[builtin(frag_coord)] pos:vec4f32) : #[location(0)] vec4f32 
       ()
     else
       () in
-  let result = main_image [width, height] time (vec2 pos.x pos.y) in
+  let result = main_image (vec2 width height) time (vec2 pos.x pos.y) in
   -- Debug the final color for center pixel
   let _ = if is_center then
       let _ = debug_str "col:" in

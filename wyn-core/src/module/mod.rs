@@ -292,7 +292,7 @@ impl ModuleElaborator {
         use crate::ast::{Type, TypeName};
 
         match ty {
-            Type::Constructed(TypeName::Named(name), args) if name == type_name => {
+            Type::Constructed(TypeName::Named(name), _args) if name == type_name => {
                 // This is a reference to the type parameter, replace it
                 replacement.clone()
             }

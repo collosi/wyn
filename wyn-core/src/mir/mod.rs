@@ -62,6 +62,13 @@ pub enum Def {
         /// Source location.
         span: Span,
     },
+    /// A uniform declaration (external input from host).
+    Uniform {
+        /// Uniform name.
+        name: String,
+        /// The type of this uniform.
+        ty: Type<TypeName>,
+    },
 }
 
 /// A function parameter.

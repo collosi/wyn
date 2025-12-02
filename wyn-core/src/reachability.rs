@@ -36,6 +36,9 @@ pub fn reachable_functions_ordered(program: &Program) -> Vec<String> {
                 // Constants might call functions too
                 functions.insert(name.clone(), body);
             }
+            Def::Uniform { .. } => {
+                // Uniforms have no body
+            }
         }
     }
 
@@ -158,13 +161,28 @@ pub fn filter_reachable(program: Program) -> Program {
             let name = match &def {
                 Def::Function { name, .. } => name.clone(),
                 Def::Constant { name, .. } => name.clone(),
+                Def::Uniform { name, .. } => name.clone(),
             };
             (name, def)
         })
         .collect();
 
     // Collect defs in topological order
-    let filtered_defs: Vec<Def> = ordered.into_iter().filter_map(|name| def_map.remove(&name)).collect();
+    let mut filtered_defs: Vec<Def> = ordered.into_iter().filter_map(|name| def_map.remove(&name)).collect();
+
+    // Add all remaining uniforms (they're referenced but have no body to traverse)
+    // Collect them first to avoid iterator invalidation
+    let uniforms: Vec<_> = def_map.iter()
+        .filter(|(_, def)| matches!(def, Def::Uniform { .. }))
+        .map(|(name, _)| name.clone())
+        .collect();
+
+    for name in uniforms {
+        if let Some(def) = def_map.remove(&name) {
+            // Insert uniforms at the beginning so they're declared before use
+            filtered_defs.insert(0, def);
+        }
+    }
 
     Program {
         defs: filtered_defs,

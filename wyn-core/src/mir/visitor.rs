@@ -257,6 +257,10 @@ pub fn walk_def<V: MirVisitor>(v: &mut V, d: Def) -> Result<Def, V::Error> {
             body,
             span,
         } => v.visit_constant(name, ty, attributes, body, span),
+        Def::Uniform { name, ty } => {
+            // Uniforms have no body, just pass through
+            Ok(Def::Uniform { name, ty })
+        }
     }
 }
 

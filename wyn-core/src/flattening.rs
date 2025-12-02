@@ -367,8 +367,14 @@ impl Flattener {
 
                     self.enclosing_decl_stack.pop();
                 }
-                ast::Declaration::Uniform(_)
-                | ast::Declaration::Val(_)
+                ast::Declaration::Uniform(uniform_decl) => {
+                    // Uniforms use the declared type directly (already a Type<TypeName>)
+                    defs.push(mir::Def::Uniform {
+                        name: uniform_decl.name.clone(),
+                        ty: uniform_decl.ty.clone(),
+                    });
+                }
+                ast::Declaration::Val(_)
                 | ast::Declaration::TypeBind(_)
                 | ast::Declaration::ModuleBind(_)
                 | ast::Declaration::ModuleTypeBind(_)

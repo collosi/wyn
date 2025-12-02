@@ -95,6 +95,9 @@ struct Constructor {
 
     // Global constants: name -> constant_id (SPIR-V OpConstant)
     global_constants: HashMap<String, spirv::Word>,
+    uniform_variables: HashMap<String, spirv::Word>,
+    uniform_types: HashMap<String, spirv::Word>, // uniform name -> SPIR-V type ID
+    next_uniform_binding: u32, // Next binding number for uniforms
 
     // Lambda registry: tag index -> (function_name, arity)
     lambda_registry: Vec<(String, usize)>,
@@ -154,6 +157,9 @@ impl Constructor {
             current_input_vars: Vec::new(),
             current_used_globals: Vec::new(),
             global_constants: HashMap::new(),
+            uniform_variables: HashMap::new(),
+            uniform_types: HashMap::new(),
+            next_uniform_binding: 0,
             lambda_registry: Vec::new(),
             builtin_registry: BuiltinRegistry::default(),
             debug_buffer: None,
@@ -533,6 +539,7 @@ impl Constructor {
     }
 
     /// Get or create a u32 constant
+    #[allow(dead_code)]
     fn const_u32(&mut self, value: u32) -> spirv::Word {
         self.builder.constant_bit32(self.u32_type, value)
     }
@@ -643,6 +650,7 @@ impl<'a> LowerCtx<'a> {
                     name.clone()
                 }
                 Def::Constant { name, .. } => name.clone(),
+                Def::Uniform { name, .. } => name.clone(),
             };
             def_index.insert(name, i);
         }
@@ -727,6 +735,30 @@ impl<'a> LowerCtx<'a> {
                 // Store constant ID for lookup
                 self.constructor.global_constants.insert(name.clone(), const_id);
             }
+            Def::Uniform { name, ty } => {
+                // Create a SPIR-V uniform variable
+                let uniform_type = self.constructor.ast_type_to_spirv(ty);
+                let ptr_type = self.constructor.get_or_create_ptr_type(
+                    spirv::StorageClass::Uniform,
+                    uniform_type,
+                );
+                let var_id = self.constructor.builder.variable(
+                    ptr_type,
+                    None,
+                    spirv::StorageClass::Uniform,
+                    None,
+                );
+
+                // Decorate with descriptor set=1, binding=next available binding
+                let binding = self.constructor.next_uniform_binding;
+                self.constructor.next_uniform_binding += 1;
+                self.constructor.builder.decorate(var_id, spirv::Decoration::DescriptorSet, [Operand::LiteralBit32(1)]);
+                self.constructor.builder.decorate(var_id, spirv::Decoration::Binding, [Operand::LiteralBit32(binding)]);
+
+                // Store uniform variable ID and type for lookup
+                self.constructor.uniform_variables.insert(name.clone(), var_id);
+                self.constructor.uniform_types.insert(name.clone(), uniform_type);
+            }
         }
         Ok(())
     }
@@ -800,7 +832,7 @@ impl<'a> LowerCtx<'a> {
 
     /// Run the lowering, starting from entry points
     fn run(mut self) -> Result<Vec<u32>> {
-        // Lower all entry points (and their dependencies)
+        // Lower all entry points (and their dependencies, including uniforms)
         let entry_names: Vec<String> = self.entry_points.iter().map(|(n, _)| n.clone()).collect();
         for name in entry_names {
             self.ensure_lowered(&name)?;
@@ -816,6 +848,12 @@ impl<'a> LowerCtx<'a> {
                 // Add debug buffer to interface if present
                 if let Some(debug_buffer_var) = self.constructor.debug_buffer {
                     interfaces.push(debug_buffer_var);
+                }
+                // Add all uniform variables to the interface
+                for &uniform_var in self.constructor.uniform_variables.values() {
+                    if !interfaces.contains(&uniform_var) {
+                        interfaces.push(uniform_var);
+                    }
                 }
                 self.constructor.builder.entry_point(*model, func_id, name, interfaces);
 
@@ -1135,6 +1173,12 @@ fn lower_const_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv:
             if let Some(&const_id) = constructor.global_constants.get(name) {
                 return Ok(const_id);
             }
+            // Uniforms cannot be used in constant expressions
+            if constructor.uniform_variables.contains_key(name) {
+                return Err(CompilerError::SpirvError(format!(
+                    "Uniform variable '{}' cannot be used in constant expressions", name
+                )));
+            }
             Err(CompilerError::SpirvError(format!(
                 "Global constant '{}' references undefined constant '{}'",
                 "?", name
@@ -1179,6 +1223,14 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             // Then check global constants (these are now OpConstants, not variables)
             if let Some(&const_id) = constructor.global_constants.get(name) {
                 return Ok(const_id);
+            }
+            // Check if it's a uniform variable
+            if let Some(&var_id) = constructor.uniform_variables.get(name) {
+                // Load from the uniform variable
+                let value_type_id = constructor.uniform_types.get(name)
+                    .copied()
+                    .ok_or_else(|| CompilerError::SpirvError(format!("Could not find type for uniform variable: {}", name)))?;
+                return Ok(constructor.builder.load(value_type_id, None, var_id, None, [])?);
             }
             Err(CompilerError::SpirvError(format!("Undefined variable: {}", name)))
         }
