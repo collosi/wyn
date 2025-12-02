@@ -509,8 +509,8 @@ fn is_copy_type(ty: &polytype::Type<TypeName>) -> bool {
             TypeName::Mat => false,
             TypeName::Unique => false,
             TypeName::Tuple(_) => args.iter().all(is_copy_type),
-            TypeName::Str("->") => true, // Functions are copy
-            _ => true,                   // Conservative: treat unknown as copy
+            TypeName::Arrow => true, // Functions are copy
+            _ => true,               // Conservative: treat unknown as copy
         },
         polytype::Type::Variable(_) => true,
     }
@@ -533,7 +533,7 @@ fn unwrap_scheme(scheme: &TypeScheme<TypeName>) -> &polytype::Type<TypeName> {
 
 fn is_param_consuming_in_type(ty: &polytype::Type<TypeName>, param_index: usize) -> bool {
     match ty {
-        polytype::Type::Constructed(TypeName::Str("->"), args) if args.len() == 2 => {
+        polytype::Type::Constructed(TypeName::Arrow, args) if args.len() == 2 => {
             if param_index == 0 {
                 is_unique_type(&args[0])
             } else {
@@ -546,7 +546,7 @@ fn is_param_consuming_in_type(ty: &polytype::Type<TypeName>, param_index: usize)
 
 fn get_return_type_is_fresh(ty: &polytype::Type<TypeName>) -> bool {
     match ty {
-        polytype::Type::Constructed(TypeName::Str("->"), args) if args.len() == 2 => {
+        polytype::Type::Constructed(TypeName::Arrow, args) if args.len() == 2 => {
             get_return_type_is_fresh(&args[1])
         }
         polytype::Type::Constructed(TypeName::Unique, _) => true,

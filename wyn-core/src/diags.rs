@@ -22,20 +22,6 @@ fn format_constructed_type(name: &TypeName, args: &[PolyType<TypeName>]) -> Stri
     match name {
         TypeName::Str(s) => {
             match *s {
-                "->" => {
-                    // T1 -> T2
-                    if args.len() == 2 {
-                        let param = format_type(&args[0]);
-                        let ret = format_type(&args[1]);
-                        format!("{} -> {}", param, ret)
-                    } else if args.is_empty() {
-                        "() -> ?".to_string()
-                    } else {
-                        let params: Vec<_> = args[..args.len() - 1].iter().map(format_type).collect();
-                        let ret = format_type(&args[args.len() - 1]);
-                        format!("({}) -> {}", params.join(", "), ret)
-                    }
-                }
                 _ => {
                     if args.is_empty() {
                         s.to_string()
@@ -45,6 +31,20 @@ fn format_constructed_type(name: &TypeName, args: &[PolyType<TypeName>]) -> Stri
                         format!("{}<{}>", s, args_str.join(", "))
                     }
                 }
+            }
+        }
+        TypeName::Arrow => {
+            // T1 -> T2
+            if args.len() == 2 {
+                let param = format_type(&args[0]);
+                let ret = format_type(&args[1]);
+                format!("{} -> {}", param, ret)
+            } else if args.is_empty() {
+                "() -> ?".to_string()
+            } else {
+                let params: Vec<_> = args[..args.len() - 1].iter().map(format_type).collect();
+                let ret = format_type(&args[args.len() - 1]);
+                format!("({}) -> {}", params.join(", "), ret)
             }
         }
         TypeName::Float(bits) => format!("f{}", bits),

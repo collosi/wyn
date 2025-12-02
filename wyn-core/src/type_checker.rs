@@ -124,7 +124,7 @@ impl TypeChecker {
     pub fn format_type(&self, ty: &Type) -> String {
         let applied = ty.apply(&self.context);
         match &applied {
-            Type::Constructed(TypeName::Str(s), args) if *s == "->" && args.len() == 2 => {
+            Type::Constructed(TypeName::Arrow, args) if args.len() == 2 => {
                 // Special case for arrow types
                 format!("{} -> {}", self.format_type(&args[0]), self.format_type(&args[1]))
             }
@@ -1694,6 +1694,7 @@ impl TypeChecker {
                                     TypeName::Int(bits) => format!("i{}", bits),
                                     TypeName::Array => "array".to_string(),
                                     TypeName::Unsized => "unsized".to_string(),
+                                    TypeName::Arrow => "function".to_string(),
                                     TypeName::Vec => "vec".to_string(),
                                     TypeName::Mat => "mat".to_string(),
                                     TypeName::Size(n) => n.to_string(),

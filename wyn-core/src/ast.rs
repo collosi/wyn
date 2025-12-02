@@ -300,6 +300,8 @@ pub enum TypeName {
     Array,
     /// Unsized/anonymous array size placeholder (for []t syntax where size is inferred)
     Unsized,
+    /// Function arrow type constructor (T1 -> T2)
+    Arrow,
     /// Vector type constructor (takes size and element type)
     Vec,
     /// Matrix type constructor (takes rows, columns, and element type)
@@ -339,6 +341,7 @@ impl std::fmt::Display for TypeName {
             TypeName::Int(bits) => write!(f, "i{}", bits),
             TypeName::Array => write!(f, "Array"),
             TypeName::Unsized => write!(f, ""),
+            TypeName::Arrow => write!(f, "->"),
             TypeName::Vec => write!(f, "Vec"),
             TypeName::Mat => write!(f, "Mat"),
             TypeName::Size(n) => write!(f, "{}", n),
@@ -386,7 +389,7 @@ impl std::fmt::Display for TypeName {
 
 impl polytype::Name for TypeName {
     fn arrow() -> Self {
-        TypeName::Str("->")
+        TypeName::Arrow
     }
 
     fn show(&self) -> String {
@@ -397,6 +400,7 @@ impl polytype::Name for TypeName {
             TypeName::Int(bits) => format!("i{}", bits),
             TypeName::Array => "Array".to_string(),
             TypeName::Unsized => "".to_string(),
+            TypeName::Arrow => "->".to_string(),
             TypeName::Vec => "Vec".to_string(),
             TypeName::Mat => "Mat".to_string(),
             TypeName::Size(n) => format!("Size({})", n),
@@ -957,7 +961,7 @@ pub mod types {
     /// Returns None if the type is not an arrow type
     pub fn as_arrow(ty: &Type) -> Option<(&Type, &Type)> {
         match ty {
-            Type::Constructed(TypeName::Str("->"), args) if args.len() == 2 => Some((&args[0], &args[1])),
+            Type::Constructed(TypeName::Arrow, args) if args.len() == 2 => Some((&args[0], &args[1])),
             _ => None,
         }
     }
