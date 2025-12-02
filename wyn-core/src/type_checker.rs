@@ -1270,24 +1270,36 @@ impl TypeChecker {
                             if let Type::Constructed(TypeName::Size(cols), _) = &args[0] {
                                 let rows = elements.len();
                                 let elem_type = args[1].clone();
-                                return Ok(types::mat(rows, *cols, elem_type));
+                                Ok(types::mat(rows, *cols, elem_type))
+                            } else {
+                                Err(CompilerError::TypeError(
+                                    "Matrix rows must be fixed-size arrays".to_string(),
+                                    expr.h.span,
+                                ))
                             }
+                        } else {
+                            Err(CompilerError::TypeError(
+                                "Matrix rows must be fixed-size arrays".to_string(),
+                                expr.h.span,
+                            ))
                         }
+                    } else {
+                        Err(CompilerError::TypeError(
+                            "Matrix rows must be fixed-size arrays".to_string(),
+                            expr.h.span,
+                        ))
                     }
-                    Err(CompilerError::TypeError(
-                        "Matrix rows must be fixed-size arrays".to_string(),
-                        expr.h.span,
-                    ))
                 } else {
                     // Vector literal
                     let size = elements.len();
                     if size < 2 || size > 4 {
-                        return Err(CompilerError::TypeError(
+                        Err(CompilerError::TypeError(
                             format!("Vector size must be 2, 3, or 4, got {}", size),
                             expr.h.span,
-                        ));
+                        ))
+                    } else {
+                        Ok(types::vec(size, first_type))
                     }
-                    Ok(types::vec(size, first_type))
                 }
             }
             ExprKind::ArrayIndex(array_expr, index_expr) => {

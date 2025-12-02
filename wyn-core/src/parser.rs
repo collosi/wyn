@@ -1144,6 +1144,7 @@ impl Parser {
             Some(Token::Identifier(_)) |
             Some(Token::LeftBracket) |  // array literal (no space) or array indexing context
             Some(Token::LeftBracketSpaced) |  // array literal (with space)
+            Some(Token::AtBracket) |    // vector/matrix literal
             Some(Token::LeftParen) |    // parenthesized expression
             Some(Token::Backslash) |    // lambda
             Some(Token::Let) |          // let..in

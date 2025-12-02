@@ -178,19 +178,19 @@
 
 -- Vertex shader: full-screen triangle
 def verts: [3]vec4f32 =
-  [vec4 -1.0f32 -1.0f32 0.0f32 1.0f32,
-   vec4 3.0f32 -1.0f32 0.0f32 1.0f32,
-   vec4 -1.0f32 3.0f32 0.0f32 1.0f32]
+  [@[-1.0f32, -1.0f32, 0.0f32, 1.0f32],
+   @[3.0f32, -1.0f32, 0.0f32, 1.0f32],
+   @[-1.0f32, 3.0f32, 0.0f32, 1.0f32]]
 
 #[vertex]
 def vertex_main (#[builtin(vertex_index)] vertex_id:i32) : #[builtin(position)] vec4f32 = verts[vertex_id]
 
--- Constants (changed to def for top-level, using vec3 constructors)
-def red : vec3f32 = vec3 1.0f32 0.0f32 0.0f32
-def green : vec3f32 = vec3 0.0f32 1.0f32 0.0f32
-def blue : vec3f32 = vec3 0.0f32 0.8f32 1.0f32
-def white : vec3f32 = vec3 1.0f32 1.0f32 0.97f32
-def yellow : vec3f32 = vec3 1.0f32 1.0f32 0.0f32
+-- Constants (using vector literals)
+def red : vec3f32 = @[1.0f32, 0.0f32, 0.0f32]
+def green : vec3f32 = @[0.0f32, 1.0f32, 0.0f32]
+def blue : vec3f32 = @[0.0f32, 0.8f32, 1.0f32]
+def white : vec3f32 = @[1.0f32, 1.0f32, 0.97f32]
+def yellow : vec3f32 = @[1.0f32, 1.0f32, 0.0f32]
 
 -- Helper functions
 def clamp (x:f32) (min:f32) (max:f32) : f32 =
@@ -229,19 +229,20 @@ def circle (weight:f32) (p:vec2f32) (c:vec2f32) (r:f32) (w:f32) : f32 =
 def getRotMatrix (a:vec3f32) : mat4f32 =
   let s = [ f32.sin a.x, f32.sin a.y, f32.sin a.z ] in
   let c = [ f32.cos a.x, f32.cos a.y, f32.cos a.z ] in
-  -- Columns ret[0..3], matching GLSL code:
-  let c0 : vec4f32 = vec4 (c[1]*c[2]) (c[1]*s[2]) (-s[1]) 0.0f32 in
-  let c1 : vec4f32 = vec4 (s[0]*s[1]*c[2]-c[0]*s[2]) (s[0]*s[1]*s[2]+c[0]*c[2]) (s[0]*c[1]) 0.0f32 in
-  let c2 : vec4f32 = vec4 (c[0]*s[1]*c[2]+s[0]*s[2]) (c[0]*s[1]*s[2]-s[0]*c[2]) (c[0]*c[1]) 0.0f32 in
-  let c3 : vec4f32 = vec4 0.0f32 0.0f32 0.0f32 1.0f32 in
-  matav [c0,c1,c2,c3]
+  @[
+    [c[1]*c[2], c[1]*s[2], -s[1], 0.0f32],
+    [s[0]*s[1]*c[2]-c[0]*s[2], s[0]*s[1]*s[2]+c[0]*c[2], s[0]*c[1], 0.0f32],
+    [c[0]*s[1]*c[2]+s[0]*s[2], c[0]*s[1]*s[2]-s[0]*c[2], c[0]*c[1], 0.0f32],
+    [0.0f32, 0.0f32, 0.0f32, 1.0f32]
+  ]
 
 def getPosMatrix (p:vec3f32) : mat4f32 =
-  let c0 : vec4f32 = vec4 1.0f32 0.0f32 0.0f32 p.x in
-  let c1 : vec4f32 = vec4 0.0f32 1.0f32 0.0f32 p.y in
-  let c2 : vec4f32 = vec4 0.0f32 0.0f32 1.0f32 p.z in
-  let c3 : vec4f32 = vec4 0.0f32 0.0f32 0.0f32 1.0f32 in
-  matav [c0,c1,c2,c3]
+  @[
+    [1.0f32, 0.0f32, 0.0f32, p.x],
+    [0.0f32, 1.0f32, 0.0f32, p.y],
+    [0.0f32, 0.0f32, 1.0f32, p.z],
+    [0.0f32, 0.0f32, 0.0f32, 1.0f32]
+  ]
 
 -- utils
 def mix3 (a:vec3f32) (b:vec3f32) (c:vec3f32) (t:f32) : vec3f32 =
@@ -281,24 +282,24 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
 
   -- Instances (first batch, 18 boxes)
   let instA : [18]vec3f32 =
-    [ vec3 0.0f32 0.0f32 (-1.0f32),
-      vec3 (-1.0f32) 0.0f32 (-1.0f32),
-      vec3 1.0f32 0.0f32 (-1.0f32),
-      vec3 0.0f32 1.0f32 (-1.0f32),
-      vec3 0.0f32 (-1.0f32) (-1.0f32),
-      vec3 (-1.0f32) 0.0f32 0.0f32,
-      vec3 1.0f32 0.0f32 0.0f32,
-      vec3 0.0f32 1.0f32 0.0f32,
-      vec3 0.0f32 (-1.0f32) 0.0f32,
-      vec3 (-1.0f32) (-1.0f32) 0.0f32,
-      vec3 1.0f32 1.0f32 0.0f32,
-      vec3 (-1.0f32) 1.0f32 0.0f32,
-      vec3 1.0f32 (-1.0f32) 0.0f32,
-      vec3 0.0f32 0.0f32 1.0f32,
-      vec3 (-1.0f32) 0.0f32 1.0f32,
-      vec3 1.0f32 0.0f32 1.0f32,
-      vec3 0.0f32 1.0f32 1.0f32,
-      vec3 0.0f32 (-1.0f32) 1.0f32 ] in
+    [ @[0.0f32, 0.0f32, -1.0f32],
+      @[-1.0f32, 0.0f32, -1.0f32],
+      @[1.0f32, 0.0f32, -1.0f32],
+      @[0.0f32, 1.0f32, -1.0f32],
+      @[0.0f32, -1.0f32, -1.0f32],
+      @[-1.0f32, 0.0f32, 0.0f32],
+      @[1.0f32, 0.0f32, 0.0f32],
+      @[0.0f32, 1.0f32, 0.0f32],
+      @[0.0f32, -1.0f32, 0.0f32],
+      @[-1.0f32, -1.0f32, 0.0f32],
+      @[1.0f32, 1.0f32, 0.0f32],
+      @[-1.0f32, 1.0f32, 0.0f32],
+      @[1.0f32, -1.0f32, 0.0f32],
+      @[0.0f32, 0.0f32, 1.0f32],
+      @[-1.0f32, 0.0f32, 1.0f32],
+      @[1.0f32, 0.0f32, 1.0f32],
+      @[0.0f32, 1.0f32, 1.0f32],
+      @[0.0f32, -1.0f32, 1.0f32] ] in
 
   -- Accumulate color
   let c_box_result =
@@ -309,14 +310,14 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
 
       -- 8 cube corners in object space
       let verts0 : [8]vec3f32 =
-        [ vec3 (-1.0f32) (-1.0f32) 1.0f32,
-          vec3 (-1.0f32) 1.0f32 1.0f32,
-          vec3 1.0f32 1.0f32 1.0f32,
-          vec3 1.0f32 (-1.0f32) 1.0f32,
-          vec3 (-1.0f32) (-1.0f32) (-1.0f32),
-          vec3 (-1.0f32) 1.0f32 (-1.0f32),
-          vec3 1.0f32 1.0f32 (-1.0f32),
-          vec3 1.0f32 (-1.0f32) (-1.0f32) ] in
+        [ @[-1.0f32, -1.0f32, 1.0f32],
+          @[-1.0f32, 1.0f32, 1.0f32],
+          @[1.0f32, 1.0f32, 1.0f32],
+          @[1.0f32, -1.0f32, 1.0f32],
+          @[-1.0f32, -1.0f32, -1.0f32],
+          @[-1.0f32, 1.0f32, -1.0f32],
+          @[1.0f32, 1.0f32, -1.0f32],
+          @[1.0f32, -1.0f32, -1.0f32] ] in
 
       -- Transform & perspective
       let v4s : [8]vec4f32 = map (\(v:vec3f32) -> mul mat (vec4 v.x v.y v.z 1.0f32)) verts0 in
@@ -348,14 +349,14 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
 
   -- Second instances (8 circles)
   let instB : [8]vec3f32 =
-    [ vec3 (-1.0f32) 1.0f32 (-1.0f32),
-      vec3 1.0f32 1.0f32 (-1.0f32),
-      vec3 (-1.0f32) (-1.0f32) (-1.0f32),
-      vec3 1.0f32 (-1.0f32) (-1.0f32),
-      vec3 (-1.0f32) 1.0f32 1.0f32,
-      vec3 1.0f32 1.0f32 1.0f32,
-      vec3 (-1.0f32) (-1.0f32) 1.0f32,
-      vec3 1.0f32 (-1.0f32) 1.0f32 ] in
+    [ @[-1.0f32, 1.0f32, -1.0f32],
+      @[1.0f32, 1.0f32, -1.0f32],
+      @[-1.0f32, -1.0f32, -1.0f32],
+      @[1.0f32, -1.0f32, -1.0f32],
+      @[-1.0f32, 1.0f32, 1.0f32],
+      @[1.0f32, 1.0f32, 1.0f32],
+      @[-1.0f32, -1.0f32, 1.0f32],
+      @[1.0f32, -1.0f32, 1.0f32] ] in
 
   let c_final_result =
     loop (idx, acc) = (0i32, c_box) while idx < 8 do

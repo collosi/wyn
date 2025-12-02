@@ -1037,10 +1037,7 @@ fn test_vector_literal_mixed_element_types() {
     assert!(result.is_err(), "Should error: mixed element types");
 }
 
-// TODO: Parse error when using @[] as function argument - likely needs adjustment to
-// how application parsing handles the @[ token
 #[test]
-#[ignore = "Vector literal as function argument not yet supported"]
 fn test_vector_literal_in_expression() {
     typecheck_program(
         r#"
@@ -1052,13 +1049,8 @@ fn test_vector_literal_in_expression() {
     );
 }
 
-// TODO: Matrix literal unification fails because mat2x2f32 (Named type from parser)
-// doesn't unify with Mat[2, 2, f32] (Constructed type from VecMatLiteral inference).
-// Need to either:
-// 1. Resolve Named("mat2x2f32") to Constructed(Mat, [Size(2), Size(2), f32]) during type checking
-// 2. Or have the type checker look up named types during unification
+// Square matrices support both matNf32 and matNxNf32 syntax
 #[test]
-#[ignore = "Matrix literal type unification not yet implemented"]
 fn test_matrix_literal_mat2x2() {
     typecheck_program("def test : mat2x2f32 = @[[1.0f32, 2.0f32], [3.0f32, 4.0f32]]");
 }
@@ -1069,7 +1061,6 @@ fn test_matrix_literal_mat2x3() {
 }
 
 #[test]
-#[ignore = "Matrix literal type unification not yet implemented"]
 fn test_matrix_literal_mat3x3() {
     typecheck_program(
         r#"
@@ -1092,8 +1083,58 @@ fn test_matrix_literal_inconsistent_row_lengths() {
 
 #[test]
 fn test_matrix_literal_wrong_element_type() {
-    let result = try_typecheck_program("def test : mat2x2f32 = @[[1, 2], [3, 4]]");
+    let result = try_typecheck_program("def test : mat2f32 = @[[1, 2], [3, 4]]");
     assert!(result.is_err(), "Should error: i32 elements for f32 matrix");
+}
+
+#[test]
+fn test_matrix_literal_with_array_indexing() {
+    // Matrix literal with array indexing inside
+    typecheck_program(r#"
+        def test : mat2f32 =
+            let a = [1.0f32, 2.0f32] in
+            @[[a[0], a[1]], [a[1], a[0]]]
+    "#);
+}
+
+#[test]
+fn test_matrix_literal_with_expressions() {
+    // Matrix literal with arithmetic expressions
+    typecheck_program(r#"
+        def test : mat2f32 =
+            let x = 1.0f32 in
+            @[[x, x+1.0f32], [x+2.0f32, x+3.0f32]]
+    "#);
+}
+
+#[test]
+fn test_matrix_literal_with_type_annotation() {
+    // Matrix literal with explicit type annotation
+    typecheck_program(r#"
+        def test : mat2f32 =
+            let a = [1.0f32, 2.0f32] in
+            (@[[a[0], a[1]], [a[1], a[0]]] : mat2f32)
+    "#);
+}
+
+#[test]
+fn test_matrix_literal_direct_return() {
+    // Matrix literal as direct return value without let binding
+    typecheck_program(r#"
+        def test : mat2f32 =
+            let a = [1.0f32, 2.0f32] in
+            @[[a[0], a[1]], [a[1], a[0]]]
+    "#);
+}
+
+#[test]
+fn test_matrix_literal_direct_return_with_type_annotation() {
+    // Matrix literal with type annotation as direct return
+    typecheck_program(r#"
+        def test : mat2f32 =
+            let a = [1.0f32, 2.0f32] in
+            (@[[a[0], a[1]], [a[1], a[0]]] : mat2f32)
+    "#);
 }
 
 #[test]

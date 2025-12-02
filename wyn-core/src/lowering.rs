@@ -1128,7 +1128,7 @@ fn lower_entry_point(
 /// Currently supports: literals, references to other constants, and basic arithmetic.
 fn lower_const_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word> {
     match &expr.kind {
-        ExprKind::Literal(lit) => lower_literal(constructor, lit),
+        ExprKind::Literal(lit) => lower_const_literal(constructor, lit),
 
         ExprKind::Var(name) => {
             // Reference to another global constant
@@ -2094,6 +2094,97 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
     }
 }
 
+/// Lower a literal for use in global constant context
+/// Uses OpConstantComposite instead of OpCompositeConstruct for arrays/vectors
+fn lower_const_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::Word> {
+    match lit {
+        Literal::Int(s) => {
+            let value: i32 = s
+                .parse()
+                .map_err(|_| CompilerError::SpirvError(format!("Invalid integer literal: {}", s)))?;
+            Ok(constructor.const_i32(value))
+        }
+        Literal::Float(s) => {
+            let value: f32 = s
+                .parse()
+                .map_err(|_| CompilerError::SpirvError(format!("Invalid float literal: {}", s)))?;
+            Ok(constructor.const_f32(value))
+        }
+        Literal::Bool(b) => Ok(constructor.const_bool(*b)),
+        Literal::String(s) => {
+            // Lower string to packed u32 words (little-endian, zero-terminated)
+            let bytes: Vec<u8> = s.bytes().chain(std::iter::once(0u8)).collect();
+            let word_count = (bytes.len() + 3) / 4;
+
+            // Pack bytes into u32 words
+            let mut packed_words: Vec<u32> = Vec::with_capacity(word_count);
+            for chunk in bytes.chunks(4) {
+                let mut word: u32 = 0;
+                for (i, &byte) in chunk.iter().enumerate() {
+                    word |= (byte as u32) << (i * 8);
+                }
+                packed_words.push(word);
+            }
+
+            // Create constants for each packed word
+            let word_ids: Vec<spirv::Word> = packed_words
+                .iter()
+                .map(|&w| constructor.builder.constant_bit32(constructor.u32_type, w))
+                .collect();
+
+            // Create array type [N]u32
+            let len_const = constructor.builder.constant_bit32(constructor.i32_type, word_count as u32);
+            let array_type = constructor.builder.type_array(constructor.u32_type, len_const);
+
+            // Use constant_composite for global constants
+            Ok(constructor.builder.constant_composite(array_type, word_ids))
+        }
+        Literal::Array(elems) => {
+            let elem_ids: Vec<spirv::Word> =
+                elems.iter().map(|e| lower_const_expr(constructor, e)).collect::<Result<Vec<_>>>()?;
+            let elem_type = elems.first()
+                .map(|e| constructor.ast_type_to_spirv(&e.ty))
+                .unwrap_or_else(|| {
+                    panic!("BUG: Empty array literal reached lowering. Type checking should require explicit type annotation for empty arrays or reject them entirely.")
+                });
+            let array_type = constructor.type_array(elem_type, elem_ids.len() as u32);
+            Ok(constructor.builder.constant_composite(array_type, elem_ids))
+        }
+        Literal::Vector(elems) => {
+            let elem_ids: Vec<spirv::Word> =
+                elems.iter().map(|e| lower_const_expr(constructor, e)).collect::<Result<Vec<_>>>()?;
+            let elem_type =
+                elems.first().map(|e| constructor.ast_type_to_spirv(&e.ty)).unwrap_or(constructor.f32_type);
+            let vec_type = constructor.get_or_create_vec_type(elem_type, elem_ids.len() as u32);
+            Ok(constructor.builder.constant_composite(vec_type, elem_ids))
+        }
+        Literal::Matrix(rows) => {
+            if rows.is_empty() || rows[0].is_empty() {
+                return Err(CompilerError::SpirvError("Empty matrix literal".to_string()));
+            }
+            let num_rows = rows.len();
+            let num_cols = rows[0].len();
+            let elem_type = constructor.ast_type_to_spirv(&rows[0][0].ty);
+            let col_vec_type = constructor.get_or_create_vec_type(elem_type, num_rows as u32);
+            let mut col_ids = Vec::with_capacity(num_cols);
+            for col in 0..num_cols {
+                let mut col_elem_ids = Vec::with_capacity(num_rows);
+                for row in rows {
+                    let elem_id = lower_const_expr(constructor, &row[col])?;
+                    col_elem_ids.push(elem_id);
+                }
+                let col_vec = constructor.builder.constant_composite(col_vec_type, col_elem_ids);
+                col_ids.push(col_vec);
+            }
+            let mat_type = constructor.get_or_create_mat_type(elem_type, num_rows as u32, num_cols as u32);
+            Ok(constructor.builder.constant_composite(mat_type, col_ids))
+        }
+        Literal::Tuple(_) => {
+            Err(CompilerError::SpirvError("Tuple literals not yet supported in global constants".to_string()))
+        }
+    }
+}
+
 fn lower_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::Word> {
     match lit {
         Literal::Int(s) => {
@@ -2189,7 +2280,6 @@ fn lower_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::
             let array_type = constructor.type_array(elem_type, elem_ids.len() as u32);
 
             // Construct the composite
-
             Ok(constructor.builder.composite_construct(array_type, None, elem_ids)?)
         }
         Literal::Vector(elems) => {

@@ -912,12 +912,7 @@ pub mod types {
         dims.iter()
             .cartesian_product(dims.iter())
             .cartesian_product(elem_types.iter())
-            .map(|((rows, cols), (elem_name, elem_type))| {
-                let name = if rows == cols {
-                    format!("mat{}{}", rows, elem_name)
-                } else {
-                    format!("mat{}x{}{}", rows, cols, elem_name)
-                };
+            .flat_map(|((rows, cols), (elem_name, elem_type))| {
                 let matrix_type = Type::Constructed(
                     TypeName::Mat,
                     vec![
@@ -926,7 +921,19 @@ pub mod types {
                         elem_type.clone(),
                     ],
                 );
-                (name, matrix_type)
+
+                if rows == cols {
+                    // Square matrices: add both matNf32 and matNxNf32 as aliases
+                    vec![
+                        (format!("mat{}{}", rows, elem_name), matrix_type.clone()),
+                        (format!("mat{}x{}{}", rows, cols, elem_name), matrix_type),
+                    ]
+                } else {
+                    // Non-square matrices: only matRxCf32
+                    vec![
+                        (format!("mat{}x{}{}", rows, cols, elem_name), matrix_type),
+                    ]
+                }
             })
             .collect()
     }
