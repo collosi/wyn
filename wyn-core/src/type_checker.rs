@@ -252,11 +252,6 @@ impl TypeChecker {
         &self.warnings
     }
 
-    /// Get all loaded module declarations (for inlining during flattening)
-    pub fn get_loaded_module_declarations(&self) -> Vec<Declaration> {
-        self.module_manager.get_all_loaded_declarations()
-    }
-
     /// Create a fresh type for a pattern based on its structure
     /// For tuple patterns, creates a tuple of fresh type variables
     /// For simple patterns, creates a single fresh type variable
@@ -774,8 +769,7 @@ impl TypeChecker {
         // Register vector field mappings
         self.register_vector_fields();
 
-        // Load the math prelude to make module functions available
-        self.module_manager.load_file("math.wyn")?;
+        // Note: Prelude files are automatically loaded when ModuleManager is created
 
         Ok(())
     }
@@ -1207,26 +1201,6 @@ impl TypeChecker {
                     };
                     debug!("Built function type for builtin '{}': {:?}", name, func_type);
                     Ok(func_type)
-                } else if crate::module_manager::ModuleManager::is_qualified_name(name) {
-                    // Check for qualified module reference (e.g., "f32.sum")
-                    if let Some((module_name, _func_name)) = crate::module_manager::ModuleManager::split_qualified_name(name) {
-                        debug!("'{}' is a qualified name: module='{}', func='{}'", name, module_name, _func_name);
-                        // Load the module and type-check its declarations
-                        let module_program = self.module_manager.load_module(module_name)?;
-                        let declarations = module_program.declarations.clone();
-                        for decl in &declarations {
-                            self.check_declaration(decl)?;
-                        }
-
-                        // Now look up the fully qualified name in scope
-                        if let Ok(type_scheme) = self.scope_stack.lookup(name) {
-                            Ok(type_scheme.instantiate(&mut self.context))
-                        } else {
-                            Err(CompilerError::UndefinedVariable(name.clone(), expr.h.span))
-                        }
-                    } else {
-                        Err(CompilerError::UndefinedVariable(name.clone(), expr.h.span))
-                    }
                 } else {
                     // Not found anywhere
                     debug!("Variable lookup failed for '{}' - not in scope or builtins", name);

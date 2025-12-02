@@ -104,8 +104,6 @@ pub struct ElaboratedModule {
 
 /// Manages lazy loading of module files
 pub struct ModuleManager {
-    /// Cached parsed modules: file_path -> Program
-    cached_modules: HashMap<String, Program>,
     /// Module type registry: type name -> ModuleTypeExpression
     module_type_registry: HashMap<String, ModuleTypeExpression>,
     /// Elaborated modules: module_name -> ElaboratedModule
@@ -119,38 +117,21 @@ pub struct ModuleManager {
 impl ModuleManager {
     /// Create a new module manager with a fresh NodeCounter
     pub fn new() -> Self {
-        let known_modules = [
-            "f32",
-            "f64",
-            "f16",
-            "i8",
-            "i16",
-            "i32",
-            "i64",
-            "u8",
-            "u16",
-            "u32",
-            "u64",
-            "bool",
-            "graphics32",
-            "graphics64",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-
-        ModuleManager {
-            cached_modules: HashMap::new(),
-            module_type_registry: HashMap::new(),
-            elaborated_modules: HashMap::new(),
-            known_modules,
-            node_counter: NodeCounter::new(),
-        }
+        let mut manager = Self::new_empty(NodeCounter::new());
+        manager.load_prelude_files().ok(); // Ignore errors during initialization
+        manager
     }
 
     /// Create a new module manager with a shared NodeCounter
     /// This ensures NodeIds don't collide with user code that was already parsed
     pub fn new_with_counter(node_counter: NodeCounter) -> Self {
+        let mut manager = Self::new_empty(node_counter);
+        manager.load_prelude_files().ok(); // Ignore errors during initialization
+        manager
+    }
+
+    /// Create an empty module manager without loading prelude (internal helper)
+    fn new_empty(node_counter: NodeCounter) -> Self {
         let known_modules = [
             "f32",
             "f64",
@@ -172,7 +153,6 @@ impl ModuleManager {
         .collect();
 
         ModuleManager {
-            cached_modules: HashMap::new(),
             module_type_registry: HashMap::new(),
             elaborated_modules: HashMap::new(),
             known_modules,
@@ -180,28 +160,23 @@ impl ModuleManager {
         }
     }
 
+    /// Load all prelude files automatically
+    fn load_prelude_files(&mut self) -> Result<()> {
+        // Load all prelude files using include_str!
+        self.load_str(include_str!("../../../prelude/math.wyn"))?;
+        self.load_str(include_str!("../../../prelude/graphics32.wyn"))?;
+        self.load_str(include_str!("../../../prelude/graphics64.wyn"))?;
+        Ok(())
+    }
+
     /// Check if a name is a known module
     pub fn is_known_module(&self, name: &str) -> bool {
         self.known_modules.contains(name)
     }
 
-    /// Load a prelude file (e.g., "math.wyn") which may contain multiple module definitions
-    /// Returns the parsed program
-    pub fn load_file(&mut self, file_path: &str) -> Result<()> {
-        // For now, we only support embedded prelude files
-        let source = match file_path {
-            "math.wyn" => include_str!("../../../prelude/math.wyn"),
-            "graphics32.wyn" => include_str!("../../../prelude/graphics32.wyn"),
-            "graphics64.wyn" => include_str!("../../../prelude/graphics64.wyn"),
-            _ => {
-                return Err(CompilerError::ModuleError(format!(
-                    "Unknown prelude file: {}",
-                    file_path
-                )));
-            }
-        };
-
-        // Parse the file
+    /// Load and elaborate modules from a source string
+    pub fn load_str(&mut self, source: &str) -> Result<()> {
+        // Parse the source
         let tokens = lexer::tokenize(source).map_err(CompilerError::ParseError)?;
         let counter = std::mem::take(&mut self.node_counter);
         let mut parser = Parser::new_with_counter(tokens, counter);
@@ -214,8 +189,6 @@ impl ModuleManager {
         // Elaborate all modules from the program
         self.elaborate_all_modules(&program)?;
 
-        // Cache the parsed program
-        self.cached_modules.insert(file_path.to_string(), program);
         Ok(())
     }
 
@@ -437,12 +410,6 @@ impl ModuleManager {
         )))
     }
 
-    /// Load a module by name (e.g., "f32" loads the f32 module from math.wyn)
-    /// Returns the parsed program with definitions prefixed by module name
-    pub fn load_module(&mut self, _module_name: &str) -> Result<&Program> {
-        todo!("Redesign module system to support multiple modules per file")
-    }
-
     /// Check if a name is a qualified module reference (e.g., "f32.sum")
     pub fn is_qualified_name(name: &str) -> bool {
         name.contains('.')
@@ -453,15 +420,6 @@ impl ModuleManager {
     pub fn split_qualified_name(name: &str) -> Option<(&str, &str)> {
         let parts: Vec<&str> = name.splitn(2, '.').collect();
         if parts.len() == 2 { Some((parts[0], parts[1])) } else { None }
-    }
-
-    /// Get all loaded module declarations (for inlining into the main program)
-    pub fn get_all_loaded_declarations(&self) -> Vec<Declaration> {
-        let mut all_decls = Vec::new();
-        for program in self.cached_modules.values() {
-            all_decls.extend(program.declarations.clone());
-        }
-        all_decls
     }
 
     /// Elaborate a module body expression into a list of elaborated items
