@@ -374,7 +374,7 @@ impl Monomorphizer {
         let param_types = match poly_def {
             Def::Function { params, .. } => params.iter().map(|p| &p.ty).collect::<Vec<_>>(),
             Def::Constant { .. } => return Ok(subst), // No parameters
-            Def::Uniform { .. } => return Ok(subst), // No parameters
+            Def::Uniform { .. } => return Ok(subst),  // No parameters
         };
 
         // Match argument types against parameter types

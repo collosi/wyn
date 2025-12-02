@@ -2606,7 +2606,8 @@ fn test_parse_sig_with_operator_double_star() {
 
 #[test]
 fn test_parse_sig_with_multiple_operators() {
-    let program = parse_ok(r#"
+    let program = parse_ok(
+        r#"
 module type numeric = {
     sig (+) : t -> t -> t
     sig (-) : t -> t -> t
@@ -2614,14 +2615,16 @@ module type numeric = {
     sig (/) : t -> t -> t
     sig (%) : t -> t -> t
 }
-"#);
+"#,
+    );
     assert_eq!(program.declarations.len(), 1);
 }
 
 #[test]
 fn test_parse_math_prelude_subset() {
     // Test a subset of the actual math.wyn syntax
-    let program = parse_ok(r#"
+    let program = parse_ok(
+        r#"
 module type numeric = {
     type t
     sig (+) : t -> t -> t
@@ -2629,19 +2632,22 @@ module type numeric = {
     sig abs : t -> t
     sig max : t -> t -> t
 }
-"#);
+"#,
+    );
     assert_eq!(program.declarations.len(), 1);
 }
 
 #[test]
 fn test_parse_sig_with_shift_operators() {
-    let program = parse_ok(r#"
+    let program = parse_ok(
+        r#"
 module type integral = {
     sig (<<) : t -> t -> t
     sig (>>) : t -> t -> t
     sig (>>>) : t -> t -> t
 }
-"#);
+"#,
+    );
     assert_eq!(program.declarations.len(), 1);
 }
 
@@ -2662,21 +2668,25 @@ fn test_parse_def_with_custom_operator_name() {
 
 #[test]
 fn test_parse_two_operator_defs() {
-    let program = parse_ok(r#"
+    let program = parse_ok(
+        r#"
 def (+) (x: f32) (y: f32): f32 = x + y
 def (%) (x: f32) (y: f32): f32 = x % y
-"#);
+"#,
+    );
     assert_eq!(program.declarations.len(), 2);
 }
 
 #[test]
 fn test_parse_module_with_operator_defs() {
-    let program = parse_ok(r#"
+    let program = parse_ok(
+        r#"
 module f32 : (numeric with t = f32) = {
   type t = f32
   def (+) (x: t) (y: t): t = x + y
   def (%) (x: t) (y: t): t = x % y
 }
-"#);
+"#,
+    );
     assert_eq!(program.declarations.len(), 1);
 }

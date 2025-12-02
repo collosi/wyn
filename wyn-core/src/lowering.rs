@@ -12,8 +12,8 @@ macro_rules! bail_spirv {
 }
 
 use crate::ast::TypeName;
-use crate::impl_source::{BuiltinImpl, ImplSource, PrimOp};
 use crate::error::{CompilerError, Result};
+use crate::impl_source::{BuiltinImpl, ImplSource, PrimOp};
 use crate::mir::{self, Def, Expr, ExprKind, Literal, LoopKind, Program};
 use polytype::Type as PolyType;
 use rspirv::binary::Assemble;
@@ -97,7 +97,7 @@ struct Constructor {
     global_constants: HashMap<String, spirv::Word>,
     uniform_variables: HashMap<String, spirv::Word>,
     uniform_types: HashMap<String, spirv::Word>, // uniform name -> SPIR-V type ID
-    next_uniform_binding: u32, // Next binding number for uniforms
+    next_uniform_binding: u32,                   // Next binding number for uniforms
 
     // Lambda registry: tag index -> (function_name, arity)
     lambda_registry: Vec<(String, usize)>,
@@ -738,22 +738,24 @@ impl<'a> LowerCtx<'a> {
             Def::Uniform { name, ty } => {
                 // Create a SPIR-V uniform variable
                 let uniform_type = self.constructor.ast_type_to_spirv(ty);
-                let ptr_type = self.constructor.get_or_create_ptr_type(
-                    spirv::StorageClass::Uniform,
-                    uniform_type,
-                );
-                let var_id = self.constructor.builder.variable(
-                    ptr_type,
-                    None,
-                    spirv::StorageClass::Uniform,
-                    None,
-                );
+                let ptr_type =
+                    self.constructor.get_or_create_ptr_type(spirv::StorageClass::Uniform, uniform_type);
+                let var_id =
+                    self.constructor.builder.variable(ptr_type, None, spirv::StorageClass::Uniform, None);
 
                 // Decorate with descriptor set=1, binding=next available binding
                 let binding = self.constructor.next_uniform_binding;
                 self.constructor.next_uniform_binding += 1;
-                self.constructor.builder.decorate(var_id, spirv::Decoration::DescriptorSet, [Operand::LiteralBit32(1)]);
-                self.constructor.builder.decorate(var_id, spirv::Decoration::Binding, [Operand::LiteralBit32(binding)]);
+                self.constructor.builder.decorate(
+                    var_id,
+                    spirv::Decoration::DescriptorSet,
+                    [Operand::LiteralBit32(1)],
+                );
+                self.constructor.builder.decorate(
+                    var_id,
+                    spirv::Decoration::Binding,
+                    [Operand::LiteralBit32(binding)],
+                );
 
                 // Store uniform variable ID and type for lookup
                 self.constructor.uniform_variables.insert(name.clone(), var_id);
@@ -1176,7 +1178,8 @@ fn lower_const_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv:
             // Uniforms cannot be used in constant expressions
             if constructor.uniform_variables.contains_key(name) {
                 return Err(CompilerError::SpirvError(format!(
-                    "Uniform variable '{}' cannot be used in constant expressions", name
+                    "Uniform variable '{}' cannot be used in constant expressions",
+                    name
                 )));
             }
             Err(CompilerError::SpirvError(format!(
@@ -1227,9 +1230,9 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             // Check if it's a uniform variable
             if let Some(&var_id) = constructor.uniform_variables.get(name) {
                 // Load from the uniform variable
-                let value_type_id = constructor.uniform_types.get(name)
-                    .copied()
-                    .ok_or_else(|| CompilerError::SpirvError(format!("Could not find type for uniform variable: {}", name)))?;
+                let value_type_id = constructor.uniform_types.get(name).copied().ok_or_else(|| {
+                    CompilerError::SpirvError(format!("Could not find type for uniform variable: {}", name))
+                })?;
                 return Ok(constructor.builder.load(value_type_id, None, var_id, None, [])?);
             }
             Err(CompilerError::SpirvError(format!("Undefined variable: {}", name)))

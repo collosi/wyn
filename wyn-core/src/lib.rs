@@ -1,10 +1,9 @@
 // pub mod annotator;
 pub mod ast;
-pub mod impl_source;
-pub mod poly_builtins;
 pub mod diags;
 pub mod error;
 pub mod flattening;
+pub mod impl_source;
 pub mod inference;
 pub mod lexer;
 pub mod mir;
@@ -12,6 +11,7 @@ pub mod module_manager;
 pub mod name_resolution;
 pub mod parser;
 pub mod pattern;
+pub mod poly_builtins;
 pub mod reachability;
 pub mod scope;
 pub mod type_checker;
@@ -21,7 +21,6 @@ pub mod alias_checker;
 pub mod constant_folding;
 pub mod gasm_lowering;
 pub mod lowering;
-pub mod module;
 pub mod monomorphization;
 
 #[cfg(test)]
@@ -86,12 +85,12 @@ pub struct Parsed {
 }
 
 impl Parsed {
-    /// Elaborate modules: expand module definitions and generate declarations from signatures
+    /// Elaborate modules: currently a no-op, module elaboration happens in module_manager
     pub fn elaborate(self) -> Result<Elaborated> {
-        let mut elaborator = module::ModuleElaborator::new();
-        let ast = elaborator.elaborate(self.ast)?;
+        // TODO: In the future, this could transform module declarations into flat declarations
+        // For now, modules are handled via module_manager registry during type checking
         Ok(Elaborated {
-            ast,
+            ast: self.ast,
             node_counter: self.node_counter,
         })
     }

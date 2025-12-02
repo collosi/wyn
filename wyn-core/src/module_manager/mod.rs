@@ -1,17 +1,105 @@
 //! Module manager for lazy loading and caching module definitions
 
-use crate::ast::{Declaration, ModuleTypeExpression, NodeCounter, Program, Spec, Type, TypeParam};
+use crate::ast::{
+    Decl, Declaration, ModuleExpression, ModuleTypeExpression, Node, NodeCounter, Pattern, PatternKind,
+    Program, Spec, Type,
+};
 use crate::error::{CompilerError, Result};
 use crate::lexer;
 use crate::parser::Parser;
+use crate::scope::ScopeStack;
 use std::collections::{HashMap, HashSet};
 
-/// Represents a fully inflated module with all includes expanded and type substitutions applied
+/// Name resolver for tracking opened modules and resolving unqualified names
 #[derive(Debug, Clone)]
-pub struct InflatedModule {
+struct NameResolver {
+    /// Modules currently opened (via `open` declarations)
+    opened_modules: Vec<String>,
+    /// Local definitions in scope (for shadowing)
+    local_scope: ScopeStack<()>,
+}
+
+impl NameResolver {
+    fn new() -> Self {
+        NameResolver {
+            opened_modules: Vec::new(),
+            local_scope: ScopeStack::new(),
+        }
+    }
+
+    /// Resolve an unqualified name by checking opened modules
+    /// Returns None if the name can't be resolved, or Some(qualified_name) if found
+    fn resolve_name(&self, name: &str, module_manager: &ModuleManager) -> Option<String> {
+        // 1. Check if it's locally defined (shadows everything)
+        if self.local_scope.is_defined(name) {
+            return None; // Keep unqualified, it's a local binding
+        }
+
+        // 2. Try each opened module in reverse order (most recent first)
+        for module_name in self.opened_modules.iter().rev() {
+            // Check if this module has this function
+            if let Some(elaborated) = module_manager.elaborated_modules.get(module_name) {
+                for item in &elaborated.items {
+                    let item_name = match item {
+                        ElaboratedItem::Spec(Spec::Sig(n, _, _)) => Some(n.as_str()),
+                        ElaboratedItem::Spec(Spec::SigOp(op, _)) => Some(op.as_str()),
+                        ElaboratedItem::Decl(decl) => Some(decl.name.as_str()),
+                        _ => None,
+                    };
+
+                    if item_name == Some(name) {
+                        return Some(format!("{}.{}", module_name, name));
+                    }
+                }
+            }
+        }
+
+        // 3. Not found in any opened module
+        None
+    }
+
+    /// Open a module (bring its names into scope)
+    fn open_module(&mut self, module_name: String) {
+        self.opened_modules.push(module_name);
+    }
+
+    /// Close the most recently opened module
+    fn close_module(&mut self) {
+        self.opened_modules.pop();
+    }
+
+    /// Push a new scope for local definitions
+    fn push_scope(&mut self) {
+        self.local_scope.push_scope();
+    }
+
+    /// Pop the current scope
+    fn pop_scope(&mut self) {
+        self.local_scope.pop_scope();
+    }
+
+    /// Add a local definition (for shadowing)
+    fn add_local(&mut self, name: String) {
+        self.local_scope.insert(name, ());
+    }
+}
+
+/// Represents a single item in an elaborated module
+#[derive(Debug, Clone)]
+pub enum ElaboratedItem {
+    /// A signature spec (from module type) with substitutions applied
+    Spec(Spec),
+    /// A declaration (def/let) from module body with substitutions and resolved names
+    Decl(Decl),
+}
+
+/// Represents a fully elaborated module with all includes expanded, type substitutions applied,
+/// and names resolved. Contains both signature specs and body declarations in source order.
+#[derive(Debug, Clone)]
+pub struct ElaboratedModule {
     pub name: String,
-    /// Fully expanded, flattened list of specs with type substitutions applied
-    pub specs: Vec<Spec>,
+    /// Items in source order (specs first, then body declarations)
+    pub items: Vec<ElaboratedItem>,
 }
 
 /// Manages lazy loading of module files
@@ -20,8 +108,8 @@ pub struct ModuleManager {
     cached_modules: HashMap<String, Program>,
     /// Module type registry: type name -> ModuleTypeExpression
     module_type_registry: HashMap<String, ModuleTypeExpression>,
-    /// Inflated modules: module_name -> InflatedModule
-    inflated_modules: HashMap<String, InflatedModule>,
+    /// Elaborated modules: module_name -> ElaboratedModule
+    pub(crate) elaborated_modules: HashMap<String, ElaboratedModule>,
     /// Set of known module names (for name resolution)
     known_modules: HashSet<String>,
     /// Shared node counter for unique NodeIds across all modules
@@ -32,8 +120,20 @@ impl ModuleManager {
     /// Create a new module manager with a fresh NodeCounter
     pub fn new() -> Self {
         let known_modules = [
-            "f32", "f64", "f16", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "bool",
-            "graphics32", "graphics64",
+            "f32",
+            "f64",
+            "f16",
+            "i8",
+            "i16",
+            "i32",
+            "i64",
+            "u8",
+            "u16",
+            "u32",
+            "u64",
+            "bool",
+            "graphics32",
+            "graphics64",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -42,7 +142,7 @@ impl ModuleManager {
         ModuleManager {
             cached_modules: HashMap::new(),
             module_type_registry: HashMap::new(),
-            inflated_modules: HashMap::new(),
+            elaborated_modules: HashMap::new(),
             known_modules,
             node_counter: NodeCounter::new(),
         }
@@ -52,8 +152,20 @@ impl ModuleManager {
     /// This ensures NodeIds don't collide with user code that was already parsed
     pub fn new_with_counter(node_counter: NodeCounter) -> Self {
         let known_modules = [
-            "f32", "f64", "f16", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "bool",
-            "graphics32", "graphics64",
+            "f32",
+            "f64",
+            "f16",
+            "i8",
+            "i16",
+            "i32",
+            "i64",
+            "u8",
+            "u16",
+            "u32",
+            "u64",
+            "bool",
+            "graphics32",
+            "graphics64",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -62,7 +174,7 @@ impl ModuleManager {
         ModuleManager {
             cached_modules: HashMap::new(),
             module_type_registry: HashMap::new(),
-            inflated_modules: HashMap::new(),
+            elaborated_modules: HashMap::new(),
             known_modules,
             node_counter,
         }
@@ -81,7 +193,12 @@ impl ModuleManager {
             "math.wyn" => include_str!("../../../prelude/math.wyn"),
             "graphics32.wyn" => include_str!("../../../prelude/graphics32.wyn"),
             "graphics64.wyn" => include_str!("../../../prelude/graphics64.wyn"),
-            _ => return Err(CompilerError::ModuleError(format!("Unknown prelude file: {}", file_path))),
+            _ => {
+                return Err(CompilerError::ModuleError(format!(
+                    "Unknown prelude file: {}",
+                    file_path
+                )));
+            }
         };
 
         // Parse the file
@@ -94,38 +211,74 @@ impl ModuleManager {
         // Register module types first
         self.register_module_types(&program)?;
 
-        // Inflate all modules from the program
-        self.inflate_all_modules(&program)?;
+        // Elaborate all modules from the program
+        self.elaborate_all_modules(&program)?;
 
         // Cache the parsed program
         self.cached_modules.insert(file_path.to_string(), program);
         Ok(())
     }
 
-    /// Inflate all module bindings from a parsed program
-    fn inflate_all_modules(&mut self, program: &Program) -> Result<()> {
+    /// Elaborate all module bindings from a parsed program
+    fn elaborate_all_modules(&mut self, program: &Program) -> Result<()> {
         for decl in &program.declarations {
             if let Declaration::ModuleBind(mb) = decl {
-                // Inflate the module signature if it exists
-                if let Some(signature) = &mb.signature {
-                    let specs = self.inflate_module_type(signature, &HashMap::new())?;
-                    let inflated = InflatedModule {
-                        name: mb.name.clone(),
-                        specs,
-                    };
-
-                    if self.inflated_modules.contains_key(&mb.name) {
-                        return Err(CompilerError::ModuleError(format!(
-                            "Module '{}' is already defined",
-                            mb.name
-                        )));
-                    }
-
-                    self.inflated_modules.insert(mb.name.clone(), inflated);
+                if self.elaborated_modules.contains_key(&mb.name) {
+                    return Err(CompilerError::ModuleError(format!(
+                        "Module '{}' is already defined",
+                        mb.name
+                    )));
                 }
+
+                // Extract type substitutions from the signature
+                let substitutions = if let Some(signature) = &mb.signature {
+                    self.extract_substitutions(signature)?
+                } else {
+                    HashMap::new()
+                };
+
+                let mut items = Vec::new();
+
+                // Elaborate the module signature if it exists
+                if let Some(signature) = &mb.signature {
+                    let specs = self.elaborate_module_type(signature, &HashMap::new())?;
+                    // Wrap specs in ElaboratedItem::Spec
+                    items.extend(specs.into_iter().map(ElaboratedItem::Spec));
+                }
+
+                // Elaborate the module body
+                let body_items = self.elaborate_module_body(&mb.body, &substitutions)?;
+                items.extend(body_items);
+
+                let elaborated = ElaboratedModule {
+                    name: mb.name.clone(),
+                    items,
+                };
+
+                self.elaborated_modules.insert(mb.name.clone(), elaborated);
             }
         }
         Ok(())
+    }
+
+    /// Extract type substitutions from a module signature
+    /// e.g., (float with t = f32 with int_t = u32) -> {t: f32, int_t: u32}
+    fn extract_substitutions(&self, mte: &ModuleTypeExpression) -> Result<HashMap<String, Type>> {
+        let mut substitutions = HashMap::new();
+        let mut current = mte;
+
+        // Walk through nested With expressions
+        loop {
+            match current {
+                ModuleTypeExpression::With(inner, type_name, _type_params, type_value) => {
+                    substitutions.insert(type_name.clone(), type_value.clone());
+                    current = inner;
+                }
+                _ => break,
+            }
+        }
+
+        Ok(substitutions)
     }
 
     /// Register all module type definitions from a parsed program
@@ -138,16 +291,15 @@ impl ModuleManager {
                         mtb.name
                     )));
                 }
-                self.module_type_registry
-                    .insert(mtb.name.clone(), mtb.definition.clone());
+                self.module_type_registry.insert(mtb.name.clone(), mtb.definition.clone());
             }
         }
         Ok(())
     }
 
-    /// Inflate a module type expression into a flat list of specs
+    /// Elaborate a module type expression into a flat list of specs
     /// Recursively expands includes and applies type substitutions
-    fn inflate_module_type(
+    fn elaborate_module_type(
         &self,
         mte: &ModuleTypeExpression,
         substitutions: &HashMap<String, Type>,
@@ -159,7 +311,7 @@ impl ModuleManager {
                     CompilerError::ModuleError(format!("Module type '{}' not found", name))
                 })?;
                 // Recurse on the definition
-                self.inflate_module_type(definition, substitutions)
+                self.elaborate_module_type(definition, substitutions)
             }
 
             ModuleTypeExpression::Signature(specs) => {
@@ -168,8 +320,8 @@ impl ModuleManager {
                 for spec in specs {
                     match spec {
                         Spec::Include(inner_mte) => {
-                            // Recursively inflate the included module type
-                            let included_specs = self.inflate_module_type(inner_mte, substitutions)?;
+                            // Recursively elaborate the included module type
+                            let included_specs = self.elaborate_module_type(inner_mte, substitutions)?;
                             result.extend(included_specs);
                         }
                         _ => {
@@ -186,7 +338,7 @@ impl ModuleManager {
                 // Add the type substitution and recurse on the inner expression
                 let mut new_substitutions = substitutions.clone();
                 new_substitutions.insert(type_name.clone(), type_value.clone());
-                self.inflate_module_type(inner, &new_substitutions)
+                self.elaborate_module_type(inner, &new_substitutions)
             }
 
             ModuleTypeExpression::Arrow(_, _, _) | ModuleTypeExpression::FunctorType(_, _) => {
@@ -210,9 +362,7 @@ impl ModuleManager {
                 Spec::SigOp(op.clone(), substituted_ty)
             }
             Spec::Type(kind, name, type_params, maybe_ty) => {
-                let substituted_ty = maybe_ty
-                    .as_ref()
-                    .map(|ty| self.substitute_in_type(ty, substitutions));
+                let substituted_ty = maybe_ty.as_ref().map(|ty| self.substitute_in_type(ty, substitutions));
                 Spec::Type(kind.clone(), name.clone(), type_params.clone(), substituted_ty)
             }
             Spec::Module(name, mte) => {
@@ -242,10 +392,8 @@ impl ModuleManager {
                 }
 
                 // Recursively substitute in type arguments
-                let new_args: Vec<Type> = args
-                    .iter()
-                    .map(|arg| self.substitute_in_type(arg, substitutions))
-                    .collect();
+                let new_args: Vec<Type> =
+                    args.iter().map(|arg| self.substitute_in_type(arg, substitutions)).collect();
                 Type::Constructed(name.clone(), new_args)
             }
             Type::Variable(_) => ty.clone(),
@@ -255,19 +403,29 @@ impl ModuleManager {
     /// Query the type of a function in a specific module
     /// e.g., get_module_function_type("f32", "sin") -> Type
     pub fn get_module_function_type(&self, module_name: &str, function_name: &str) -> Result<Type> {
-        // Look up the inflated module
-        let inflated = self.inflated_modules.get(module_name).ok_or_else(|| {
-            CompilerError::ModuleError(format!("Module '{}' not found", module_name))
-        })?;
+        // Look up the elaborated module
+        let elaborated = self
+            .elaborated_modules
+            .get(module_name)
+            .ok_or_else(|| CompilerError::ModuleError(format!("Module '{}' not found", module_name)))?;
 
-        // Search for the function in the inflated specs
-        for spec in &inflated.specs {
-            match spec {
-                Spec::Sig(name, _type_params, ty) if name == function_name => {
-                    return Ok(ty.clone());
-                }
-                Spec::SigOp(op, ty) if op == function_name => {
-                    return Ok(ty.clone());
+        // Search for the function in the elaborated items
+        for item in &elaborated.items {
+            match item {
+                ElaboratedItem::Spec(spec) => match spec {
+                    Spec::Sig(name, _type_params, ty) if name == function_name => {
+                        return Ok(ty.clone());
+                    }
+                    Spec::SigOp(op, ty) if op == function_name => {
+                        return Ok(ty.clone());
+                    }
+                    _ => {}
+                },
+                ElaboratedItem::Decl(decl) if decl.name == function_name => {
+                    // Return the type from the declaration if it has one
+                    if let Some(ty) = &decl.ty {
+                        return Ok(ty.clone());
+                    }
                 }
                 _ => {}
             }
@@ -304,6 +462,109 @@ impl ModuleManager {
             all_decls.extend(program.declarations.clone());
         }
         all_decls
+    }
+
+    /// Elaborate a module body expression into a list of elaborated items
+    /// Applies type substitutions to declaration signatures
+    fn elaborate_module_body(
+        &self,
+        module_expr: &ModuleExpression,
+        substitutions: &HashMap<String, Type>,
+    ) -> Result<Vec<ElaboratedItem>> {
+        match module_expr {
+            ModuleExpression::Struct(declarations) => {
+                let mut items = Vec::new();
+
+                for decl in declarations {
+                    match decl {
+                        Declaration::Decl(d) => {
+                            // Apply type substitutions to the declaration signature only
+                            let elaborated_decl = self.elaborate_decl_signature(d, substitutions);
+                            items.push(ElaboratedItem::Decl(elaborated_decl));
+                        }
+                        Declaration::Open(_) => {
+                            // TODO: Handle open declarations for name resolution
+                        }
+                        _ => {
+                            // Skip other declaration types (ModuleTypeBind, etc.)
+                        }
+                    }
+                }
+
+                Ok(items)
+            }
+            _ => {
+                // For now, only handle struct module expressions
+                Err(CompilerError::ModuleError(
+                    "Only struct module expressions are supported".to_string(),
+                ))
+            }
+        }
+    }
+
+    /// Elaborate a declaration's signature (params and return type) with type substitutions
+    fn elaborate_decl_signature(&self, decl: &Decl, substitutions: &HashMap<String, Type>) -> Decl {
+        // Apply type substitutions to params
+        let new_params: Vec<Pattern> =
+            decl.params.iter().map(|p| self.substitute_in_pattern(p, substitutions)).collect();
+
+        // Apply type substitutions to return type
+        let new_ty = decl.ty.as_ref().map(|ty| self.substitute_in_type(ty, substitutions));
+
+        Decl {
+            keyword: decl.keyword,
+            attributes: decl.attributes.clone(),
+            name: decl.name.clone(),
+            size_params: decl.size_params.clone(),
+            type_params: decl.type_params.clone(),
+            params: new_params,
+            ty: new_ty,
+            body: decl.body.clone(), // TODO: Apply type substitution and name resolution in body
+        }
+    }
+
+    /// Apply type substitutions to a pattern
+    fn substitute_in_pattern(&self, pattern: &Pattern, substitutions: &HashMap<String, Type>) -> Pattern {
+        let new_kind = match &pattern.kind {
+            PatternKind::Typed(inner, ty) => {
+                let new_ty = self.substitute_in_type(ty, substitutions);
+                PatternKind::Typed(inner.clone(), new_ty)
+            }
+            PatternKind::Tuple(pats) => {
+                let new_pats: Vec<Pattern> =
+                    pats.iter().map(|p| self.substitute_in_pattern(p, substitutions)).collect();
+                PatternKind::Tuple(new_pats)
+            }
+            PatternKind::Record(fields) => {
+                let new_fields = fields
+                    .iter()
+                    .map(|field| crate::ast::RecordPatternField {
+                        field: field.field.clone(),
+                        pattern: field
+                            .pattern
+                            .as_ref()
+                            .map(|p| self.substitute_in_pattern(p, substitutions)),
+                    })
+                    .collect();
+                PatternKind::Record(new_fields)
+            }
+            PatternKind::Constructor(name, pats) => {
+                let new_pats: Vec<Pattern> =
+                    pats.iter().map(|p| self.substitute_in_pattern(p, substitutions)).collect();
+                PatternKind::Constructor(name.clone(), new_pats)
+            }
+            PatternKind::Attributed(attrs, inner) => {
+                let new_inner = self.substitute_in_pattern(inner, substitutions);
+                PatternKind::Attributed(attrs.clone(), Box::new(new_inner))
+            }
+            // Name, Wildcard, Literal, Unit don't contain types
+            _ => pattern.kind.clone(),
+        };
+
+        Node {
+            h: pattern.h.clone(),
+            kind: new_kind,
+        }
     }
 }
 

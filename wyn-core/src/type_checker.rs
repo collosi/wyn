@@ -50,7 +50,7 @@ pub struct TypeChecker {
     scope_stack: ScopeStack<TypeScheme<TypeName>>, // Store polymorphic types
     context: Context<TypeName>,                    // Polytype unification context
     record_field_map: HashMap<(String, String), Type>, // Map (type_name, field_name) -> field_type
-    impl_source: crate::impl_source::ImplSource, // Implementation source for code generation
+    impl_source: crate::impl_source::ImplSource,   // Implementation source for code generation
     poly_builtins: crate::poly_builtins::PolyBuiltins, // Type registry for polymorphic builtins
     module_manager: crate::module_manager::ModuleManager, // Lazy module loading
     type_table: HashMap<crate::ast::NodeId, TypeScheme<TypeName>>, // Maps NodeId to type scheme
@@ -774,6 +774,9 @@ impl TypeChecker {
         // Register vector field mappings
         self.register_vector_fields();
 
+        // Load the math prelude to make module functions available
+        self.module_manager.load_file("math.wyn")?;
+
         Ok(())
     }
 
@@ -926,7 +929,10 @@ impl TypeChecker {
     fn check_module_declaration(&mut self, module_name: &str, decl: &Declaration) -> Result<()> {
         match decl {
             Declaration::Decl(decl_node) => {
-                debug!("Checking module {} declaration: {}.{}", module_name, module_name, decl_node.name);
+                debug!(
+                    "Checking module {} declaration: {}.{}",
+                    module_name, module_name, decl_node.name
+                );
                 // Check the declaration normally first
                 self.check_decl(decl_node)?;
 
@@ -1809,6 +1815,16 @@ impl TypeChecker {
                     };
                     self.type_table.insert(expr.h.id, polytype::TypeScheme::Monotype(ty.clone()));
                     return Ok(ty);
+                }
+
+                // Try to query from elaborated modules
+                if !quals.is_empty() {
+                    let module_name = &quals[0];
+                    if let Ok(ty) = self.module_manager.get_module_function_type(module_name, name) {
+                        debug!("Found '{}' in elaborated module '{}' with type: {:?}", name, module_name, ty);
+                        self.type_table.insert(expr.h.id, polytype::TypeScheme::Monotype(ty.clone()));
+                        return Ok(ty);
+                    }
                 }
 
                 // Look up in scope stack (for module functions like f32.sum)

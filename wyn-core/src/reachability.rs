@@ -168,11 +168,13 @@ pub fn filter_reachable(program: Program) -> Program {
         .collect();
 
     // Collect defs in topological order
-    let mut filtered_defs: Vec<Def> = ordered.into_iter().filter_map(|name| def_map.remove(&name)).collect();
+    let mut filtered_defs: Vec<Def> =
+        ordered.into_iter().filter_map(|name| def_map.remove(&name)).collect();
 
     // Add all remaining uniforms (they're referenced but have no body to traverse)
     // Collect them first to avoid iterator invalidation
-    let uniforms: Vec<_> = def_map.iter()
+    let uniforms: Vec<_> = def_map
+        .iter()
         .filter(|(_, def)| matches!(def, Def::Uniform { .. }))
         .map(|(name, _)| name.clone())
         .collect();

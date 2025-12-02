@@ -1739,7 +1739,7 @@ impl Parser {
 
         if operator.is_empty() {
             return Err(CompilerError::ParseError(
-                "Operator section cannot be empty".to_string()
+                "Operator section cannot be empty".to_string(),
             ));
         }
 
