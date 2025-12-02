@@ -548,16 +548,17 @@ impl Parser {
         }
 
         // Regular function type or type application
-        let mut left = self.parse_type_application()?;
+        let left = self.parse_type_application()?;
 
         // Handle function arrows: T1 -> T2 -> T3
-        while self.check(&Token::Arrow) {
+        // Arrow is right-associative: a -> b -> c means a -> (b -> c)
+        if self.check(&Token::Arrow) {
             self.advance();
-            let right = self.parse_type_application()?;
-            left = types::function(left, right);
+            let right = self.parse_function_type()?; // Recursive call for right-associativity
+            Ok(types::function(left, right))
+        } else {
+            Ok(left)
         }
-
-        Ok(left)
     }
 
     fn parse_type_application(&mut self) -> Result<Type> {

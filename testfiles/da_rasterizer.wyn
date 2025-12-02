@@ -252,7 +252,7 @@ def main_image (iResolution:vec2f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
   let time = iTime * 0.31415 in
 
   let base_col = mix3v @[0.19, 0.13, 0.10] @[1.0, 1.0, 1.0]
-                         (0.5 * f32.pow (magnitude uv * 0.5) 2.0) in
+                         (0.5 * ((magnitude uv * 0.5) ** 2.0)) in
   let cam = graphics32.translation @[0.0, 0.0, 10.0] in
 
   -- #define LINEAR_ROTATION

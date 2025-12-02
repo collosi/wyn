@@ -2,7 +2,7 @@
 
 use crate::ast::{
     Decl, Declaration, ModuleExpression, ModuleTypeExpression, Node, NodeCounter, Pattern, PatternKind,
-    Program, Spec, Type,
+    Program, Spec, Type, TypeName,
 };
 use crate::error::{CompilerError, Result};
 use crate::lexer;
@@ -164,8 +164,7 @@ impl ModuleManager {
     fn load_prelude_files(&mut self) -> Result<()> {
         // Load all prelude files using include_str!
         self.load_str(include_str!("../../../prelude/math.wyn"))?;
-        self.load_str(include_str!("../../../prelude/graphics32.wyn"))?;
-        self.load_str(include_str!("../../../prelude/graphics64.wyn"))?;
+        self.load_str(include_str!("../../../prelude/graphics.wyn"))?;
         Ok(())
     }
 
@@ -395,10 +394,9 @@ impl ModuleManager {
                     _ => {}
                 },
                 ElaboratedItem::Decl(decl) if decl.name == function_name => {
-                    // Return the type from the declaration if it has one
-                    if let Some(ty) = &decl.ty {
-                        return Ok(ty.clone());
-                    }
+                    // Build the full function type from parameters and return type
+                    // For def min (x: f32) (y: f32): f32, we need to construct f32 -> f32 -> f32
+                    return self.build_function_type_from_decl(decl);
                 }
                 _ => {}
             }
@@ -408,6 +406,48 @@ impl ModuleManager {
             "Function '{}' not found in module '{}'",
             function_name, module_name
         )))
+    }
+
+    /// Build the full function type from a declaration's parameters and return type
+    fn build_function_type_from_decl(&self, decl: &Decl) -> Result<Type> {
+        // Extract parameter types
+        let mut param_types = Vec::new();
+        for param in &decl.params {
+            if let Some(param_ty) = self.extract_type_from_pattern(param) {
+                param_types.push(param_ty);
+            } else {
+                return Err(CompilerError::ModuleError(format!(
+                    "Function parameter in '{}' lacks type annotation",
+                    decl.name
+                )));
+            }
+        }
+
+        // Get return type (default to unit if not specified)
+        let return_type = decl.ty.clone().unwrap_or_else(|| Type::Constructed(TypeName::Unit, vec![]));
+
+        // Build function type by folding right-to-left
+        // f32 -> f32 -> f32 is represented as f32 -> (f32 -> f32)
+        let mut result_type = return_type;
+        for param_ty in param_types.into_iter().rev() {
+            result_type = Type::Constructed(TypeName::Arrow, vec![param_ty, result_type]);
+        }
+
+        Ok(result_type)
+    }
+
+    /// Extract type annotation from a pattern
+    fn extract_type_from_pattern(&self, pattern: &Pattern) -> Option<Type> {
+        match &pattern.kind {
+            PatternKind::Typed(_, ty) => Some(ty.clone()),
+            PatternKind::Tuple(pats) => {
+                // For tuple patterns, extract types from each element
+                let elem_types: Option<Vec<Type>> =
+                    pats.iter().map(|p| self.extract_type_from_pattern(p)).collect();
+                elem_types.map(|types| Type::Constructed(TypeName::Tuple(types.len()), types))
+            }
+            _ => None,
+        }
     }
 
     /// Check if a name is a qualified module reference (e.g., "f32.sum")

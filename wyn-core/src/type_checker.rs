@@ -1369,7 +1369,7 @@ impl TypeChecker {
                         // Comparison operators return boolean
                         Ok(Type::Constructed(TypeName::Str("bool"), vec![]))
                     }
-                    "+" | "-" | "*" | "/" => {
+                    "+" | "-" | "*" | "/" | "%" | "**" => {
                         // Arithmetic operators return the same type as operands
                         Ok(left_type.apply(&self.context))
                     }

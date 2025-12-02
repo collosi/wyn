@@ -1160,3 +1160,26 @@ fn test_vector_literal_too_large() {
     let result = try_typecheck_program("def test : f32 = @[1.0f32, 2.0f32, 3.0f32, 4.0f32, 5.0f32]");
     assert!(result.is_err(), "Should error: vector size 5 is invalid");
 }
+
+#[test]
+fn test_f32_min() {
+    typecheck_program("def test : f32 = f32.min 1.0f32 2.0f32");
+}
+
+#[test]
+fn test_f32_min_partial() {
+    // Test partial application: f32.min 1.0f32 should return a function
+    typecheck_program("def test : f32 -> f32 = f32.min 1.0f32");
+}
+
+#[test]
+fn test_f32_min_in_expression() {
+    // Reproduce the da_rasterizer case: f32.min (s*s) 1.0
+    typecheck_program(
+        r#"
+def test : f32 =
+  let s = 2.0f32 in
+  f32.min (s*s) 1.0f32
+"#,
+    );
+}
