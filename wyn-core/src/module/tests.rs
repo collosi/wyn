@@ -277,13 +277,13 @@ fn test_module_instantiation_with_type_param() {
         crate::ast::Declaration::TypeBind(tb) if tb.name == "i32_t"
     )));
 
-    // Check that we have val declarations for operations
+    // Check that we have sig declarations for operations
     assert!(result.declarations.iter().any(|d| matches!(d,
-        crate::ast::Declaration::Val(v) if v.name == "i32_add"
+        crate::ast::Declaration::Sig(v) if v.name == "i32_add"
     )));
 
     assert!(result.declarations.iter().any(|d| matches!(d,
-        crate::ast::Declaration::Val(v) if v.name == "i32_sub"
+        crate::ast::Declaration::Sig(v) if v.name == "i32_sub"
     )));
 }
 
@@ -315,11 +315,11 @@ fn test_module_instantiation_with_include() {
 
     // Check that include was expanded
     assert!(result.declarations.iter().any(|d| matches!(d,
-        crate::ast::Declaration::Val(v) if v.name == "i32_zero"
+        crate::ast::Declaration::Sig(v) if v.name == "i32_zero"
     )));
 
     assert!(result.declarations.iter().any(|d| matches!(d,
-        crate::ast::Declaration::Val(v) if v.name == "i32_add"
+        crate::ast::Declaration::Sig(v) if v.name == "i32_add"
     )));
 }
 
@@ -423,7 +423,7 @@ fn test_parse_module_type_with_operators() {
                 let op_specs: Vec<_> = specs
                     .iter()
                     .filter_map(|s| match s {
-                        crate::ast::Spec::ValOp(op, _) => Some(op.as_str()),
+                        crate::ast::Spec::SigOp(op, _) => Some(op.as_str()),
                         _ => None,
                     })
                     .collect();

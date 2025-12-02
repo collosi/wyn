@@ -160,8 +160,8 @@ impl Visitor for CodeAnnotator {
                 self.visit_uniform_decl(uniform)?;
                 self.output.push('\n');
             }
-            Declaration::Val(val) => {
-                self.visit_val_decl(val)?;
+            Declaration::Sig(sig) => {
+                self.visit_sig_decl(sig)?;
                 self.output.push('\n');
             }
             Declaration::TypeBind(_) => {
@@ -225,8 +225,8 @@ impl Visitor for CodeAnnotator {
         ControlFlow::Continue(())
     }
 
-    fn visit_val_decl(&mut self, v: &ValDecl) -> ControlFlow<Self::Break> {
-        write!(self.output, "val {}: ", v.name).unwrap();
+    fn visit_sig_decl(&mut self, v: &SigDecl) -> ControlFlow<Self::Break> {
+        write!(self.output, "sig {}: ", v.name).unwrap();
         self.write_type(&v.ty);
         ControlFlow::Continue(())
     }

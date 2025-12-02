@@ -1,6 +1,7 @@
 // pub mod annotator;
 pub mod ast;
-pub mod builtin_registry;
+pub mod impl_source;
+pub mod poly_builtins;
 pub mod diags;
 pub mod error;
 pub mod flattening;
@@ -203,7 +204,7 @@ impl AliasChecked {
 
     /// Flatten AST to MIR (with defunctionalization and desugaring)
     pub fn flatten(self) -> Result<Flattened> {
-        let builtins = builtin_registry::BuiltinRegistry::default().all_names();
+        let builtins = impl_source::ImplSource::default().all_names();
         let mut flattener = flattening::Flattener::new(self.type_table, builtins);
         let mir = flattener.flatten_program(&self.ast)?;
         Ok(Flattened { mir })

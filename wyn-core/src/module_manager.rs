@@ -21,6 +21,7 @@ impl ModuleManager {
     pub fn new() -> Self {
         let known_modules = [
             "f32", "f64", "f16", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "bool",
+            "graphics32", "graphics64",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -38,6 +39,7 @@ impl ModuleManager {
     pub fn new_with_counter(node_counter: NodeCounter) -> Self {
         let known_modules = [
             "f32", "f64", "f16", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "bool",
+            "graphics32", "graphics64",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -58,7 +60,9 @@ impl ModuleManager {
     /// Get the source code for a prelude module
     fn get_prelude_source(module_name: &str) -> Option<&'static str> {
         match module_name {
-            "f32" => Some(include_str!("../../prelude/f32.wyn")),
+            "math" => Some(include_str!("../../prelude/math.wyn")),
+            "graphics32" => Some(include_str!("../../prelude/graphics32.wyn")),
+            "graphics64" => Some(include_str!("../../prelude/graphics64.wyn")),
             _ => None,
         }
     }

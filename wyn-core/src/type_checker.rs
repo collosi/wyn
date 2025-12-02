@@ -962,9 +962,9 @@ impl TypeChecker {
                 debug!("Checking Uniform declaration: {}", uniform_decl.name);
                 self.check_uniform_decl(uniform_decl)
             }
-            Declaration::Val(val_decl) => {
-                debug!("Checking Val declaration: {}", val_decl.name);
-                self.check_val_decl(val_decl)
+            Declaration::Sig(sig_decl) => {
+                debug!("Checking Sig declaration: {}", sig_decl.name);
+                self.check_sig_decl(sig_decl)
             }
             Declaration::TypeBind(type_bind) => {
                 debug!("Processing TypeBind: {}", type_bind.name);
@@ -1147,8 +1147,8 @@ impl TypeChecker {
         Ok(())
     }
 
-    fn check_val_decl(&mut self, decl: &ValDecl) -> Result<()> {
-        // Val declarations are just type signatures - register them in scope
+    fn check_sig_decl(&mut self, decl: &SigDecl) -> Result<()> {
+        // Sig declarations are just type signatures - register them in scope
         let type_scheme = TypeScheme::Monotype(decl.ty.clone());
         self.scope_stack.insert(decl.name.clone(), type_scheme);
         Ok(())

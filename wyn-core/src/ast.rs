@@ -453,7 +453,7 @@ pub enum Declaration {
     Decl(Decl),           // Unified let/def declarations
     Entry(EntryDecl),     // Entry point declarations (vertex/fragment shaders)
     Uniform(UniformDecl), // Uniform declarations (no initializer)
-    Val(ValDecl),
+    Sig(SigDecl),
     TypeBind(TypeBind),             // Type declarations
     ModuleBind(ModuleBind),         // Module declarations
     ModuleTypeBind(ModuleTypeBind), // Module type declarations
@@ -535,7 +535,7 @@ pub struct Parameter {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ValDecl {
+pub struct SigDecl {
     pub attributes: Vec<Attribute>,
     pub name: String,
     pub size_params: Vec<String>, // Size parameters: [n], [m]
@@ -618,8 +618,8 @@ pub enum ModuleTypeExpression {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Spec {
-    Val(String, Vec<TypeParam>, Type), // val name type_params : type
-    ValOp(String, Type),               // val (symbol) : type or val symbol : type
+    Sig(String, Vec<TypeParam>, Type), // sig name type_params : type
+    SigOp(String, Type),               // sig (symbol) : type or sig symbol : type
     Type(TypeBindKind, String, Vec<TypeParam>, Option<Type>), // type declarations with optional definition
     Module(String, ModuleTypeExpression), // module name : mod_type_exp
     Include(ModuleTypeExpression),     // include mod_type_exp

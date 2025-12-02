@@ -214,8 +214,8 @@ impl AstFormatter {
             Declaration::Uniform(u) => {
                 self.write_line(&format!("uniform {}: {}", u.name, u.ty));
             }
-            Declaration::Val(v) => {
-                self.write_line(&format!("val {}: {}", v.name, v.ty));
+            Declaration::Sig(v) => {
+                self.write_line(&format!("sig {}: {}", v.name, v.ty));
             }
             Declaration::TypeBind(tb) => {
                 self.write_line(&format!("type {} = {}", tb.name, tb.definition));

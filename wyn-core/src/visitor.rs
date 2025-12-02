@@ -41,8 +41,8 @@ pub trait Visitor: Sized {
         walk_uniform_decl(self, u)
     }
 
-    fn visit_val_decl(&mut self, v: &ValDecl) -> ControlFlow<Self::Break> {
-        walk_val_decl(self, v)
+    fn visit_sig_decl(&mut self, v: &SigDecl) -> ControlFlow<Self::Break> {
+        walk_sig_decl(self, v)
     }
 
     // --- Expressions ---
@@ -214,7 +214,7 @@ pub fn walk_declaration<V: Visitor>(v: &mut V, d: &Declaration) -> ControlFlow<V
         Declaration::Decl(decl) => v.visit_decl(decl),
         Declaration::Entry(entry) => v.visit_entry_decl(entry),
         Declaration::Uniform(uniform) => v.visit_uniform_decl(uniform),
-        Declaration::Val(val) => v.visit_val_decl(val),
+        Declaration::Sig(sig) => v.visit_sig_decl(sig),
         Declaration::TypeBind(_) => {
             unimplemented!("Type bindings are not yet supported in visitor")
         }
@@ -270,8 +270,8 @@ pub fn walk_uniform_decl<V: Visitor>(v: &mut V, u: &UniformDecl) -> ControlFlow<
     v.visit_type(&u.ty)
 }
 
-pub fn walk_val_decl<V: Visitor>(v: &mut V, val: &ValDecl) -> ControlFlow<V::Break> {
-    v.visit_type(&val.ty)
+pub fn walk_sig_decl<V: Visitor>(v: &mut V, sig: &SigDecl) -> ControlFlow<V::Break> {
+    v.visit_type(&sig.ty)
 }
 
 pub fn walk_parameter<V: Visitor>(v: &mut V, p: &Parameter) -> ControlFlow<V::Break> {

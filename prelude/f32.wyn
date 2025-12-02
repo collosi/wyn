@@ -1,7 +1,0 @@
--- f32 module: library-level functions for f32 type
-
--- Sum all elements in an array of f32
-def sum [n] (arr:[n]f32) : f32 =
-  let (result, _) = loop (acc, i) = (0.0f32, 0) while i < length arr do
-    (acc + arr[i], i + 1)
-  in result

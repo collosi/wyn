@@ -10,22 +10,22 @@ Wyn is a minimal compiler for a Futhark-like language that generates SPIR-V code
 
 Build the project:
 ```bash
-LLVM_SYS_180_PREFIX=/usr/local/Cellar/llvm@18/18.1.8 cargo build
+cargo build
 ```
 
 Run tests:
 ```bash
-LLVM_SYS_180_PREFIX=/usr/local/Cellar/llvm@18/18.1.8 cargo test
+cargo test
 ```
 
 Compile a Wyn source file:
 ```bash
-LLVM_SYS_180_PREFIX=/usr/local/Cellar/llvm@18/18.1.8 cargo run --bin wyn -- compile test.wyn -o test.spv
+cargo run --bin wyn -- compile test.wyn -o test.spv
 ```
 
 Check a source file without generating output:
 ```bash
-LLVM_SYS_180_PREFIX=/usr/local/Cellar/llvm@18/18.1.8 cargo run --bin wyn -- check test.wyn
+cargo run --bin wyn -- check test.wyn
 ```
 
 ## Architecture
@@ -44,9 +44,12 @@ LLVM_SYS_180_PREFIX=/usr/local/Cellar/llvm@18/18.1.8 cargo run --bin wyn -- chec
 
 ### Adding New Features
 - Language features start in `lexer.rs` (tokens) and `ast.rs` (AST nodes)
-- Parser rules go in `parser.rs` 
+- Parser rules go in `parser.rs`
 - Type checking logic in `type_checker.rs`
 - SPIR-V generation in `codegen.rs`
 - All new syntax elements should have unit tests
-- You do not need the LLVM_SYS_180_PREFIX environment variable.  LLVM is not in use in this project
-- cd viz && cargo run vf ../complete_shader_example.spv --vertex vertex_main --fragment fragment_main
+
+### Visualizing SPIR-V Output
+```bash
+cd viz && cargo run vf ../complete_shader_example.spv --vertex vertex_main --fragment fragment_main
+```

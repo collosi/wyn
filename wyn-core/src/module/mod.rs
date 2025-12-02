@@ -256,10 +256,10 @@ impl ModuleElaborator {
 
         for spec in specs.iter_mut() {
             match spec {
-                Spec::Val(_, _, ty) => {
+                Spec::Sig(_, _, ty) => {
                     *ty = self.substitute_type_in_type(ty, type_name, replacement);
                 }
-                Spec::ValOp(_, ty) => {
+                Spec::SigOp(_, ty) => {
                     *ty = self.substitute_type_in_type(ty, type_name, replacement);
                 }
                 Spec::Type(_, name, _, def) => {
@@ -318,10 +318,10 @@ impl ModuleElaborator {
 
         for spec in specs {
             match spec {
-                Spec::Val(name, type_params, ty) => {
-                    // Generate a Val declaration with mangled name
+                Spec::Sig(name, type_params, ty) => {
+                    // Generate a Sig declaration with mangled name
                     let mangled_name = format!("{}_{}", module_name, name);
-                    decls.push(Declaration::Val(crate::ast::ValDecl {
+                    decls.push(Declaration::Sig(crate::ast::SigDecl {
                         attributes: vec![],
                         name: mangled_name,
                         size_params: type_params
@@ -341,10 +341,10 @@ impl ModuleElaborator {
                         ty: ty.clone(),
                     }));
                 }
-                Spec::ValOp(op, ty) => {
-                    // Generate a Val declaration for operator with mangled name
+                Spec::SigOp(op, ty) => {
+                    // Generate a Sig declaration for operator with mangled name
                     let mangled_name = format!("{}_({})", module_name, op);
-                    decls.push(Declaration::Val(crate::ast::ValDecl {
+                    decls.push(Declaration::Sig(crate::ast::SigDecl {
                         attributes: vec![],
                         name: mangled_name,
                         size_params: vec![],
@@ -438,9 +438,9 @@ impl ModuleElaborator {
                 tb.name = format!("{}_{}", prefix, tb.name);
                 Declaration::TypeBind(tb)
             }
-            Declaration::Val(mut v) => {
+            Declaration::Sig(mut v) => {
                 v.name = format!("{}_{}", prefix, v.name);
-                Declaration::Val(v)
+                Declaration::Sig(v)
             }
             Declaration::Entry(mut e) => {
                 e.name = format!("{}_{}", prefix, e.name);
@@ -472,11 +472,11 @@ impl ModuleElaborator {
             // For each spec in the signature, find the matching declaration
             for spec in specs {
                 match spec {
-                    Spec::Val(name, _type_params, _ty) => {
+                    Spec::Sig(name, _type_params, _ty) => {
                         // Find the value declaration with this name
                         let matching_decl = decls.iter().find(|d| match d {
                             Declaration::Decl(decl) => decl.name.ends_with(name),
-                            Declaration::Val(val) => val.name.ends_with(name),
+                            Declaration::Sig(sig) => sig.name.ends_with(name),
                             _ => false,
                         });
 
@@ -517,8 +517,8 @@ impl ModuleElaborator {
                             "Include in signatures not yet implemented".to_string(),
                         ));
                     }
-                    Spec::ValOp(op, _ty) => {
-                        // Operator specs like val (+): t -> t -> t
+                    Spec::SigOp(op, _ty) => {
+                        // Operator specs like sig (+): t -> t -> t
                         // The definition will have name "(+)" for operator "+"
                         let op_name = format!("({})", op);
                         let matching_decl = decls.iter().find(|d| match d {
@@ -555,11 +555,11 @@ impl ModuleElaborator {
                     None
                 }
             }
-            Declaration::Val(v) => {
+            Declaration::Sig(v) => {
                 if v.name.starts_with(prefix) {
-                    let mut new_val = v.clone();
-                    new_val.name = v.name[prefix.len()..].to_string();
-                    Some(Declaration::Val(new_val))
+                    let mut new_sig = v.clone();
+                    new_sig.name = v.name[prefix.len()..].to_string();
+                    Some(Declaration::Sig(new_sig))
                 } else {
                     None
                 }

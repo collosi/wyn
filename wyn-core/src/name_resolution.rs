@@ -230,8 +230,8 @@ impl NameResolver {
             Declaration::Entry(entry) => {
                 self.resolve_expr(&mut entry.body)?;
             }
-            Declaration::Val(_) => {
-                // ValDecl has no body, only a type signature
+            Declaration::Sig(_) => {
+                // SigDecl has no body, only a type signature
             }
             _ => {}
         }

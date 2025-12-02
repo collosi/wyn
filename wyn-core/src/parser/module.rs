@@ -411,9 +411,9 @@ impl Parser {
 
     /// Parse a specification:
     /// ```text
-    /// spec ::= "val" name type_param* ":" type
-    ///        | "val" "(" symbol ")" ":" type
-    ///        | "val" symbol type_param* ":" type
+    /// spec ::= "sig" name type_param* ":" type
+    ///        | "sig" "(" symbol ")" ":" type
+    ///        | "sig" symbol type_param* ":" type
     ///        | ("type" | "type^" | "type~") name type_param* "=" type
     ///        | ("type" | "type^" | "type~") name type_param*
     ///        | "module" name ":" mod_type_exp
@@ -427,10 +427,10 @@ impl Parser {
         let _attributes = self.parse_attributes()?;
 
         match self.peek() {
-            Some(Token::Val) => {
+            Some(Token::Sig) => {
                 self.advance();
 
-                // Check for operator in parens: val (op) : type
+                // Check for operator in parens: sig (op) : type
                 if self.check(&Token::LeftParen) {
                     self.advance();
                     // Handle both identifiers and binary operators
@@ -447,7 +447,7 @@ impl Parser {
                         }
                         _ => {
                             return Err(CompilerError::ParseError(format!(
-                                "Expected identifier or operator in val spec at {}",
+                                "Expected identifier or operator in sig spec at {}",
                                 self.current_span()
                             )));
                         }
@@ -455,7 +455,7 @@ impl Parser {
                     self.expect(Token::RightParen)?;
                     self.expect(Token::Colon)?;
                     let ty = self.parse_type()?;
-                    return Ok(Spec::ValOp(op, ty));
+                    return Ok(Spec::SigOp(op, ty));
                 }
 
                 let name = self.expect_identifier()?;
@@ -469,7 +469,7 @@ impl Parser {
                 self.expect(Token::Colon)?;
                 let ty = self.parse_type()?;
 
-                Ok(Spec::Val(name, type_params, ty))
+                Ok(Spec::Sig(name, type_params, ty))
             }
 
             Some(Token::Type) => {

@@ -203,13 +203,6 @@ def clamp (x:f32) (min:f32) (max:f32) : f32 =
 def mix3v (a:vec3f32) (b:vec3f32) (t:f32) : vec3f32 =
   @[(a.x + (b.x - a.x) * t), (a.y + (b.y - a.y) * t), (a.z + (b.z - a.z) * t)]
 
--- Vector magnitude (Euclidean length)
-def length2 (v:vec2f32) : f32 =
-  f32.sqrt (v.x * v.x + v.y * v.y)
-
-def length3 (v:vec3f32) : f32 =
-  f32.sqrt (v.x * v.x + v.y * v.y + v.z * v.z)
-
 -- Rasterize helpers
 def line (weight:f32) (p:vec2f32) (p0:vec2f32) (p1:vec2f32) (w:f32) : f32 =
   let d = @[(p1.x-p0.x), (p1.y-p0.y)] in
@@ -219,34 +212,15 @@ def line (weight:f32) (p:vec2f32) (p0:vec2f32) (p1:vec2f32) (w:f32) : f32 =
   let t = clamp t_raw 0.0 1.0 in
   let proj = @[(p0.x + d.x*t), (p0.y + d.y*t)] in
   let pdiff = @[(p.x-proj.x), (p.y-proj.y)] in
-  let dist = length2 pdiff in
+  let dist = magnitude pdiff in
   let s = (if dist == 0.0 then 0.0 else (1.0 / dist)) * weight * w in
   f32.min (s*s) 1.0
 
 def circle (weight:f32) (p:vec2f32) (c:vec2f32) (r:f32) (w:f32) : f32 =
   let diff = @[(p.x-c.x), (p.y-c.y)] in
-  let dist = f32.abs (length2 diff) + r in
+  let dist = f32.abs (magnitude diff) + r in
   let s = (if dist == 0.0 then 0.0 else (1.0 / dist)) * weight * w in
   f32.min (s*s) 1.0
-
--- Matrices
-def getRotMatrix (a:vec3f32) : mat4f32 =
-  let s = [ f32.sin a.x, f32.sin a.y, f32.sin a.z ] in
-  let c = [ f32.cos a.x, f32.cos a.y, f32.cos a.z ] in
-  @[
-    [c[1]*c[2], c[1]*s[2], -s[1], 0.0],
-    [s[0]*s[1]*c[2]-c[0]*s[2], s[0]*s[1]*s[2]+c[0]*c[2], s[0]*c[1], 0.0],
-    [c[0]*s[1]*c[2]+s[0]*s[2], c[0]*s[1]*s[2]-s[0]*c[2], c[0]*c[1], 0.0],
-    [0.0, 0.0, 0.0, 1.0]
-  ]
-
-def getPosMatrix (p:vec3f32) : mat4f32 =
-  @[
-    [1.0, 0.0, 0.0, p.x],
-    [0.0, 1.0, 0.0, p.y],
-    [0.0, 0.0, 1.0, p.z],
-    [0.0, 0.0, 0.0, 1.0]
-  ]
 
 -- utils
 def mix3 (a:vec3f32) (b:vec3f32) (c:vec3f32) (t:f32) : vec3f32 =
@@ -278,11 +252,11 @@ def main_image (iResolution:vec2f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
   let time = iTime * 0.31415 in
 
   let base_col = mix3v @[0.19, 0.13, 0.10] @[1.0, 1.0, 1.0]
-                         (0.5 * f32.pow (length2 uv * 0.5) 2.0) in
-  let cam = getPosMatrix @[0.0, 0.0, 10.0] in
+                         (0.5 * f32.pow (magnitude uv * 0.5) 2.0) in
+  let cam = graphics32.translation @[0.0, 0.0, 10.0] in
 
   -- #define LINEAR_ROTATION
-  let rot = getRotMatrix @[time, (time*0.86), (time*0.473)] in
+  let rot = graphics32.rotation_euler @[time, (time*0.86), (time*0.473)] in
 
   -- Instances (first batch, 18 boxes)
   let instA : [18]vec3f32 =
@@ -309,7 +283,7 @@ def main_image (iResolution:vec2f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
   let c_box_result =
     loop (idx, acc) = (0i32, base_col) while idx < 18 do
       let inst = instA[idx] in
-      let pos  = getPosMatrix @[(inst.x * 4.0), (inst.y * 4.0), (inst.z * 4.0)] in
+      let pos  = graphics32.translation @[(inst.x * 4.0), (inst.y * 4.0), (inst.z * 4.0)] in
       let mat  : mat4f32 = mul (mul pos rot) cam in
 
       -- 8 cube corners in object space
@@ -365,7 +339,7 @@ def main_image (iResolution:vec2f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
   let c_final_result =
     loop (idx, acc) = (0i32, c_box) while idx < 8 do
       let inst = instB[idx] in
-      let pos = getPosMatrix @[(inst.x * 4.0), (inst.y * 4.0), (inst.z * 4.0)] in
+      let pos = graphics32.translation @[(inst.x * 4.0), (inst.y * 4.0), (inst.z * 4.0)] in
       let mat : mat4f32 = mul (mul pos rot) cam in
       let v4  : vec4f32 = mul mat @[0.0, 0.0, 0.0, 1.0] in
       let zinv = 1.0 / v4.z in

@@ -83,10 +83,10 @@ impl Parser {
         match self.peek() {
             Some(Token::Let) => self.parse_decl("let", attributes),
             Some(Token::Def) => self.parse_decl("def", attributes),
-            Some(Token::Val) => {
-                let mut decl = self.parse_val_decl()?;
+            Some(Token::Sig) => {
+                let mut decl = self.parse_sig_decl()?;
                 decl.attributes = attributes;
-                Ok(Declaration::Val(decl))
+                Ok(Declaration::Sig(decl))
             }
             Some(Token::Type) => {
                 let type_bind = self.parse_type_bind()?;
@@ -298,9 +298,9 @@ impl Parser {
         }
     }
 
-    fn parse_val_decl(&mut self) -> Result<ValDecl> {
-        trace!("parse_val_decl: next token = {:?}", self.peek());
-        self.expect(Token::Val)?;
+    fn parse_sig_decl(&mut self) -> Result<SigDecl> {
+        trace!("parse_sig_decl: next token = {:?}", self.peek());
+        self.expect(Token::Sig)?;
         let name = self.expect_identifier()?;
 
         // Parse size parameters: [n] [m] ...
@@ -323,7 +323,7 @@ impl Parser {
         self.expect(Token::Colon)?;
         let ty = self.parse_type()?;
 
-        Ok(ValDecl {
+        Ok(SigDecl {
             attributes: vec![],
             name,
             size_params,

@@ -376,7 +376,7 @@ impl Flattener {
                         ty: uniform_decl.ty.clone(),
                     });
                 }
-                ast::Declaration::Val(_)
+                ast::Declaration::Sig(_)
                 | ast::Declaration::TypeBind(_)
                 | ast::Declaration::ModuleBind(_)
                 | ast::Declaration::ModuleTypeBind(_)

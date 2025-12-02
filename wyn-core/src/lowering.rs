@@ -12,7 +12,7 @@ macro_rules! bail_spirv {
 }
 
 use crate::ast::TypeName;
-use crate::builtin_registry::{BuiltinImpl, BuiltinRegistry, PrimOp};
+use crate::impl_source::{BuiltinImpl, ImplSource, PrimOp};
 use crate::error::{CompilerError, Result};
 use crate::mir::{self, Def, Expr, ExprKind, Literal, LoopKind, Program};
 use polytype::Type as PolyType;
@@ -103,7 +103,7 @@ struct Constructor {
     lambda_registry: Vec<(String, usize)>,
 
     // Builtin function registry
-    builtin_registry: BuiltinRegistry,
+    impl_source: ImplSource,
 
     // Debug mode: when Some, contains buffer_var_id for the @gdp_buffer global
     // The buffer is a StorageBuffer with layout: [write_head, read_head, max_loops, data[4093]]
@@ -161,7 +161,7 @@ impl Constructor {
             uniform_types: HashMap::new(),
             next_uniform_binding: 0,
             lambda_registry: Vec::new(),
-            builtin_registry: BuiltinRegistry::default(),
+            impl_source: ImplSource::default(),
             debug_buffer: None,
             gasm_globals: HashMap::new(),
             gasm_type_cache: HashMap::new(),
@@ -613,7 +613,7 @@ impl<'a> LowerCtx<'a> {
                 "gdp_encode_string_local",
             ];
             for func_name in &gasm_funcs_to_preload {
-                if let Some(gasm_func) = constructor.builtin_registry.get_gasm_function(func_name) {
+                if let Some(gasm_func) = constructor.impl_source.get_gasm_function(func_name) {
                     let gasm_func = gasm_func.clone();
                     let func_id = crate::gasm_lowering::lower_function_into_builder(
                         &mut constructor.builder,
@@ -1595,16 +1595,8 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                 }
                 _ => {
                     // Check if it's a builtin function
-                    use crate::builtin_registry::BuiltinLookup;
-                    if let Some(lookup) = constructor.builtin_registry.get(func) {
-                        let builtin = match &lookup {
-                            BuiltinLookup::Single(entry) => *entry,
-                            BuiltinLookup::Overloaded(overloads) => {
-                                // All overloads share the same implementation, only types differ
-                                &overloads.entries()[0]
-                            }
-                        };
-                        match &builtin.implementation {
+                    if let Some(builtin_impl) = constructor.impl_source.get(func) {
+                        match builtin_impl {
                             BuiltinImpl::PrimOp(spirv_op) => {
                                 // Handle core SPIR-V operations
                                 match spirv_op {
@@ -1736,68 +1728,35 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                 }
                             }
                             BuiltinImpl::Intrinsic(custom_impl) => {
-                                use crate::builtin_registry::Intrinsic;
+                                use crate::impl_source::Intrinsic;
                                 match custom_impl {
-                                    Intrinsic::MatrixFromVectors => {
-                                        // Matrix from array of vectors: extract vectors and construct matrix
-                                        // SPIR-V matrices are constructed from column vectors via OpCompositeConstruct
+                                    Intrinsic::Placeholder if func == "length" => {
+                                        // Array length: extract size from array type
                                         if args.len() != 1 {
-                                            bail_spirv!("matav expects exactly 1 argument");
+                                            bail_spirv!("length expects exactly 1 argument");
                                         }
-
-                                        // The argument is an array literal [v0, v1, ...] - extract the vectors
-                                        let vectors = match &args[0].kind {
-                                            ExprKind::Literal(Literal::Array(elems)) => elems
-                                                .iter()
-                                                .map(|e| lower_expr(constructor, e))
-                                                .collect::<Result<Vec<_>>>()?,
-                                            _ => {
-                                                // If not a literal array, the array was already lowered
-                                                // We need to extract elements from it
-                                                let arr_id = arg_ids[0];
-                                                let num_cols = match &expr.ty {
-                                                    PolyType::Constructed(TypeName::Mat, type_args) => {
-                                                        match type_args.get(0) {
-                                                            Some(PolyType::Constructed(
-                                                                TypeName::Size(n),
-                                                                _,
-                                                            )) => *n as u32,
-                                                            _ => bail_spirv!(
-                                                                "matav: cannot determine matrix column count"
-                                                            ),
-                                                        }
-                                                    }
-                                                    _ => bail_spirv!("matav: result type is not a matrix"),
-                                                };
-                                                let vec_type = match &args[0].ty {
-                                                    PolyType::Constructed(TypeName::Array, type_args)
-                                                        if type_args.len() >= 2 =>
-                                                    {
-                                                        constructor.ast_type_to_spirv(&type_args[1])
-                                                    }
-                                                    _ => bail_spirv!(
-                                                        "matav: argument is not an array of vectors"
-                                                    ),
-                                                };
-                                                (0..num_cols)
-                                                    .map(|i| {
-                                                        Ok(constructor.builder.composite_extract(
-                                                            vec_type,
-                                                            None,
-                                                            arr_id,
-                                                            [i],
-                                                        )?)
-                                                    })
-                                                    .collect::<Result<Vec<_>>>()?
+                                        if let PolyType::Constructed(TypeName::Array, type_args) =
+                                            &args[0].ty
+                                        {
+                                            match type_args.get(0) {
+                                                Some(PolyType::Constructed(TypeName::Size(n), _)) => {
+                                                    Ok(constructor.const_i32(*n as i32))
+                                                }
+                                                _ => bail_spirv!(
+                                                    "Cannot determine compile-time array size for length: {:?}",
+                                                    type_args.get(0)
+                                                ),
                                             }
-                                        };
-
-                                        // Construct the matrix from the column vectors
-                                        Ok(constructor.builder.composite_construct(
-                                            result_type,
-                                            None,
-                                            vectors,
-                                        )?)
+                                        } else {
+                                            bail_spirv!("length called on non-array type: {:?}", args[0].ty)
+                                        }
+                                    }
+                                    Intrinsic::Placeholder => {
+                                        // Other placeholder intrinsics should have been desugared
+                                        bail_spirv!(
+                                            "Placeholder intrinsic '{}' should have been desugared before lowering",
+                                            func
+                                        )
                                     }
                                     Intrinsic::Uninit => {
                                         // Return an undefined value of the result type
@@ -1897,7 +1856,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                         if constructor.debug_buffer.is_some() {
                                             // Call @gdp_encode_int32 GASM builtin
                                             let gasm_func = constructor
-                                                .builtin_registry
+                                                .impl_source
                                                 .get_gasm_function("gdp_encode_int32")
                                                 .ok_or_else(|| {
                                                     CompilerError::SpirvError(
@@ -1923,7 +1882,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                         if constructor.debug_buffer.is_some() {
                                             // Call @gdp_encode_float32 GASM builtin
                                             let gasm_func = constructor
-                                                .builtin_registry
+                                                .impl_source
                                                 .get_gasm_function("gdp_encode_float32")
                                                 .ok_or_else(|| {
                                                     CompilerError::SpirvError(
@@ -2015,7 +1974,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                             // Call @gdp_encode_string_local GASM builtin
                                             // Pass the array pointer directly (not element pointer)
                                             let gasm_func = constructor
-                                                .builtin_registry
+                                                .impl_source
                                                 .get_gasm_function("gdp_encode_string_local")
                                                 .ok_or_else(|| {
                                                     CompilerError::SpirvError(
@@ -2060,7 +2019,6 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                 // GASM builtin: lower to SPIR-V once and call
                                 // Clone to avoid borrow checker issues
                                 let gasm_func_clone = gasm_func.clone();
-                                drop(lookup); // Drop the borrow of builtin_registry
                                 let func_id = constructor.lower_gasm_function(&gasm_func_clone)?;
                                 Ok(constructor.builder.function_call(
                                     result_type,
