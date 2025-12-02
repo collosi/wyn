@@ -276,7 +276,6 @@ impl BuiltinRegistry {
         registry.register_float_modules();
         registry.register_vector_operations(ctx);
         registry.register_matrix_operations(ctx);
-        registry.register_vector_constructors();
         registry.register_higher_order_functions(ctx);
         registry.register_matav_variants();
         registry.register_debug_intrinsics();
@@ -1195,34 +1194,6 @@ impl BuiltinRegistry {
         // We'll generate these on-demand during desugaring, similar to how we handle mul
     }
 
-    /// Helper to register a vector constructor
-    fn register_vec_constructor(&mut self, vec_name: &'static str, elem_type: &'static str, arity: usize) {
-        let elem_t = Self::ty(elem_type);
-        // Return type is Vec[arity, elem_type], not just the name "vec4"
-        let return_type = Type::Constructed(
-            TypeName::Vec,
-            vec![Type::Constructed(TypeName::Size(arity), vec![]), elem_t.clone()],
-        );
-        self.register(
-            vec_name,
-            vec![elem_t; arity],
-            return_type,
-            BuiltinImpl::Intrinsic(Intrinsic::Placeholder),
-        );
-    }
-
-    /// Register vector constructor functions
-    fn register_vector_constructors(&mut self) {
-        // f32 vectors
-        self.register_vec_constructor("vec2", "f32", 2);
-        self.register_vec_constructor("vec3", "f32", 3);
-        self.register_vec_constructor("vec4", "f32", 4);
-
-        // i32 vectors
-        self.register_vec_constructor("ivec2", "i32", 2);
-        self.register_vec_constructor("ivec3", "i32", 3);
-        self.register_vec_constructor("ivec4", "i32", 4);
-    }
 
     /// Register higher-order functions and array operations
     fn register_higher_order_functions(&mut self, _ctx: &mut impl TypeVarGenerator) {

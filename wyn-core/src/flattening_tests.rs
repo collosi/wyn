@@ -336,23 +336,20 @@ def test : (i32 -> i32) =
 }
 
 #[test]
-fn test_lambda_calling_builtin_constructor() {
-    // This test reproduces an issue where vec4 inside a lambda is incorrectly
-    // captured as a free variable and rewritten to __closure.vec4
+fn test_lambda_with_vector_literal() {
+    // Test that vector literals work inside lambdas
     let mir = flatten_program(
         r#"
 def test (v:vec3f32) : vec4f32 =
-    let f = \(x:vec3f32) -> vec4 x.x x.y x.z 1.0f32 in
+    let f = \(x:vec3f32) -> @[x.x, x.y, x.z, 1.0f32] in
     f v
 "#,
     );
     let mir_str = format!("{}", mir);
     println!("MIR output:\n{}", mir_str);
 
-    // Should call vec4 directly, not __closure.vec4
-    assert!(mir_str.contains("vec4"));
-    // vec4 should NOT be accessed through closure
-    assert!(!mir_str.contains("__closure.vec4"));
+    // Should contain vector literal
+    assert!(mir_str.contains("@["));
 }
 
 #[test]

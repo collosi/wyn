@@ -68,7 +68,7 @@ fn test_two_length_and_replicate_calls() {
     typecheck_program(
         r#"
 def test : f32 =
-    let v4s : [2]vec4f32 = [vec4 1.0f32 2.0f32 3.0f32 4.0f32, vec4 5.0f32 6.0f32 7.0f32 8.0f32] in
+    let v4s : [2]vec4f32 = [@[1.0f32, 2.0f32, 3.0f32, 4.0f32], @[5.0f32, 6.0f32, 7.0f32, 8.0f32]] in
     let len1 = length v4s in
     let out1 = replicate len1 (__uninit()) in
 
@@ -156,7 +156,7 @@ fn test_lambda_param_with_annotation() {
     // Test that lambda parameter works with type annotation (Futhark-style)
     // Field projection requires the parameter type to be known
     typecheck_program(
-        "def test : [2]f32 = let arr : [2]vec3f32 = [vec3 1.0f32 2.0f32 3.0f32, vec3 4.0f32 5.0f32 6.0f32] in map (\\(v:vec3f32) -> v.x) arr",
+        "def test : [2]f32 = let arr : [2]vec3f32 = [@[1.0f32, 2.0f32, 3.0f32], @[4.0f32, 5.0f32, 6.0f32]] in map (\\(v:vec3f32) -> v.x) arr",
     );
 }
 
@@ -167,7 +167,7 @@ fn test_bidirectional_with_concrete_type() {
     typecheck_program(
         r#"
             def apply_to_vec (f : vec3f32 -> f32) : f32 =
-              f (vec3 1.0f32 2.0f32 3.0f32)
+              f (@[1.0f32, 2.0f32, 3.0f32])
 
             def test : f32 = apply_to_vec (\v -> v.x)
         "#,
@@ -183,9 +183,9 @@ fn test_bidirectional_explicit_annotation_mismatch() {
     typecheck_program(
         r#"
             def test =
-              let arr : [1]vec3f32 = [vec3 1.0f32 2.0f32 3.0f32] in
-              let v4s : [1]vec4f32 = map (\(v:vec3f32) -> vec4 v.x v.y v.z 1.0f32) arr in
-              map (\(q:vec4f32) -> vec3 q.x q.y q.z) v4s
+              let arr : [1]vec3f32 = [@[1.0f32, 2.0f32, 3.0f32]] in
+              let v4s : [1]vec4f32 = map (\(v:vec3f32) -> @[v.x, v.y, v.z, 1.0f32]) arr in
+              map (\(q:vec4f32) -> @[q.x, q.y, q.z]) v4s
         "#,
     );
 }
@@ -385,7 +385,7 @@ fn test_map_with_capturing_closure() {
     typecheck_program(
         r#"
 def line : f32 =
-  let denom = dot (vec2 0.0f32 0.0f32) (vec2 9.0f32 9.0f32) in
+  let denom = dot (@[0.0f32, 0.0f32]) (@[9.0f32, 9.0f32]) in
   f32.min denom 1.0f32
 "#,
     );
@@ -603,7 +603,7 @@ fn test_lambda_inferred_from_map_context() {
     typecheck_program(
         r#"
 def test : [2]f32 =
-    let vs : [2]vec3f32 = [vec3 1.0f32 2.0f32 3.0f32, vec3 4.0f32 5.0f32 6.0f32] in
+    let vs : [2]vec3f32 = [@[1.0f32, 2.0f32, 3.0f32], @[4.0f32, 5.0f32, 6.0f32]] in
     map (\v -> v.x) vs
 "#,
     );
@@ -822,7 +822,7 @@ fn test_mul_mat_vec_application() {
     typecheck_program(
         r#"
 def test (mat:mat4f32) : vec4f32 =
-    mul mat (vec4 1.0f32 2.0f32 3.0f32 4.0f32)
+    mul mat (@[1.0f32, 2.0f32, 3.0f32, 4.0f32])
 "#,
     );
 }
@@ -833,7 +833,7 @@ fn test_mul_mat_vec_in_lambda() {
     typecheck_program(
         r#"
 def test (mat:mat4f32) (verts:[3]vec3f32) : [3]vec4f32 =
-    map (\v -> mul mat (vec4 v.x v.y v.z 1.0f32)) verts
+    map (\v -> mul mat (@[v.x, v.y, v.z, 1.0f32])) verts
 "#,
     );
 }
@@ -1042,7 +1042,7 @@ fn test_vector_literal_in_expression() {
     typecheck_program(
         r#"
         def add_vectors (a: vec3f32) (b: vec3f32) : vec3f32 =
-            vec3 (a.x + b.x) (a.y + b.y) (a.z + b.z)
+            @[(a.x + b.x), (a.y + b.y), (a.z + b.z)]
 
         def test : vec3f32 = add_vectors @[1.0f32, 0.0f32, 0.0f32] @[0.0f32, 1.0f32, 0.0f32]
         "#,

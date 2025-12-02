@@ -45,7 +45,7 @@ def sum [n] (arr:[n]f32) : f32 =
 #[vertex]
 def vertex_main (vertex_id:i32) : #[builtin(position)] vec4f32 =
   let result = sum [1.0f32, 1.0f32, 1.0f32] in
-  vec4 result result 0.0f32 1.0f32
+  @[result, result, 0.0f32, 1.0f32]
 "#;
 
     // The assertion in monomorphization should catch unresolved variables
@@ -72,7 +72,7 @@ def sum [n] (arr:[n]f32) : f32 =
 def vertex_main (vertex_id:i32) : #[builtin(position)] vec4f32 =
   let edges : [3][2]i32 = [[0,1], [1,2], [2,0]] in
   let result = sum (map (\(e:[2]i32) -> 1.0f32) edges) in
-  vec4 result result 0.0f32 1.0f32
+  @[result, result, 0.0f32, 1.0f32]
 "#;
     compile_through_monomorphization(source).expect("Should compile after bug is fixed");
 }
