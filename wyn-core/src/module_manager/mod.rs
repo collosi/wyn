@@ -57,54 +57,59 @@ impl ModuleManager {
         self.known_modules.contains(name)
     }
 
-    /// Get the source code for a prelude module
-    fn get_prelude_source(module_name: &str) -> Option<&'static str> {
-        match module_name {
-            "math" => Some(include_str!("../../prelude/math.wyn")),
-            "graphics32" => Some(include_str!("../../prelude/graphics32.wyn")),
-            "graphics64" => Some(include_str!("../../prelude/graphics64.wyn")),
-            _ => None,
-        }
-    }
+    /// Load a prelude file (e.g., "math.wyn") which may contain multiple module definitions
+    /// Returns the parsed program
+    pub fn load_file(&mut self, file_path: &str) -> Result<()> {
+        // For now, we only support embedded prelude files
+        let source = match file_path {
+            "math.wyn" => include_str!("../../../prelude/math.wyn"),
+            "graphics32.wyn" => include_str!("../../../prelude/graphics32.wyn"),
+            "graphics64.wyn" => include_str!("../../../prelude/graphics64.wyn"),
+            _ => return Err(CompilerError::ModuleError(format!("Unknown prelude file: {}", file_path))),
+        };
 
-    /// Load a module by name (e.g., "f32" loads the embedded f32 prelude)
-    /// Returns the parsed program with definitions prefixed by module name
-    pub fn load_module(&mut self, module_name: &str) -> Result<&Program> {
-        // Check cache first
-        if self.cached_modules.contains_key(module_name) {
-            return Ok(self.cached_modules.get(module_name).unwrap());
-        }
-
-        // Get embedded source
-        let source = Self::get_prelude_source(module_name)
-            .ok_or_else(|| CompilerError::ModuleError(format!("Unknown module '{}'", module_name)))?;
-
-        // Parse module using the shared node counter to avoid NodeId collisions
+        // Parse the file
         let tokens = lexer::tokenize(source).map_err(CompilerError::ParseError)?;
-        // Take ownership of node_counter, parse, then put it back
         let counter = std::mem::take(&mut self.node_counter);
         let mut parser = Parser::new_with_counter(tokens, counter);
-        let mut program = parser.parse()?;
+        let program = parser.parse()?;
         self.node_counter = parser.take_node_counter();
 
-        // Prefix all declaration names with module name
-        for decl in &mut program.declarations {
-            match decl {
-                Declaration::Decl(d) => {
-                    let prefixed_name = format!("{}.{}", module_name, d.name);
-                    d.name = prefixed_name;
+        // TODO: Extract individual modules from the parsed program
+        // For now, just cache the whole file under the file_path key
+        self.cached_modules.insert(file_path.to_string(), program);
+        Ok(())
+    }
+
+    /// Query the type of a function in a specific module
+    /// e.g., get_module_function_type("f32", "sin") -> Type
+    pub fn get_module_function_type(&self, module_name: &str, function_name: &str) -> Result<crate::ast::Type> {
+        // TODO: Implement proper module extraction and lookup
+        // For now, search through all cached programs
+        for program in self.cached_modules.values() {
+            for decl in &program.declarations {
+                match decl {
+                    Declaration::ModuleBind(mb) if mb.name == module_name => {
+                        // Found the module, now look for the function in its body
+                        // TODO: Navigate the module structure to find the function
+                        return Err(CompilerError::ModuleError(
+                            "Module extraction not yet implemented".to_string()
+                        ));
+                    }
+                    _ => {}
                 }
-                Declaration::Entry(entry_def) => {
-                    let prefixed_name = format!("{}.{}", module_name, entry_def.name);
-                    entry_def.name = prefixed_name;
-                }
-                _ => {} // Other declarations don't need prefixing
             }
         }
+        Err(CompilerError::ModuleError(format!(
+            "Module '{}' or function '{}' not found",
+            module_name, function_name
+        )))
+    }
 
-        // Cache and return
-        self.cached_modules.insert(module_name.to_string(), program);
-        Ok(self.cached_modules.get(module_name).unwrap())
+    /// Load a module by name (e.g., "f32" loads the f32 module from math.wyn)
+    /// Returns the parsed program with definitions prefixed by module name
+    pub fn load_module(&mut self, _module_name: &str) -> Result<&Program> {
+        todo!("Redesign module system to support multiple modules per file")
     }
 
     /// Check if a name is a qualified module reference (e.g., "f32.sum")
@@ -134,3 +139,6 @@ impl Default for ModuleManager {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests;
