@@ -930,9 +930,7 @@ pub mod types {
                     ]
                 } else {
                     // Non-square matrices: only matRxCf32
-                    vec![
-                        (format!("mat{}x{}{}", rows, cols, elem_name), matrix_type),
-                    ]
+                    vec![(format!("mat{}x{}{}", rows, cols, elem_name), matrix_type)]
                 }
             })
             .collect()

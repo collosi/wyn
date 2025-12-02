@@ -163,8 +163,8 @@ pub fn parse_float_literal(input: &str) -> IResult<&str, Token> {
     map(
         tuple((
             opt(char('-')),
-            alt((hexadecimalfloat, exponentfloat, pointfloat, intpart)),
-            float_type_suffix,
+            alt((hexadecimalfloat, exponentfloat, pointfloat)),
+            opt(float_type_suffix),
         )),
         |(sign, float_str, _suffix)| {
             let mut clean = strip_underscores(float_str);
@@ -259,23 +259,6 @@ mod tests {
     }
 
     #[test]
-    fn test_intpart_with_suffix() {
-        // Test integers with float suffix like "135f32"
-        assert_eq!(
-            parse_float_literal("135f32"),
-            Ok(("", Token::FloatLiteral(135.0)))
-        );
-        assert_eq!(
-            parse_float_literal("255f32"),
-            Ok(("", Token::FloatLiteral(255.0)))
-        );
-        assert_eq!(
-            parse_float_literal("-17f32"),
-            Ok(("", Token::FloatLiteral(-17.0)))
-        );
-    }
-
-    #[test]
     fn test_float_exponent_notation() {
         assert_eq!(
             parse_float_literal("1.5e10f32"),
@@ -362,5 +345,29 @@ mod tests {
     fn test_char_rejects_empty() {
         // Empty char literals should fail
         assert!(parse_char_literal("''").is_err());
+    }
+
+    #[test]
+    fn test_float_without_suffix() {
+        // Float literals without suffix should parse as f32
+        assert_eq!(parse_float_literal("3.14"), Ok(("", Token::FloatLiteral(3.14))));
+        assert_eq!(parse_float_literal("0.5"), Ok(("", Token::FloatLiteral(0.5))));
+        assert_eq!(parse_float_literal(".5"), Ok(("", Token::FloatLiteral(0.5))));
+        assert_eq!(parse_float_literal("7.0"), Ok(("", Token::FloatLiteral(7.0))));
+        assert_eq!(parse_float_literal("-3.14"), Ok(("", Token::FloatLiteral(-3.14))));
+    }
+
+    #[test]
+    fn test_float_exponent_without_suffix() {
+        // Float exponent notation without suffix
+        assert_eq!(
+            parse_float_literal("1.5e10"),
+            Ok(("", Token::FloatLiteral(1.5e10)))
+        );
+        assert_eq!(parse_float_literal("2E-5"), Ok(("", Token::FloatLiteral(2e-5))));
+        assert_eq!(
+            parse_float_literal("3.14e2"),
+            Ok(("", Token::FloatLiteral(314.0)))
+        );
     }
 }

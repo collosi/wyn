@@ -470,7 +470,7 @@ mod tests {
 
     #[test]
     fn test_tokenize_division() {
-        let input = "135f32/255f32";
+        let input = "135.0f32/255.0f32";
         let tokens = tokens_only(input);
         assert_eq!(
             tokens,

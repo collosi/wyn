@@ -178,19 +178,19 @@
 
 -- Vertex shader: full-screen triangle
 def verts: [3]vec4f32 =
-  [@[-1.0f32, -1.0f32, 0.0f32, 1.0f32],
-   @[3.0f32, -1.0f32, 0.0f32, 1.0f32],
-   @[-1.0f32, 3.0f32, 0.0f32, 1.0f32]]
+  [@[-1.0, -1.0, 0.0, 1.0],
+   @[3.0, -1.0, 0.0, 1.0],
+   @[-1.0, 3.0, 0.0, 1.0]]
 
 #[vertex]
 def vertex_main (#[builtin(vertex_index)] vertex_id:i32) : #[builtin(position)] vec4f32 = verts[vertex_id]
 
 -- Constants (using vector literals)
-def red : vec3f32 = @[1.0f32, 0.0f32, 0.0f32]
-def green : vec3f32 = @[0.0f32, 1.0f32, 0.0f32]
-def blue : vec3f32 = @[0.0f32, 0.8f32, 1.0f32]
-def white : vec3f32 = @[1.0f32, 1.0f32, 0.97f32]
-def yellow : vec3f32 = @[1.0f32, 1.0f32, 0.0f32]
+def red : vec3f32 = @[1.0, 0.0, 0.0]
+def green : vec3f32 = @[0.0, 1.0, 0.0]
+def blue : vec3f32 = @[0.0, 0.8, 1.0]
+def white : vec3f32 = @[1.0, 1.0, 0.97]
+def yellow : vec3f32 = @[1.0, 1.0, 0.0]
 
 -- Helper functions
 def clamp (x:f32) (min:f32) (max:f32) : f32 =
@@ -211,48 +211,48 @@ def line (weight:f32) (p:vec2f32) (p0:vec2f32) (p1:vec2f32) (w:f32) : f32 =
   let d = vec2 (p1.x-p0.x) (p1.y-p0.y) in
   let denom = dot d d in
   let dp = vec2 (p.x-p0.x) (p.y-p0.y) in
-  let t_raw = if denom == 0.0f32 then 0.0f32 else (dot d dp / denom) in
-  let t = clamp t_raw 0.0f32 1.0f32 in
+  let t_raw = if denom == 0.0 then 0.0 else (dot d dp / denom) in
+  let t = clamp t_raw 0.0 1.0 in
   let proj = vec2 (p0.x + d.x*t) (p0.y + d.y*t) in
   let pdiff = vec2 (p.x-proj.x) (p.y-proj.y) in
   let dist = length2 pdiff in
-  let s = (if dist == 0.0f32 then 0.0f32 else (1.0f32 / dist)) * weight * w in
-  f32.min (s*s) 1.0f32
+  let s = (if dist == 0.0 then 0.0 else (1.0 / dist)) * weight * w in
+  f32.min (s*s) 1.0
 
 def circle (weight:f32) (p:vec2f32) (c:vec2f32) (r:f32) (w:f32) : f32 =
   let diff = vec2 (p.x-c.x) (p.y-c.y) in
   let dist = f32.abs (length2 diff) + r in
-  let s = (if dist == 0.0f32 then 0.0f32 else (1.0f32 / dist)) * weight * w in
-  f32.min (s*s) 1.0f32
+  let s = (if dist == 0.0 then 0.0 else (1.0 / dist)) * weight * w in
+  f32.min (s*s) 1.0
 
 -- Matrices
 def getRotMatrix (a:vec3f32) : mat4f32 =
   let s = [ f32.sin a.x, f32.sin a.y, f32.sin a.z ] in
   let c = [ f32.cos a.x, f32.cos a.y, f32.cos a.z ] in
   @[
-    [c[1]*c[2], c[1]*s[2], -s[1], 0.0f32],
-    [s[0]*s[1]*c[2]-c[0]*s[2], s[0]*s[1]*s[2]+c[0]*c[2], s[0]*c[1], 0.0f32],
-    [c[0]*s[1]*c[2]+s[0]*s[2], c[0]*s[1]*s[2]-s[0]*c[2], c[0]*c[1], 0.0f32],
-    [0.0f32, 0.0f32, 0.0f32, 1.0f32]
+    [c[1]*c[2], c[1]*s[2], -s[1], 0.0],
+    [s[0]*s[1]*c[2]-c[0]*s[2], s[0]*s[1]*s[2]+c[0]*c[2], s[0]*c[1], 0.0],
+    [c[0]*s[1]*c[2]+s[0]*s[2], c[0]*s[1]*s[2]-s[0]*c[2], c[0]*c[1], 0.0],
+    [0.0, 0.0, 0.0, 1.0]
   ]
 
 def getPosMatrix (p:vec3f32) : mat4f32 =
   @[
-    [1.0f32, 0.0f32, 0.0f32, p.x],
-    [0.0f32, 1.0f32, 0.0f32, p.y],
-    [0.0f32, 0.0f32, 1.0f32, p.z],
-    [0.0f32, 0.0f32, 0.0f32, 1.0f32]
+    [1.0, 0.0, 0.0, p.x],
+    [0.0, 1.0, 0.0, p.y],
+    [0.0, 0.0, 1.0, p.z],
+    [0.0, 0.0, 0.0, 1.0]
   ]
 
 -- utils
 def mix3 (a:vec3f32) (b:vec3f32) (c:vec3f32) (t:f32) : vec3f32 =
-  if t > 0.5f32
-  then mix3v b c (t*2.0f32 - 1.0f32)
-  else mix3v a b (t*2.0f32)
+  if t > 0.5
+  then mix3v b c (t*2.0 - 1.0)
+  else mix3v a b (t*2.0)
 
 def fragment (p:vec3f32) (iTime:f32) : vec3f32 =
-  let t = f32.sin(p.x*0.8f32 + iTime*0.5f32)*0.5f32 + 0.5f32 in
-  let fog = f32.min (p.z*p.z*p.z*400.0f32) 1.0f32 in
+  let t = f32.sin(p.x*0.8 + iTime*0.5)*0.5 + 0.5 in
+  let fog = f32.min (p.z*p.z*p.z*400.0) 1.0 in
   let col = mix3 red green blue t in
   vec3 (col.x * fog) (col.y * fog) (col.z * fog)
 
@@ -263,67 +263,67 @@ def fragment (p:vec3f32) (iTime:f32) : vec3f32 =
 --   fragCoord   : pixel coordinate [x, y]
 -- Output: vec4f32 color
 def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
-  let weight = 3.0f32 / iResolution[0] in
+  let weight = 3.0 / iResolution[0] in
 
   -- Normalized, centered UV with aspect correction
   let uv0 : vec2f32 = vec2 (fragCoord.x / iResolution[0]) (fragCoord.y / iResolution[1]) in
-  let uv1 : vec2f32 = vec2 (uv0.x*2.0f32 - 1.0f32) (uv0.y*2.0f32 - 1.0f32) in
+  let uv1 : vec2f32 = vec2 (uv0.x*2.0 - 1.0) (uv0.y*2.0 - 1.0) in
   let uv  : vec2f32 = vec2 (uv1.x * (iResolution[0]/iResolution[1])) uv1.y in
 
-  let line_width = 0.4f32 in
-  let time = iTime * 0.31415f32 in
+  let line_width = 0.4 in
+  let time = iTime * 0.31415 in
 
-  let base_col = mix3v (vec3 0.19f32 0.13f32 0.10f32) (vec3 1.0f32 1.0f32 1.0f32)
-                         (0.5f32 * f32.pow (length2 uv * 0.5f32) 2.0f32) in
-  let cam = getPosMatrix (vec3 0.0f32 0.0f32 10.0f32) in
+  let base_col = mix3v (vec3 0.19 0.13 0.10) (vec3 1.0 1.0 1.0)
+                         (0.5 * f32.pow (length2 uv * 0.5) 2.0) in
+  let cam = getPosMatrix (vec3 0.0 0.0 10.0) in
 
   -- #define LINEAR_ROTATION
-  let rot = getRotMatrix (vec3 time (time*0.86f32) (time*0.473f32)) in
+  let rot = getRotMatrix (vec3 time (time*0.86) (time*0.473)) in
 
   -- Instances (first batch, 18 boxes)
   let instA : [18]vec3f32 =
-    [ @[0.0f32, 0.0f32, -1.0f32],
-      @[-1.0f32, 0.0f32, -1.0f32],
-      @[1.0f32, 0.0f32, -1.0f32],
-      @[0.0f32, 1.0f32, -1.0f32],
-      @[0.0f32, -1.0f32, -1.0f32],
-      @[-1.0f32, 0.0f32, 0.0f32],
-      @[1.0f32, 0.0f32, 0.0f32],
-      @[0.0f32, 1.0f32, 0.0f32],
-      @[0.0f32, -1.0f32, 0.0f32],
-      @[-1.0f32, -1.0f32, 0.0f32],
-      @[1.0f32, 1.0f32, 0.0f32],
-      @[-1.0f32, 1.0f32, 0.0f32],
-      @[1.0f32, -1.0f32, 0.0f32],
-      @[0.0f32, 0.0f32, 1.0f32],
-      @[-1.0f32, 0.0f32, 1.0f32],
-      @[1.0f32, 0.0f32, 1.0f32],
-      @[0.0f32, 1.0f32, 1.0f32],
-      @[0.0f32, -1.0f32, 1.0f32] ] in
+    [ @[0.0, 0.0, -1.0],
+      @[-1.0, 0.0, -1.0],
+      @[1.0, 0.0, -1.0],
+      @[0.0, 1.0, -1.0],
+      @[0.0, -1.0, -1.0],
+      @[-1.0, 0.0, 0.0],
+      @[1.0, 0.0, 0.0],
+      @[0.0, 1.0, 0.0],
+      @[0.0, -1.0, 0.0],
+      @[-1.0, -1.0, 0.0],
+      @[1.0, 1.0, 0.0],
+      @[-1.0, 1.0, 0.0],
+      @[1.0, -1.0, 0.0],
+      @[0.0, 0.0, 1.0],
+      @[-1.0, 0.0, 1.0],
+      @[1.0, 0.0, 1.0],
+      @[0.0, 1.0, 1.0],
+      @[0.0, -1.0, 1.0] ] in
 
   -- Accumulate color
   let c_box_result =
     loop (idx, acc) = (0i32, base_col) while idx < 18 do
       let inst = instA[idx] in
-      let pos  = getPosMatrix (vec3 (inst.x * 4.0f32) (inst.y * 4.0f32) (inst.z * 4.0f32)) in
+      let pos  = getPosMatrix (vec3 (inst.x * 4.0) (inst.y * 4.0) (inst.z * 4.0)) in
       let mat  : mat4f32 = mul (mul pos rot) cam in
 
       -- 8 cube corners in object space
       let verts0 : [8]vec3f32 =
-        [ @[-1.0f32, -1.0f32, 1.0f32],
-          @[-1.0f32, 1.0f32, 1.0f32],
-          @[1.0f32, 1.0f32, 1.0f32],
-          @[1.0f32, -1.0f32, 1.0f32],
-          @[-1.0f32, -1.0f32, -1.0f32],
-          @[-1.0f32, 1.0f32, -1.0f32],
-          @[1.0f32, 1.0f32, -1.0f32],
-          @[1.0f32, -1.0f32, -1.0f32] ] in
+        [ @[-1.0, -1.0, 1.0],
+          @[-1.0, 1.0, 1.0],
+          @[1.0, 1.0, 1.0],
+          @[1.0, -1.0, 1.0],
+          @[-1.0, -1.0, -1.0],
+          @[-1.0, 1.0, -1.0],
+          @[1.0, 1.0, -1.0],
+          @[1.0, -1.0, -1.0] ] in
 
       -- Transform & perspective
-      let v4s : [8]vec4f32 = map (\(v:vec3f32) -> mul mat (vec4 v.x v.y v.z 1.0f32)) verts0 in
+      let v4s : [8]vec4f32 = map (\(v:vec3f32) -> mul mat (vec4 v.x v.y v.z 1.0)) verts0 in
       let verts1 : [8]vec3f32 =
         map (\(q:vec4f32) ->
-                  let zinv = 1.0f32 / q.z in
+                  let zinv = 1.0 / q.z in
                   vec3 (q.x*zinv) (q.y*zinv) zinv)
                v4s in
 
@@ -341,7 +341,7 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
           edges) in
 
       let shade = fragment verts1[0] iTime in
-      let intensity = f32.min i_sum 1.0f32 in
+      let intensity = f32.min i_sum 1.0 in
       let shade_scaled = vec3 (shade.x * intensity) (shade.y * intensity) (shade.z * intensity) in
       let acc' = vec3 (acc.x + shade_scaled.x) (acc.y + shade_scaled.y) (acc.z + shade_scaled.z) in
       (idx + 1, acc') in
@@ -349,22 +349,22 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
 
   -- Second instances (8 circles)
   let instB : [8]vec3f32 =
-    [ @[-1.0f32, 1.0f32, -1.0f32],
-      @[1.0f32, 1.0f32, -1.0f32],
-      @[-1.0f32, -1.0f32, -1.0f32],
-      @[1.0f32, -1.0f32, -1.0f32],
-      @[-1.0f32, 1.0f32, 1.0f32],
-      @[1.0f32, 1.0f32, 1.0f32],
-      @[-1.0f32, -1.0f32, 1.0f32],
-      @[1.0f32, -1.0f32, 1.0f32] ] in
+    [ @[-1.0, 1.0, -1.0],
+      @[1.0, 1.0, -1.0],
+      @[-1.0, -1.0, -1.0],
+      @[1.0, -1.0, -1.0],
+      @[-1.0, 1.0, 1.0],
+      @[1.0, 1.0, 1.0],
+      @[-1.0, -1.0, 1.0],
+      @[1.0, -1.0, 1.0] ] in
 
   let c_final_result =
     loop (idx, acc) = (0i32, c_box) while idx < 8 do
       let inst = instB[idx] in
-      let pos = getPosMatrix (vec3 (inst.x * 4.0f32) (inst.y * 4.0f32) (inst.z * 4.0f32)) in
+      let pos = getPosMatrix (vec3 (inst.x * 4.0) (inst.y * 4.0) (inst.z * 4.0)) in
       let mat : mat4f32 = mul (mul pos rot) cam in
-      let v4  : vec4f32 = mul mat (vec4 0.0f32 0.0f32 0.0f32 1.0f32) in
-      let zinv = 1.0f32 / v4.z in
+      let v4  : vec4f32 = mul mat (vec4 0.0 0.0 0.0 1.0) in
+      let zinv = 1.0 / v4.z in
       let vert : vec3f32 = vec3 (v4.x*zinv) (v4.y*zinv) zinv in
       let sh  = fragment vert iTime in
       let cov = circle weight uv (vec2 vert.x vert.y) (-vert.z) line_width in
@@ -373,21 +373,21 @@ def main_image (iResolution:[2]f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
       (idx + 1, acc') in
   let (dummy2, c_final) = c_final_result in
 
-  vec4 c_final.x c_final.y c_final.z 1.0f32
+  vec4 c_final.x c_final.y c_final.z 1.0
 
 -- Fragment shader entry point
 #[fragment]
 def fragment_main (#[builtin(frag_coord)] pos:vec4f32) : #[location(0)] vec4f32 =
   -- Unconditional debug to see if fragment shader runs at all
   let _ = debug_str "F" in
-  let width = 800.0f32 in
-  let height = 600.0f32 in
-  let time = 1.0f32 in
+  let width = 800.0 in
+  let height = 600.0 in
+  let time = 1.0 in
   -- Debug output for center pixel only
-  let is_center = if pos.x > 399.0f32 then
-      if pos.x < 401.0f32 then
-        if pos.y > 299.0f32 then
-          if pos.y < 301.0f32 then true else false
+  let is_center = if pos.x > 399.0 then
+      if pos.x < 401.0 then
+        if pos.y > 299.0 then
+          if pos.y < 301.0 then true else false
         else false
       else false
     else false in

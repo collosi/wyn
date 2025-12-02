@@ -191,7 +191,7 @@ fn test_parse_array_index() {
 
 #[test]
 fn test_parse_division() {
-    let decl = single_decl("let x: f32 = 135f32/255f32");
+    let decl = single_decl("let x: f32 = 135.0f32/255.0f32");
     assert!(matches!(
         &decl.body.kind,
         ExprKind::BinaryOp(op, left, right)

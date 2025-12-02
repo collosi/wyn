@@ -2179,9 +2179,9 @@ fn lower_const_literal(constructor: &mut Constructor, lit: &Literal) -> Result<s
             let mat_type = constructor.get_or_create_mat_type(elem_type, num_rows as u32, num_cols as u32);
             Ok(constructor.builder.constant_composite(mat_type, col_ids))
         }
-        Literal::Tuple(_) => {
-            Err(CompilerError::SpirvError("Tuple literals not yet supported in global constants".to_string()))
-        }
+        Literal::Tuple(_) => Err(CompilerError::SpirvError(
+            "Tuple literals not yet supported in global constants".to_string(),
+        )),
     }
 }
 

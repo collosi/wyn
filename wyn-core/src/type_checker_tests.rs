@@ -1090,51 +1090,61 @@ fn test_matrix_literal_wrong_element_type() {
 #[test]
 fn test_matrix_literal_with_array_indexing() {
     // Matrix literal with array indexing inside
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
         def test : mat2f32 =
             let a = [1.0f32, 2.0f32] in
             @[[a[0], a[1]], [a[1], a[0]]]
-    "#);
+    "#,
+    );
 }
 
 #[test]
 fn test_matrix_literal_with_expressions() {
     // Matrix literal with arithmetic expressions
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
         def test : mat2f32 =
             let x = 1.0f32 in
             @[[x, x+1.0f32], [x+2.0f32, x+3.0f32]]
-    "#);
+    "#,
+    );
 }
 
 #[test]
 fn test_matrix_literal_with_type_annotation() {
     // Matrix literal with explicit type annotation
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
         def test : mat2f32 =
             let a = [1.0f32, 2.0f32] in
             (@[[a[0], a[1]], [a[1], a[0]]] : mat2f32)
-    "#);
+    "#,
+    );
 }
 
 #[test]
 fn test_matrix_literal_direct_return() {
     // Matrix literal as direct return value without let binding
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
         def test : mat2f32 =
             let a = [1.0f32, 2.0f32] in
             @[[a[0], a[1]], [a[1], a[0]]]
-    "#);
+    "#,
+    );
 }
 
 #[test]
 fn test_matrix_literal_direct_return_with_type_annotation() {
     // Matrix literal with type annotation as direct return
-    typecheck_program(r#"
+    typecheck_program(
+        r#"
         def test : mat2f32 =
             let a = [1.0f32, 2.0f32] in
             (@[[a[0], a[1]], [a[1], a[0]]] : mat2f32)
-    "#);
+    "#,
+    );
 }
 
 #[test]
