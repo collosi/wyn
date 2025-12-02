@@ -1431,7 +1431,7 @@ fn test_parse_module_bind_simple() {
 
 #[test]
 fn test_parse_module_with_signature() {
-    let program = parse_ok("module M : { val x : i32 } = { def x : i32 = 42 }");
+    let program = parse_ok("module M : { sig x : i32 } = { def x : i32 = 42 }");
     assert_eq!(program.declarations.len(), 1);
 
     let bind = match &program.declarations[0] {
@@ -1445,7 +1445,7 @@ fn test_parse_module_with_signature() {
 
 #[test]
 fn test_parse_module_type_bind() {
-    let program = parse_ok("module type numeric = { type t val add : t -> t -> t }");
+    let program = parse_ok("module type numeric = { type t sig add : t -> t -> t }");
     assert_eq!(program.declarations.len(), 1);
 
     match &program.declarations[0] {
@@ -2590,4 +2590,93 @@ fn test_parse_matrix_literal_in_let() {
         }
         other => panic!("Expected LetIn, got {:?}", other),
     }
+}
+
+#[test]
+fn test_parse_sig_with_operator_percent() {
+    let program = parse_ok("module type numeric = { sig (%) : t -> t -> t }");
+    assert_eq!(program.declarations.len(), 1);
+}
+
+#[test]
+fn test_parse_sig_with_operator_double_star() {
+    let program = parse_ok("module type numeric = { sig (**) : t -> t -> t }");
+    assert_eq!(program.declarations.len(), 1);
+}
+
+#[test]
+fn test_parse_sig_with_multiple_operators() {
+    let program = parse_ok(r#"
+module type numeric = {
+    sig (+) : t -> t -> t
+    sig (-) : t -> t -> t
+    sig (*) : t -> t -> t
+    sig (/) : t -> t -> t
+    sig (%) : t -> t -> t
+}
+"#);
+    assert_eq!(program.declarations.len(), 1);
+}
+
+#[test]
+fn test_parse_math_prelude_subset() {
+    // Test a subset of the actual math.wyn syntax
+    let program = parse_ok(r#"
+module type numeric = {
+    type t
+    sig (+) : t -> t -> t
+    sig (-) : t -> t -> t
+    sig abs : t -> t
+    sig max : t -> t -> t
+}
+"#);
+    assert_eq!(program.declarations.len(), 1);
+}
+
+#[test]
+fn test_parse_sig_with_shift_operators() {
+    let program = parse_ok(r#"
+module type integral = {
+    sig (<<) : t -> t -> t
+    sig (>>) : t -> t -> t
+    sig (>>>) : t -> t -> t
+}
+"#);
+    assert_eq!(program.declarations.len(), 1);
+}
+
+#[test]
+fn test_parse_def_with_builtin_operator_name() {
+    let decl = single_decl("def (+) (x: f32) (y: f32): f32 = x + y");
+    assert_eq!(decl.name, "(+)");
+}
+
+#[test]
+fn test_parse_def_with_custom_operator_name() {
+    // Custom operators like +^ are allowed - fixity determined by prefix
+    let decl = single_decl("def (+^) (a:i32,b:i32) (c:i32,d:i32) = (a+c, b+d)");
+    assert_eq!(decl.name, "(+^)");
+    // Should have two pattern parameters (tuples)
+    assert_eq!(decl.params.len(), 2);
+}
+
+#[test]
+fn test_parse_two_operator_defs() {
+    let program = parse_ok(r#"
+def (+) (x: f32) (y: f32): f32 = x + y
+def (%) (x: f32) (y: f32): f32 = x % y
+"#);
+    assert_eq!(program.declarations.len(), 2);
+}
+
+#[test]
+fn test_parse_module_with_operator_defs() {
+    let program = parse_ok(r#"
+module f32 : (numeric with t = f32) = {
+  type t = f32
+  def (+) (x: t) (y: t): t = x + y
+  def (%) (x: t) (y: t): t = x % y
+}
+"#);
+    assert_eq!(program.declarations.len(), 1);
 }

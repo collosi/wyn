@@ -569,7 +569,7 @@ The following table describes the precedence and associativity of infix operator
 | left | `&&` |
 | left | `<= >= > < == != ! =` |
 | left | `& ^ \|` |
-| left | `<< >>` |
+| left | `<< >> >>>` |
 | left | `+ -` |
 | left | `* / % // %%` |
 | left | `\|>` |
@@ -669,7 +669,7 @@ Apply an operator to `x` and `y`. Operators are functions like any other, and ca
 - **`**`**: Power operator, defined for all numeric types.
 - **`//`, `%%`**: Division and remainder on integers, with rounding towards zero.
 - **`*`, `/`, `%`, `+`, `-`**: The usual arithmetic operators, defined for all numeric types. Note that `/` and `%` rounds towards negative infinity when used on integers - this is different from in C.
-- **`^`, `&`, `|`, `>>`, `<<`**: Bitwise operators, respectively bitwise xor, and, or, arithmetic shift right and left, and logical shift right. Shifting is undefined if the right operand is negative, or greater than or equal to the length in bits of the left operand.
+- **`^`, `&`, `|`, `>>`, `<<`, `>>>`**: Bitwise operators, respectively bitwise xor, and, or, arithmetic shift right, left shift, and logical (unsigned) shift right. Shifting is undefined if the right operand is negative, or greater than or equal to the length in bits of the left operand.
 
 Note that, unlike in C, bitwise operators have higher priority than arithmetic operators. This means that `x & y == z` is understood as `(x & y) == z`, rather than `x & (y == z)` as it would in C. Note that the latter is a type error in Futhark anyhow.
 

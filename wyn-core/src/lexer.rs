@@ -208,15 +208,23 @@ fn parse_operator(input: &str) -> IResult<&str, Token> {
             value(Token::PipeOp, tag("|>")),
         )),
         alt((
+            // Multi-character operators (must come before single-char versions)
+            map(tag(">>>"), |s: &str| Token::BinOp(s.to_string())), // Logical right shift
+            map(tag("**"), |s: &str| Token::BinOp(s.to_string())),  // Exponentiation
+            map(tag("//"), |s: &str| Token::BinOp(s.to_string())),  // Integer division
+            map(tag("%%"), |s: &str| Token::BinOp(s.to_string())),  // Integer modulo
+            map(tag(">>"), |s: &str| Token::BinOp(s.to_string())),  // Right shift
+            map(tag("<<"), |s: &str| Token::BinOp(s.to_string())),  // Left shift
             // Comparison operators (must come before single =, <, >)
             map(tag("=="), |s: &str| Token::BinOp(s.to_string())),
             map(tag("!="), |s: &str| Token::BinOp(s.to_string())),
             map(tag("<="), |s: &str| Token::BinOp(s.to_string())),
             map(tag(">="), |s: &str| Token::BinOp(s.to_string())),
-            map(tag("<"), |s: &str| Token::BinOp(s.to_string())),
-            map(tag(">"), |s: &str| Token::BinOp(s.to_string())),
         )),
         alt((
+            // Single-character comparison
+            map(tag("<"), |s: &str| Token::BinOp(s.to_string())),
+            map(tag(">"), |s: &str| Token::BinOp(s.to_string())),
             // Assignment (must come after ==)
             value(Token::Assign, tag("=")),
             // Arithmetic operators
@@ -224,6 +232,10 @@ fn parse_operator(input: &str) -> IResult<&str, Token> {
             map(char('+'), |c| Token::BinOp(c.to_string())),
             map(char('-'), |c| Token::BinOp(c.to_string())),
             map(char('*'), |c| Token::BinOp(c.to_string())),
+            map(char('%'), |c| Token::BinOp(c.to_string())),
+            // Bitwise operators
+            map(char('&'), |c| Token::BinOp(c.to_string())),
+            map(char('^'), |c| Token::BinOp(c.to_string())),
             value(Token::Backslash, char('\\')),
         )),
         alt((

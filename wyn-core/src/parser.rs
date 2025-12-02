@@ -213,23 +213,9 @@ impl Parser {
                 _ => return Err(CompilerError::ParseError(format!("Invalid keyword: {}", keyword))),
             }
 
-            // Parse name - either an identifier or an operator in parentheses like (+)
+            // Parse name - either an identifier or an operator in parentheses like (+) or (+^)
             let name = if self.peek() == Some(&Token::LeftParen) {
-                self.advance(); // consume (
-                let op = match self.peek() {
-                    Some(Token::BinOp(op)) => {
-                        let op = op.clone();
-                        self.advance();
-                        op
-                    }
-                    _ => {
-                        return Err(CompilerError::ParseError(format!(
-                            "Expected operator after ( in definition at {}",
-                            self.current_span()
-                        )));
-                    }
-                };
-                self.expect(Token::RightParen)?;
+                let op = self.parse_operator_section()?;
                 format!("({})", op)
             } else {
                 self.expect_identifier()?
@@ -1021,11 +1007,17 @@ impl Parser {
     fn get_operator_precedence(op: &str) -> Option<(i32, bool)> {
         // Returns (precedence, is_left_associative)
         // Higher precedence binds tighter
+        // Based on SPECIFICATION.md operator precedence table
         match op {
-            "|>" => Some((8, true)),                                  // Pipe operator
-            "*" | "/" => Some((3, true)),                             // Multiplication and division
-            "+" | "-" => Some((2, true)),                             // Addition and subtraction
-            "==" | "!=" | "<" | ">" | "<=" | ">=" => Some((1, true)), // Comparison operators
+            "**" => Some((7, true)),                                  // Exponentiation
+            "|>" => Some((6, true)),                                  // Pipe operator
+            "*" | "/" | "%" | "//" | "%%" => Some((4, true)),         // Multiplication, division, modulo
+            "+" | "-" => Some((3, true)),                             // Addition and subtraction
+            "<<" | ">>" | ">>>" => Some((2, true)),                   // Bitwise shifts
+            "&" | "^" | "|" => Some((1, true)),                       // Bitwise operators
+            "==" | "!=" | "<" | ">" | "<=" | ">=" => Some((0, true)), // Comparison operators
+            "&&" => Some((-1, true)),                                 // Logical and
+            "||" => Some((-2, true)),                                 // Logical or
             _ => None,
         }
     }
@@ -1043,6 +1035,7 @@ impl Parser {
             let op_string = match self.peek() {
                 Some(Token::BinOp(op)) => op.clone(),
                 Some(Token::PipeOp) => "|>".to_string(),
+                Some(Token::Pipe) => "|".to_string(),
                 _ => break,
             };
 
@@ -1702,6 +1695,66 @@ impl Parser {
                 span
             )))
         }
+    }
+
+    /// Parse an operator section: (op) where op is a sequence of operator characters.
+    /// Valid operator characters are: +-*/%=!><&^|
+    /// Examples: (+), (|), (+^), (**), (>>)
+    fn parse_operator_section(&mut self) -> Result<String> {
+        self.expect(Token::LeftParen)?;
+
+        let mut operator = String::new();
+
+        // Accumulate all operator characters until we hit RightParen
+        loop {
+            match self.peek() {
+                Some(Token::RightParen) => {
+                    self.advance();
+                    break;
+                }
+                Some(Token::BinOp(op)) => {
+                    operator.push_str(op);
+                    self.advance();
+                }
+                Some(Token::Pipe) => {
+                    operator.push('|');
+                    self.advance();
+                }
+                Some(Token::Bang) => {
+                    operator.push('!');
+                    self.advance();
+                }
+                Some(Token::Assign) => {
+                    operator.push('=');
+                    self.advance();
+                }
+                _ => {
+                    return Err(CompilerError::ParseError(format!(
+                        "Expected operator or ) in operator section at {}",
+                        self.current_span()
+                    )));
+                }
+            }
+        }
+
+        if operator.is_empty() {
+            return Err(CompilerError::ParseError(
+                "Operator section cannot be empty".to_string()
+            ));
+        }
+
+        // Validate that all characters are valid operator characters
+        const VALID_OP_CHARS: &str = "+-*/%=!><&^|";
+        for ch in operator.chars() {
+            if !VALID_OP_CHARS.contains(ch) {
+                return Err(CompilerError::ParseError(format!(
+                    "Invalid operator character '{}' in operator section",
+                    ch
+                )));
+            }
+        }
+
+        Ok(operator)
     }
 
     fn expect_identifier(&mut self) -> Result<String> {

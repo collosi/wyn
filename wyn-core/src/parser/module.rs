@@ -44,7 +44,7 @@ impl Parser {
 
     fn can_start_type_param(&self) -> bool {
         match self.peek() {
-            Some(Token::LeftBracket) => true,
+            Some(Token::LeftBracketSpaced) => true,
             Some(Token::Identifier(s)) if s.starts_with('\'') => true,
             _ => false,
         }
@@ -56,7 +56,7 @@ impl Parser {
     /// ```
     fn parse_type_param(&mut self) -> Result<TypeParam> {
         match self.peek() {
-            Some(Token::LeftBracket) => {
+            Some(Token::LeftBracketSpaced) => {
                 self.advance();
                 let name = self.expect_identifier()?;
                 self.expect(Token::RightBracket)?;
@@ -433,25 +433,53 @@ impl Parser {
                 // Check for operator in parens: sig (op) : type
                 if self.check(&Token::LeftParen) {
                     self.advance();
-                    // Handle both identifiers and binary operators
-                    let op = match self.peek() {
-                        Some(Token::Identifier(id)) => {
-                            let id = id.clone();
-                            self.advance();
-                            id
+
+                    // Check if it's an identifier or an operator sequence
+                    let op = if let Some(Token::Identifier(id)) = self.peek() {
+                        // It's an identifier in parens
+                        let id = id.clone();
+                        self.advance();
+                        id
+                    } else {
+                        // It's an operator sequence - accumulate all operator tokens
+                        let mut operator = String::new();
+                        loop {
+                            match self.peek() {
+                                Some(Token::RightParen) => break,
+                                Some(Token::BinOp(op)) => {
+                                    operator.push_str(op);
+                                    self.advance();
+                                }
+                                Some(Token::Pipe) => {
+                                    operator.push('|');
+                                    self.advance();
+                                }
+                                Some(Token::Bang) => {
+                                    operator.push('!');
+                                    self.advance();
+                                }
+                                Some(Token::Assign) => {
+                                    operator.push('=');
+                                    self.advance();
+                                }
+                                _ => {
+                                    return Err(CompilerError::ParseError(format!(
+                                        "Expected operator or ) in sig spec at {}",
+                                        self.current_span()
+                                    )));
+                                }
+                            }
                         }
-                        Some(Token::BinOp(op)) => {
-                            let op = op.clone();
-                            self.advance();
-                            op
+
+                        if operator.is_empty() {
+                            return Err(CompilerError::ParseError(
+                                "Operator section cannot be empty in sig spec".to_string()
+                            ));
                         }
-                        _ => {
-                            return Err(CompilerError::ParseError(format!(
-                                "Expected identifier or operator in sig spec at {}",
-                                self.current_span()
-                            )));
-                        }
+
+                        operator
                     };
+
                     self.expect(Token::RightParen)?;
                     self.expect(Token::Colon)?;
                     let ty = self.parse_type()?;
