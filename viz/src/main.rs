@@ -70,6 +70,9 @@ enum PipelineSpec {
 const DEBUG_BUFFER_SIZE: u64 = 16384;
 const DEFAULT_MAX_LOOPS: u32 = 100; // Limit debug output to prevent GPU lockup
 
+/// Maximum frames to render before exiting (for debugging GPU lockups)
+const MAX_FRAMES: u32 = 24;
+
 // Uniform buffers - one per shader uniform
 // iResolution: [2]f32
 #[repr(C)]
@@ -101,6 +104,9 @@ struct State {
     time_buffer: Option<wgpu::Buffer>,
     uniform_bind_group: Option<BindGroup>,
     start_time: std::time::Instant,
+    // Frame timing for debugging
+    frame_count: u32,
+    last_frame_time: std::time::Instant,
 }
 
 impl State {
@@ -399,6 +405,8 @@ impl State {
             time_buffer,
             uniform_bind_group,
             start_time: now,
+            frame_count: 0,
+            last_frame_time: now,
         })
     }
 
@@ -411,6 +419,14 @@ impl State {
     }
 
     fn render(&mut self) {
+        // Frame timing and limit
+        let frame_start = std::time::Instant::now();
+        let since_last = frame_start.duration_since(self.last_frame_time);
+
+        self.frame_count += 1;
+        eprintln!("Frame {}: starting ({}ms since last frame)",
+            self.frame_count, since_last.as_millis());
+
         // Update uniform data for this frame if Shadertoy mode is enabled
         if let (Some(ref resolution_buffer), Some(ref time_buffer)) = (&self.resolution_buffer, &self.time_buffer) {
             let now = std::time::Instant::now();
@@ -477,6 +493,18 @@ impl State {
 
                 self.queue.submit(Some(encoder.finish()));
                 frame.present();
+
+                // Print frame timing and check limit
+                let frame_end = std::time::Instant::now();
+                let frame_duration = frame_end.duration_since(frame_start);
+                eprintln!("Frame {}: completed in {}ms", self.frame_count, frame_duration.as_millis());
+                self.last_frame_time = frame_end;
+
+                if self.frame_count >= MAX_FRAMES {
+                    eprintln!("Reached {} frames, exiting.", MAX_FRAMES);
+                    self.print_debug_output();
+                    std::process::exit(0);
+                }
             }
             Err(e @ wgpu::SurfaceError::Lost) | Err(e @ wgpu::SurfaceError::Outdated) => {
                 eprintln!("surface {e}; reconfiguring");

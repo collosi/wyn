@@ -196,6 +196,25 @@ def blue : vec3f32 = @[0.0, 0.8, 1.0]
 def white : vec3f32 = @[1.0, 1.0, 0.97]
 def yellow : vec3f32 = @[1.0, 1.0, 0.0]
 
+-- Matrix functions (inlined from graphics32)
+def translation (p: vec3f32) : mat4f32 =
+  @[
+    [1.0f32, 0.0f32, 0.0f32, p.x],
+    [0.0f32, 1.0f32, 0.0f32, p.y],
+    [0.0f32, 0.0f32, 1.0f32, p.z],
+    [0.0f32, 0.0f32, 0.0f32, 1.0f32]
+  ]
+
+def rotation_euler (a: vec3f32) : mat4f32 =
+  let s = [f32.sin a.x, f32.sin a.y, f32.sin a.z] in
+  let c = [f32.cos a.x, f32.cos a.y, f32.cos a.z] in
+  @[
+    [c[1]*c[2], c[1]*s[2], 0.0f32 - s[1], 0.0f32],
+    [s[0]*s[1]*c[2] - c[0]*s[2], s[0]*s[1]*s[2] + c[0]*c[2], s[0]*c[1], 0.0f32],
+    [c[0]*s[1]*c[2] + s[0]*s[2], c[0]*s[1]*s[2] - s[0]*c[2], c[0]*c[1], 0.0f32],
+    [0.0f32, 0.0f32, 0.0f32, 1.0f32]
+  ]
+
 -- Helper functions
 def clamp (x:f32) (min:f32) (max:f32) : f32 =
   if x < min then min else if x > max then max else x
@@ -221,6 +240,16 @@ def circle (weight:f32) (p:vec2f32) (c:vec2f32) (r:f32) (w:f32) : f32 =
   let dist = f32.abs (magnitude diff) + r in
   let s = (if dist == 0.0 then 0.0 else (1.0 / dist)) * weight * w in
   f32.min (s*s) 1.0
+
+def edge_line (verts: [8]vec3f32) (weight: f32) (uv: vec2f32) (line_width: f32) (e: [2]i32) : f32 =
+  let a = verts[e[0]] in
+  let b = verts[e[1]] in
+  line weight uv @[a.x, a.y] @[b.x, b.y] line_width
+
+def sum_edges (verts: [8]vec3f32) (weight: f32) (uv: vec2f32) (line_width: f32) (edges: [12][2]i32) : f32 =
+  let (_, acc) = loop (i, acc) = (0, 0.0f32) while i < 12 do
+    (i + 1, acc + edge_line verts weight uv line_width edges[i])
+  in acc
 
 -- utils
 def mix3 (a:vec3f32) (b:vec3f32) (c:vec3f32) (t:f32) : vec3f32 =
@@ -253,10 +282,30 @@ def main_image (iResolution:vec2f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
 
   let base_col = mix3v @[0.19, 0.13, 0.10] @[1.0, 1.0, 1.0]
                          (0.5 * ((magnitude uv * 0.5) ** 2.0)) in
-  let cam = graphics32.translation @[0.0, 0.0, 10.0] in
+  let cam = translation @[0.0, 0.0, 10.0] in
 
   -- #define LINEAR_ROTATION
-  let rot = graphics32.rotation_euler @[time, (time*0.86), (time*0.473)] in
+  let rot = rotation_euler @[time, (time*0.86), (time*0.473)] in
+
+  -- Precompute rot * cam (loop invariant)
+  let rot_cam : mat4f32 = mul rot cam in
+
+  -- 8 cube corners in object space (loop invariant)
+  let verts0 : [8]vec3f32 =
+    [ @[-1.0, -1.0, 1.0],
+      @[-1.0, 1.0, 1.0],
+      @[1.0, 1.0, 1.0],
+      @[1.0, -1.0, 1.0],
+      @[-1.0, -1.0, -1.0],
+      @[-1.0, 1.0, -1.0],
+      @[1.0, 1.0, -1.0],
+      @[1.0, -1.0, -1.0] ] in
+
+  -- Edge indices (loop invariant)
+  let edges : [12][2]i32 =
+    [ [0,1],[1,2],[2,3],[3,0],
+      [4,5],[5,6],[6,7],[7,4],
+      [0,4],[1,5],[2,6],[3,7] ] in
 
   -- Instances (first batch, 18 boxes)
   let instA : [18]vec3f32 =
@@ -283,19 +332,8 @@ def main_image (iResolution:vec2f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
   let c_box_result =
     loop (idx, acc) = (0i32, base_col) while idx < 18 do
       let inst = instA[idx] in
-      let pos  = graphics32.translation @[(inst.x * 4.0), (inst.y * 4.0), (inst.z * 4.0)] in
-      let mat  : mat4f32 = mul (mul pos rot) cam in
-
-      -- 8 cube corners in object space
-      let verts0 : [8]vec3f32 =
-        [ @[-1.0, -1.0, 1.0],
-          @[-1.0, 1.0, 1.0],
-          @[1.0, 1.0, 1.0],
-          @[1.0, -1.0, 1.0],
-          @[-1.0, -1.0, -1.0],
-          @[-1.0, 1.0, -1.0],
-          @[1.0, 1.0, -1.0],
-          @[1.0, -1.0, -1.0] ] in
+      let pos  = translation @[(inst.x * 4.0), (inst.y * 4.0), (inst.z * 4.0)] in
+      let mat  : mat4f32 = mul pos rot_cam in
 
       -- Transform & perspective
       let v4s : [8]vec4f32 = map (\(v:vec3f32) -> mul mat @[v.x, v.y, v.z, 1.0]) verts0 in
@@ -305,18 +343,7 @@ def main_image (iResolution:vec2f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
                   @[(q.x*zinv), (q.y*zinv), zinv])
                v4s in
 
-      -- Rasterize edges
-      let edges : [12][2]i32 =
-        [ [0,1],[1,2],[2,3],[3,0],
-          [4,5],[5,6],[6,7],[7,4],
-          [0,4],[1,5],[2,6],[3,7] ] in
-
-      let i_sum =
-        f32.sum (map (\e ->
-          let a = verts1[e[0]] in
-          let b = verts1[e[1]] in
-          line weight uv @[a.x, a.y] @[b.x, b.y] line_width)
-          edges) in
+      let i_sum = sum_edges verts1 weight uv line_width edges in
 
       let shade = fragment verts1[0] iTime in
       let intensity = f32.min i_sum 1.0 in
@@ -339,8 +366,8 @@ def main_image (iResolution:vec2f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
   let c_final_result =
     loop (idx, acc) = (0i32, c_box) while idx < 8 do
       let inst = instB[idx] in
-      let pos = graphics32.translation @[(inst.x * 4.0), (inst.y * 4.0), (inst.z * 4.0)] in
-      let mat : mat4f32 = mul (mul pos rot) cam in
+      let pos = translation @[(inst.x * 4.0), (inst.y * 4.0), (inst.z * 4.0)] in
+      let mat : mat4f32 = mul pos rot_cam in
       let v4  : vec4f32 = mul mat @[0.0, 0.0, 0.0, 1.0] in
       let zinv = 1.0 / v4.z in
       let vert : vec3f32 = @[(v4.x*zinv), (v4.y*zinv), zinv] in
@@ -356,34 +383,7 @@ def main_image (iResolution:vec2f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
 -- Fragment shader entry point
 #[fragment]
 def fragment_main (#[builtin(frag_coord)] pos:vec4f32) : #[location(0)] vec4f32 =
-  -- Unconditional debug to see if fragment shader runs at all
-  let _ = debug_str "F" in
   let width = iResolution.x in
   let height = iResolution.y in
   let time = iTime in
-  -- Debug output for center pixel only
-  let is_center = if pos.x > 399.0 then
-      if pos.x < 401.0 then
-        if pos.y > 299.0 then
-          if pos.y < 301.0 then true else false
-        else false
-      else false
-    else false in
-  let _ = if is_center then
-      let _ = debug_str "frag:" in
-      let _ = debug_f32 pos.x in
-      let _ = debug_f32 pos.y in
-      ()
-    else
-      () in
-  let result = main_image @[width, height] time @[pos.x, pos.y] in
-  -- Debug the final color for center pixel
-  let _ = if is_center then
-      let _ = debug_str "col:" in
-      let _ = debug_f32 result.x in
-      let _ = debug_f32 result.y in
-      let _ = debug_f32 result.z in
-      ()
-    else
-      () in
-  result
+  main_image @[width, height] time @[pos.x, pos.y]
