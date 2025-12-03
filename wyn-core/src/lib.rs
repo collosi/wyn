@@ -18,6 +18,7 @@ pub mod type_checker;
 pub mod visitor;
 
 pub mod alias_checker;
+pub mod binding_lifter;
 pub mod constant_folding;
 pub mod gasm_lowering;
 pub mod lowering;
@@ -25,6 +26,8 @@ pub mod monomorphization;
 
 #[cfg(test)]
 mod alias_checker_tests;
+#[cfg(test)]
+mod binding_lifter_tests;
 #[cfg(test)]
 mod constant_folding_tests;
 #[cfg(test)]
@@ -78,7 +81,7 @@ impl Compiler {
     }
 }
 
-/// Stage 1: Source has been parsed into an AST
+/// Source has been parsed into an AST
 pub struct Parsed {
     pub ast: ast::Program,
     pub node_counter: ast::NodeCounter,
@@ -96,7 +99,7 @@ impl Parsed {
     }
 }
 
-/// Stage 2: Modules have been elaborated
+/// Modules have been elaborated
 pub struct Elaborated {
     pub ast: ast::Program,
     pub node_counter: ast::NodeCounter,
@@ -111,7 +114,7 @@ impl Elaborated {
     }
 }
 
-/// Stage 3: Names have been resolved
+/// Names have been resolved
 pub struct Resolved {
     pub ast: ast::Program,
 }
@@ -134,7 +137,7 @@ impl Resolved {
     }
 }
 
-/// Stage 4: Program has been type checked
+/// Program has been type checked
 pub struct TypeChecked {
     pub ast: ast::Program,
     pub type_table: TypeTable,
@@ -169,7 +172,7 @@ impl TypeChecked {
     }
 }
 
-/// Stage 5: Program has been alias checked
+/// Program has been alias checked
 pub struct AliasChecked {
     pub ast: ast::Program,
     pub type_table: TypeTable,
@@ -210,7 +213,7 @@ impl AliasChecked {
     }
 }
 
-/// Stage 6: AST has been flattened to MIR
+/// AST has been flattened to MIR
 pub struct Flattened {
     pub mir: mir::Program,
 }
@@ -223,7 +226,7 @@ impl Flattened {
     }
 }
 
-/// Stage 7: Program has been monomorphized
+/// Program has been monomorphized
 pub struct Monomorphized {
     pub mir: mir::Program,
 }
@@ -236,7 +239,7 @@ impl Monomorphized {
     }
 }
 
-/// Stage 8: Unreachable code has been filtered out
+/// Unreachable code has been filtered out
 pub struct Reachable {
     pub mir: mir::Program,
 }
@@ -249,12 +252,26 @@ impl Reachable {
     }
 }
 
-/// Stage 9: Constants have been folded
+/// Constants have been folded
 pub struct Folded {
     pub mir: mir::Program,
 }
 
 impl Folded {
+    /// Lift loop-invariant bindings out of loops
+    pub fn lift_bindings(self) -> Result<Lifted> {
+        let mut lifter = binding_lifter::BindingLifter::new();
+        let mir = lifter.lift_program(self.mir)?;
+        Ok(Lifted { mir })
+    }
+}
+
+/// Bindings have been lifted (loop-invariant code motion)
+pub struct Lifted {
+    pub mir: mir::Program,
+}
+
+impl Lifted {
     /// Lower MIR to SPIR-V
     pub fn lower(self) -> Result<Lowered> {
         self.lower_with_options(false)
@@ -267,7 +284,7 @@ impl Folded {
     }
 }
 
-/// Stage 10: Final stage - contains MIR and SPIR-V bytecode
+/// Final stage - contains MIR and SPIR-V bytecode
 pub struct Lowered {
     pub mir: mir::Program,
     pub spirv: Vec<u32>,
