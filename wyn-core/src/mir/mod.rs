@@ -196,6 +196,11 @@ pub enum ExprKind {
         /// The inner expression.
         expr: Box<Expr>,
     },
+
+    /// Materialize a value into a variable, returning a reference to that variable.
+    /// This is used when a value needs to be stored before being indexed/accessed.
+    /// In SPIR-V, this becomes: declare OpVariable, OpStore, return pointer.
+    Materialize(Box<Expr>),
 }
 
 /// Literal values, categorized by type class.

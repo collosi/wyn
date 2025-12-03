@@ -792,6 +792,9 @@ impl Display for mir::ExprKind {
                 }
                 write!(f, "{}", expr)
             }
+            mir::ExprKind::Materialize(inner) => {
+                write!(f, "materialize({})", inner)
+            }
         }
     }
 }

@@ -813,6 +813,9 @@ impl<'a> LowerCtx<'a> {
             ExprKind::Attributed { expr, .. } => {
                 self.ensure_deps_lowered(expr)?;
             }
+            ExprKind::Materialize(inner) => {
+                self.ensure_deps_lowered(inner)?;
+            }
             ExprKind::Literal(lit) => {
                 // Check for closure tuples with __lambda_name at index 0
                 if let Some(lambda_name) = crate::mir::extract_lambda_name(expr) {
@@ -2114,6 +2117,21 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
         ExprKind::Attributed { expr, .. } => {
             // Attributes are metadata, just lower the inner expression
             lower_expr(constructor, expr)
+        }
+
+        ExprKind::Materialize(inner) => {
+            // Evaluate the inner expression to get its value
+            let value_id = lower_expr(constructor, inner)?;
+            let value_type_id = constructor.ast_type_to_spirv(&inner.ty);
+
+            // Declare a function-local variable to hold the value
+            let var_id = constructor.declare_variable("_mat", value_type_id)?;
+
+            // Store the value into the variable
+            constructor.builder.store(var_id, value_id, None, [])?;
+
+            // Return the variable pointer (for use with OpAccessChain)
+            Ok(var_id)
         }
     }
 }

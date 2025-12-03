@@ -327,6 +327,7 @@ impl Monomorphizer {
                 attributes,
                 expr: Box::new(self.process_expr(*expr)?),
             },
+            ExprKind::Materialize(inner) => ExprKind::Materialize(Box::new(self.process_expr(*inner)?)),
             // Leaf nodes - no recursion needed
             ExprKind::Var(ref name) => {
                 // Variable reference might refer to a top-level constant

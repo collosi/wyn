@@ -168,6 +168,10 @@ pub trait MirVisitor: Sized {
         walk_expr_attributed(self, attributes, inner, expr)
     }
 
+    fn visit_expr_materialize(&mut self, inner: Expr, expr: Expr) -> Result<Expr, Self::Error> {
+        walk_expr_materialize(self, inner, expr)
+    }
+
     // --- Literals ---
 
     fn visit_literal_int(&mut self, value: String) -> Result<Literal, Self::Error> {
@@ -451,6 +455,14 @@ pub fn walk_expr<V: MirVisitor>(v: &mut V, e: Expr) -> Result<Expr, V::Error> {
             };
             v.visit_expr_attributed(attributes, *inner, expr)
         }
+        ExprKind::Materialize(inner) => {
+            let expr = Expr {
+                ty,
+                kind: ExprKind::Var(String::new()),
+                span,
+            };
+            v.visit_expr_materialize(*inner, expr)
+        }
     }
 }
 
@@ -599,6 +611,14 @@ pub fn walk_expr_attributed<V: MirVisitor>(
             attributes,
             expr: Box::new(inner),
         },
+        ..expr
+    })
+}
+
+pub fn walk_expr_materialize<V: MirVisitor>(v: &mut V, inner: Expr, expr: Expr) -> Result<Expr, V::Error> {
+    let inner = v.visit_expr(inner)?;
+    Ok(Expr {
+        kind: ExprKind::Materialize(Box::new(inner)),
         ..expr
     })
 }

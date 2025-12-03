@@ -687,10 +687,13 @@ impl Flattener {
             ExprKind::ArrayIndex(arr, idx) => {
                 let (arr, _) = self.flatten_expr(arr)?;
                 let (idx, _) = self.flatten_expr(idx)?;
+                // Wrap the array in Materialize so lowering can get a pointer for OpAccessChain
+                let materialized_arr =
+                    Expr::new(arr.ty.clone(), mir::ExprKind::Materialize(Box::new(arr)), span);
                 (
                     mir::ExprKind::Intrinsic {
                         name: "index".to_string(),
-                        args: vec![arr, idx],
+                        args: vec![materialized_arr, idx],
                     },
                     StaticValue::Dyn,
                 )
@@ -724,8 +727,14 @@ impl Flattener {
                             }
                         };
 
-                        let obj =
-                            Expr::new(closure_type, mir::ExprKind::Var("__closure".to_string()), span);
+                        let obj = Expr::new(
+                            closure_type.clone(),
+                            mir::ExprKind::Var("__closure".to_string()),
+                            span,
+                        );
+                        // Wrap in Materialize for pointer access
+                        let materialized_obj =
+                            Expr::new(closure_type, mir::ExprKind::Materialize(Box::new(obj)), span);
                         let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
                         return Ok((
                             Expr::new(
@@ -733,7 +742,7 @@ impl Flattener {
                                 mir::ExprKind::Intrinsic {
                                     name: "tuple_access".to_string(),
                                     args: vec![
-                                        obj,
+                                        materialized_obj,
                                         Expr::new(
                                             i32_type,
                                             mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
@@ -758,11 +767,15 @@ impl Flattener {
                 // Create i32 type for the index literal
                 let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
 
+                // Wrap in Materialize for pointer access
+                let materialized_obj =
+                    Expr::new(obj.ty.clone(), mir::ExprKind::Materialize(Box::new(obj)), span);
+
                 (
                     mir::ExprKind::Intrinsic {
                         name: "tuple_access".to_string(),
                         args: vec![
-                            obj,
+                            materialized_obj,
                             Expr::new(
                                 i32_type,
                                 mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
@@ -926,12 +939,20 @@ impl Flattener {
                         });
                     let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
 
+                    // Wrap the tuple var in Materialize for pointer access
+                    let tuple_var = Expr::new(tuple_ty.clone(), mir::ExprKind::Var(tmp.clone()), span);
+                    let materialized_tuple = Expr::new(
+                        tuple_ty.clone(),
+                        mir::ExprKind::Materialize(Box::new(tuple_var)),
+                        span,
+                    );
+
                     let extract = Expr::new(
                         elem_ty.clone(),
                         mir::ExprKind::Intrinsic {
                             name: "tuple_access".to_string(),
                             args: vec![
-                                Expr::new(tuple_ty.clone(), mir::ExprKind::Var(tmp.clone()), span),
+                                materialized_tuple,
                                 Expr::new(
                                     i32_type,
                                     mir::ExprKind::Literal(mir::Literal::Int(i.to_string())),
@@ -1381,12 +1402,20 @@ impl Flattener {
             })?;
             let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
 
+            // Wrap the loop var in Materialize for pointer access
+            let loop_var_expr = Expr::new(tuple_ty.clone(), mir::ExprKind::Var(loop_var.to_string()), span);
+            let materialized_loop_var = Expr::new(
+                tuple_ty.clone(),
+                mir::ExprKind::Materialize(Box::new(loop_var_expr)),
+                span,
+            );
+
             let extract = Expr::new(
                 elem_ty,
                 mir::ExprKind::Intrinsic {
                     name: "tuple_access".to_string(),
                     args: vec![
-                        Expr::new(tuple_ty.clone(), mir::ExprKind::Var(loop_var.to_string()), span),
+                        materialized_loop_var,
                         Expr::new(
                             i32_type,
                             mir::ExprKind::Literal(mir::Literal::Int(i.to_string())),
