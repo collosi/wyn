@@ -153,56 +153,56 @@ module f32	: 	(float with t = f32 with int_t = u32) = {
   def f64 (x: f64): t = __builtin_f32_from_f64 x
   def bool (x: bool): t = if x then 1.0f32 else 0.0f32
 
-  def (+) (x: t) (y: t): t = x + y
-  def (-) (x: t) (y: t): t = x - y
-  def (*) (x: t) (y: t): t = x * y
-  def (/) (x: t) (y: t): t = x / y
-  def (%) (x: t) (y: t): t = x % y
-  def (**) (x: t) (y: t): t = f32.pow x y
+  -- Operators (registered in impl_source.rs)
+  sig (+) : t -> t -> t
+  sig (-) : t -> t -> t
+  sig (*) : t -> t -> t
+  sig (/) : t -> t -> t
+  sig (%) : t -> t -> t
+  sig (**) : t -> t -> t
+  sig (==) : t -> t -> bool
+  sig (!=) : t -> t -> bool
+  sig (<) : t -> t -> bool
+  sig (>) : t -> t -> bool
+  sig (<=) : t -> t -> bool
+  sig (>=) : t -> t -> bool
 
   def to_i64 (x: t): i64 = __builtin_f32_to_i64 x
 
-  def (==) (x: t) (y: t): bool = x == y
-  def (<) (x: t) (y: t): bool = x < y
-  def (>) (x: t) (y: t): bool = x > y
-  def (<=) (x: t) (y: t): bool = x <= y
-  def (>=) (x: t) (y: t): bool = x >= y
-  def (!=) (x: t) (y: t): bool = x != y
-
   def neg (x: t): t = 0.0f32 - x
-  def max (x: t) (y: t): t = f32.max x y
-  def min (x: t) (y: t): t = f32.min x y
-  def abs (x: t): t = f32.abs x
+  sig max : t -> t -> t
+  sig min : t -> t -> t
+  sig abs : t -> t
   def sgn (x: t): t = if f32.isnan x then x else if x > 0.0f32 then 1.0f32 else if x < 0.0f32 then (0.0f32 - 1.0f32) else 0.0f32
 
   def highest: t = 1.0f32 / 0.0f32
   def lowest: t = (0.0f32 - 1.0f32) / 0.0f32
 
-  def sum [n] (arr: [n]t): t = f32.sum arr
-  def product [n] (arr: [n]t): t = f32.product arr
-  def maximum [n] (arr: [n]t): t = f32.maximum arr
-  def minimum [n] (arr: [n]t): t = f32.minimum arr
+  sig sum [n] : [n]t -> t
+  sig product [n] : [n]t -> t
+  sig maximum [n] : [n]t -> t
+  sig minimum [n] : [n]t -> t
 
   def recip (x: t): t = 1.0f32 / x
   def from_fraction (x: i64) (y: i64): t = __builtin_f32_from_i64 x / __builtin_f32_from_i64 y
   def to_f64 (x: t): f64 = x
 
-  def sqrt (x: t): t = f32.sqrt x
-  def rsqrt (x: t): t = f32.rsqrt x
+  sig sqrt : t -> t
+  sig rsqrt : t -> t
   def cbrt (x: t): t = f32.pow x (1.0f32 / 3.0f32)
 
-  def exp (x: t): t = f32.exp x
-  def log (x: t): t = f32.log x
-  def log2 (x: t): t = f32.log2 x
+  sig exp : t -> t
+  sig log : t -> t
+  sig log2 : t -> t
   def log10 (x: t): t = f32.log x / f32.log 10.0f32
   def log1p (x: t): t = f32.log (1.0f32 + x)
 
-  def sin (x: t): t = f32.sin x
-  def cos (x: t): t = f32.cos x
-  def tan (x: t): t = f32.tan x
-  def asin (x: t): t = f32.asin x
-  def acos (x: t): t = f32.acos x
-  def atan (x: t): t = f32.atan x
+  sig sin : t -> t
+  sig cos : t -> t
+  sig tan : t -> t
+  sig asin : t -> t
+  sig acos : t -> t
+  sig atan : t -> t
 
   def pi: t = 3.14159265358979323846f32
   def sinpi (x: t): t = f32.sin (pi * x)
@@ -212,14 +212,14 @@ module f32	: 	(float with t = f32 with int_t = u32) = {
   def acospi (x: t): t = f32.acos x / pi
   def atanpi (x: t): t = f32.atan x / pi
 
-  def sinh (x: t): t = f32.sinh x
-  def cosh (x: t): t = f32.cosh x
-  def tanh (x: t): t = f32.tanh x
-  def asinh (x: t): t = f32.asinh x
-  def acosh (x: t): t = f32.acosh x
-  def atanh (x: t): t = f32.atanh x
+  sig sinh : t -> t
+  sig cosh : t -> t
+  sig tanh : t -> t
+  sig asinh : t -> t
+  sig acosh : t -> t
+  sig atanh : t -> t
 
-  def atan2 (x: t) (y: t): t = f32.atan2 x y
+  sig atan2 : t -> t -> t
   def atan2pi (x: t) (y: t): t = f32.atan2 x y / pi
   def hypot (x: t) (y: t): t = f32.sqrt (x * x + y * y)
 
@@ -228,17 +228,17 @@ module f32	: 	(float with t = f32 with int_t = u32) = {
   def erf (x: t): t = x
   def erfc (x: t): t = x
 
-  def lerp (v0: t) (v1: t) (t: t): t = f32.lerp v0 v1 t
+  sig lerp : t -> t -> t -> t
   def mad (a: t) (b: t) (c: t): t = a * b + c
-  def fma (a: t) (b: t) (c: t): t = f32.fma a b c
+  sig fma : t -> t -> t -> t
 
-  def ceil (x: t): t = f32.ceil x
-  def floor (x: t): t = f32.floor x
-  def trunc (x: t): t = f32.trunc x
-  def round (x: t): t = f32.round x
+  sig ceil : t -> t
+  sig floor : t -> t
+  sig trunc : t -> t
+  sig round : t -> t
 
-  def isinf (x: t): bool = f32.isinf x
-  def isnan (x: t): bool = f32.isnan x
+  sig isinf : t -> bool
+  sig isnan : t -> bool
   def inf: t = 1.0f32 / 0.0f32
   def nan: t = 0.0f32 / 0.0f32
   def e: t = 2.71828182845904523536f32

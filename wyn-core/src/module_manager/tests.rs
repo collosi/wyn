@@ -5,6 +5,10 @@ fn test_query_f32_sin_from_math_prelude() {
     let manager = ModuleManager::new();
 
     // Prelude files are automatically loaded on creation
+    println!(
+        "Loaded modules: {:?}",
+        manager.elaborated_modules.keys().collect::<Vec<_>>()
+    );
 
     // Query for the f32 module's sin function type
     let sin_type = manager.get_module_function_type("f32", "sin").expect("Failed to find f32.sin");

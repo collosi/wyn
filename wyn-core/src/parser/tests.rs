@@ -2690,3 +2690,38 @@ module f32 : (numeric with t = f32) = {
     );
     assert_eq!(program.declarations.len(), 1);
 }
+
+#[test]
+fn test_parse_module_with_operator_sigs() {
+    let program = parse_ok(
+        r#"
+module f32 : (numeric with t = f32) = {
+  type t = f32
+  sig (+) : t -> t -> t
+  sig (%) : t -> t -> t
+  sig (**) : t -> t -> t
+}
+"#,
+    );
+    assert_eq!(program.declarations.len(), 1);
+
+    // Check that we parsed a ModuleBind
+    match &program.declarations[0] {
+        Declaration::ModuleBind(mb) => {
+            // Check the module body contains sig declarations
+            match &mb.body {
+                ModuleExpression::Struct(decls) => {
+                    assert!(
+                        decls.len() >= 3,
+                        "Expected at least 3 declarations (type + 3 sigs)"
+                    );
+                    // Find the operator sigs
+                    let sig_count = decls.iter().filter(|d| matches!(d, Declaration::Sig(_))).count();
+                    assert_eq!(sig_count, 3, "Expected 3 sig declarations");
+                }
+                _ => panic!("Expected ModuleExpression::Struct"),
+            }
+        }
+        _ => panic!("Expected ModuleBind"),
+    }
+}

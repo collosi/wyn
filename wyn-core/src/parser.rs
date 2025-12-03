@@ -287,7 +287,13 @@ impl Parser {
     fn parse_sig_decl(&mut self) -> Result<SigDecl> {
         trace!("parse_sig_decl: next token = {:?}", self.peek());
         self.expect(Token::Sig)?;
-        let name = self.expect_identifier()?;
+
+        // Parse name - either an identifier or an operator in parentheses like (+) or (**)
+        let name = if self.check(&Token::LeftParen) {
+            self.parse_operator_section()?
+        } else {
+            self.expect_identifier()?
+        };
 
         // Parse size parameters: [n] [m] ...
         let mut size_params = Vec::new();

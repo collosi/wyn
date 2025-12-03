@@ -118,7 +118,9 @@ impl ModuleManager {
     /// Create a new module manager with a fresh NodeCounter
     pub fn new() -> Self {
         let mut manager = Self::new_empty(NodeCounter::new());
-        manager.load_prelude_files().ok(); // Ignore errors during initialization
+        if let Err(e) = manager.load_prelude_files() {
+            eprintln!("ERROR loading prelude files: {:?}", e);
+        }
         manager
     }
 
@@ -479,6 +481,23 @@ impl ModuleManager {
                             // Apply type substitutions to the declaration signature only
                             let elaborated_decl = self.elaborate_decl_signature(d, substitutions);
                             items.push(ElaboratedItem::Decl(elaborated_decl));
+                        }
+                        Declaration::Sig(sig_decl) => {
+                            // Apply type substitutions to sig declarations
+                            let substituted_ty = self.substitute_in_type(&sig_decl.ty, substitutions);
+
+                            // Convert size_params and type_params to Vec<TypeParam>
+                            use crate::ast::TypeParam;
+                            let mut type_params_vec = Vec::new();
+                            for size_param in &sig_decl.size_params {
+                                type_params_vec.push(TypeParam::Size(size_param.clone()));
+                            }
+                            for type_param in &sig_decl.type_params {
+                                type_params_vec.push(TypeParam::Type(type_param.clone()));
+                            }
+
+                            let spec = Spec::Sig(sig_decl.name.clone(), type_params_vec, substituted_ty);
+                            items.push(ElaboratedItem::Spec(spec));
                         }
                         Declaration::Open(_) => {
                             // TODO: Handle open declarations for name resolution

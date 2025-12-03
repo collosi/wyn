@@ -1281,6 +1281,17 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                 (">=", Constructed(Float(_), _)) => {
                     Ok(constructor.builder.f_ord_greater_than_equal(bool_type, None, lhs_id, rhs_id)?)
                 }
+                ("**", Constructed(Float(_), _)) => {
+                    // Power operator - use GLSL pow extended instruction
+                    let glsl_id = constructor.glsl_ext_inst_id;
+                    Ok(constructor.builder.ext_inst(
+                        same_out_type,
+                        None,
+                        glsl_id,
+                        26, // Pow
+                        vec![Operand::IdRef(lhs_id), Operand::IdRef(rhs_id)],
+                    )?)
+                }
 
                 // Unsigned integer operations
                 ("/", Constructed(UInt(_), _)) => {
