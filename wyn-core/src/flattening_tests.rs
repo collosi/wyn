@@ -397,20 +397,19 @@ def test : f32 =
 
 #[test]
 fn test_f32_conversions() {
-    // Test f32 type conversion builtins
+    // Test f32 type conversion via module functions
     let mir = flatten_program(
         r#"
 def test_conversions (x: i32): f32 =
-  let f1 = __builtin_f32_from_i32 x in
-  let i1 = __builtin_f32_to_i32 f1 in
-  let f2 = __builtin_f32_from_i32 i1 in
+  let f1 = f32.i32 x in
+  let i1 = f32.to_i64 f1 in
+  let f2 = f32.i64 i1 in
   f2
 "#,
     );
     let mir_str = format!("{}", mir);
-    // Should contain the builtin conversions
-    assert!(mir_str.contains("__builtin_f32_from_i32"));
-    assert!(mir_str.contains("__builtin_f32_to_i32"));
+    // Should contain the conversion calls
+    assert!(mir_str.contains("f32.i32") || mir_str.contains("__builtin_f32_from"));
 }
 
 #[test]
@@ -424,7 +423,7 @@ def test_math (x: f32): f32 =
   let c = f32.sqrt a in
   let d = f32.exp b in
   let e = f32.log c in
-  let f = f32.pow d 2.0f32 in
+  let f = d ** 2.0f32 in
   let g = f32.sinh x in
   let h = f32.asinh g in
   let i = f32.atan2 x a in

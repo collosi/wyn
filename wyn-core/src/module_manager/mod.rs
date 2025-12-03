@@ -2,12 +2,13 @@
 
 use crate::ast::{
     Decl, Declaration, ModuleExpression, ModuleTypeExpression, Node, NodeCounter, Pattern, PatternKind,
-    Program, Spec, Type, TypeName,
+    Program, Spec, Type, TypeName, TypeParam,
 };
 use crate::error::{CompilerError, Result};
 use crate::lexer;
 use crate::parser::Parser;
 use crate::scope::ScopeStack;
+use polytype::{Context, TypeScheme};
 use std::collections::{HashMap, HashSet};
 
 /// Name resolver for tracking opened modules and resolving unqualified names
@@ -365,18 +366,148 @@ impl ModuleManager {
                     }
                 }
 
+                // Handle named parameters by recursively substituting in the inner type
+                let new_name = match name {
+                    TypeName::NamedParam(param_name, inner_ty) => {
+                        let substituted_inner = self.substitute_in_type(inner_ty, substitutions);
+                        TypeName::NamedParam(param_name.clone(), Box::new(substituted_inner))
+                    }
+                    _ => name.clone(),
+                };
+
                 // Recursively substitute in type arguments
                 let new_args: Vec<Type> =
                     args.iter().map(|arg| self.substitute_in_type(arg, substitutions)).collect();
-                Type::Constructed(name.clone(), new_args)
+                Type::Constructed(new_name, new_args)
             }
             Type::Variable(_) => ty.clone(),
         }
     }
 
+    /// Convert a type with type parameters to a polymorphic TypeScheme
+    /// Converts SizeVar("n") and UserVar("t") to fresh Type::Variables
+    /// and wraps the result in nested TypeScheme::Polytype layers
+    fn convert_to_polytype(
+        &self,
+        ty: &Type,
+        type_params: &[TypeParam],
+        context: &mut Context<TypeName>,
+    ) -> TypeScheme<TypeName> {
+        // First strip NamedParam wrappers
+        let ty = self.strip_named_params(ty);
+
+        if type_params.is_empty() {
+            return TypeScheme::Monotype(ty.clone());
+        }
+
+        // Create fresh variables for each parameter and build substitution map
+        let mut substitutions: HashMap<String, polytype::Variable> = HashMap::new();
+        let mut var_ids = Vec::new();
+
+        for param in type_params {
+            let var = context.new_variable();
+            if let Type::Variable(id) = var {
+                var_ids.push(id);
+                match param {
+                    TypeParam::Size(name) => {
+                        substitutions.insert(name.clone(), id);
+                    }
+                    TypeParam::Type(name) => {
+                        substitutions.insert(name.clone(), id);
+                    }
+                    _ => {} // Ignore other param types for now
+                }
+            }
+        }
+
+        // Substitute SizeVar/UserVar with Variable in the type
+        let substituted_ty = self.substitute_params(&ty, &substitutions);
+
+        // Wrap in nested Polytype layers
+        let mut result = TypeScheme::Monotype(substituted_ty);
+        for &var_id in var_ids.iter().rev() {
+            result = TypeScheme::Polytype {
+                variable: var_id,
+                body: Box::new(result),
+            };
+        }
+
+        result
+    }
+
+    /// Strip NamedParam wrappers from a type - they're just documentation
+    fn strip_named_params(&self, ty: &Type) -> Type {
+        match ty {
+            Type::Constructed(TypeName::NamedParam(_param_name, inner_ty), _args) => {
+                // Recursively strip from inner type
+                self.strip_named_params(inner_ty)
+            }
+            Type::Constructed(name, args) => Type::Constructed(
+                name.clone(),
+                args.iter().map(|a| self.strip_named_params(a)).collect(),
+            ),
+            Type::Variable(_) => ty.clone(),
+        }
+    }
+
+    /// Recursively substitute SizeVar and UserVar with Variable
+    fn substitute_params(&self, ty: &Type, substitutions: &HashMap<String, polytype::Variable>) -> Type {
+        match ty {
+            Type::Constructed(TypeName::SizeVar(name), args) => {
+                if let Some(&var_id) = substitutions.get(name) {
+                    Type::Variable(var_id)
+                } else {
+                    // Not in our substitution map, keep as-is
+                    Type::Constructed(
+                        TypeName::SizeVar(name.clone()),
+                        args.iter().map(|a| self.substitute_params(a, substitutions)).collect(),
+                    )
+                }
+            }
+            Type::Constructed(TypeName::UserVar(name), args) => {
+                if let Some(&var_id) = substitutions.get(name) {
+                    Type::Variable(var_id)
+                } else {
+                    Type::Constructed(
+                        TypeName::UserVar(name.clone()),
+                        args.iter().map(|a| self.substitute_params(a, substitutions)).collect(),
+                    )
+                }
+            }
+            Type::Constructed(TypeName::NamedParam(param_name, inner_ty), args) => {
+                // Strip NamedParam wrapper - it's just documentation, not part of the type structure
+                let substituted_inner = self.substitute_params(inner_ty, substitutions);
+                let substituted_args: Vec<Type> =
+                    args.iter().map(|a| self.substitute_params(a, substitutions)).collect();
+
+                // If there are args, reconstruct with them; otherwise just return the inner type
+                if substituted_args.is_empty() {
+                    substituted_inner
+                } else {
+                    // This shouldn't happen in practice, but handle it for completeness
+                    Type::Constructed(
+                        TypeName::NamedParam(param_name.clone(), Box::new(substituted_inner)),
+                        substituted_args,
+                    )
+                }
+            }
+            Type::Constructed(name, args) => Type::Constructed(
+                name.clone(),
+                args.iter().map(|a| self.substitute_params(a, substitutions)).collect(),
+            ),
+            Type::Variable(_) => ty.clone(),
+        }
+    }
+
     /// Query the type of a function in a specific module
-    /// e.g., get_module_function_type("f32", "sin") -> Type
-    pub fn get_module_function_type(&self, module_name: &str, function_name: &str) -> Result<Type> {
+    /// Returns a TypeScheme for polymorphic functions (with type/size params)
+    /// e.g., get_module_function_type("f32", "sum") -> TypeScheme::Polytype for [n] param
+    pub fn get_module_function_type(
+        &self,
+        module_name: &str,
+        function_name: &str,
+        context: &mut Context<TypeName>,
+    ) -> Result<TypeScheme<TypeName>> {
         // Look up the elaborated module
         let elaborated = self
             .elaborated_modules
@@ -387,18 +518,22 @@ impl ModuleManager {
         for item in &elaborated.items {
             match item {
                 ElaboratedItem::Spec(spec) => match spec {
-                    Spec::Sig(name, _type_params, ty) if name == function_name => {
-                        return Ok(ty.clone());
+                    Spec::Sig(name, type_params, ty) if name == function_name => {
+                        // Convert to TypeScheme if there are type/size parameters
+                        return Ok(self.convert_to_polytype(ty, type_params, context));
                     }
                     Spec::SigOp(op, ty) if op == function_name => {
-                        return Ok(ty.clone());
+                        // Operators currently don't have type parameters, return as Monotype
+                        // Strip NamedParam wrappers before returning
+                        let stripped_ty = self.strip_named_params(ty);
+                        return Ok(TypeScheme::Monotype(stripped_ty));
                     }
                     _ => {}
                 },
                 ElaboratedItem::Decl(decl) if decl.name == function_name => {
                     // Build the full function type from parameters and return type
                     // For def min (x: f32) (y: f32): f32, we need to construct f32 -> f32 -> f32
-                    return self.build_function_type_from_decl(decl);
+                    return self.build_function_type_from_decl(decl, context);
                 }
                 _ => {}
             }
@@ -411,7 +546,11 @@ impl ModuleManager {
     }
 
     /// Build the full function type from a declaration's parameters and return type
-    fn build_function_type_from_decl(&self, decl: &Decl) -> Result<Type> {
+    fn build_function_type_from_decl(
+        &self,
+        decl: &Decl,
+        context: &mut Context<TypeName>,
+    ) -> Result<TypeScheme<TypeName>> {
         // Extract parameter types
         let mut param_types = Vec::new();
         for param in &decl.params {
@@ -435,7 +574,42 @@ impl ModuleManager {
             result_type = Type::Constructed(TypeName::Arrow, vec![param_ty, result_type]);
         }
 
-        Ok(result_type)
+        // Convert to TypeScheme if there are type/size parameters
+        // For declarations, check if the type contains UserVar or SizeVar
+        let type_params = self.extract_type_params_from_type(&result_type);
+        Ok(self.convert_to_polytype(&result_type, &type_params, context))
+    }
+
+    /// Extract type parameters from a type by finding all UserVar and SizeVar
+    fn extract_type_params_from_type(&self, ty: &Type) -> Vec<TypeParam> {
+        let mut params = HashSet::new();
+        self.collect_type_params(ty, &mut params);
+
+        params.into_iter().collect()
+    }
+
+    /// Recursively collect type parameters from a type
+    fn collect_type_params(&self, ty: &Type, params: &mut HashSet<TypeParam>) {
+        match ty {
+            Type::Constructed(TypeName::UserVar(name), args) => {
+                params.insert(TypeParam::Type(name.clone()));
+                for arg in args {
+                    self.collect_type_params(arg, params);
+                }
+            }
+            Type::Constructed(TypeName::SizeVar(name), args) => {
+                params.insert(TypeParam::Size(name.clone()));
+                for arg in args {
+                    self.collect_type_params(arg, params);
+                }
+            }
+            Type::Constructed(_, args) => {
+                for arg in args {
+                    self.collect_type_params(arg, params);
+                }
+            }
+            Type::Variable(_) => {}
+        }
     }
 
     /// Extract type annotation from a pattern

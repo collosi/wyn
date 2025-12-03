@@ -569,7 +569,7 @@ pub enum TypeBindKind {
     Size,   // type~
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeParam {
     Size(String),       // [n]
     Type(String),       // 'a

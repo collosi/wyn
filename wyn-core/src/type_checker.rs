@@ -1795,9 +1795,10 @@ impl TypeChecker {
                 // Try to query from elaborated modules
                 if !quals.is_empty() {
                     let module_name = &quals[0];
-                    if let Ok(ty) = self.module_manager.get_module_function_type(module_name, name) {
-                        debug!("Found '{}' in elaborated module '{}' with type: {:?}", name, module_name, ty);
-                        self.type_table.insert(expr.h.id, polytype::TypeScheme::Monotype(ty.clone()));
+                    if let Ok(type_scheme) = self.module_manager.get_module_function_type(module_name, name, &mut self.context) {
+                        debug!("Found '{}' in elaborated module '{}' with type: {:?}", name, module_name, type_scheme);
+                        let ty = type_scheme.instantiate(&mut self.context);
+                        self.type_table.insert(expr.h.id, type_scheme);
                         return Ok(ty);
                     }
                 }
