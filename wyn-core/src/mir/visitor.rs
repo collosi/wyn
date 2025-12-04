@@ -8,7 +8,7 @@
 //! The visitor is a tree-mutating visitor: it consumes and returns values.
 //! Read-only passes can just return the input unchanged.
 
-use crate::ast::{Span, TypeName};
+use crate::ast::{NodeId, Span, TypeName};
 use crate::mir::*;
 use polytype::Type;
 
@@ -22,21 +22,25 @@ use polytype::Type;
 /// - Read-only passes (just return the input unchanged)
 ///
 /// The `Error` associated type allows visitors to propagate errors.
+/// The `Ctx` associated type provides per-branch context state.
 pub trait MirVisitor: Sized {
     type Error;
+    /// Context type for per-branch state. Use `()` if not needed.
+    type Ctx;
 
     // --- Top-level program ---
 
-    fn visit_program(&mut self, p: Program) -> Result<Program, Self::Error> {
-        walk_program(self, p)
+    fn visit_program(&mut self, p: Program, ctx: &mut Self::Ctx) -> Result<Program, Self::Error> {
+        walk_program(self, p, ctx)
     }
 
-    fn visit_def(&mut self, d: Def) -> Result<Def, Self::Error> {
-        walk_def(self, d)
+    fn visit_def(&mut self, d: Def, ctx: &mut Self::Ctx) -> Result<Def, Self::Error> {
+        walk_def(self, d, ctx)
     }
 
     fn visit_function(
         &mut self,
+        id: NodeId,
         name: String,
         params: Vec<Param>,
         ret_type: Type<TypeName>,
@@ -45,9 +49,11 @@ pub trait MirVisitor: Sized {
         return_attributes: Vec<Vec<Attribute>>,
         body: Expr,
         span: Span,
+        ctx: &mut Self::Ctx,
     ) -> Result<Def, Self::Error> {
         walk_function(
             self,
+            id,
             name,
             params,
             ret_type,
@@ -56,47 +62,60 @@ pub trait MirVisitor: Sized {
             return_attributes,
             body,
             span,
+            ctx,
         )
     }
 
     fn visit_constant(
         &mut self,
+        id: NodeId,
         name: String,
         ty: Type<TypeName>,
         attributes: Vec<Attribute>,
         body: Expr,
         span: Span,
+        ctx: &mut Self::Ctx,
     ) -> Result<Def, Self::Error> {
-        walk_constant(self, name, ty, attributes, body, span)
+        walk_constant(self, id, name, ty, attributes, body, span, ctx)
     }
 
-    fn visit_param(&mut self, p: Param) -> Result<Param, Self::Error> {
-        walk_param(self, p)
+    fn visit_uniform(
+        &mut self,
+        id: NodeId,
+        name: String,
+        ty: Type<TypeName>,
+        ctx: &mut Self::Ctx,
+    ) -> Result<Def, Self::Error> {
+        walk_uniform(self, id, name, ty, ctx)
     }
 
-    fn visit_attribute(&mut self, a: Attribute) -> Result<Attribute, Self::Error> {
-        walk_attribute(self, a)
+    fn visit_param(&mut self, p: Param, ctx: &mut Self::Ctx) -> Result<Param, Self::Error> {
+        walk_param(self, p, ctx)
     }
 
-    fn visit_type(&mut self, ty: Type<TypeName>) -> Result<Type<TypeName>, Self::Error> {
+    fn visit_attribute(&mut self, a: Attribute, ctx: &mut Self::Ctx) -> Result<Attribute, Self::Error> {
+        walk_attribute(self, a, ctx)
+    }
+
+    fn visit_type(&mut self, ty: Type<TypeName>, _ctx: &mut Self::Ctx) -> Result<Type<TypeName>, Self::Error> {
         Ok(ty)
     }
 
     // --- Expressions ---
 
-    fn visit_expr(&mut self, e: Expr) -> Result<Expr, Self::Error> {
-        walk_expr(self, e)
+    fn visit_expr(&mut self, e: Expr, ctx: &mut Self::Ctx) -> Result<Expr, Self::Error> {
+        walk_expr(self, e, ctx)
     }
 
-    fn visit_expr_literal(&mut self, lit: Literal, expr: Expr) -> Result<Expr, Self::Error> {
-        let lit = walk_literal(self, lit)?;
+    fn visit_expr_literal(&mut self, lit: Literal, expr: Expr, ctx: &mut Self::Ctx) -> Result<Expr, Self::Error> {
+        let lit = walk_literal(self, lit, ctx)?;
         Ok(Expr {
             kind: ExprKind::Literal(lit),
             ..expr
         })
     }
 
-    fn visit_expr_var(&mut self, _name: String, expr: Expr) -> Result<Expr, Self::Error> {
+    fn visit_expr_var(&mut self, _name: String, expr: Expr, _ctx: &mut Self::Ctx) -> Result<Expr, Self::Error> {
         Ok(expr)
     }
 
@@ -106,12 +125,13 @@ pub trait MirVisitor: Sized {
         lhs: Expr,
         rhs: Expr,
         expr: Expr,
+        ctx: &mut Self::Ctx,
     ) -> Result<Expr, Self::Error> {
-        walk_expr_bin_op(self, op, lhs, rhs, expr)
+        walk_expr_bin_op(self, op, lhs, rhs, expr, ctx)
     }
 
-    fn visit_expr_unary_op(&mut self, op: String, operand: Expr, expr: Expr) -> Result<Expr, Self::Error> {
-        walk_expr_unary_op(self, op, operand, expr)
+    fn visit_expr_unary_op(&mut self, op: String, operand: Expr, expr: Expr, ctx: &mut Self::Ctx) -> Result<Expr, Self::Error> {
+        walk_expr_unary_op(self, op, operand, expr, ctx)
     }
 
     fn visit_expr_if(
@@ -120,8 +140,9 @@ pub trait MirVisitor: Sized {
         then_branch: Expr,
         else_branch: Expr,
         expr: Expr,
+        ctx: &mut Self::Ctx,
     ) -> Result<Expr, Self::Error> {
-        walk_expr_if(self, cond, then_branch, else_branch, expr)
+        walk_expr_if(self, cond, then_branch, else_branch, expr, ctx)
     }
 
     fn visit_expr_let(
@@ -131,8 +152,9 @@ pub trait MirVisitor: Sized {
         value: Expr,
         body: Expr,
         expr: Expr,
+        ctx: &mut Self::Ctx,
     ) -> Result<Expr, Self::Error> {
-        walk_expr_let(self, name, binding_id, value, body, expr)
+        walk_expr_let(self, name, binding_id, value, body, expr, ctx)
     }
 
     fn visit_expr_loop(
@@ -143,12 +165,13 @@ pub trait MirVisitor: Sized {
         kind: LoopKind,
         body: Expr,
         expr: Expr,
+        ctx: &mut Self::Ctx,
     ) -> Result<Expr, Self::Error> {
-        walk_expr_loop(self, loop_var, init, init_bindings, kind, body, expr)
+        walk_expr_loop(self, loop_var, init, init_bindings, kind, body, expr, ctx)
     }
 
-    fn visit_expr_call(&mut self, func: String, args: Vec<Expr>, expr: Expr) -> Result<Expr, Self::Error> {
-        walk_expr_call(self, func, args, expr)
+    fn visit_expr_call(&mut self, func: String, args: Vec<Expr>, expr: Expr, ctx: &mut Self::Ctx) -> Result<Expr, Self::Error> {
+        walk_expr_call(self, func, args, expr, ctx)
     }
 
     fn visit_expr_intrinsic(
@@ -156,8 +179,9 @@ pub trait MirVisitor: Sized {
         name: String,
         args: Vec<Expr>,
         expr: Expr,
+        ctx: &mut Self::Ctx,
     ) -> Result<Expr, Self::Error> {
-        walk_expr_intrinsic(self, name, args, expr)
+        walk_expr_intrinsic(self, name, args, expr, ctx)
     }
 
     fn visit_expr_attributed(
@@ -165,68 +189,69 @@ pub trait MirVisitor: Sized {
         attributes: Vec<Attribute>,
         inner: Expr,
         expr: Expr,
+        ctx: &mut Self::Ctx,
     ) -> Result<Expr, Self::Error> {
-        walk_expr_attributed(self, attributes, inner, expr)
+        walk_expr_attributed(self, attributes, inner, expr, ctx)
     }
 
-    fn visit_expr_materialize(&mut self, inner: Expr, expr: Expr) -> Result<Expr, Self::Error> {
-        walk_expr_materialize(self, inner, expr)
+    fn visit_expr_materialize(&mut self, inner: Expr, expr: Expr, ctx: &mut Self::Ctx) -> Result<Expr, Self::Error> {
+        walk_expr_materialize(self, inner, expr, ctx)
     }
 
     // --- Literals ---
 
-    fn visit_literal_int(&mut self, value: String) -> Result<Literal, Self::Error> {
+    fn visit_literal_int(&mut self, value: String, _ctx: &mut Self::Ctx) -> Result<Literal, Self::Error> {
         Ok(Literal::Int(value))
     }
 
-    fn visit_literal_float(&mut self, value: String) -> Result<Literal, Self::Error> {
+    fn visit_literal_float(&mut self, value: String, _ctx: &mut Self::Ctx) -> Result<Literal, Self::Error> {
         Ok(Literal::Float(value))
     }
 
-    fn visit_literal_bool(&mut self, value: bool) -> Result<Literal, Self::Error> {
+    fn visit_literal_bool(&mut self, value: bool, _ctx: &mut Self::Ctx) -> Result<Literal, Self::Error> {
         Ok(Literal::Bool(value))
     }
 
-    fn visit_literal_string(&mut self, value: String) -> Result<Literal, Self::Error> {
+    fn visit_literal_string(&mut self, value: String, _ctx: &mut Self::Ctx) -> Result<Literal, Self::Error> {
         Ok(Literal::String(value))
     }
 
-    fn visit_literal_tuple(&mut self, elements: Vec<Expr>) -> Result<Literal, Self::Error> {
-        walk_literal_tuple(self, elements)
+    fn visit_literal_tuple(&mut self, elements: Vec<Expr>, ctx: &mut Self::Ctx) -> Result<Literal, Self::Error> {
+        walk_literal_tuple(self, elements, ctx)
     }
 
-    fn visit_literal_array(&mut self, elements: Vec<Expr>) -> Result<Literal, Self::Error> {
-        walk_literal_array(self, elements)
+    fn visit_literal_array(&mut self, elements: Vec<Expr>, ctx: &mut Self::Ctx) -> Result<Literal, Self::Error> {
+        walk_literal_array(self, elements, ctx)
     }
 
     // --- Loops ---
 
-    fn visit_loop_kind(&mut self, kind: LoopKind) -> Result<LoopKind, Self::Error> {
-        walk_loop_kind(self, kind)
+    fn visit_loop_kind(&mut self, kind: LoopKind, ctx: &mut Self::Ctx) -> Result<LoopKind, Self::Error> {
+        walk_loop_kind(self, kind, ctx)
     }
 
-    fn visit_for_loop(&mut self, var: String, iter: Expr) -> Result<LoopKind, Self::Error> {
-        walk_for_loop(self, var, iter)
+    fn visit_for_loop(&mut self, var: String, iter: Expr, ctx: &mut Self::Ctx) -> Result<LoopKind, Self::Error> {
+        walk_for_loop(self, var, iter, ctx)
     }
 
-    fn visit_for_range_loop(&mut self, var: String, bound: Expr) -> Result<LoopKind, Self::Error> {
-        walk_for_range_loop(self, var, bound)
+    fn visit_for_range_loop(&mut self, var: String, bound: Expr, ctx: &mut Self::Ctx) -> Result<LoopKind, Self::Error> {
+        walk_for_range_loop(self, var, bound, ctx)
     }
 
-    fn visit_while_loop(&mut self, cond: Expr) -> Result<LoopKind, Self::Error> {
-        walk_while_loop(self, cond)
+    fn visit_while_loop(&mut self, cond: Expr, ctx: &mut Self::Ctx) -> Result<LoopKind, Self::Error> {
+        walk_while_loop(self, cond, ctx)
     }
 }
 
 // --- Walk functions: canonical traversal ---
 
-pub fn walk_program<V: MirVisitor>(v: &mut V, p: Program) -> Result<Program, V::Error> {
+pub fn walk_program<V: MirVisitor>(v: &mut V, p: Program, ctx: &mut V::Ctx) -> Result<Program, V::Error> {
     let Program {
         defs,
         lambda_registry,
     } = p;
 
-    let defs = defs.into_iter().map(|d| v.visit_def(d)).collect::<Result<Vec<_>, _>>()?;
+    let defs = defs.into_iter().map(|d| v.visit_def(d, ctx)).collect::<Result<Vec<_>, _>>()?;
 
     Ok(Program {
         defs,
@@ -234,9 +259,10 @@ pub fn walk_program<V: MirVisitor>(v: &mut V, p: Program) -> Result<Program, V::
     })
 }
 
-pub fn walk_def<V: MirVisitor>(v: &mut V, d: Def) -> Result<Def, V::Error> {
+pub fn walk_def<V: MirVisitor>(v: &mut V, d: Def, ctx: &mut V::Ctx) -> Result<Def, V::Error> {
     match d {
         Def::Function {
+            id,
             name,
             params,
             ret_type,
@@ -246,6 +272,7 @@ pub fn walk_def<V: MirVisitor>(v: &mut V, d: Def) -> Result<Def, V::Error> {
             body,
             span,
         } => v.visit_function(
+            id,
             name,
             params,
             ret_type,
@@ -254,23 +281,23 @@ pub fn walk_def<V: MirVisitor>(v: &mut V, d: Def) -> Result<Def, V::Error> {
             return_attributes,
             body,
             span,
+            ctx,
         ),
         Def::Constant {
+            id,
             name,
             ty,
             attributes,
             body,
             span,
-        } => v.visit_constant(name, ty, attributes, body, span),
-        Def::Uniform { name, ty } => {
-            // Uniforms have no body, just pass through
-            Ok(Def::Uniform { name, ty })
-        }
+        } => v.visit_constant(id, name, ty, attributes, body, span, ctx),
+        Def::Uniform { id, name, ty } => v.visit_uniform(id, name, ty, ctx),
     }
 }
 
 pub fn walk_function<V: MirVisitor>(
     v: &mut V,
+    id: NodeId,
     name: String,
     params: Vec<Param>,
     ret_type: Type<TypeName>,
@@ -279,26 +306,28 @@ pub fn walk_function<V: MirVisitor>(
     return_attributes: Vec<Vec<Attribute>>,
     body: Expr,
     span: Span,
+    ctx: &mut V::Ctx,
 ) -> Result<Def, V::Error> {
-    let params = params.into_iter().map(|p| v.visit_param(p)).collect::<Result<Vec<_>, _>>()?;
+    let params = params.into_iter().map(|p| v.visit_param(p, ctx)).collect::<Result<Vec<_>, _>>()?;
 
-    let ret_type = v.visit_type(ret_type)?;
+    let ret_type = v.visit_type(ret_type, ctx)?;
 
-    let attributes = attributes.into_iter().map(|a| v.visit_attribute(a)).collect::<Result<Vec<_>, _>>()?;
+    let attributes = attributes.into_iter().map(|a| v.visit_attribute(a, ctx)).collect::<Result<Vec<_>, _>>()?;
 
     let param_attributes = param_attributes
         .into_iter()
-        .map(|attrs| attrs.into_iter().map(|a| v.visit_attribute(a)).collect::<Result<Vec<_>, _>>())
+        .map(|attrs| attrs.into_iter().map(|a| v.visit_attribute(a, ctx)).collect::<Result<Vec<_>, _>>())
         .collect::<Result<Vec<_>, _>>()?;
 
     let return_attributes = return_attributes
         .into_iter()
-        .map(|attrs| attrs.into_iter().map(|a| v.visit_attribute(a)).collect::<Result<Vec<_>, _>>())
+        .map(|attrs| attrs.into_iter().map(|a| v.visit_attribute(a, ctx)).collect::<Result<Vec<_>, _>>())
         .collect::<Result<Vec<_>, _>>()?;
 
-    let body = v.visit_expr(body)?;
+    let body = v.visit_expr(body, ctx)?;
 
     Ok(Def::Function {
+        id,
         name,
         params,
         ret_type,
@@ -312,19 +341,22 @@ pub fn walk_function<V: MirVisitor>(
 
 pub fn walk_constant<V: MirVisitor>(
     v: &mut V,
+    id: NodeId,
     name: String,
     ty: Type<TypeName>,
     attributes: Vec<Attribute>,
     body: Expr,
     span: Span,
+    ctx: &mut V::Ctx,
 ) -> Result<Def, V::Error> {
-    let ty = v.visit_type(ty)?;
+    let ty = v.visit_type(ty, ctx)?;
 
-    let attributes = attributes.into_iter().map(|a| v.visit_attribute(a)).collect::<Result<Vec<_>, _>>()?;
+    let attributes = attributes.into_iter().map(|a| v.visit_attribute(a, ctx)).collect::<Result<Vec<_>, _>>()?;
 
-    let body = v.visit_expr(body)?;
+    let body = v.visit_expr(body, ctx)?;
 
     Ok(Def::Constant {
+        id,
         name,
         ty,
         attributes,
@@ -333,13 +365,24 @@ pub fn walk_constant<V: MirVisitor>(
     })
 }
 
-pub fn walk_param<V: MirVisitor>(v: &mut V, p: Param) -> Result<Param, V::Error> {
+pub fn walk_uniform<V: MirVisitor>(
+    v: &mut V,
+    id: NodeId,
+    name: String,
+    ty: Type<TypeName>,
+    ctx: &mut V::Ctx,
+) -> Result<Def, V::Error> {
+    let ty = v.visit_type(ty, ctx)?;
+    Ok(Def::Uniform { id, name, ty })
+}
+
+pub fn walk_param<V: MirVisitor>(v: &mut V, p: Param, ctx: &mut V::Ctx) -> Result<Param, V::Error> {
     let Param {
         name,
         ty,
         is_consumed,
     } = p;
-    let ty = v.visit_type(ty)?;
+    let ty = v.visit_type(ty, ctx)?;
     Ok(Param {
         name,
         ty,
@@ -347,53 +390,58 @@ pub fn walk_param<V: MirVisitor>(v: &mut V, p: Param) -> Result<Param, V::Error>
     })
 }
 
-pub fn walk_attribute<V: MirVisitor>(_v: &mut V, a: Attribute) -> Result<Attribute, V::Error> {
+pub fn walk_attribute<V: MirVisitor>(_v: &mut V, a: Attribute, _ctx: &mut V::Ctx) -> Result<Attribute, V::Error> {
     Ok(a)
 }
 
 // --- Expressions ---
 
-pub fn walk_expr<V: MirVisitor>(v: &mut V, e: Expr) -> Result<Expr, V::Error> {
-    let Expr { ty, kind, span } = e;
-    let ty = v.visit_type(ty)?;
+pub fn walk_expr<V: MirVisitor>(v: &mut V, e: Expr, ctx: &mut V::Ctx) -> Result<Expr, V::Error> {
+    let Expr { id, ty, kind, span } = e;
+    let ty = v.visit_type(ty, ctx)?;
 
     match kind {
         ExprKind::Literal(lit) => {
             let expr = Expr {
+                id,
                 ty,
                 kind: ExprKind::Literal(lit.clone()),
                 span,
             };
-            v.visit_expr_literal(lit, expr)
+            v.visit_expr_literal(lit, expr, ctx)
         }
         ExprKind::Unit => Ok(Expr {
+            id,
             ty,
             kind: ExprKind::Unit,
             span,
         }),
         ExprKind::Var(ref name) => {
             let expr = Expr {
+                id,
                 ty,
                 kind: ExprKind::Var(name.clone()),
                 span,
             };
-            v.visit_expr_var(name.clone(), expr)
+            v.visit_expr_var(name.clone(), expr, ctx)
         }
         ExprKind::BinOp { op, lhs, rhs } => {
             let expr = Expr {
+                id,
                 ty,
                 kind: ExprKind::Var(String::new()), // Dummy kind, won't be used
                 span,
             };
-            v.visit_expr_bin_op(op, *lhs, *rhs, expr)
+            v.visit_expr_bin_op(op, *lhs, *rhs, expr, ctx)
         }
         ExprKind::UnaryOp { op, operand } => {
             let expr = Expr {
+                id,
                 ty,
                 kind: ExprKind::Var(String::new()),
                 span,
             };
-            v.visit_expr_unary_op(op, *operand, expr)
+            v.visit_expr_unary_op(op, *operand, expr, ctx)
         }
         ExprKind::If {
             cond,
@@ -401,11 +449,12 @@ pub fn walk_expr<V: MirVisitor>(v: &mut V, e: Expr) -> Result<Expr, V::Error> {
             else_branch,
         } => {
             let expr = Expr {
+                id,
                 ty,
                 kind: ExprKind::Var(String::new()),
                 span,
             };
-            v.visit_expr_if(*cond, *then_branch, *else_branch, expr)
+            v.visit_expr_if(*cond, *then_branch, *else_branch, expr, ctx)
         }
         ExprKind::Let {
             name,
@@ -414,11 +463,12 @@ pub fn walk_expr<V: MirVisitor>(v: &mut V, e: Expr) -> Result<Expr, V::Error> {
             body,
         } => {
             let expr = Expr {
+                id,
                 ty,
                 kind: ExprKind::Var(String::new()),
                 span,
             };
-            v.visit_expr_let(name, binding_id, *value, *body, expr)
+            v.visit_expr_let(name, binding_id, *value, *body, expr, ctx)
         }
         ExprKind::Loop {
             loop_var,
@@ -428,46 +478,51 @@ pub fn walk_expr<V: MirVisitor>(v: &mut V, e: Expr) -> Result<Expr, V::Error> {
             body,
         } => {
             let expr = Expr {
+                id,
                 ty,
                 kind: ExprKind::Var(String::new()),
                 span,
             };
-            v.visit_expr_loop(loop_var, *init, init_bindings, kind, *body, expr)
+            v.visit_expr_loop(loop_var, *init, init_bindings, kind, *body, expr, ctx)
         }
         ExprKind::Call { func, args } => {
             let expr = Expr {
+                id,
                 ty,
                 kind: ExprKind::Var(String::new()),
                 span,
             };
-            v.visit_expr_call(func, args, expr)
+            v.visit_expr_call(func, args, expr, ctx)
         }
         ExprKind::Intrinsic { name, args } => {
             let expr = Expr {
+                id,
                 ty,
                 kind: ExprKind::Var(String::new()),
                 span,
             };
-            v.visit_expr_intrinsic(name, args, expr)
+            v.visit_expr_intrinsic(name, args, expr, ctx)
         }
         ExprKind::Attributed {
             attributes,
             expr: inner,
         } => {
             let expr = Expr {
+                id,
                 ty,
                 kind: ExprKind::Var(String::new()),
                 span,
             };
-            v.visit_expr_attributed(attributes, *inner, expr)
+            v.visit_expr_attributed(attributes, *inner, expr, ctx)
         }
         ExprKind::Materialize(inner) => {
             let expr = Expr {
+                id,
                 ty,
                 kind: ExprKind::Var(String::new()),
                 span,
             };
-            v.visit_expr_materialize(*inner, expr)
+            v.visit_expr_materialize(*inner, expr, ctx)
         }
     }
 }
@@ -478,9 +533,10 @@ pub fn walk_expr_bin_op<V: MirVisitor>(
     lhs: Expr,
     rhs: Expr,
     expr: Expr,
+    ctx: &mut V::Ctx,
 ) -> Result<Expr, V::Error> {
-    let lhs = v.visit_expr(lhs)?;
-    let rhs = v.visit_expr(rhs)?;
+    let lhs = v.visit_expr(lhs, ctx)?;
+    let rhs = v.visit_expr(rhs, ctx)?;
     Ok(Expr {
         kind: ExprKind::BinOp {
             op,
@@ -496,8 +552,9 @@ pub fn walk_expr_unary_op<V: MirVisitor>(
     op: String,
     operand: Expr,
     expr: Expr,
+    ctx: &mut V::Ctx,
 ) -> Result<Expr, V::Error> {
-    let operand = v.visit_expr(operand)?;
+    let operand = v.visit_expr(operand, ctx)?;
     Ok(Expr {
         kind: ExprKind::UnaryOp {
             op,
@@ -513,10 +570,11 @@ pub fn walk_expr_if<V: MirVisitor>(
     then_branch: Expr,
     else_branch: Expr,
     expr: Expr,
+    ctx: &mut V::Ctx,
 ) -> Result<Expr, V::Error> {
-    let cond = v.visit_expr(cond)?;
-    let then_branch = v.visit_expr(then_branch)?;
-    let else_branch = v.visit_expr(else_branch)?;
+    let cond = v.visit_expr(cond, ctx)?;
+    let then_branch = v.visit_expr(then_branch, ctx)?;
+    let else_branch = v.visit_expr(else_branch, ctx)?;
     Ok(Expr {
         kind: ExprKind::If {
             cond: Box::new(cond),
@@ -534,9 +592,10 @@ pub fn walk_expr_let<V: MirVisitor>(
     value: Expr,
     body: Expr,
     expr: Expr,
+    ctx: &mut V::Ctx,
 ) -> Result<Expr, V::Error> {
-    let value = v.visit_expr(value)?;
-    let body = v.visit_expr(body)?;
+    let value = v.visit_expr(value, ctx)?;
+    let body = v.visit_expr(body, ctx)?;
     Ok(Expr {
         kind: ExprKind::Let {
             name,
@@ -556,15 +615,16 @@ pub fn walk_expr_loop<V: MirVisitor>(
     kind: LoopKind,
     body: Expr,
     expr: Expr,
+    ctx: &mut V::Ctx,
 ) -> Result<Expr, V::Error> {
-    let init = v.visit_expr(init)?;
+    let init = v.visit_expr(init, ctx)?;
     let init_bindings = init_bindings
         .into_iter()
-        .map(|(name, e)| Ok((name, v.visit_expr(e)?)))
+        .map(|(name, e)| Ok((name, v.visit_expr(e, ctx)?)))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let kind = v.visit_loop_kind(kind)?;
-    let body = v.visit_expr(body)?;
+    let kind = v.visit_loop_kind(kind, ctx)?;
+    let body = v.visit_expr(body, ctx)?;
 
     Ok(Expr {
         kind: ExprKind::Loop {
@@ -583,8 +643,9 @@ pub fn walk_expr_call<V: MirVisitor>(
     func: String,
     args: Vec<Expr>,
     expr: Expr,
+    ctx: &mut V::Ctx,
 ) -> Result<Expr, V::Error> {
-    let args = args.into_iter().map(|arg| v.visit_expr(arg)).collect::<Result<Vec<_>, _>>()?;
+    let args = args.into_iter().map(|arg| v.visit_expr(arg, ctx)).collect::<Result<Vec<_>, _>>()?;
     Ok(Expr {
         kind: ExprKind::Call { func, args },
         ..expr
@@ -596,8 +657,9 @@ pub fn walk_expr_intrinsic<V: MirVisitor>(
     name: String,
     args: Vec<Expr>,
     expr: Expr,
+    ctx: &mut V::Ctx,
 ) -> Result<Expr, V::Error> {
-    let args = args.into_iter().map(|arg| v.visit_expr(arg)).collect::<Result<Vec<_>, _>>()?;
+    let args = args.into_iter().map(|arg| v.visit_expr(arg, ctx)).collect::<Result<Vec<_>, _>>()?;
     Ok(Expr {
         kind: ExprKind::Intrinsic { name, args },
         ..expr
@@ -609,10 +671,11 @@ pub fn walk_expr_attributed<V: MirVisitor>(
     attributes: Vec<Attribute>,
     inner: Expr,
     expr: Expr,
+    ctx: &mut V::Ctx,
 ) -> Result<Expr, V::Error> {
-    let attributes = attributes.into_iter().map(|a| v.visit_attribute(a)).collect::<Result<Vec<_>, _>>()?;
+    let attributes = attributes.into_iter().map(|a| v.visit_attribute(a, ctx)).collect::<Result<Vec<_>, _>>()?;
 
-    let inner = v.visit_expr(inner)?;
+    let inner = v.visit_expr(inner, ctx)?;
 
     Ok(Expr {
         kind: ExprKind::Attributed {
@@ -623,8 +686,8 @@ pub fn walk_expr_attributed<V: MirVisitor>(
     })
 }
 
-pub fn walk_expr_materialize<V: MirVisitor>(v: &mut V, inner: Expr, expr: Expr) -> Result<Expr, V::Error> {
-    let inner = v.visit_expr(inner)?;
+pub fn walk_expr_materialize<V: MirVisitor>(v: &mut V, inner: Expr, expr: Expr, ctx: &mut V::Ctx) -> Result<Expr, V::Error> {
+    let inner = v.visit_expr(inner, ctx)?;
     Ok(Expr {
         kind: ExprKind::Materialize(Box::new(inner)),
         ..expr
@@ -633,50 +696,50 @@ pub fn walk_expr_materialize<V: MirVisitor>(v: &mut V, inner: Expr, expr: Expr) 
 
 // --- Literals ---
 
-pub fn walk_literal<V: MirVisitor>(v: &mut V, lit: Literal) -> Result<Literal, V::Error> {
+pub fn walk_literal<V: MirVisitor>(v: &mut V, lit: Literal, ctx: &mut V::Ctx) -> Result<Literal, V::Error> {
     match lit {
-        Literal::Int(s) => v.visit_literal_int(s),
-        Literal::Float(s) => v.visit_literal_float(s),
-        Literal::Bool(b) => v.visit_literal_bool(b),
-        Literal::String(s) => v.visit_literal_string(s),
-        Literal::Tuple(elems) => v.visit_literal_tuple(elems),
-        Literal::Array(elems) => v.visit_literal_array(elems),
+        Literal::Int(s) => v.visit_literal_int(s, ctx),
+        Literal::Float(s) => v.visit_literal_float(s, ctx),
+        Literal::Bool(b) => v.visit_literal_bool(b, ctx),
+        Literal::String(s) => v.visit_literal_string(s, ctx),
+        Literal::Tuple(elems) => v.visit_literal_tuple(elems, ctx),
+        Literal::Array(elems) => v.visit_literal_array(elems, ctx),
         Literal::Vector(elems) => {
-            let elems = elems.into_iter().map(|e| v.visit_expr(e)).collect::<Result<Vec<_>, _>>()?;
+            let elems = elems.into_iter().map(|e| v.visit_expr(e, ctx)).collect::<Result<Vec<_>, _>>()?;
             Ok(Literal::Vector(elems))
         }
         Literal::Matrix(rows) => {
             let rows = rows
                 .into_iter()
-                .map(|row| row.into_iter().map(|e| v.visit_expr(e)).collect::<Result<Vec<_>, _>>())
+                .map(|row| row.into_iter().map(|e| v.visit_expr(e, ctx)).collect::<Result<Vec<_>, _>>())
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Literal::Matrix(rows))
         }
     }
 }
 
-pub fn walk_literal_tuple<V: MirVisitor>(v: &mut V, elements: Vec<Expr>) -> Result<Literal, V::Error> {
-    let elements = elements.into_iter().map(|e| v.visit_expr(e)).collect::<Result<Vec<_>, _>>()?;
+pub fn walk_literal_tuple<V: MirVisitor>(v: &mut V, elements: Vec<Expr>, ctx: &mut V::Ctx) -> Result<Literal, V::Error> {
+    let elements = elements.into_iter().map(|e| v.visit_expr(e, ctx)).collect::<Result<Vec<_>, _>>()?;
     Ok(Literal::Tuple(elements))
 }
 
-pub fn walk_literal_array<V: MirVisitor>(v: &mut V, elements: Vec<Expr>) -> Result<Literal, V::Error> {
-    let elements = elements.into_iter().map(|e| v.visit_expr(e)).collect::<Result<Vec<_>, _>>()?;
+pub fn walk_literal_array<V: MirVisitor>(v: &mut V, elements: Vec<Expr>, ctx: &mut V::Ctx) -> Result<Literal, V::Error> {
+    let elements = elements.into_iter().map(|e| v.visit_expr(e, ctx)).collect::<Result<Vec<_>, _>>()?;
     Ok(Literal::Array(elements))
 }
 
 // --- Loop kinds ---
 
-pub fn walk_loop_kind<V: MirVisitor>(v: &mut V, kind: LoopKind) -> Result<LoopKind, V::Error> {
+pub fn walk_loop_kind<V: MirVisitor>(v: &mut V, kind: LoopKind, ctx: &mut V::Ctx) -> Result<LoopKind, V::Error> {
     match kind {
-        LoopKind::For { var, iter } => v.visit_for_loop(var, *iter),
-        LoopKind::ForRange { var, bound } => v.visit_for_range_loop(var, *bound),
-        LoopKind::While { cond } => v.visit_while_loop(*cond),
+        LoopKind::For { var, iter } => v.visit_for_loop(var, *iter, ctx),
+        LoopKind::ForRange { var, bound } => v.visit_for_range_loop(var, *bound, ctx),
+        LoopKind::While { cond } => v.visit_while_loop(*cond, ctx),
     }
 }
 
-pub fn walk_for_loop<V: MirVisitor>(v: &mut V, var: String, iter: Expr) -> Result<LoopKind, V::Error> {
-    let iter = v.visit_expr(iter)?;
+pub fn walk_for_loop<V: MirVisitor>(v: &mut V, var: String, iter: Expr, ctx: &mut V::Ctx) -> Result<LoopKind, V::Error> {
+    let iter = v.visit_expr(iter, ctx)?;
     Ok(LoopKind::For {
         var,
         iter: Box::new(iter),
@@ -687,15 +750,16 @@ pub fn walk_for_range_loop<V: MirVisitor>(
     v: &mut V,
     var: String,
     bound: Expr,
+    ctx: &mut V::Ctx,
 ) -> Result<LoopKind, V::Error> {
-    let bound = v.visit_expr(bound)?;
+    let bound = v.visit_expr(bound, ctx)?;
     Ok(LoopKind::ForRange {
         var,
         bound: Box::new(bound),
     })
 }
 
-pub fn walk_while_loop<V: MirVisitor>(v: &mut V, cond: Expr) -> Result<LoopKind, V::Error> {
-    let cond = v.visit_expr(cond)?;
+pub fn walk_while_loop<V: MirVisitor>(v: &mut V, cond: Expr, ctx: &mut V::Ctx) -> Result<LoopKind, V::Error> {
+    let cond = v.visit_expr(cond, ctx)?;
     Ok(LoopKind::While { cond: Box::new(cond) })
 }

@@ -7,7 +7,7 @@
 //! - Imports and namespacing have been resolved
 //! - Range expressions have been desugared
 
-use crate::ast::{Span, TypeName};
+use crate::ast::{NodeId, Span, TypeName};
 use polytype::Type;
 
 #[cfg(test)]
@@ -31,6 +31,8 @@ pub struct Program {
 pub enum Def {
     /// A function definition with parameters.
     Function {
+        /// Unique node identifier.
+        id: NodeId,
         /// Function name.
         name: String,
         /// Function parameters with optional uniqueness markers.
@@ -51,6 +53,8 @@ pub enum Def {
     },
     /// A constant definition (no parameters).
     Constant {
+        /// Unique node identifier.
+        id: NodeId,
         /// Constant name.
         name: String,
         /// The type of this constant.
@@ -64,6 +68,8 @@ pub enum Def {
     },
     /// A uniform declaration (external input from host).
     Uniform {
+        /// Unique node identifier.
+        id: NodeId,
         /// Uniform name.
         name: String,
         /// The type of this uniform.
@@ -95,14 +101,16 @@ pub enum Attribute {
 /// The main expression type with source location and type.
 #[derive(Debug, Clone)]
 pub struct Expr {
+    /// Unique node identifier.
+    pub id: NodeId,
     pub ty: Type<TypeName>,
     pub kind: ExprKind,
     pub span: Span,
 }
 
 impl Expr {
-    pub fn new(ty: Type<TypeName>, kind: ExprKind, span: Span) -> Self {
-        Expr { ty, kind, span }
+    pub fn new(id: NodeId, ty: Type<TypeName>, kind: ExprKind, span: Span) -> Self {
+        Expr { id, ty, kind, span }
     }
 }
 

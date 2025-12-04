@@ -28,6 +28,8 @@ use crate::mir::{Def, Expr, ExprKind, Literal, LoopKind, Program};
 
 /// A single binding in linear form, extracted from nested Let chains.
 struct LinearBinding {
+    /// The NodeId of the original Let expression
+    id: crate::ast::NodeId,
     name: String,
     binding_id: u64,
     value: Expr,
@@ -66,6 +68,7 @@ impl BindingLifter {
     fn lift_def(&mut self, def: Def) -> Result<Def> {
         match def {
             Def::Function {
+                id,
                 name,
                 params,
                 ret_type,
@@ -77,6 +80,7 @@ impl BindingLifter {
             } => {
                 let body = self.lift_expr(body)?;
                 Ok(Def::Function {
+                    id,
                     name,
                     params,
                     ret_type,
@@ -88,6 +92,7 @@ impl BindingLifter {
                 })
             }
             Def::Constant {
+                id,
                 name,
                 ty,
                 attributes,
@@ -96,6 +101,7 @@ impl BindingLifter {
             } => {
                 let body = self.lift_expr(body)?;
                 Ok(Def::Constant {
+                    id,
                     name,
                     ty,
                     attributes,
@@ -109,6 +115,7 @@ impl BindingLifter {
 
     /// Main recursive driver: lift bindings in an expression.
     pub fn lift_expr(&mut self, expr: Expr) -> Result<Expr> {
+        let id = expr.id;
         let ty = expr.ty.clone();
         let span = expr.span;
 
@@ -125,6 +132,7 @@ impl BindingLifter {
                 let value = self.lift_expr(*value)?;
                 let body = self.lift_expr(*body)?;
                 Ok(Expr::new(
+                    id,
                     ty,
                     ExprKind::Let {
                         name,
@@ -145,6 +153,7 @@ impl BindingLifter {
                 let then_branch = self.lift_expr(*then_branch)?;
                 let else_branch = self.lift_expr(*else_branch)?;
                 Ok(Expr::new(
+                    id,
                     ty,
                     ExprKind::If {
                         cond: Box::new(cond),
@@ -159,6 +168,7 @@ impl BindingLifter {
                 let lhs = self.lift_expr(*lhs)?;
                 let rhs = self.lift_expr(*rhs)?;
                 Ok(Expr::new(
+                    id,
                     ty,
                     ExprKind::BinOp {
                         op,
@@ -172,6 +182,7 @@ impl BindingLifter {
             ExprKind::UnaryOp { op, operand } => {
                 let operand = self.lift_expr(*operand)?;
                 Ok(Expr::new(
+                    id,
                     ty,
                     ExprKind::UnaryOp {
                         op,
@@ -183,12 +194,12 @@ impl BindingLifter {
 
             ExprKind::Call { func, args } => {
                 let args = args.into_iter().map(|a| self.lift_expr(a)).collect::<Result<Vec<_>>>()?;
-                Ok(Expr::new(ty, ExprKind::Call { func, args }, span))
+                Ok(Expr::new(id, ty, ExprKind::Call { func, args }, span))
             }
 
             ExprKind::Intrinsic { name, args } => {
                 let args = args.into_iter().map(|a| self.lift_expr(a)).collect::<Result<Vec<_>>>()?;
-                Ok(Expr::new(ty, ExprKind::Intrinsic { name, args }, span))
+                Ok(Expr::new(id, ty, ExprKind::Intrinsic { name, args }, span))
             }
 
             ExprKind::Attributed {
@@ -197,6 +208,7 @@ impl BindingLifter {
             } => {
                 let inner = self.lift_expr(*inner)?;
                 Ok(Expr::new(
+                    id,
                     ty,
                     ExprKind::Attributed {
                         attributes,
@@ -208,16 +220,16 @@ impl BindingLifter {
 
             ExprKind::Materialize(inner) => {
                 let inner = self.lift_expr(*inner)?;
-                Ok(Expr::new(ty, ExprKind::Materialize(Box::new(inner)), span))
+                Ok(Expr::new(id, ty, ExprKind::Materialize(Box::new(inner)), span))
             }
 
             ExprKind::Literal(lit) => {
                 let lit = self.lift_literal(lit)?;
-                Ok(Expr::new(ty, ExprKind::Literal(lit), span))
+                Ok(Expr::new(id, ty, ExprKind::Literal(lit), span))
             }
 
             // Leaf nodes - no children to process
-            ExprKind::Var(_) | ExprKind::Unit => Ok(Expr::new(ty, expr.kind, span)),
+            ExprKind::Var(_) | ExprKind::Unit => Ok(Expr::new(id, ty, expr.kind, span)),
         }
     }
 
@@ -261,6 +273,7 @@ impl BindingLifter {
             unreachable!("lift_loop called on non-loop expression");
         };
 
+        let id = loop_expr.id;
         let ty = loop_expr.ty;
         let span = loop_expr.span;
 
@@ -289,6 +302,7 @@ impl BindingLifter {
         // If no bindings, nothing to hoist
         if bindings.is_empty() {
             return Ok(Expr::new(
+                id,
                 ty,
                 ExprKind::Loop {
                     loop_var,
@@ -322,6 +336,7 @@ impl BindingLifter {
 
         // 9. Create the new loop
         let new_loop = Expr::new(
+            id,
             ty,
             ExprKind::Loop {
                 loop_var,
@@ -375,6 +390,7 @@ fn linearize_body(mut expr: Expr) -> LinearizedBody {
     {
         let free_vars = collect_free_vars(&value);
         bindings.push(LinearBinding {
+            id: expr.id,
             name,
             binding_id,
             value: *value,
@@ -417,6 +433,7 @@ fn partition_bindings(
 fn rebuild_nested_lets(bindings: Vec<LinearBinding>, result: Expr) -> Expr {
     bindings.into_iter().rev().fold(result, |body, binding| {
         Expr::new(
+            binding.id,
             body.ty.clone(),
             ExprKind::Let {
                 name: binding.name,

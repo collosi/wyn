@@ -1,10 +1,11 @@
 //! Tests for the ANF normalization pass.
 
-use crate::ast::{Span, TypeName};
+use crate::ast::{NodeCounter, NodeId, Span, TypeName};
 use crate::error::CompilerError;
 use crate::mir::{Expr, ExprKind, Literal};
-use crate::normalize::{Normalizer, is_atomic};
+use crate::normalize::{is_atomic, Normalizer};
 use polytype::Type;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Helper to run full pipeline through lowering with normalization
 fn compile_through_lowering(input: &str) -> Result<(), CompilerError> {
@@ -25,46 +26,56 @@ fn compile_through_lowering(input: &str) -> Result<(), CompilerError> {
     Ok(())
 }
 
-fn dummy_span() -> Span {
-    Span::dummy()
+fn test_span() -> Span {
+    Span::new(1, 1, 1, 1)
 }
 
 fn i32_type() -> Type<TypeName> {
     Type::Constructed(TypeName::Int(32), vec![])
 }
 
+// Global counter for test node IDs (tests don't care about the actual values)
+static TEST_NODE_ID: AtomicU32 = AtomicU32::new(0);
+
+fn next_id() -> NodeId {
+    NodeId(TEST_NODE_ID.fetch_add(1, Ordering::Relaxed))
+}
+
 fn var(name: &str) -> Expr {
-    Expr::new(i32_type(), ExprKind::Var(name.to_string()), dummy_span())
+    Expr::new(next_id(), i32_type(), ExprKind::Var(name.to_string()), test_span())
 }
 
 fn int_lit(n: i32) -> Expr {
     Expr::new(
+        next_id(),
         i32_type(),
         ExprKind::Literal(Literal::Int(n.to_string())),
-        dummy_span(),
+        test_span(),
     )
 }
 
 fn binop(op: &str, lhs: Expr, rhs: Expr) -> Expr {
     Expr::new(
+        next_id(),
         i32_type(),
         ExprKind::BinOp {
             op: op.to_string(),
             lhs: Box::new(lhs),
             rhs: Box::new(rhs),
         },
-        dummy_span(),
+        test_span(),
     )
 }
 
 fn call(func: &str, args: Vec<Expr>) -> Expr {
     Expr::new(
+        next_id(),
         i32_type(),
         ExprKind::Call {
             func: func.to_string(),
             args,
         },
-        dummy_span(),
+        test_span(),
     )
 }
 
@@ -91,7 +102,7 @@ fn test_normalize_binop_with_atomic_operands() {
     // a + b should stay as a + b (no new bindings)
     let expr = binop("+", var("a"), var("b"));
     let mut bindings = Vec::new();
-    let mut normalizer = Normalizer::new(0);
+    let mut normalizer = Normalizer::new(0, NodeCounter::new());
     let result = normalizer.normalize_expr(expr, &mut bindings);
 
     assert!(bindings.is_empty());
@@ -105,7 +116,7 @@ fn test_normalize_nested_binop() {
     let inner = binop("+", var("a"), var("b"));
     let expr = binop("+", inner, var("c"));
     let mut bindings = Vec::new();
-    let mut normalizer = Normalizer::new(0);
+    let mut normalizer = Normalizer::new(0, NodeCounter::new());
     let result = normalizer.normalize_expr(expr, &mut bindings);
 
     // Should have one binding for the inner binop
@@ -128,7 +139,7 @@ fn test_normalize_call_with_binop_arg() {
     let arg = binop("+", var("a"), var("b"));
     let expr = call("foo", vec![arg]);
     let mut bindings = Vec::new();
-    let mut normalizer = Normalizer::new(0);
+    let mut normalizer = Normalizer::new(0, NodeCounter::new());
     let result = normalizer.normalize_expr(expr, &mut bindings);
 
     // Should have one binding for the binop

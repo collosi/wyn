@@ -94,14 +94,15 @@ struct CalleeCollector {
 
 impl MirVisitor for CalleeCollector {
     type Error = std::convert::Infallible;
+    type Ctx = ();
 
-    fn visit_expr_call(&mut self, func: String, args: Vec<Expr>, expr: Expr) -> Result<Expr, Self::Error> {
+    fn visit_expr_call(&mut self, func: String, args: Vec<Expr>, expr: Expr, ctx: &mut Self::Ctx) -> Result<Expr, Self::Error> {
         // Collect the function name
         self.callees.insert(func.clone());
 
         // Continue traversal of arguments
         for arg in &args {
-            self.visit_expr(arg.clone()).ok();
+            self.visit_expr(arg.clone(), ctx).ok();
         }
 
         Ok(Expr {
@@ -110,7 +111,7 @@ impl MirVisitor for CalleeCollector {
         })
     }
 
-    fn visit_expr_var(&mut self, name: String, expr: Expr) -> Result<Expr, Self::Error> {
+    fn visit_expr_var(&mut self, name: String, expr: Expr, _ctx: &mut Self::Ctx) -> Result<Expr, Self::Error> {
         // Variable references might refer to top-level constants
         self.callees.insert(name.clone());
         Ok(Expr {
@@ -119,7 +120,7 @@ impl MirVisitor for CalleeCollector {
         })
     }
 
-    fn visit_expr_literal(&mut self, lit: Literal, expr: Expr) -> Result<Expr, Self::Error> {
+    fn visit_expr_literal(&mut self, lit: Literal, expr: Expr, ctx: &mut Self::Ctx) -> Result<Expr, Self::Error> {
         // Check for closure records with __lambda_name field
         if let Some(lambda_name) = crate::mir::extract_lambda_name(&expr) {
             self.callees.insert(lambda_name.to_string());
@@ -128,7 +129,7 @@ impl MirVisitor for CalleeCollector {
         // Continue traversal into tuple subexpressions (closures are tuples now)
         if let Literal::Tuple(ref elems) = lit {
             for elem in elems {
-                self.visit_expr(elem.clone()).ok();
+                self.visit_expr(elem.clone(), ctx).ok();
             }
         }
 
@@ -144,7 +145,7 @@ fn collect_callees(expr: &Expr) -> HashSet<String> {
     let mut collector = CalleeCollector {
         callees: HashSet::new(),
     };
-    collector.visit_expr(expr.clone()).ok();
+    collector.visit_expr(expr.clone(), &mut ()).ok();
     collector.callees
 }
 

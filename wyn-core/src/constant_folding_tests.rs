@@ -1,8 +1,9 @@
 #![cfg(test)]
 
-use crate::ast::Span;
+use crate::ast::{NodeId, Span};
 use crate::constant_folding::ConstantFolder;
 use crate::mir::{Expr, ExprKind, Literal};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 fn i32_type() -> polytype::Type<crate::ast::TypeName> {
     polytype::Type::Constructed(crate::ast::TypeName::Int(32), vec![])
@@ -16,27 +17,41 @@ fn bool_type() -> polytype::Type<crate::ast::TypeName> {
     polytype::Type::Constructed(crate::ast::TypeName::Str("bool".into()), vec![])
 }
 
+fn test_span() -> Span {
+    Span::new(1, 1, 1, 1)
+}
+
+// Global counter for test node IDs (tests don't care about the actual values)
+static TEST_NODE_ID: AtomicU32 = AtomicU32::new(0);
+
+fn next_id() -> NodeId {
+    NodeId(TEST_NODE_ID.fetch_add(1, Ordering::Relaxed))
+}
+
 #[test]
 fn test_fold_float_division() {
     let mut folder = ConstantFolder::new();
 
     // 135.0 / 255.0
     let expr = Expr::new(
+        next_id(),
         f32_type(),
         ExprKind::BinOp {
             op: "/".to_string(),
             lhs: Box::new(Expr::new(
+                next_id(),
                 f32_type(),
                 ExprKind::Literal(Literal::Float("135.0".to_string())),
-                Span::dummy(),
+                test_span(),
             )),
             rhs: Box::new(Expr::new(
+                next_id(),
                 f32_type(),
                 ExprKind::Literal(Literal::Float("255.0".to_string())),
-                Span::dummy(),
+                test_span(),
             )),
         },
-        Span::dummy(),
+        test_span(),
     );
 
     let result = folder.fold_expr(&expr).unwrap();
@@ -56,21 +71,24 @@ fn test_fold_integer_addition() {
 
     // 10 + 32
     let expr = Expr::new(
+        next_id(),
         i32_type(),
         ExprKind::BinOp {
             op: "+".to_string(),
             lhs: Box::new(Expr::new(
+                next_id(),
                 i32_type(),
                 ExprKind::Literal(Literal::Int("10".to_string())),
-                Span::dummy(),
+                test_span(),
             )),
             rhs: Box::new(Expr::new(
+                next_id(),
                 i32_type(),
                 ExprKind::Literal(Literal::Int("32".to_string())),
-                Span::dummy(),
+                test_span(),
             )),
         },
-        Span::dummy(),
+        test_span(),
     );
 
     let result = folder.fold_expr(&expr).unwrap();
@@ -89,25 +107,29 @@ fn test_fold_constant_if_true() {
 
     // if true then 1 else 2
     let expr = Expr::new(
+        next_id(),
         i32_type(),
         ExprKind::If {
             cond: Box::new(Expr::new(
+                next_id(),
                 bool_type(),
                 ExprKind::Literal(Literal::Bool(true)),
-                Span::dummy(),
+                test_span(),
             )),
             then_branch: Box::new(Expr::new(
+                next_id(),
                 i32_type(),
                 ExprKind::Literal(Literal::Int("1".to_string())),
-                Span::dummy(),
+                test_span(),
             )),
             else_branch: Box::new(Expr::new(
+                next_id(),
                 i32_type(),
                 ExprKind::Literal(Literal::Int("2".to_string())),
-                Span::dummy(),
+                test_span(),
             )),
         },
-        Span::dummy(),
+        test_span(),
     );
 
     let result = folder.fold_expr(&expr).unwrap();
@@ -126,25 +148,29 @@ fn test_fold_constant_if_false() {
 
     // if false then 1 else 2
     let expr = Expr::new(
+        next_id(),
         i32_type(),
         ExprKind::If {
             cond: Box::new(Expr::new(
+                next_id(),
                 bool_type(),
                 ExprKind::Literal(Literal::Bool(false)),
-                Span::dummy(),
+                test_span(),
             )),
             then_branch: Box::new(Expr::new(
+                next_id(),
                 i32_type(),
                 ExprKind::Literal(Literal::Int("1".to_string())),
-                Span::dummy(),
+                test_span(),
             )),
             else_branch: Box::new(Expr::new(
+                next_id(),
                 i32_type(),
                 ExprKind::Literal(Literal::Int("2".to_string())),
-                Span::dummy(),
+                test_span(),
             )),
         },
-        Span::dummy(),
+        test_span(),
     );
 
     let result = folder.fold_expr(&expr).unwrap();
@@ -163,44 +189,51 @@ fn test_fold_array_literal() {
 
     // [1 + 2, 3 * 4]
     let expr = Expr::new(
+        next_id(),
         i32_type(), // simplified, would be array type
         ExprKind::Literal(Literal::Array(vec![
             Expr::new(
+                next_id(),
                 i32_type(),
                 ExprKind::BinOp {
                     op: "+".to_string(),
                     lhs: Box::new(Expr::new(
+                        next_id(),
                         i32_type(),
                         ExprKind::Literal(Literal::Int("1".to_string())),
-                        Span::dummy(),
+                        test_span(),
                     )),
                     rhs: Box::new(Expr::new(
+                        next_id(),
                         i32_type(),
                         ExprKind::Literal(Literal::Int("2".to_string())),
-                        Span::dummy(),
+                        test_span(),
                     )),
                 },
-                Span::dummy(),
+                test_span(),
             ),
             Expr::new(
+                next_id(),
                 i32_type(),
                 ExprKind::BinOp {
                     op: "*".to_string(),
                     lhs: Box::new(Expr::new(
+                        next_id(),
                         i32_type(),
                         ExprKind::Literal(Literal::Int("3".to_string())),
-                        Span::dummy(),
+                        test_span(),
                     )),
                     rhs: Box::new(Expr::new(
+                        next_id(),
                         i32_type(),
                         ExprKind::Literal(Literal::Int("4".to_string())),
-                        Span::dummy(),
+                        test_span(),
                     )),
                 },
-                Span::dummy(),
+                test_span(),
             ),
         ])),
-        Span::dummy(),
+        test_span(),
     );
 
     let result = folder.fold_expr(&expr).unwrap();
@@ -227,16 +260,18 @@ fn test_fold_negation() {
 
     // -42
     let expr = Expr::new(
+        next_id(),
         i32_type(),
         ExprKind::UnaryOp {
             op: "-".to_string(),
             operand: Box::new(Expr::new(
+                next_id(),
                 i32_type(),
                 ExprKind::Literal(Literal::Int("42".to_string())),
-                Span::dummy(),
+                test_span(),
             )),
         },
-        Span::dummy(),
+        test_span(),
     );
 
     let result = folder.fold_expr(&expr).unwrap();
@@ -255,16 +290,18 @@ fn test_fold_boolean_not() {
 
     // !true
     let expr = Expr::new(
+        next_id(),
         bool_type(),
         ExprKind::UnaryOp {
             op: "!".to_string(),
             operand: Box::new(Expr::new(
+                next_id(),
                 bool_type(),
                 ExprKind::Literal(Literal::Bool(true)),
-                Span::dummy(),
+                test_span(),
             )),
         },
-        Span::dummy(),
+        test_span(),
     );
 
     let result = folder.fold_expr(&expr).unwrap();
@@ -283,21 +320,24 @@ fn test_fold_comparison() {
 
     // 10 < 20
     let expr = Expr::new(
+        next_id(),
         bool_type(),
         ExprKind::BinOp {
             op: "<".to_string(),
             lhs: Box::new(Expr::new(
+                next_id(),
                 i32_type(),
                 ExprKind::Literal(Literal::Int("10".to_string())),
-                Span::dummy(),
+                test_span(),
             )),
             rhs: Box::new(Expr::new(
+                next_id(),
                 i32_type(),
                 ExprKind::Literal(Literal::Int("20".to_string())),
-                Span::dummy(),
+                test_span(),
             )),
         },
-        Span::dummy(),
+        test_span(),
     );
 
     let result = folder.fold_expr(&expr).unwrap();
@@ -316,21 +356,24 @@ fn test_no_fold_with_variable() {
 
     // x + 1 (should not fold since x is a variable)
     let expr = Expr::new(
+        next_id(),
         i32_type(),
         ExprKind::BinOp {
             op: "+".to_string(),
             lhs: Box::new(Expr::new(
+                next_id(),
                 i32_type(),
                 ExprKind::Var("x".to_string()),
-                Span::dummy(),
+                test_span(),
             )),
             rhs: Box::new(Expr::new(
+                next_id(),
                 i32_type(),
                 ExprKind::Literal(Literal::Int("1".to_string())),
-                Span::dummy(),
+                test_span(),
             )),
         },
-        Span::dummy(),
+        test_span(),
     );
 
     let result = folder.fold_expr(&expr).unwrap();

@@ -736,7 +736,7 @@ impl<'a> LowerCtx<'a> {
                 // Store constant ID for lookup
                 self.constructor.global_constants.insert(name.clone(), const_id);
             }
-            Def::Uniform { name, ty } => {
+            Def::Uniform { name, ty, .. } => {
                 // Create a SPIR-V uniform variable
                 let uniform_type = self.constructor.ast_type_to_spirv(ty);
                 let ptr_type =

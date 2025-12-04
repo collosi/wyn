@@ -1,4 +1,4 @@
-use crate::ast::{Span, TypeName};
+use crate::ast::{NodeCounter, Span, TypeName};
 use polytype::Type;
 
 use super::*;
@@ -11,10 +11,18 @@ fn f32_type() -> Type<TypeName> {
     Type::Constructed(TypeName::Float(32), vec![])
 }
 
+fn test_span() -> Span {
+    Span::new(1, 1, 1, 1)
+}
+
 #[test]
 fn test_simple_function() {
+    let mut nc = NodeCounter::new();
+    let span = test_span();
+
     // Represents: def add(x, y) = x + y
     let add_fn = Def::Function {
+        id: nc.next(),
         name: "add".to_string(),
         params: vec![
             Param {
@@ -33,23 +41,16 @@ fn test_simple_function() {
         param_attributes: vec![],
         return_attributes: vec![],
         body: Expr::new(
+            nc.next(),
             i32_type(),
             ExprKind::BinOp {
                 op: "+".to_string(),
-                lhs: Box::new(Expr::new(
-                    i32_type(),
-                    ExprKind::Var("x".to_string()),
-                    Span::dummy(),
-                )),
-                rhs: Box::new(Expr::new(
-                    i32_type(),
-                    ExprKind::Var("y".to_string()),
-                    Span::dummy(),
-                )),
+                lhs: Box::new(Expr::new(nc.next(), i32_type(), ExprKind::Var("x".to_string()), span)),
+                rhs: Box::new(Expr::new(nc.next(), i32_type(), ExprKind::Var("y".to_string()), span)),
             },
-            Span::dummy(),
+            span,
         ),
-        span: Span::dummy(),
+        span,
     };
 
     let program = Program {
@@ -66,17 +67,22 @@ fn test_simple_function() {
 
 #[test]
 fn test_constant() {
+    let mut nc = NodeCounter::new();
+    let span = test_span();
+
     // Represents: def pi = 3.14159
     let pi_const = Def::Constant {
+        id: nc.next(),
         name: "pi".to_string(),
         ty: f32_type(),
         attributes: vec![],
         body: Expr::new(
+            nc.next(),
             f32_type(),
             ExprKind::Literal(Literal::Float("3.14159".to_string())),
-            Span::dummy(),
+            span,
         ),
-        span: Span::dummy(),
+        span,
     };
 
     match pi_const {

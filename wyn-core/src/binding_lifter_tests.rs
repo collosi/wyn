@@ -1,9 +1,10 @@
 //! Tests for the binding lifting (code motion) optimization pass.
 
-use crate::ast::{Span, TypeName};
+use crate::ast::{NodeId, Span, TypeName};
 use crate::binding_lifter::BindingLifter;
 use crate::mir::{Expr, ExprKind, Literal, LoopKind};
 use polytype::Type;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 // =============================================================================
 // Test Helpers - Type Constructors
@@ -13,38 +14,52 @@ fn i32_type() -> Type<TypeName> {
     Type::Constructed(TypeName::Int(32), vec![])
 }
 
+fn test_span() -> Span {
+    Span::new(1, 1, 1, 1)
+}
+
+// Global counter for test node IDs (tests don't care about the actual values)
+static TEST_NODE_ID: AtomicU32 = AtomicU32::new(0);
+
+fn next_id() -> NodeId {
+    NodeId(TEST_NODE_ID.fetch_add(1, Ordering::Relaxed))
+}
+
 // =============================================================================
 // Test Helpers - Expression Constructors
 // =============================================================================
 
 fn var(name: &str, ty: Type<TypeName>) -> Expr {
-    Expr::new(ty, ExprKind::Var(name.to_string()), Span::dummy())
+    Expr::new(next_id(), ty, ExprKind::Var(name.to_string()), test_span())
 }
 
 fn int_lit(n: i32) -> Expr {
     Expr::new(
+        next_id(),
         i32_type(),
         ExprKind::Literal(Literal::Int(n.to_string())),
-        Span::dummy(),
+        test_span(),
     )
 }
 
 fn binop(op: &str, lhs: Expr, rhs: Expr) -> Expr {
     let ty = lhs.ty.clone();
     Expr::new(
+        next_id(),
         ty,
         ExprKind::BinOp {
             op: op.to_string(),
             lhs: Box::new(lhs),
             rhs: Box::new(rhs),
         },
-        Span::dummy(),
+        test_span(),
     )
 }
 
 fn let_bind(name: &str, value: Expr, body: Expr) -> Expr {
     let ty = body.ty.clone();
     Expr::new(
+        next_id(),
         ty,
         ExprKind::Let {
             name: name.to_string(),
@@ -52,7 +67,7 @@ fn let_bind(name: &str, value: Expr, body: Expr) -> Expr {
             value: Box::new(value),
             body: Box::new(body),
         },
-        Span::dummy(),
+        test_span(),
     )
 }
 
@@ -61,6 +76,7 @@ fn for_range_loop(loop_var: &str, init: Expr, iter_var: &str, bound: Expr, body:
     let ty = body.ty.clone();
     let init_ty = init.ty.clone();
     Expr::new(
+        next_id(),
         ty,
         ExprKind::Loop {
             loop_var: loop_var.to_string(),
@@ -72,7 +88,7 @@ fn for_range_loop(loop_var: &str, init: Expr, iter_var: &str, bound: Expr, body:
             },
             body: Box::new(body),
         },
-        Span::dummy(),
+        test_span(),
     )
 }
 

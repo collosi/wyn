@@ -201,6 +201,7 @@ impl Monomorphizer {
     fn process_function(&mut self, def: Def) -> Result<Def> {
         match def {
             Def::Function {
+                id,
                 name,
                 params,
                 ret_type,
@@ -212,6 +213,7 @@ impl Monomorphizer {
             } => {
                 let body = self.process_expr(body)?;
                 Ok(Def::Function {
+                    id,
                     name,
                     params,
                     ret_type,
@@ -223,6 +225,7 @@ impl Monomorphizer {
                 })
             }
             Def::Constant {
+                id,
                 name,
                 ty,
                 attributes,
@@ -231,6 +234,7 @@ impl Monomorphizer {
             } => {
                 let body = self.process_expr(body)?;
                 Ok(Def::Constant {
+                    id,
                     name,
                     ty,
                     attributes,
@@ -238,9 +242,9 @@ impl Monomorphizer {
                     span,
                 })
             }
-            Def::Uniform { name, ty } => {
+            Def::Uniform { .. } => {
                 // Uniforms have no body to process
-                Ok(Def::Uniform { name, ty })
+                Ok(def)
             }
         }
     }
@@ -363,6 +367,7 @@ impl Monomorphizer {
         };
 
         Ok(Expr {
+            id: expr.id,
             ty: expr.ty,
             kind,
             span: expr.span,
@@ -444,6 +449,7 @@ impl Monomorphizer {
     fn specialize_def(&self, def: Def, subst: &Substitution, new_name: &str) -> Result<Def> {
         match def {
             Def::Function {
+                id,
                 params,
                 ret_type,
                 attributes,
@@ -465,6 +471,7 @@ impl Monomorphizer {
                 let body = apply_subst_expr(body, subst);
 
                 Ok(Def::Function {
+                    id,
                     name: new_name.to_string(),
                     params,
                     ret_type,
@@ -476,19 +483,22 @@ impl Monomorphizer {
                 })
             }
             Def::Constant {
+                id,
                 ty,
                 attributes,
                 body,
                 span,
                 ..
             } => Ok(Def::Constant {
+                id,
                 name: new_name.to_string(),
                 ty: apply_subst(&ty, subst),
                 attributes,
                 body: apply_subst_expr(body, subst),
                 span,
             }),
-            Def::Uniform { ty, .. } => Ok(Def::Uniform {
+            Def::Uniform { id, ty, .. } => Ok(Def::Uniform {
+                id,
                 name: new_name.to_string(),
                 ty: apply_subst(&ty, subst),
             }),
@@ -537,8 +547,9 @@ struct SubstitutionVisitor<'a> {
 
 impl<'a> MirVisitor for SubstitutionVisitor<'a> {
     type Error = std::convert::Infallible;
+    type Ctx = ();
 
-    fn visit_type(&mut self, ty: Type) -> std::result::Result<Type, Self::Error> {
+    fn visit_type(&mut self, ty: Type, _ctx: &mut Self::Ctx) -> std::result::Result<Type, Self::Error> {
         Ok(apply_subst(&ty, self.subst))
     }
 }
@@ -592,7 +603,7 @@ fn apply_subst(ty: &Type, subst: &Substitution) -> Type {
 /// Apply a substitution to an expression
 fn apply_subst_expr(expr: Expr, subst: &Substitution) -> Expr {
     let mut visitor = SubstitutionVisitor { subst };
-    visitor.visit_expr(expr).unwrap()
+    visitor.visit_expr(expr, &mut ()).unwrap()
 }
 
 /// Format a substitution for use in specialized function names

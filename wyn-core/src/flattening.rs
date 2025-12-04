@@ -5,7 +5,7 @@
 //! - Pattern flattening: complex patterns become simple let bindings
 //! - Lambda lifting: all functions become top-level Def entries
 
-use crate::ast::{self, ExprKind, Expression, NodeId, PatternKind, Span, Type, TypeName};
+use crate::ast::{self, ExprKind, Expression, NodeCounter, NodeId, PatternKind, Span, Type, TypeName};
 use crate::error::Result;
 use crate::mir::{self, Expr};
 use crate::pattern;
@@ -47,6 +47,8 @@ pub struct Flattener {
     next_id: usize,
     /// Counter for generating unique binding IDs
     next_binding_id: u64,
+    /// Counter for generating unique MIR node IDs
+    node_counter: NodeCounter,
     /// Generated lambda functions (collected during flattening)
     generated_functions: Vec<mir::Def>,
     /// Stack of enclosing declaration names for lambda naming
@@ -71,6 +73,7 @@ impl Flattener {
         Flattener {
             next_id: 0,
             next_binding_id: 0,
+            node_counter: NodeCounter::new(),
             generated_functions: Vec::new(),
             enclosing_decl_stack: Vec::new(),
             lambda_registry: Vec::new(),
@@ -80,6 +83,21 @@ impl Flattener {
             closure_type_stack: Vec::new(),
             needs_backing_store: HashSet::new(),
         }
+    }
+
+    /// Get the NodeCounter for use after flattening
+    pub fn into_node_counter(self) -> NodeCounter {
+        self.node_counter
+    }
+
+    /// Create a new MIR expression with a fresh NodeId
+    fn mk_expr(&mut self, ty: Type, kind: mir::ExprKind, span: Span) -> Expr {
+        Expr::new(self.node_counter.next(), ty, kind, span)
+    }
+
+    /// Get a fresh NodeId
+    fn next_node_id(&mut self) -> NodeId {
+        self.node_counter.next()
     }
 
     /// Generate a fresh binding ID
@@ -241,7 +259,7 @@ impl Flattener {
     /// Hoist inner Let expressions out of a Let's value.
     /// Transforms: let x = (let y = A in B) in C  =>  let y = A in let x = B in C
     /// This ensures materialized pointers are at the same scope level as their referents.
-    fn hoist_inner_lets(expr_kind: mir::ExprKind, span: Span) -> mir::ExprKind {
+    fn hoist_inner_lets(&mut self, expr_kind: mir::ExprKind, span: Span) -> mir::ExprKind {
         if let mir::ExprKind::Let {
             name,
             binding_id,
@@ -265,14 +283,14 @@ impl Flattener {
                     value: inner_body,
                     body,
                 };
-                let new_inner_expr = Expr::new(body_ty.clone(), new_inner, span);
+                let new_inner_expr = self.mk_expr(body_ty.clone(), new_inner, span);
                 // Recursively hoist in case there are more nested Lets
-                let hoisted_inner = Self::hoist_inner_lets(new_inner_expr.kind, span);
+                let hoisted_inner = self.hoist_inner_lets(new_inner_expr.kind, span);
                 mir::ExprKind::Let {
                     name: inner_name,
                     binding_id: inner_binding_id,
                     value: inner_value,
-                    body: Box::new(Expr::new(body_ty, hoisted_inner, span)),
+                    body: Box::new(self.mk_expr(body_ty, hoisted_inner, span)),
                 }
             } else {
                 mir::ExprKind::Let {
@@ -343,6 +361,7 @@ impl Flattener {
             let (body, _) = self.flatten_expr(&d.body)?;
             let ty = self.get_expr_type(&d.body);
             mir::Def::Constant {
+                id: self.next_node_id(),
                 name: d.name.clone(),
                 ty,
                 attributes: self.convert_attributes(&d.attributes),
@@ -365,6 +384,7 @@ impl Flattener {
 
             let ret_type = self.get_expr_type(&d.body);
             mir::Def::Function {
+                id: self.next_node_id(),
                 name: d.name.clone(),
                 params,
                 ret_type,
@@ -442,6 +462,7 @@ impl Flattener {
                             .collect();
 
                     let def = mir::Def::Function {
+                        id: self.next_node_id(),
                         name: e.name.clone(),
                         params,
                         ret_type,
@@ -460,6 +481,7 @@ impl Flattener {
                 ast::Declaration::Uniform(uniform_decl) => {
                     // Uniforms use the declared type directly (already a Type<TypeName>)
                     defs.push(mir::Def::Uniform {
+                        id: self.next_node_id(),
                         name: uniform_decl.name.clone(),
                         ty: uniform_decl.ty.clone(),
                     });
@@ -567,20 +589,20 @@ impl Flattener {
         for (param_name, param_ty, binding_id) in params_needing_stores.into_iter().rev() {
             let ptr_name = Self::backing_store_name(binding_id);
             let ptr_binding_id = self.fresh_binding_id();
-            result = Expr::new(
-                result.ty.clone(),
+            // Build inner expressions first to avoid nested mutable borrows
+            let var_expr = self.mk_expr(param_ty.clone(), mir::ExprKind::Var(param_name), span);
+            let materialize_expr = self.mk_expr(
+                types::pointer(param_ty),
+                mir::ExprKind::Materialize(Box::new(var_expr)),
+                span,
+            );
+            let result_ty = result.ty.clone();
+            result = self.mk_expr(
+                result_ty,
                 mir::ExprKind::Let {
                     name: ptr_name,
                     binding_id: ptr_binding_id,
-                    value: Box::new(Expr::new(
-                        types::pointer(param_ty.clone()),
-                        mir::ExprKind::Materialize(Box::new(Expr::new(
-                            param_ty,
-                            mir::ExprKind::Var(param_name),
-                            span,
-                        ))),
-                        span,
-                    )),
+                    value: Box::new(materialize_expr),
                     body: Box::new(result),
                 },
                 span,
@@ -668,7 +690,7 @@ impl Flattener {
 
                 // Build the closure tuple with __lambda_name at the end (no free variables)
                 let string_type = Type::Constructed(TypeName::Str("string".into()), vec![]);
-                let tuple_elems = vec![Expr::new(
+                let tuple_elems = vec![self.mk_expr(
                     string_type.clone(),
                     mir::ExprKind::Literal(mir::Literal::String(func_name.clone())),
                     span,
@@ -699,9 +721,9 @@ impl Flattener {
                 ];
 
                 // Build the body: x <op> y
-                let x_var = Expr::new(param_type.clone(), mir::ExprKind::Var("x".to_string()), span);
-                let y_var = Expr::new(param_type.clone(), mir::ExprKind::Var("y".to_string()), span);
-                let body = Expr::new(
+                let x_var = self.mk_expr(param_type.clone(), mir::ExprKind::Var("x".to_string()), span);
+                let y_var = self.mk_expr(param_type.clone(), mir::ExprKind::Var("y".to_string()), span);
+                let body = self.mk_expr(
                     ret_type.clone(),
                     mir::ExprKind::BinOp {
                         op: op.clone(),
@@ -713,6 +735,7 @@ impl Flattener {
 
                 // Create the generated function
                 let func = mir::Def::Function {
+                    id: self.next_node_id(),
                     name: func_name.clone(),
                     params,
                     ret_type,
@@ -846,17 +869,17 @@ impl Flattener {
                         // Use the backing store variable name
                         let ptr_name = Self::backing_store_name(binding_id);
                         let ptr_var =
-                            Expr::new(types::pointer(arr.ty.clone()), mir::ExprKind::Var(ptr_name), span);
+                            self.mk_expr(types::pointer(arr.ty.clone()), mir::ExprKind::Var(ptr_name), span);
                         let kind = mir::ExprKind::Intrinsic {
                             name: "index".to_string(),
                             args: vec![ptr_var, idx],
                         };
-                        return Ok((Expr::new(ty, kind, span), StaticValue::Dyn { binding_id: 0 }));
+                        return Ok((self.mk_expr(ty, kind, span), StaticValue::Dyn { binding_id: 0 }));
                     }
                 }
 
                 // Fallback: wrap the array in Materialize inline
-                let materialized_arr = Expr::new(
+                let materialized_arr = self.mk_expr(
                     types::pointer(arr.ty.clone()),
                     mir::ExprKind::Materialize(Box::new(arr)),
                     span,
@@ -889,31 +912,30 @@ impl Flattener {
                             }
                         };
 
-                        let obj = Expr::new(
+                        let obj = self.mk_expr(
                             closure_type.clone(),
                             mir::ExprKind::Var("__closure".to_string()),
                             span,
                         );
                         // Wrap in Materialize for pointer access
-                        let materialized_obj = Expr::new(
+                        let materialized_obj = self.mk_expr(
                             types::pointer(closure_type),
                             mir::ExprKind::Materialize(Box::new(obj)),
                             span,
                         );
                         let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
+                        // Build index literal first to avoid nested mutable borrow
+                        let idx_expr = self.mk_expr(
+                            i32_type,
+                            mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
+                            span,
+                        );
                         return Ok((
-                            Expr::new(
+                            self.mk_expr(
                                 ty,
                                 mir::ExprKind::Intrinsic {
                                     name: "tuple_access".to_string(),
-                                    args: vec![
-                                        materialized_obj,
-                                        Expr::new(
-                                            i32_type,
-                                            mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
-                                            span,
-                                        ),
-                                    ],
+                                    args: vec![materialized_obj, idx_expr],
                                 },
                                 span,
                             ),
@@ -945,19 +967,19 @@ impl Flattener {
                         // Use the backing store variable name
                         let ptr_name = Self::backing_store_name(binding_id);
                         let ptr_var =
-                            Expr::new(types::pointer(obj.ty.clone()), mir::ExprKind::Var(ptr_name), span);
+                            self.mk_expr(types::pointer(obj.ty.clone()), mir::ExprKind::Var(ptr_name), span);
                         let kind = mir::ExprKind::Intrinsic {
                             name: "tuple_access".to_string(),
                             args: vec![
                                 ptr_var,
-                                Expr::new(
+                                self.mk_expr(
                                     i32_type,
                                     mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
                                     span,
                                 ),
                             ],
                         };
-                        return Ok((Expr::new(ty, kind, span), StaticValue::Dyn { binding_id: 0 }));
+                        return Ok((self.mk_expr(ty, kind, span), StaticValue::Dyn { binding_id: 0 }));
                     }
                 }
 
@@ -967,22 +989,21 @@ impl Flattener {
                 let obj_ty = obj.ty.clone();
                 let ptr_ty = types::pointer(obj_ty.clone());
                 let materialized_obj =
-                    Expr::new(ptr_ty.clone(), mir::ExprKind::Materialize(Box::new(obj)), span);
+                    self.mk_expr(ptr_ty.clone(), mir::ExprKind::Materialize(Box::new(obj)), span);
 
                 // Reference the temp in the tuple_access
-                let tmp_var = Expr::new(ptr_ty, mir::ExprKind::Var(tmp_name.clone()), span);
-                let access_expr = Expr::new(
+                let tmp_var = self.mk_expr(ptr_ty, mir::ExprKind::Var(tmp_name.clone()), span);
+                // Build idx literal first to avoid nested mutable borrow
+                let idx_expr = self.mk_expr(
+                    i32_type,
+                    mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
+                    span,
+                );
+                let access_expr = self.mk_expr(
                     ty.clone(),
                     mir::ExprKind::Intrinsic {
                         name: "tuple_access".to_string(),
-                        args: vec![
-                            tmp_var,
-                            Expr::new(
-                                i32_type,
-                                mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
-                                span,
-                            ),
-                        ],
+                        args: vec![tmp_var, idx_expr],
                     },
                     span,
                 );
@@ -1044,7 +1065,7 @@ impl Flattener {
             }
         };
 
-        Ok((Expr::new(ty, kind, span), sv))
+        Ok((self.mk_expr(ty, kind, span), sv))
     }
 
     /// Flatten a let-in expression, handling pattern destructuring
@@ -1081,20 +1102,20 @@ impl Flattener {
                     // let __ptr_{id} = materialize(name) in body
                     let ptr_name = Self::backing_store_name(binding_id);
                     let ptr_binding_id = self.fresh_binding_id();
-                    Expr::new(
-                        body.ty.clone(),
+                    // Build inner expressions first to avoid nested mutable borrow
+                    let var_expr = self.mk_expr(value.ty.clone(), mir::ExprKind::Var(name.clone()), span);
+                    let materialize_expr = self.mk_expr(
+                        types::pointer(value.ty.clone()),
+                        mir::ExprKind::Materialize(Box::new(var_expr)),
+                        span,
+                    );
+                    let body_ty = body.ty.clone();
+                    self.mk_expr(
+                        body_ty,
                         mir::ExprKind::Let {
                             name: ptr_name,
                             binding_id: ptr_binding_id,
-                            value: Box::new(Expr::new(
-                                types::pointer(value.ty.clone()),
-                                mir::ExprKind::Materialize(Box::new(Expr::new(
-                                    value.ty.clone(),
-                                    mir::ExprKind::Var(name.clone()),
-                                    span,
-                                ))),
-                                span,
-                            )),
+                            value: Box::new(materialize_expr),
                             body: Box::new(body),
                         },
                         span,
@@ -1111,7 +1132,7 @@ impl Flattener {
                     value: Box::new(value),
                     body: Box::new(body),
                 };
-                let result = Self::hoist_inner_lets(result, span);
+                let result = self.hoist_inner_lets(result, span);
 
                 Ok((result, body_sv))
             }
@@ -1181,31 +1202,30 @@ impl Flattener {
                     let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
 
                     // Wrap the tuple var in Materialize for pointer access
-                    let tuple_var = Expr::new(tuple_ty.clone(), mir::ExprKind::Var(tmp.clone()), span);
-                    let materialized_tuple = Expr::new(
+                    let tuple_var = self.mk_expr(tuple_ty.clone(), mir::ExprKind::Var(tmp.clone()), span);
+                    let materialized_tuple = self.mk_expr(
                         types::pointer(tuple_ty.clone()),
                         mir::ExprKind::Materialize(Box::new(tuple_var)),
                         span,
                     );
+                    // Build idx literal first to avoid nested mutable borrow
+                    let idx_expr = self.mk_expr(
+                        i32_type,
+                        mir::ExprKind::Literal(mir::Literal::Int(i.to_string())),
+                        span,
+                    );
 
-                    let extract = Expr::new(
+                    let extract = self.mk_expr(
                         elem_ty.clone(),
                         mir::ExprKind::Intrinsic {
                             name: "tuple_access".to_string(),
-                            args: vec![
-                                materialized_tuple,
-                                Expr::new(
-                                    i32_type,
-                                    mir::ExprKind::Literal(mir::Literal::Int(i.to_string())),
-                                    span,
-                                ),
-                            ],
+                            args: vec![materialized_tuple, idx_expr],
                         },
                         span,
                     );
 
                     let elem_binding_id = self.fresh_binding_id();
-                    body = Expr::new(
+                    body = self.mk_expr(
                         body.ty.clone(),
                         mir::ExprKind::Let {
                             name,
@@ -1277,7 +1297,7 @@ impl Flattener {
                 .unwrap_or_else(|| {
                     panic!("BUG: Free variable '{}' in lambda has no type. Type checking should ensure all variables have types.", var)
                 });
-            tuple_elems.push(Expr::new(
+            tuple_elems.push(self.mk_expr(
                 var_type.clone(),
                 mir::ExprKind::Var((*var).clone()),
                 span,
@@ -1286,7 +1306,7 @@ impl Flattener {
         }
 
         // Last element: lambda name (phantom field, not lowered to SPIR-V)
-        let lambda_name_expr = Expr::new(
+        let lambda_name_expr = self.mk_expr(
             string_type.clone(),
             mir::ExprKind::Literal(mir::Literal::String(func_name.clone())),
             span,
@@ -1329,6 +1349,7 @@ impl Flattener {
 
         // Create the generated function
         let func = mir::Def::Function {
+            id: self.next_node_id(),
             name: func_name.clone(),
             params,
             ret_type,
@@ -1552,7 +1573,7 @@ impl Flattener {
         let bindings = match &pattern.kind {
             PatternKind::Name(name) => {
                 // Single variable: binding is just identity (Var(loop_var))
-                let binding = Expr::new(init_ty, mir::ExprKind::Var(loop_var.clone()), span);
+                let binding = self.mk_expr(init_ty, mir::ExprKind::Var(loop_var.clone()), span);
                 vec![(name.clone(), binding)]
             }
             PatternKind::Typed(inner, _) => {
@@ -1572,7 +1593,7 @@ impl Flattener {
 
     /// Helper to extract bindings from pattern given loop_var and init_ty
     fn extract_bindings_from_pattern(
-        &self,
+        &mut self,
         pattern: &ast::Pattern,
         loop_var: &str,
         init_ty: &Type,
@@ -1580,7 +1601,7 @@ impl Flattener {
     ) -> Result<Vec<(String, Expr)>> {
         match &pattern.kind {
             PatternKind::Name(name) => {
-                let binding = Expr::new(init_ty.clone(), mir::ExprKind::Var(loop_var.to_string()), span);
+                let binding = self.mk_expr(init_ty.clone(), mir::ExprKind::Var(loop_var.to_string()), span);
                 Ok(vec![(name.clone(), binding)])
             }
             PatternKind::Typed(inner, _) => {
@@ -1593,7 +1614,7 @@ impl Flattener {
 
     /// Extract bindings for tuple pattern
     fn extract_tuple_bindings(
-        &self,
+        &mut self,
         patterns: &[ast::Pattern],
         loop_var: &str,
         tuple_ty: &Type,
@@ -1629,25 +1650,24 @@ impl Flattener {
             let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
 
             // Wrap the loop var in Materialize for pointer access
-            let loop_var_expr = Expr::new(tuple_ty.clone(), mir::ExprKind::Var(loop_var.to_string()), span);
-            let materialized_loop_var = Expr::new(
+            let loop_var_expr = self.mk_expr(tuple_ty.clone(), mir::ExprKind::Var(loop_var.to_string()), span);
+            let materialized_loop_var = self.mk_expr(
                 types::pointer(tuple_ty.clone()),
                 mir::ExprKind::Materialize(Box::new(loop_var_expr)),
                 span,
             );
+            // Build idx literal first to avoid nested mutable borrow
+            let idx_expr = self.mk_expr(
+                i32_type,
+                mir::ExprKind::Literal(mir::Literal::Int(i.to_string())),
+                span,
+            );
 
-            let extract = Expr::new(
+            let extract = self.mk_expr(
                 elem_ty,
                 mir::ExprKind::Intrinsic {
                     name: "tuple_access".to_string(),
-                    args: vec![
-                        materialized_loop_var,
-                        Expr::new(
-                            i32_type,
-                            mir::ExprKind::Literal(mir::Literal::Int(i.to_string())),
-                            span,
-                        ),
-                    ],
+                    args: vec![materialized_loop_var, idx_expr],
                 },
                 span,
             );

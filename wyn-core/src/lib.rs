@@ -41,7 +41,7 @@ mod normalize_tests;
 
 use std::collections::HashMap;
 
-use ast::NodeId;
+use ast::{NodeCounter, NodeId};
 use error::Result;
 use polytype::TypeScheme;
 
@@ -216,65 +216,80 @@ impl AliasChecked {
         let builtins = impl_source::ImplSource::default().all_names();
         let mut flattener = flattening::Flattener::new(self.type_table, builtins);
         let mir = flattener.flatten_program(&self.ast)?;
-        Ok(Flattened { mir })
+        let node_counter = flattener.into_node_counter();
+        Ok(Flattened { mir, node_counter })
     }
 }
 
 /// AST has been flattened to MIR
 pub struct Flattened {
     pub mir: mir::Program,
+    pub node_counter: NodeCounter,
 }
 
 impl Flattened {
     /// Normalize MIR to A-normal form
     pub fn normalize(self) -> Normalized {
-        let mir = normalize::normalize_program(self.mir);
-        Normalized { mir }
+        let (mir, node_counter) = normalize::normalize_program(self.mir, self.node_counter);
+        Normalized { mir, node_counter }
     }
 }
 
 /// MIR has been normalized to A-normal form
 pub struct Normalized {
     pub mir: mir::Program,
+    pub node_counter: NodeCounter,
 }
 
 impl Normalized {
     /// Monomorphize: specialize polymorphic functions
     pub fn monomorphize(self) -> Result<Monomorphized> {
         let mir = monomorphization::monomorphize(self.mir)?;
-        Ok(Monomorphized { mir })
+        Ok(Monomorphized {
+            mir,
+            node_counter: self.node_counter,
+        })
     }
 }
 
 /// Program has been monomorphized
 pub struct Monomorphized {
     pub mir: mir::Program,
+    pub node_counter: NodeCounter,
 }
 
 impl Monomorphized {
     /// Filter to only reachable functions
     pub fn filter_reachable(self) -> Reachable {
         let mir = reachability::filter_reachable(self.mir);
-        Reachable { mir }
+        Reachable {
+            mir,
+            node_counter: self.node_counter,
+        }
     }
 }
 
 /// Unreachable code has been filtered out
 pub struct Reachable {
     pub mir: mir::Program,
+    pub node_counter: NodeCounter,
 }
 
 impl Reachable {
     /// Fold constants: evaluate constant expressions at compile time
     pub fn fold_constants(self) -> Result<Folded> {
         let mir = constant_folding::fold_constants(self.mir)?;
-        Ok(Folded { mir })
+        Ok(Folded {
+            mir,
+            node_counter: self.node_counter,
+        })
     }
 }
 
 /// Constants have been folded
 pub struct Folded {
     pub mir: mir::Program,
+    pub node_counter: NodeCounter,
 }
 
 impl Folded {
@@ -282,13 +297,18 @@ impl Folded {
     pub fn lift_bindings(self) -> Result<Lifted> {
         let mut lifter = binding_lifter::BindingLifter::new();
         let mir = lifter.lift_program(self.mir)?;
-        Ok(Lifted { mir })
+        Ok(Lifted {
+            mir,
+            node_counter: self.node_counter,
+        })
     }
 }
 
 /// Bindings have been lifted (loop-invariant code motion)
 pub struct Lifted {
     pub mir: mir::Program,
+    #[allow(dead_code)]
+    pub node_counter: NodeCounter,
 }
 
 impl Lifted {
