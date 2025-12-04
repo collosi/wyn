@@ -3,7 +3,7 @@
 use crate::ast::{NodeCounter, NodeId, Span, TypeName};
 use crate::error::CompilerError;
 use crate::mir::{Expr, ExprKind, Literal};
-use crate::normalize::{is_atomic, Normalizer};
+use crate::normalize::{Normalizer, is_atomic};
 use polytype::Type;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -42,7 +42,12 @@ fn next_id() -> NodeId {
 }
 
 fn var(name: &str) -> Expr {
-    Expr::new(next_id(), i32_type(), ExprKind::Var(name.to_string()), test_span())
+    Expr::new(
+        next_id(),
+        i32_type(),
+        ExprKind::Var(name.to_string()),
+        test_span(),
+    )
 }
 
 fn int_lit(n: i32) -> Expr {

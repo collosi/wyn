@@ -13,7 +13,7 @@
 
 use crate::ast::{Type, TypeName};
 use crate::error::Result;
-use crate::mir::visitor::MirVisitor;
+use crate::mir::folder::MirFolder;
 use crate::mir::{Attribute, Def, Expr, ExprKind, Param, Program};
 use polytype::Type as PolyType;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -545,7 +545,7 @@ struct SubstitutionVisitor<'a> {
     subst: &'a Substitution,
 }
 
-impl<'a> MirVisitor for SubstitutionVisitor<'a> {
+impl<'a> MirFolder for SubstitutionVisitor<'a> {
     type Error = std::convert::Infallible;
     type Ctx = ();
 

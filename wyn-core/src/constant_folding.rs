@@ -4,7 +4,7 @@
 //! operations on literals to their computed values.
 
 use crate::error::{CompilerError, Result};
-use crate::mir::visitor::MirVisitor;
+use crate::mir::folder::MirFolder;
 use crate::mir::{Expr, ExprKind, Literal, Program};
 use crate::{bail_type_at, err_type_at};
 
@@ -17,7 +17,7 @@ impl Default for ConstantFolder {
     }
 }
 
-impl MirVisitor for ConstantFolder {
+impl MirFolder for ConstantFolder {
     type Error = CompilerError;
     type Ctx = ();
 

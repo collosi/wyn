@@ -868,8 +868,11 @@ impl Flattener {
                         self.needs_backing_store.insert(binding_id);
                         // Use the backing store variable name
                         let ptr_name = Self::backing_store_name(binding_id);
-                        let ptr_var =
-                            self.mk_expr(types::pointer(arr.ty.clone()), mir::ExprKind::Var(ptr_name), span);
+                        let ptr_var = self.mk_expr(
+                            types::pointer(arr.ty.clone()),
+                            mir::ExprKind::Var(ptr_name),
+                            span,
+                        );
                         let kind = mir::ExprKind::Intrinsic {
                             name: "index".to_string(),
                             args: vec![ptr_var, idx],
@@ -966,8 +969,11 @@ impl Flattener {
                         self.needs_backing_store.insert(binding_id);
                         // Use the backing store variable name
                         let ptr_name = Self::backing_store_name(binding_id);
-                        let ptr_var =
-                            self.mk_expr(types::pointer(obj.ty.clone()), mir::ExprKind::Var(ptr_name), span);
+                        let ptr_var = self.mk_expr(
+                            types::pointer(obj.ty.clone()),
+                            mir::ExprKind::Var(ptr_name),
+                            span,
+                        );
                         let kind = mir::ExprKind::Intrinsic {
                             name: "tuple_access".to_string(),
                             args: vec![
@@ -1297,11 +1303,7 @@ impl Flattener {
                 .unwrap_or_else(|| {
                     panic!("BUG: Free variable '{}' in lambda has no type. Type checking should ensure all variables have types.", var)
                 });
-            tuple_elems.push(self.mk_expr(
-                var_type.clone(),
-                mir::ExprKind::Var((*var).clone()),
-                span,
-            ));
+            tuple_elems.push(self.mk_expr(var_type.clone(), mir::ExprKind::Var((*var).clone()), span));
             type_fields.push(((*var).clone(), var_type));
         }
 
@@ -1650,7 +1652,8 @@ impl Flattener {
             let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
 
             // Wrap the loop var in Materialize for pointer access
-            let loop_var_expr = self.mk_expr(tuple_ty.clone(), mir::ExprKind::Var(loop_var.to_string()), span);
+            let loop_var_expr =
+                self.mk_expr(tuple_ty.clone(), mir::ExprKind::Var(loop_var.to_string()), span);
             let materialized_loop_var = self.mk_expr(
                 types::pointer(tuple_ty.clone()),
                 mir::ExprKind::Materialize(Box::new(loop_var_expr)),

@@ -13,7 +13,7 @@ use polytype::Type;
 #[cfg(test)]
 mod tests;
 
-pub mod visitor;
+pub mod folder;
 
 /// A complete MIR program.
 #[derive(Debug, Clone)]

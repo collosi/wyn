@@ -45,8 +45,18 @@ fn test_simple_function() {
             i32_type(),
             ExprKind::BinOp {
                 op: "+".to_string(),
-                lhs: Box::new(Expr::new(nc.next(), i32_type(), ExprKind::Var("x".to_string()), span)),
-                rhs: Box::new(Expr::new(nc.next(), i32_type(), ExprKind::Var("y".to_string()), span)),
+                lhs: Box::new(Expr::new(
+                    nc.next(),
+                    i32_type(),
+                    ExprKind::Var("x".to_string()),
+                    span,
+                )),
+                rhs: Box::new(Expr::new(
+                    nc.next(),
+                    i32_type(),
+                    ExprKind::Var("y".to_string()),
+                    span,
+                )),
             },
             span,
         ),

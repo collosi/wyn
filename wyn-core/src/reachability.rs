@@ -5,7 +5,7 @@
 //! It returns functions in topological order (callees before callers)
 //! so the lowerer can process them without forward references.
 
-use crate::mir::visitor::MirVisitor;
+use crate::mir::folder::MirFolder;
 use crate::mir::{Attribute, Def, Expr, ExprKind, Literal, Program};
 use std::collections::HashSet;
 
@@ -92,11 +92,17 @@ struct CalleeCollector {
     callees: HashSet<String>,
 }
 
-impl MirVisitor for CalleeCollector {
+impl MirFolder for CalleeCollector {
     type Error = std::convert::Infallible;
     type Ctx = ();
 
-    fn visit_expr_call(&mut self, func: String, args: Vec<Expr>, expr: Expr, ctx: &mut Self::Ctx) -> Result<Expr, Self::Error> {
+    fn visit_expr_call(
+        &mut self,
+        func: String,
+        args: Vec<Expr>,
+        expr: Expr,
+        ctx: &mut Self::Ctx,
+    ) -> Result<Expr, Self::Error> {
         // Collect the function name
         self.callees.insert(func.clone());
 
@@ -111,7 +117,12 @@ impl MirVisitor for CalleeCollector {
         })
     }
 
-    fn visit_expr_var(&mut self, name: String, expr: Expr, _ctx: &mut Self::Ctx) -> Result<Expr, Self::Error> {
+    fn visit_expr_var(
+        &mut self,
+        name: String,
+        expr: Expr,
+        _ctx: &mut Self::Ctx,
+    ) -> Result<Expr, Self::Error> {
         // Variable references might refer to top-level constants
         self.callees.insert(name.clone());
         Ok(Expr {
@@ -120,7 +131,12 @@ impl MirVisitor for CalleeCollector {
         })
     }
 
-    fn visit_expr_literal(&mut self, lit: Literal, expr: Expr, ctx: &mut Self::Ctx) -> Result<Expr, Self::Error> {
+    fn visit_expr_literal(
+        &mut self,
+        lit: Literal,
+        expr: Expr,
+        ctx: &mut Self::Ctx,
+    ) -> Result<Expr, Self::Error> {
         // Check for closure records with __lambda_name field
         if let Some(lambda_name) = crate::mir::extract_lambda_name(&expr) {
             self.callees.insert(lambda_name.to_string());
