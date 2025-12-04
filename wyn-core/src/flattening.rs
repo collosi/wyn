@@ -10,7 +10,7 @@ use crate::error::Result;
 use crate::mir::{self, Expr};
 use crate::pattern;
 use crate::scope::ScopeStack;
-use crate::{bail_flatten, bail_type_at, err_flatten, err_type, err_type_at};
+use crate::{bail_flatten, bail_type_at, err_flatten, err_type};
 use polytype::TypeScheme;
 use std::collections::{HashMap, HashSet};
 
@@ -920,7 +920,7 @@ impl Flattener {
                     // FieldAccess on identifier - this is a real record field access
                 }
 
-                let (obj, obj_sv) = self.flatten_expr(obj_expr)?;
+                let (obj, _obj_sv) = self.flatten_expr(obj_expr)?;
 
                 // Resolve field name to index using type information
                 let idx = self.resolve_field_index(obj_expr, field)?;

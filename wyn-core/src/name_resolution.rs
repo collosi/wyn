@@ -10,14 +10,12 @@ use crate::module_manager::ModuleManager;
 
 pub struct NameResolver {
     module_manager: ModuleManager,
-    impl_source: crate::impl_source::ImplSource,
 }
 
 impl NameResolver {
     pub fn new() -> Self {
         NameResolver {
             module_manager: ModuleManager::new(),
-            impl_source: crate::impl_source::ImplSource::default(),
         }
     }
 
@@ -26,7 +24,6 @@ impl NameResolver {
     pub fn new_with_counter(node_counter: NodeCounter) -> Self {
         NameResolver {
             module_manager: ModuleManager::new_with_counter(node_counter),
-            impl_source: crate::impl_source::ImplSource::default(),
         }
     }
 
@@ -67,7 +64,6 @@ impl NameResolver {
                         // Build the qualified name
                         let module = name.clone();
                         let func_name = field.clone();
-                        let full_name = format!("{}.{}", module, func_name);
 
                         // Rewrite to QualifiedName
                         expr.kind = ExprKind::QualifiedName(vec![module.clone()], func_name);

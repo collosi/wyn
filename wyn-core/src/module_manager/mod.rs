@@ -13,6 +13,8 @@ use polytype::{Context, TypeScheme};
 use std::collections::{HashMap, HashSet};
 
 /// Name resolver for tracking opened modules and resolving unqualified names
+/// TODO: Integrate with elaboration to handle `open` declarations
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct NameResolver {
     /// Modules currently opened (via `open` declarations)
@@ -21,6 +23,7 @@ struct NameResolver {
     local_scope: ScopeStack<()>,
 }
 
+#[allow(dead_code)]
 impl NameResolver {
     fn new() -> Self {
         NameResolver {

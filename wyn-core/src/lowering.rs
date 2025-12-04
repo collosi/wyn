@@ -65,9 +65,6 @@ struct Constructor {
     // Environment: name -> value ID
     env: HashMap<String, spirv::Word>,
 
-    // Track which variable names hold pointers (from Materialize)
-    pointer_vars: std::collections::HashSet<String>,
-
     // Function map: name -> function ID
     functions: HashMap<String, spirv::Word>,
 
@@ -162,7 +159,6 @@ impl Constructor {
             debug_buffer: None,
             gasm_globals: HashMap::new(),
             gasm_type_cache: HashMap::new(),
-            pointer_vars: std::collections::HashSet::new(),
         }
     }
 

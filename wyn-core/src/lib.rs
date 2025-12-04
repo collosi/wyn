@@ -1,10 +1,8 @@
-// pub mod annotator;
 pub mod ast;
 pub mod diags;
 pub mod error;
 pub mod flattening;
 pub mod impl_source;
-pub mod inference;
 pub mod lexer;
 pub mod mir;
 pub mod module_manager;
