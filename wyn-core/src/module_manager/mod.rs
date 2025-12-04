@@ -363,19 +363,10 @@ impl ModuleManager {
                     }
                 }
 
-                // Handle named parameters by recursively substituting in the inner type
-                let new_name = match name {
-                    TypeName::NamedParam(param_name, inner_ty) => {
-                        let substituted_inner = self.substitute_in_type(inner_ty, substitutions);
-                        TypeName::NamedParam(param_name.clone(), Box::new(substituted_inner))
-                    }
-                    _ => name.clone(),
-                };
-
                 // Recursively substitute in type arguments
                 let new_args: Vec<Type> =
                     args.iter().map(|arg| self.substitute_in_type(arg, substitutions)).collect();
-                Type::Constructed(new_name, new_args)
+                Type::Constructed(name.clone(), new_args)
             }
             Type::Variable(_) => ty.clone(),
         }
@@ -390,9 +381,6 @@ impl ModuleManager {
         type_params: &[TypeParam],
         context: &mut Context<TypeName>,
     ) -> TypeScheme<TypeName> {
-        // First strip NamedParam wrappers
-        let ty = self.strip_named_params(ty);
-
         if type_params.is_empty() {
             return TypeScheme::Monotype(ty.clone());
         }
@@ -432,21 +420,6 @@ impl ModuleManager {
         result
     }
 
-    /// Strip NamedParam wrappers from a type - they're just documentation
-    fn strip_named_params(&self, ty: &Type) -> Type {
-        match ty {
-            Type::Constructed(TypeName::NamedParam(_param_name, inner_ty), _args) => {
-                // Recursively strip from inner type
-                self.strip_named_params(inner_ty)
-            }
-            Type::Constructed(name, args) => Type::Constructed(
-                name.clone(),
-                args.iter().map(|a| self.strip_named_params(a)).collect(),
-            ),
-            Type::Variable(_) => ty.clone(),
-        }
-    }
-
     /// Recursively substitute SizeVar and UserVar with Variable
     fn substitute_params(&self, ty: &Type, substitutions: &HashMap<String, polytype::Variable>) -> Type {
         match ty {
@@ -468,23 +441,6 @@ impl ModuleManager {
                     Type::Constructed(
                         TypeName::UserVar(name.clone()),
                         args.iter().map(|a| self.substitute_params(a, substitutions)).collect(),
-                    )
-                }
-            }
-            Type::Constructed(TypeName::NamedParam(param_name, inner_ty), args) => {
-                // Strip NamedParam wrapper - it's just documentation, not part of the type structure
-                let substituted_inner = self.substitute_params(inner_ty, substitutions);
-                let substituted_args: Vec<Type> =
-                    args.iter().map(|a| self.substitute_params(a, substitutions)).collect();
-
-                // If there are args, reconstruct with them; otherwise just return the inner type
-                if substituted_args.is_empty() {
-                    substituted_inner
-                } else {
-                    // This shouldn't happen in practice, but handle it for completeness
-                    Type::Constructed(
-                        TypeName::NamedParam(param_name.clone(), Box::new(substituted_inner)),
-                        substituted_args,
                     )
                 }
             }
@@ -521,9 +477,7 @@ impl ModuleManager {
                     }
                     Spec::SigOp(op, ty) if op == function_name => {
                         // Operators currently don't have type parameters, return as Monotype
-                        // Strip NamedParam wrappers before returning
-                        let stripped_ty = self.strip_named_params(ty);
-                        return Ok(TypeScheme::Monotype(stripped_ty));
+                        return Ok(TypeScheme::Monotype(ty.clone()));
                     }
                     _ => {}
                 },

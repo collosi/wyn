@@ -329,8 +329,6 @@ pub enum TypeName {
     Sum(Vec<(String, Vec<Type>)>),
     /// Existential size: ?[n][m]. type
     Existential(Vec<String>, Box<Type>),
-    /// Named parameter: (name: type)
-    NamedParam(String, Box<Type>),
 }
 
 impl std::fmt::Display for TypeName {
@@ -381,9 +379,6 @@ impl std::fmt::Display for TypeName {
                 }
                 write!(f, ".{}", ty)
             }
-            TypeName::NamedParam(name, ty) => {
-                write!(f, "({}:{})", name, ty)
-            }
         }
     }
 }
@@ -433,7 +428,6 @@ impl polytype::Name for TypeName {
                 variant_strs.join(" | ")
             }
             TypeName::Existential(vars, ty) => format!("?{}. {}", vars.join(""), ty),
-            TypeName::NamedParam(name, ty) => format!("{}: {}", name, ty),
         }
     }
 }
@@ -996,11 +990,6 @@ pub mod types {
     /// Create an existential size type: ?[n][m]. type
     pub fn existential(size_vars: Vec<String>, inner: Type) -> Type {
         Type::Constructed(TypeName::Existential(size_vars, Box::new(inner)), vec![])
-    }
-
-    /// Create a named parameter type: (name: type)
-    pub fn named_param(name: String, ty: Type) -> Type {
-        Type::Constructed(TypeName::NamedParam(name, Box::new(ty)), vec![])
     }
 
     /// Create a size variable in array types: [n]

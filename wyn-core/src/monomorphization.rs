@@ -63,7 +63,6 @@ enum TypeKey {
     Record(Vec<(String, TypeKey)>),
     Sum(Vec<(String, Vec<TypeKey>)>),
     Existential(Vec<String>, Box<TypeKey>),
-    NamedParam(String, Box<TypeKey>),
 }
 
 impl SubstKey {
@@ -103,9 +102,6 @@ impl TypeKey {
                     }
                     TypeName::Existential(vars, inner) => {
                         return TypeKey::Existential(vars.clone(), Box::new(TypeKey::from_type(inner)));
-                    }
-                    TypeName::NamedParam(name, inner) => {
-                        return TypeKey::NamedParam(name.clone(), Box::new(TypeKey::from_type(inner)));
                     }
                     _ => {}
                 }
@@ -526,12 +522,6 @@ fn contains_variables(ty: &Type) -> bool {
                         return true;
                     }
                 }
-                TypeName::NamedParam(_, inner) => {
-                    // Check the inner type
-                    if contains_variables(inner) {
-                        return true;
-                    }
-                }
                 _ => {}
             }
             // Check type arguments
@@ -590,9 +580,6 @@ fn apply_subst(ty: &Type, subst: &Substitution) -> Type {
                 }
                 TypeName::Existential(vars, inner) => {
                     TypeName::Existential(vars.clone(), Box::new(apply_subst(inner, subst)))
-                }
-                TypeName::NamedParam(name, inner) => {
-                    TypeName::NamedParam(name.clone(), Box::new(apply_subst(inner, subst)))
                 }
                 _ => name.clone(),
             };

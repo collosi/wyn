@@ -136,9 +136,6 @@ fn format_constructed_type(name: &TypeName, args: &[PolyType<TypeName>]) -> Stri
         TypeName::Existential(vars, inner) => {
             format!("?[{}]. {}", vars.join(", "), format_type(inner))
         }
-        TypeName::NamedParam(name, ty) => {
-            format!("({}: {})", name, format_type(ty))
-        }
     }
 }
 

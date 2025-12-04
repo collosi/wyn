@@ -499,18 +499,18 @@ impl Parser {
     fn parse_function_type(&mut self) -> Result<Type> {
         trace!("parse_function_type: next token = {:?}", self.peek());
 
-        // Check for named parameter: (name: type) -> type
+        // Check for named parameter syntax: (name: type) -> ...
+        // We parse this for documentation but drop the name, keeping just the type
         if self.check(&Token::LeftParen) {
             let saved_pos = self.current;
             self.advance(); // consume '('
 
             // Try to parse as named parameter
-            if let Some(Token::Identifier(name)) = self.peek() {
-                let param_name = name.clone();
+            if let Some(Token::Identifier(_name)) = self.peek() {
                 self.advance();
 
                 if self.check(&Token::Colon) {
-                    // It's a named parameter
+                    // It's a named parameter - parse but drop the name
                     self.advance(); // consume ':'
                     let param_type = self.parse_type()?;
                     self.expect(Token::RightParen)?;
@@ -518,9 +518,9 @@ impl Parser {
                     // Must be followed by ->
                     if self.check(&Token::Arrow) {
                         self.advance();
-                        let return_type = self.parse_type()?;
-                        let named_param = types::named_param(param_name, param_type);
-                        return Ok(types::function(named_param, return_type));
+                        let return_type = self.parse_function_type()?;
+                        // Just use the param_type directly, ignoring the name
+                        return Ok(types::function(param_type, return_type));
                     } else {
                         bail_parse!("Named parameter must be followed by ->");
                     }
