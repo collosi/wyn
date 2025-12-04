@@ -134,6 +134,9 @@ pub enum TypeName {
     Sum(Vec<(String, Vec<Type>)>),
     /// Existential size: ?[n][m]. type
     Existential(Vec<String>, Box<Type>),
+    /// Pointer type (MIR only) - result of Materialize, used for indexing/access.
+    /// The pointee type is stored in Type::Constructed args.
+    Pointer,
 }
 
 impl std::fmt::Display for TypeName {
@@ -184,6 +187,7 @@ impl std::fmt::Display for TypeName {
                 }
                 write!(f, ".{}", ty)
             }
+            TypeName::Pointer => write!(f, "Ptr"),
         }
     }
 }
@@ -233,6 +237,7 @@ impl polytype::Name for TypeName {
                 variant_strs.join(" | ")
             }
             TypeName::Existential(vars, ty) => format!("?{}. {}", vars.join(""), ty),
+            TypeName::Pointer => "Ptr".to_string(),
         }
     }
 }
@@ -453,5 +458,23 @@ pub fn strip_unique(ty: &Type) -> Type {
             Type::Constructed(name.clone(), stripped_args)
         }
         _ => ty.clone(),
+    }
+}
+
+/// Create a pointer type (MIR only): Ptr(inner)
+pub fn pointer(inner: Type) -> Type {
+    Type::Constructed(TypeName::Pointer, vec![inner])
+}
+
+/// Check if a type is a pointer type
+pub fn is_pointer(ty: &Type) -> bool {
+    matches!(ty, Type::Constructed(TypeName::Pointer, _))
+}
+
+/// Get the pointee type from a pointer type, or None if not a pointer
+pub fn pointee(ty: &Type) -> Option<&Type> {
+    match ty {
+        Type::Constructed(TypeName::Pointer, args) if !args.is_empty() => Some(&args[0]),
+        _ => None,
     }
 }

@@ -8,6 +8,7 @@ use crate::ast::TypeName;
 use crate::error::Result;
 use crate::impl_source::{BuiltinImpl, ImplSource, PrimOp};
 use crate::mir::{self, Def, Expr, ExprKind, Literal, LoopKind, Program};
+use crate::types;
 use crate::{bail_spirv, err_spirv};
 use polytype::Type as PolyType;
 use rspirv::binary::Assemble;
@@ -378,6 +379,14 @@ impl Constructor {
                             );
                         }
                         self.get_or_create_struct_type(field_types)
+                    }
+                    TypeName::Pointer => {
+                        // Pointer type: args[0] is pointee type
+                        if args.is_empty() {
+                            panic!("BUG: Pointer type requires a pointee type argument.");
+                        }
+                        let pointee_type = self.ast_type_to_spirv(&args[0]);
+                        self.builder.type_pointer(None, StorageClass::Function, pointee_type)
                     }
                     _ => {
                         panic!(
@@ -2063,18 +2072,12 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                         }
                     };
 
-                    // Check if args[0] is a pointer (Materialize or __ptr variable)
-                    // Matches both __ptr_N (backing store) and __ptrN (inline)
-                    let is_ptr = match &args[0].kind {
-                        ExprKind::Materialize(_) => true,
-                        ExprKind::Var(name) => name.starts_with("__ptr"),
-                        _ => false,
-                    };
-
-                    let composite_id = if is_ptr {
+                    let composite_id = if types::is_pointer(&args[0].ty) {
                         // It's a pointer, load the value
                         let ptr = lower_expr(constructor, &args[0])?;
-                        let value_type = constructor.ast_type_to_spirv(&args[0].ty);
+                        let pointee_ty =
+                            types::pointee(&args[0].ty).expect("Pointer type should have pointee");
+                        let value_type = constructor.ast_type_to_spirv(pointee_ty);
                         constructor.builder.load(value_type, None, ptr, None, [])?
                     } else {
                         lower_expr(constructor, &args[0])?
@@ -2089,15 +2092,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                     // Array indexing with OpAccessChain + OpLoad
                     let index_val = lower_expr(constructor, &args[1])?;
 
-                    // Check if args[0] is a pointer (Materialize or __ptr variable)
-                    // Matches both __ptr_N (backing store) and __ptrN (inline)
-                    let is_ptr = match &args[0].kind {
-                        ExprKind::Materialize(_) => true,
-                        ExprKind::Var(name) => name.starts_with("__ptr"),
-                        _ => false,
-                    };
-
-                    let array_var = if is_ptr {
+                    let array_var = if types::is_pointer(&args[0].ty) {
                         // It's a pointer, use it directly
                         lower_expr(constructor, &args[0])?
                     } else {

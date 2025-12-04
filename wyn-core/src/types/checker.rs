@@ -1667,6 +1667,7 @@ impl TypeChecker {
                                     TypeName::Tuple(_) => "tuple".to_string(),
                                     TypeName::Sum(_) => "sum".to_string(),
                                     TypeName::Existential(_, _) => "existential".to_string(),
+                                    TypeName::Pointer => "pointer".to_string(),
                                 };
 
                                 // Look up field in builtin registry (for vector types)

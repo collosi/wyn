@@ -573,7 +573,7 @@ impl Flattener {
                     name: ptr_name,
                     binding_id: ptr_binding_id,
                     value: Box::new(Expr::new(
-                        param_ty.clone(),
+                        types::pointer(param_ty.clone()),
                         mir::ExprKind::Materialize(Box::new(Expr::new(
                             param_ty,
                             mir::ExprKind::Var(param_name),
@@ -845,7 +845,8 @@ impl Flattener {
                         self.needs_backing_store.insert(binding_id);
                         // Use the backing store variable name
                         let ptr_name = Self::backing_store_name(binding_id);
-                        let ptr_var = Expr::new(arr.ty.clone(), mir::ExprKind::Var(ptr_name), span);
+                        let ptr_var =
+                            Expr::new(types::pointer(arr.ty.clone()), mir::ExprKind::Var(ptr_name), span);
                         let kind = mir::ExprKind::Intrinsic {
                             name: "index".to_string(),
                             args: vec![ptr_var, idx],
@@ -855,8 +856,11 @@ impl Flattener {
                 }
 
                 // Fallback: wrap the array in Materialize inline
-                let materialized_arr =
-                    Expr::new(arr.ty.clone(), mir::ExprKind::Materialize(Box::new(arr)), span);
+                let materialized_arr = Expr::new(
+                    types::pointer(arr.ty.clone()),
+                    mir::ExprKind::Materialize(Box::new(arr)),
+                    span,
+                );
                 (
                     mir::ExprKind::Intrinsic {
                         name: "index".to_string(),
@@ -891,8 +895,11 @@ impl Flattener {
                             span,
                         );
                         // Wrap in Materialize for pointer access
-                        let materialized_obj =
-                            Expr::new(closure_type, mir::ExprKind::Materialize(Box::new(obj)), span);
+                        let materialized_obj = Expr::new(
+                            types::pointer(closure_type),
+                            mir::ExprKind::Materialize(Box::new(obj)),
+                            span,
+                        );
                         let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
                         return Ok((
                             Expr::new(
@@ -937,7 +944,8 @@ impl Flattener {
                         self.needs_backing_store.insert(binding_id);
                         // Use the backing store variable name
                         let ptr_name = Self::backing_store_name(binding_id);
-                        let ptr_var = Expr::new(obj.ty.clone(), mir::ExprKind::Var(ptr_name), span);
+                        let ptr_var =
+                            Expr::new(types::pointer(obj.ty.clone()), mir::ExprKind::Var(ptr_name), span);
                         let kind = mir::ExprKind::Intrinsic {
                             name: "tuple_access".to_string(),
                             args: vec![
@@ -957,11 +965,12 @@ impl Flattener {
                 let tmp_name = self.fresh_name("ptr");
                 let tmp_binding_id = self.fresh_binding_id();
                 let obj_ty = obj.ty.clone();
+                let ptr_ty = types::pointer(obj_ty.clone());
                 let materialized_obj =
-                    Expr::new(obj_ty.clone(), mir::ExprKind::Materialize(Box::new(obj)), span);
+                    Expr::new(ptr_ty.clone(), mir::ExprKind::Materialize(Box::new(obj)), span);
 
                 // Reference the temp in the tuple_access
-                let tmp_var = Expr::new(obj_ty.clone(), mir::ExprKind::Var(tmp_name.clone()), span);
+                let tmp_var = Expr::new(ptr_ty, mir::ExprKind::Var(tmp_name.clone()), span);
                 let access_expr = Expr::new(
                     ty.clone(),
                     mir::ExprKind::Intrinsic {
@@ -1078,7 +1087,7 @@ impl Flattener {
                             name: ptr_name,
                             binding_id: ptr_binding_id,
                             value: Box::new(Expr::new(
-                                value.ty.clone(), // Materialize returns pointer to same type
+                                types::pointer(value.ty.clone()),
                                 mir::ExprKind::Materialize(Box::new(Expr::new(
                                     value.ty.clone(),
                                     mir::ExprKind::Var(name.clone()),
@@ -1174,7 +1183,7 @@ impl Flattener {
                     // Wrap the tuple var in Materialize for pointer access
                     let tuple_var = Expr::new(tuple_ty.clone(), mir::ExprKind::Var(tmp.clone()), span);
                     let materialized_tuple = Expr::new(
-                        tuple_ty.clone(),
+                        types::pointer(tuple_ty.clone()),
                         mir::ExprKind::Materialize(Box::new(tuple_var)),
                         span,
                     );
@@ -1622,7 +1631,7 @@ impl Flattener {
             // Wrap the loop var in Materialize for pointer access
             let loop_var_expr = Expr::new(tuple_ty.clone(), mir::ExprKind::Var(loop_var.to_string()), span);
             let materialized_loop_var = Expr::new(
-                tuple_ty.clone(),
+                types::pointer(tuple_ty.clone()),
                 mir::ExprKind::Materialize(Box::new(loop_var_expr)),
                 span,
             );
