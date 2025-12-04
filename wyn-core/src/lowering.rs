@@ -6,9 +6,9 @@
 
 use crate::ast::TypeName;
 use crate::error::Result;
-use crate::{bail_spirv, err_spirv};
 use crate::impl_source::{BuiltinImpl, ImplSource, PrimOp};
 use crate::mir::{self, Def, Expr, ExprKind, Literal, LoopKind, Program};
+use crate::{bail_spirv, err_spirv};
 use polytype::Type as PolyType;
 use rspirv::binary::Assemble;
 use rspirv::dr::Operand;
@@ -1176,11 +1176,15 @@ fn lower_const_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv:
             }
             // Uniforms cannot be used in constant expressions
             if constructor.uniform_variables.contains_key(name) {
-                bail_spirv!("Uniform variable '{}' cannot be used in constant expressions", name);
+                bail_spirv!(
+                    "Uniform variable '{}' cannot be used in constant expressions",
+                    name
+                );
             }
             Err(err_spirv!(
                 "Global constant '{}' references undefined constant '{}'",
-                "?", name
+                "?",
+                name
             ))
         }
 
@@ -1226,9 +1230,11 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             // Check if it's a uniform variable
             if let Some(&var_id) = constructor.uniform_variables.get(name) {
                 // Load from the uniform variable
-                let value_type_id = constructor.uniform_types.get(name).copied().ok_or_else(|| {
-                    err_spirv!("Could not find type for uniform variable: {}", name)
-                })?;
+                let value_type_id = constructor
+                    .uniform_types
+                    .get(name)
+                    .copied()
+                    .ok_or_else(|| err_spirv!("Could not find type for uniform variable: {}", name))?;
                 return Ok(constructor.builder.load(value_type_id, None, var_id, None, [])?);
             }
             Err(err_spirv!("Undefined variable: {}", name))
@@ -1449,9 +1455,10 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                 LoopKind::While { cond } => lower_expr(constructor, cond)?,
                 LoopKind::ForRange { var, bound } => {
                     let bound_id = lower_expr(constructor, bound)?;
-                    let var_id = *constructor.env.get(var).ok_or_else(|| {
-                        err_spirv!("Loop variable {} not found", var)
-                    })?;
+                    let var_id = *constructor
+                        .env
+                        .get(var)
+                        .ok_or_else(|| err_spirv!("Loop variable {} not found", var))?;
                     constructor.builder.s_less_than(constructor.bool_type, None, var_id, bound_id)?
                 }
                 LoopKind::For { .. } => {
@@ -1568,9 +1575,10 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                 let output_elem_type = constructor.ast_type_to_spirv(output_elem_mir_type);
 
                 // Look up the lambda function by name
-                let lambda_func_id = *constructor.functions.get(&lambda_name).ok_or_else(|| {
-                    err_spirv!("Lambda function not found: {}", lambda_name)
-                })?;
+                let lambda_func_id = *constructor
+                    .functions
+                    .get(&lambda_name)
+                    .ok_or_else(|| err_spirv!("Lambda function not found: {}", lambda_name))?;
 
                 // Build result array by calling lambda for each element
                 let mut result_elements = Vec::new();
@@ -1869,9 +1877,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                             let gasm_func = constructor
                                                 .impl_source
                                                 .get_gasm_function("gdp_encode_int32")
-                                                .ok_or_else(|| {
-                                                    err_spirv!("gdp_encode_int32 not found")
-                                                })?
+                                                .ok_or_else(|| err_spirv!("gdp_encode_int32 not found"))?
                                                 .clone();
                                             let func_id = constructor.lower_gasm_function(&gasm_func)?;
                                             constructor.builder.function_call(
@@ -1893,9 +1899,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                             let gasm_func = constructor
                                                 .impl_source
                                                 .get_gasm_function("gdp_encode_float32")
-                                                .ok_or_else(|| {
-                                                    err_spirv!("gdp_encode_float32 not found")
-                                                })?
+                                                .ok_or_else(|| err_spirv!("gdp_encode_float32 not found"))?
                                                 .clone();
                                             let func_id = constructor.lower_gasm_function(&gasm_func)?;
                                             constructor.builder.function_call(
@@ -2005,10 +2009,10 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                             BuiltinImpl::CoreFn(core_fn_name) => {
                                 // Library-level builtins implemented as normal functions in prelude
                                 // Look up the function and call it
-                                let func_id =
-                                    *constructor.functions.get(core_fn_name).ok_or_else(|| {
-                                        err_spirv!("CoreFn not found: {}", core_fn_name)
-                                    })?;
+                                let func_id = *constructor
+                                    .functions
+                                    .get(core_fn_name)
+                                    .ok_or_else(|| err_spirv!("CoreFn not found: {}", core_fn_name))?;
 
                                 Ok(constructor.builder.function_call(
                                     result_type,
@@ -2032,9 +2036,10 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                         }
                     } else {
                         // Look up user-defined function
-                        let func_id = *constructor.functions.get(func).ok_or_else(|| {
-                            err_spirv!("Unknown function: {}", func)
-                        })?;
+                        let func_id = *constructor
+                            .functions
+                            .get(func)
+                            .ok_or_else(|| err_spirv!("Unknown function: {}", func))?;
                         Ok(constructor.builder.function_call(result_type, None, func_id, arg_ids)?)
                     }
                 }
@@ -2156,15 +2161,11 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
 fn lower_const_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::Word> {
     match lit {
         Literal::Int(s) => {
-            let value: i32 = s
-                .parse()
-                .map_err(|_| err_spirv!("Invalid integer literal: {}", s))?;
+            let value: i32 = s.parse().map_err(|_| err_spirv!("Invalid integer literal: {}", s))?;
             Ok(constructor.const_i32(value))
         }
         Literal::Float(s) => {
-            let value: f32 = s
-                .parse()
-                .map_err(|_| err_spirv!("Invalid float literal: {}", s))?;
+            let value: f32 = s.parse().map_err(|_| err_spirv!("Invalid float literal: {}", s))?;
             Ok(constructor.const_f32(value))
         }
         Literal::Bool(b) => Ok(constructor.const_bool(*b)),
@@ -2236,24 +2237,18 @@ fn lower_const_literal(constructor: &mut Constructor, lit: &Literal) -> Result<s
             let mat_type = constructor.get_or_create_mat_type(elem_type, num_rows as u32, num_cols as u32);
             Ok(constructor.builder.constant_composite(mat_type, col_ids))
         }
-        Literal::Tuple(_) => Err(err_spirv!(
-            "Tuple literals not yet supported in global constants"
-        )),
+        Literal::Tuple(_) => Err(err_spirv!("Tuple literals not yet supported in global constants")),
     }
 }
 
 fn lower_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::Word> {
     match lit {
         Literal::Int(s) => {
-            let value: i32 = s
-                .parse()
-                .map_err(|_| err_spirv!("Invalid integer literal: {}", s))?;
+            let value: i32 = s.parse().map_err(|_| err_spirv!("Invalid integer literal: {}", s))?;
             Ok(constructor.const_i32(value))
         }
         Literal::Float(s) => {
-            let value: f32 = s
-                .parse()
-                .map_err(|_| err_spirv!("Invalid float literal: {}", s))?;
+            let value: f32 = s.parse().map_err(|_| err_spirv!("Invalid float literal: {}", s))?;
             Ok(constructor.const_f32(value))
         }
         Literal::Bool(b) => Ok(constructor.const_bool(*b)),

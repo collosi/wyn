@@ -110,10 +110,7 @@ impl Parser {
                 self.parse_pattern_literal()
             }
 
-            _ => Err(err_parse!(
-                "Expected pattern, got {:?}",
-                self.peek()
-            )),
+            _ => Err(err_parse!("Expected pattern, got {:?}", self.peek())),
         }
     }
 
@@ -311,10 +308,7 @@ impl Parser {
             }
 
             _ => {
-                bail_parse!(
-                    "Expected literal in pattern, got {:?}",
-                    self.peek()
-                );
+                bail_parse!("Expected literal in pattern, got {:?}", self.peek());
             }
         };
 

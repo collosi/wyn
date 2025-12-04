@@ -960,7 +960,9 @@ impl TypeChecker {
             Declaration::ModuleBind(_) => {
                 // Module bindings should be elaborated away before type checking
                 // If we encounter one here, it means elaboration wasn't run or failed
-                Err(err_module!("Module bindings should be elaborated before type checking"))
+                Err(err_module!(
+                    "Module bindings should be elaborated before type checking"
+                ))
             }
             Declaration::ModuleTypeBind(_) => {
                 // Module type bindings are erased during elaboration
@@ -1925,9 +1927,9 @@ impl TypeChecker {
                 let result_type = self.context.new_variable();
                 let expected_func_type = Type::arrow(param_type_var.clone(), result_type.clone());
 
-                self.context.unify(&func_type, &expected_func_type).map_err(|e| {
-                    err_type_at!(arg.h.span, "Function application type error: {:?}", e)
-                })?;
+                self.context
+                    .unify(&func_type, &expected_func_type)
+                    .map_err(|e| err_type_at!(arg.h.span, "Function application type error: {:?}", e))?;
 
                 // Extract the parameter type by applying context
                 let param_type = param_type_var.apply(&self.context);
@@ -1944,9 +1946,9 @@ impl TypeChecker {
                 let result_type = self.context.new_variable();
                 let expected_func_type = Type::arrow(param_type_var.clone(), result_type.clone());
 
-                self.context.unify(&func_type, &expected_func_type).map_err(|e| {
-                    err_type_at!(arg.h.span, "Function application type error: {:?}", e)
-                })?;
+                self.context
+                    .unify(&func_type, &expected_func_type)
+                    .map_err(|e| err_type_at!(arg.h.span, "Function application type error: {:?}", e))?;
 
                 // Extract the expected parameter type
                 let expected_param_type = param_type_var.apply(&self.context);

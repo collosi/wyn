@@ -294,13 +294,14 @@ impl Flattener {
         }
 
         // Look up the type of the object
-        let scheme = self.type_table.get(&obj.h.id).ok_or_else(|| {
-            err_flatten!("No type information for field access target")
-        })?;
+        let scheme = self
+            .type_table
+            .get(&obj.h.id)
+            .ok_or_else(|| err_flatten!("No type information for field access target"))?;
 
-        let obj_type = self.get_monotype(scheme).ok_or_else(|| {
-            err_flatten!("Could not extract monotype from scheme")
-        })?;
+        let obj_type = self
+            .get_monotype(scheme)
+            .ok_or_else(|| err_flatten!("Could not extract monotype from scheme"))?;
 
         // Resolve based on type
         match obj_type {
@@ -879,11 +880,9 @@ impl Flattener {
 
                         // Resolve field name to index from closure type
                         let idx = match &closure_type {
-                            Type::Constructed(TypeName::Record(fields), _) => {
-                                fields.get_index(field).ok_or_else(|| {
-                                    err_flatten!("Unknown closure field: {}", field)
-                                })?
-                            }
+                            Type::Constructed(TypeName::Record(fields), _) => fields
+                                .get_index(field)
+                                .ok_or_else(|| err_flatten!("Unknown closure field: {}", field))?,
                             _ => {
                                 bail_flatten!("Closure type is not a record");
                             }
@@ -1035,9 +1034,7 @@ impl Flattener {
                 bail_flatten!("Match expressions not yet supported");
             }
             ExprKind::Range(_) => {
-                bail_flatten!(
-                    "Range expressions should be desugared before flattening"
-                );
+                bail_flatten!("Range expressions should be desugared before flattening");
             }
         };
 
@@ -1540,8 +1537,7 @@ impl Flattener {
         init: Option<&Expression>,
         span: Span,
     ) -> Result<(String, Expr, Vec<(String, Expr)>)> {
-        let init_expr = init
-            .ok_or_else(|| err_flatten!("Loop must have init expression"))?;
+        let init_expr = init.ok_or_else(|| err_flatten!("Loop must have init expression"))?;
 
         let (init_flat, _) = self.flatten_expr(init_expr)?;
         let init_ty = init_flat.ty.clone();
@@ -1561,10 +1557,7 @@ impl Flattener {
                 self.extract_tuple_bindings(patterns, &loop_var, &init_ty, span)?
             }
             _ => {
-                bail_flatten!(
-                    "Loop pattern {:?} not supported",
-                    pattern.kind
-                );
+                bail_flatten!("Loop pattern {:?} not supported", pattern.kind);
             }
         };
 
@@ -1588,10 +1581,7 @@ impl Flattener {
                 self.extract_bindings_from_pattern(inner, loop_var, init_ty, span)
             }
             PatternKind::Tuple(patterns) => self.extract_tuple_bindings(patterns, loop_var, init_ty, span),
-            _ => Err(err_flatten!(
-                "Loop pattern {:?} not supported",
-                pattern.kind
-            )),
+            _ => Err(err_flatten!("Loop pattern {:?} not supported", pattern.kind)),
         }
     }
 
@@ -1607,10 +1597,7 @@ impl Flattener {
         let elem_types: Vec<Type> = match tuple_ty {
             Type::Constructed(TypeName::Tuple(_), args) => args.clone(),
             _ => {
-                bail_flatten!(
-                    "Expected tuple type for tuple pattern, got {:?}",
-                    tuple_ty
-                );
+                bail_flatten!("Expected tuple type for tuple pattern, got {:?}", tuple_ty);
             }
         };
 
@@ -1629,12 +1616,10 @@ impl Flattener {
                 }
             };
 
-            let elem_ty = elem_types.get(i).cloned().ok_or_else(|| {
-                err_flatten!(
-                    "Tuple pattern element {} has no corresponding type",
-                    i
-                )
-            })?;
+            let elem_ty = elem_types
+                .get(i)
+                .cloned()
+                .ok_or_else(|| err_flatten!("Tuple pattern element {} has no corresponding type", i))?;
             let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
 
             // Wrap the loop var in Materialize for pointer access

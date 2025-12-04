@@ -7,8 +7,8 @@ use crate::ast::{
 use crate::error::Result;
 use crate::lexer;
 use crate::parser::Parser;
-use crate::{bail_module, err_module, err_parse};
 use crate::scope::ScopeStack;
+use crate::{bail_module, err_module, err_parse};
 use polytype::{Context, TypeScheme};
 use std::collections::{HashMap, HashSet};
 
@@ -200,10 +200,7 @@ impl ModuleManager {
         for decl in &program.declarations {
             if let Declaration::ModuleBind(mb) = decl {
                 if self.elaborated_modules.contains_key(&mb.name) {
-                    bail_module!(
-                        "Module '{}' is already defined",
-                        mb.name
-                    );
+                    bail_module!("Module '{}' is already defined", mb.name);
                 }
 
                 // Extract type substitutions from the signature
@@ -262,10 +259,7 @@ impl ModuleManager {
         for decl in &program.declarations {
             if let Declaration::ModuleTypeBind(mtb) = decl {
                 if self.module_type_registry.contains_key(&mtb.name) {
-                    bail_module!(
-                        "Module type '{}' is already defined",
-                        mtb.name
-                    );
+                    bail_module!("Module type '{}' is already defined", mtb.name);
                 }
                 self.module_type_registry.insert(mtb.name.clone(), mtb.definition.clone());
             }
@@ -283,9 +277,10 @@ impl ModuleManager {
         match mte {
             ModuleTypeExpression::Name(name) => {
                 // Look up the module type in the registry
-                let definition = self.module_type_registry.get(name).ok_or_else(|| {
-                    err_module!("Module type '{}' not found", name)
-                })?;
+                let definition = self
+                    .module_type_registry
+                    .get(name)
+                    .ok_or_else(|| err_module!("Module type '{}' not found", name))?;
                 // Recurse on the definition
                 self.elaborate_module_type(definition, substitutions)
             }
@@ -540,7 +535,8 @@ impl ModuleManager {
 
         Err(err_module!(
             "Function '{}' not found in module '{}'",
-            function_name, module_name
+            function_name,
+            module_name
         ))
     }
 
@@ -556,10 +552,7 @@ impl ModuleManager {
             if let Some(param_ty) = self.extract_type_from_pattern(param) {
                 param_types.push(param_ty);
             } else {
-                bail_module!(
-                    "Function parameter in '{}' lacks type annotation",
-                    decl.name
-                );
+                bail_module!("Function parameter in '{}' lacks type annotation", decl.name);
             }
         }
 

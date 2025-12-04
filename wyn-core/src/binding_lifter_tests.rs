@@ -333,4 +333,3 @@ fn compile_to_flattened(source: &str) -> crate::mir::Program {
         .expect("fold_constants failed")
         .mir
 }
-
