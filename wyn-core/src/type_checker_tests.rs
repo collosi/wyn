@@ -1,7 +1,6 @@
 use crate::ast::{Type, TypeName};
 use crate::error::CompilerError;
 use crate::type_checker::{TypeChecker, TypeWarning};
-use polytype::TypeScheme;
 
 /// Helper to parse and type check source code, expecting success
 fn typecheck_program(input: &str) {
@@ -23,12 +22,6 @@ fn try_typecheck_program(input: &str) -> Result<TypeChecker, CompilerError> {
     let mut type_checker = TypeChecker::new();
     type_checker.load_builtins()?;
     Ok(type_checker)
-}
-
-/// Helper to parse and type check, returning the type table
-fn typecheck_and_get_types(input: &str) -> Result<crate::TypeTable, CompilerError> {
-    let type_checked = crate::Compiler::parse(input)?.elaborate()?.resolve()?.type_check()?;
-    Ok(type_checked.type_table)
 }
 
 #[test]

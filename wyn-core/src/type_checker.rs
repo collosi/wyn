@@ -161,7 +161,7 @@ impl TypeChecker {
 
     /// Look up a variable in the scope stack (for testing)
     pub fn lookup(&self, name: &str) -> Option<TypeScheme<TypeName>> {
-        self.scope_stack.lookup(name).ok().cloned()
+        self.scope_stack.lookup(name).cloned()
     }
 
     /// Get a reference to the context (for testing)
@@ -918,7 +918,7 @@ impl TypeChecker {
                 // Now also register it with the qualified name
                 // The unqualified name was already registered in check_decl
                 let qualified_name = format!("{}.{}", module_name, decl_node.name);
-                if let Ok(type_scheme) = self.scope_stack.lookup(&decl_node.name) {
+                if let Some(type_scheme) = self.scope_stack.lookup(&decl_node.name) {
                     self.scope_stack.insert(qualified_name.clone(), type_scheme.clone());
                     debug!("Registered module function as '{}'", qualified_name);
                 }
@@ -1170,7 +1170,7 @@ impl TypeChecker {
                 debug!("Current scope depth: {}", self.scope_stack.depth());
 
                 // First check scope stack for variables
-                if let Ok(type_scheme) = self.scope_stack.lookup(name) {
+                if let Some(type_scheme) = self.scope_stack.lookup(name) {
                     debug!("Found '{}' in scope stack with type: {:?}", name, type_scheme);
                     // Instantiate the type scheme to get a concrete type
                     Ok(type_scheme.instantiate(&mut self.context))
@@ -1496,7 +1496,7 @@ impl TypeChecker {
                     let mangled = qual_name.mangle();
 
                     // Check if this is a module-qualified name (mangled name exists in scope)
-                    if let Ok(scheme) = self.scope_stack.lookup(&mangled) {
+                    if let Some(scheme) = self.scope_stack.lookup(&mangled) {
                         // Instantiate the type scheme
                         let ty = scheme.instantiate(&mut self.context);
                         self.type_table.insert(expr.h.id, TypeScheme::Monotype(ty.clone()));
@@ -1754,7 +1754,7 @@ impl TypeChecker {
                 }
 
                 // Look up in scope stack (for module functions like f32.sum)
-                if let Ok(type_scheme) = self.scope_stack.lookup(&full_name) {
+                if let Some(type_scheme) = self.scope_stack.lookup(&full_name) {
                     debug!("Found '{}' in scope stack with type: {:?}", full_name, type_scheme);
                     Ok(type_scheme.instantiate(&mut self.context))
                 } else {

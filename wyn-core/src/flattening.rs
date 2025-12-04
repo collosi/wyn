@@ -625,7 +625,6 @@ impl Flattener {
                 let sv = self
                     .static_values
                     .lookup(name)
-                    .ok()
                     .cloned()
                     .unwrap_or(StaticValue::Dyn { binding_id: 0 });
                 (mir::ExprKind::Var(name.clone()), sv)
@@ -839,7 +838,7 @@ impl Flattener {
                 // Check if arr is a simple Var - if so, use backing store system
                 if let mir::ExprKind::Var(ref var_name) = arr.kind {
                     // Look up binding_id from static_values
-                    if let Ok(sv) = self.static_values.lookup(var_name) {
+                    if let Some(sv) = self.static_values.lookup(var_name) {
                         let binding_id = match sv {
                             StaticValue::Dyn { binding_id } => *binding_id,
                             StaticValue::Closure { binding_id, .. } => *binding_id,
@@ -931,7 +930,7 @@ impl Flattener {
                 // Check if obj is a simple Var - if so, use backing store system
                 if let mir::ExprKind::Var(ref var_name) = obj.kind {
                     // Look up binding_id from static_values
-                    if let Ok(sv) = self.static_values.lookup(var_name) {
+                    if let Some(sv) = self.static_values.lookup(var_name) {
                         let binding_id = match sv {
                             StaticValue::Dyn { binding_id } => *binding_id,
                             StaticValue::Closure { binding_id, .. } => *binding_id,

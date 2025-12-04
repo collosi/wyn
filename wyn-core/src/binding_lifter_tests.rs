@@ -311,25 +311,3 @@ fn test_mixed_hoistable_and_dependent() {
 // =============================================================================
 // Integration Tests - Source Code to MIR
 // =============================================================================
-
-/// Compile source through flattening (before lifting)
-fn compile_to_flattened(source: &str) -> crate::mir::Program {
-    crate::Compiler::parse(source)
-        .expect("parse failed")
-        .elaborate()
-        .expect("elaborate failed")
-        .resolve()
-        .expect("resolve failed")
-        .type_check()
-        .expect("type_check failed")
-        .alias_check()
-        .expect("alias_check failed")
-        .flatten()
-        .expect("flatten failed")
-        .monomorphize()
-        .expect("monomorphize failed")
-        .filter_reachable()
-        .fold_constants()
-        .expect("fold_constants failed")
-        .mir
-}

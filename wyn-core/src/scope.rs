@@ -1,16 +1,9 @@
 use std::collections::HashMap;
 
-/// Represents the state of a binding in scope (private)
-#[derive(Debug, Clone)]
-enum BindingState<T> {
-    Available(T),
-    Consumed(T), // Tombstone: holds the type but marks it as consumed
-}
-
 /// A single scope containing variable bindings
 #[derive(Debug, Clone)]
 pub struct Scope<T> {
-    bindings: HashMap<String, BindingState<T>>,
+    bindings: HashMap<String, T>,
 }
 
 impl<T: Clone> Default for Scope<T> {
@@ -27,33 +20,12 @@ impl<T: Clone> Scope<T> {
     }
 
     pub fn insert(&mut self, name: String, value: T) {
-        self.bindings.insert(name, BindingState::Available(value));
+        self.bindings.insert(name, value);
     }
 
-    /// Get a binding. Returns an error if the variable has been consumed.
-    pub fn get(&self, name: &str) -> Result<&T, String> {
-        match self.bindings.get(name) {
-            Some(BindingState::Available(value)) => Ok(value),
-            Some(BindingState::Consumed(_)) => {
-                Err(format!("Variable '{}' has already been consumed", name))
-            }
-            None => Err(format!("Variable '{}' not found", name)),
-        }
-    }
-
-    /// Mark a variable as consumed. Returns an error if already consumed or not found.
-    pub fn mark_consumed(&mut self, name: &str) -> Result<(), String> {
-        match self.bindings.get(name) {
-            Some(BindingState::Available(value)) => {
-                let value = value.clone();
-                self.bindings.insert(name.to_string(), BindingState::Consumed(value));
-                Ok(())
-            }
-            Some(BindingState::Consumed(_)) => {
-                Err(format!("Variable '{}' has already been consumed", name))
-            }
-            None => Err(format!("Variable '{}' not found", name)),
-        }
+    /// Get a binding.
+    pub fn get(&self, name: &str) -> Option<&T> {
+        self.bindings.get(name)
     }
 
     pub fn contains_key(&self, name: &str) -> bool {
@@ -104,25 +76,13 @@ impl<T: Clone> ScopeStack<T> {
     }
 
     /// Look up a binding, searching from innermost to outermost scope.
-    /// Returns an error if the variable has been consumed.
-    pub fn lookup(&self, name: &str) -> Result<&T, String> {
+    pub fn lookup(&self, name: &str) -> Option<&T> {
         for scope in self.scopes.iter().rev() {
-            if scope.contains_key(name) {
-                return scope.get(name);
+            if let Some(value) = scope.get(name) {
+                return Some(value);
             }
         }
-        Err(format!("Variable '{}' not found", name))
-    }
-
-    /// Mark a variable as consumed in the scope where it's defined.
-    /// Searches from innermost to outermost scope.
-    pub fn mark_consumed(&mut self, name: &str) -> Result<(), String> {
-        for scope in self.scopes.iter_mut().rev() {
-            if scope.contains_key(name) {
-                return scope.mark_consumed(name);
-            }
-        }
-        Err(format!("Variable '{}' not found", name))
+        None
     }
 
     /// Check if a name is defined in the current scope (not outer scopes)
@@ -147,11 +107,8 @@ impl<T: Clone> ScopeStack<T> {
         F: FnMut(&str, &T),
     {
         for scope in &self.scopes {
-            for (name, state) in &scope.bindings {
-                match state {
-                    BindingState::Available(value) => f(name, value),
-                    BindingState::Consumed(value) => f(name, value),
-                }
+            for (name, value) in &scope.bindings {
+                f(name, value);
             }
         }
     }
@@ -193,20 +150,20 @@ mod tests {
 
         // Insert in global scope
         scope_stack.insert("x".to_string(), 1);
-        assert_eq!(scope_stack.lookup("x"), Ok(&1));
+        assert_eq!(scope_stack.lookup("x"), Some(&1));
 
         // Push new scope and shadow variable
         scope_stack.push_scope();
         scope_stack.insert("x".to_string(), 2);
         scope_stack.insert("y".to_string(), 3);
 
-        assert_eq!(scope_stack.lookup("x"), Ok(&2)); // Shadows outer x
-        assert_eq!(scope_stack.lookup("y"), Ok(&3));
+        assert_eq!(scope_stack.lookup("x"), Some(&2)); // Shadows outer x
+        assert_eq!(scope_stack.lookup("y"), Some(&3));
 
         // Pop scope
         scope_stack.pop_scope();
-        assert_eq!(scope_stack.lookup("x"), Ok(&1)); // Back to outer x
-        assert!(scope_stack.lookup("y").is_err()); // y is gone
+        assert_eq!(scope_stack.lookup("x"), Some(&1)); // Back to outer x
+        assert!(scope_stack.lookup("y").is_none()); // y is gone
     }
 
     #[test]
@@ -248,28 +205,10 @@ mod tests {
         // Manual scope push
         scope_stack.push_scope();
         scope_stack.insert("x".to_string(), 2);
-        assert_eq!(scope_stack.lookup("x"), Ok(&2));
+        assert_eq!(scope_stack.lookup("x"), Some(&2));
 
         // Manual scope pop
         scope_stack.pop_scope();
-        assert_eq!(scope_stack.lookup("x"), Ok(&1));
-    }
-
-    #[test]
-    fn test_consumption_tracking() {
-        let mut scope_stack: ScopeStack<i32> = ScopeStack::new();
-
-        // Insert a variable
-        scope_stack.insert("x".to_string(), 42);
-        assert_eq!(scope_stack.lookup("x"), Ok(&42));
-
-        // Mark it as consumed
-        assert!(scope_stack.mark_consumed("x").is_ok());
-
-        // Now lookup should fail
-        assert!(scope_stack.lookup("x").is_err());
-
-        // Trying to consume again should also fail
-        assert!(scope_stack.mark_consumed("x").is_err());
+        assert_eq!(scope_stack.lookup("x"), Some(&1));
     }
 }
