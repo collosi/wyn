@@ -5,11 +5,12 @@
 //! - Pattern flattening: complex patterns become simple let bindings
 //! - Lambda lifting: all functions become top-level Def entries
 
-use crate::ast::{self, ExprKind, Expression, NodeId, PatternKind, Span, Type, TypeName, types};
+use crate::ast::{self, ExprKind, Expression, NodeId, PatternKind, Span, Type, TypeName};
 use crate::error::Result;
 use crate::mir::{self, Expr};
 use crate::pattern;
 use crate::scope::ScopeStack;
+use crate::types;
 use crate::{bail_flatten, bail_type_at, err_flatten, err_type};
 use polytype::TypeScheme;
 use std::collections::{HashMap, HashSet};
@@ -646,8 +647,8 @@ impl Flattener {
                 let op_type = self.get_expr_type(expr);
 
                 // Extract parameter types from the function type 'a -> 'a -> 'b
-                let (param_type, ret_type) = if let Some((param1, rest)) = ast::types::as_arrow(&op_type) {
-                    if let Some((_param2, ret)) = ast::types::as_arrow(rest) {
+                let (param_type, ret_type) = if let Some((param1, rest)) = types::as_arrow(&op_type) {
+                    if let Some((_param2, ret)) = types::as_arrow(rest) {
                         // Binary operator: a -> a -> b
                         (param1.clone(), ret.clone())
                     } else {

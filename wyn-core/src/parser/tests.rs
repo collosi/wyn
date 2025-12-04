@@ -149,7 +149,7 @@ macro_rules! assert_matches {
 fn test_parse_let_decl() {
     let decl = single_decl("let x: i32 = 42");
     assert_eq!(decl.name, "x");
-    assert_eq!(decl.ty, Some(crate::ast::types::i32()));
+    assert_eq!(decl.ty, Some(crate::types::i32()));
     assert!(matches!(decl.body.kind, ExprKind::IntLiteral(42)));
 }
 
@@ -168,13 +168,13 @@ fn test_parse_entry_point_decl() {
     assert_eq!(entry.entry_type, Attribute::Vertex);
     assert_eq!(entry.params.len(), 2);
 
-    assert_typed_param!(&entry.params[0], "x", crate::ast::types::i32());
-    assert_typed_param!(&entry.params[1], "y", crate::ast::types::f32());
+    assert_typed_param!(&entry.params[0], "x", crate::types::i32());
+    assert_typed_param!(&entry.params[1], "y", crate::types::f32());
 
     assert_eq!(entry.return_types.len(), 1);
     assert_eq!(
         entry.return_types[0],
-        crate::ast::types::sized_array(4, crate::ast::types::f32())
+        crate::types::sized_array(4, crate::types::f32())
     );
     // return_attributes removed - only on EntryDecl now
 }
@@ -275,7 +275,7 @@ fn test_parse_builtin_attribute_on_return_type() {
     );
     assert_eq!(
         entry.return_types[0],
-        crate::ast::types::sized_array(4, crate::ast::types::f32())
+        crate::types::sized_array(4, crate::types::f32())
     );
 }
 
@@ -338,7 +338,7 @@ fn test_parse_location_attribute_on_return_type() {
     assert_eq!(entry.return_attributes[0], Some(Attribute::Location(0)));
     assert_eq!(
         entry.return_types[0],
-        crate::ast::types::sized_array(4, crate::ast::types::f32())
+        crate::types::sized_array(4, crate::types::f32())
     );
 }
 
@@ -350,7 +350,7 @@ fn test_parse_parameter_with_builtin_attribute() {
     assert_typed_param_with_attrs!(
         &entry.params[0],
         "vid",
-        crate::ast::types::i32(),
+        crate::types::i32(),
         vec![Attribute::BuiltIn(spirv::BuiltIn::VertexIndex)]
     );
 }
@@ -363,7 +363,7 @@ fn test_parse_parameter_with_location_attribute() {
     assert_typed_param_with_attrs!(
         &entry.params[0],
         "color",
-        crate::ast::types::sized_array(3, crate::ast::types::f32()),
+        crate::types::sized_array(3, crate::types::f32()),
         vec![Attribute::Location(1)]
     );
 }
@@ -380,7 +380,7 @@ fn test_parse_multiple_builtin_types() {
     assert_typed_param_with_attrs!(
         &entry.params[0],
         "vid",
-        crate::ast::types::i32(),
+        crate::types::i32(),
         vec![Attribute::BuiltIn(spirv::BuiltIn::VertexIndex)]
     );
 
@@ -388,7 +388,7 @@ fn test_parse_multiple_builtin_types() {
     assert_typed_param_with_attrs!(
         &entry.params[1],
         "iid",
-        crate::ast::types::i32(),
+        crate::types::i32(),
         vec![Attribute::BuiltIn(spirv::BuiltIn::InstanceIndex)]
     );
 
@@ -747,7 +747,7 @@ fn test_parse_vector_arithmetic() {
     );
 
     assert_eq!(decl.name, "test_vector_arithmetic");
-    assert_eq!(decl.ty, Some(crate::ast::types::f32()));
+    assert_eq!(decl.ty, Some(crate::types::f32()));
     assert!(matches!(&decl.body.kind, ExprKind::LetIn(_)));
 }
 

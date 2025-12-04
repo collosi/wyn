@@ -1,11 +1,17 @@
-use crate::ast::TypeName;
+use super::{Type, TypeName, TypeScheme};
 use crate::ast::*;
 use crate::error::Result;
 use crate::scope::ScopeStack;
 use crate::{bail_type_at, err_module, err_type_at, err_undef_at};
 use log::debug;
-use polytype::{Context, TypeScheme};
+use polytype::Context;
 use std::collections::{BTreeSet, HashMap};
+
+// Import type helper functions from parent module
+use super::{
+    as_arrow, bool_type, f32, function, i32, mat, record, sized_array, string, strip_unique, tuple, unique,
+    unit, vec,
+};
 
 /// Trait for generating fresh type variables
 pub trait TypeVarGenerator {
@@ -48,15 +54,15 @@ impl TypeWarning {
 }
 
 pub struct TypeChecker {
-    scope_stack: ScopeStack<TypeScheme<TypeName>>, // Store polymorphic types
-    context: Context<TypeName>,                    // Polytype unification context
+    scope_stack: ScopeStack<TypeScheme>, // Store polymorphic types
+    context: Context<TypeName>,          // Polytype unification context
     record_field_map: HashMap<(String, String), Type>, // Map (type_name, field_name) -> field_type
-    impl_source: crate::impl_source::ImplSource,   // Implementation source for code generation
+    impl_source: crate::impl_source::ImplSource, // Implementation source for code generation
     poly_builtins: crate::poly_builtins::PolyBuiltins, // Type registry for polymorphic builtins
     module_manager: crate::module_manager::ModuleManager, // Lazy module loading
-    type_table: HashMap<crate::ast::NodeId, TypeScheme<TypeName>>, // Maps NodeId to type scheme
-    warnings: Vec<TypeWarning>,                    // Collected warnings
-    type_holes: Vec<(NodeId, Span)>,               // Track type hole locations for warning emission
+    type_table: HashMap<crate::ast::NodeId, TypeScheme>, // Maps NodeId to type scheme
+    warnings: Vec<TypeWarning>,          // Collected warnings
+    type_holes: Vec<(NodeId, Span)>,     // Track type hole locations for warning emission
 }
 
 impl Default for TypeChecker {
@@ -85,7 +91,7 @@ fn fv_type(ty: &Type) -> BTreeSet<usize> {
 }
 
 /// Compute free type variables in a TypeScheme
-fn fv_scheme(s: &TypeScheme<TypeName>) -> BTreeSet<usize> {
+fn fv_scheme(s: &TypeScheme) -> BTreeSet<usize> {
     match s {
         TypeScheme::Monotype(t) => fv_type(t),
         TypeScheme::Polytype { variable, body } => {
@@ -97,7 +103,7 @@ fn fv_scheme(s: &TypeScheme<TypeName>) -> BTreeSet<usize> {
 }
 
 /// Wrap a TypeScheme in nested Polytype quantifiers for the given variables
-fn quantify(mut body: TypeScheme<TypeName>, vars: &BTreeSet<usize>) -> TypeScheme<TypeName> {
+fn quantify(mut body: TypeScheme, vars: &BTreeSet<usize>) -> TypeScheme {
     // Quantify in descending order so the smallest variable ends up outermost
     for v in vars.iter().rev() {
         body = TypeScheme::Polytype {
@@ -148,7 +154,7 @@ impl TypeChecker {
     }
 
     /// Format a type scheme for error messages
-    pub fn format_scheme(&self, scheme: &TypeScheme<TypeName>) -> String {
+    pub fn format_scheme(&self, scheme: &TypeScheme) -> String {
         match scheme {
             TypeScheme::Monotype(ty) => self.format_type(ty),
             TypeScheme::Polytype { variable, body } => {
@@ -160,7 +166,7 @@ impl TypeChecker {
     }
 
     /// Look up a variable in the scope stack (for testing)
-    pub fn lookup(&self, name: &str) -> Option<TypeScheme<TypeName>> {
+    pub fn lookup(&self, name: &str) -> Option<TypeScheme> {
         self.scope_stack.lookup(name).cloned()
     }
 
@@ -181,7 +187,7 @@ impl TypeChecker {
     /// HM-style generalization at let: ∀(fv(ty) \ fv(env) \ ascription_vars). ty
     /// Quantifies over type variables that are free in ty but not free in the environment
     /// and not in the set of ascription variables (which must remain monomorphic)
-    fn generalize(&self, ty: &Type) -> TypeScheme<TypeName> {
+    fn generalize(&self, ty: &Type) -> TypeScheme {
         // Always generalize the *solved* view
         let applied = ty.apply(&self.context);
 
@@ -267,7 +273,7 @@ impl TypeChecker {
                 // Create a tuple type with fresh type variable for each element
                 let elem_types: Vec<Type> =
                     patterns.iter().map(|p| self.fresh_type_for_pattern(p)).collect();
-                types::tuple(elem_types)
+                tuple(elem_types)
             }
             PatternKind::Typed(_, annotated_type) => {
                 // Pattern has explicit type, use it
@@ -374,7 +380,7 @@ impl TypeChecker {
             }
             PatternKind::Unit => {
                 // Unit pattern should match unit type
-                let unit_type = types::tuple(vec![]);
+                let unit_type = tuple(vec![]);
                 self.context.unify(&unit_type, expected_type).map_err(|_| {
                     err_type_at!(
                         pattern.h.span,
@@ -444,7 +450,7 @@ impl TypeChecker {
                 // Unwrap nested function types to get parameter types
                 for _ in 0..lambda.params.len() {
                     let applied = expected_type.apply(&self.context);
-                    if let Some((param_type, result_type)) = types::as_arrow(&applied) {
+                    if let Some((param_type, result_type)) = as_arrow(&applied) {
                         expected_param_types.push(param_type.clone());
                         expected_type = result_type.clone();
                     } else {
@@ -497,7 +503,7 @@ impl TypeChecker {
                 // Build the function type
                 let mut func_type = return_type;
                 for param_type in param_types.iter().rev() {
-                    func_type = types::function(param_type.clone(), func_type);
+                    func_type = function(param_type.clone(), func_type);
                 }
 
                 // Unify the built function type with the original expected type
@@ -567,7 +573,7 @@ impl TypeChecker {
             TypeName::Array,
             vec![Type::Variable(var_n_id), Type::Variable(var_a_id)],
         );
-        let length_body = Type::arrow(array_type, types::i32());
+        let length_body = Type::arrow(array_type, i32());
 
         // Create Polytype ∀n a. [n]a -> i32
         let length_scheme = TypeScheme::Polytype {
@@ -592,7 +598,7 @@ impl TypeChecker {
         let var_n_id = if let Type::Variable(id) = var_n { id } else { panic!("Expected Type::Variable") };
 
         let func_type = Type::arrow(Type::Variable(var_a_id), Type::Variable(var_b_id));
-        let input_array_type = types::unique(Type::Constructed(
+        let input_array_type = unique(Type::Constructed(
             TypeName::Array,
             vec![Type::Variable(var_n_id), Type::Variable(var_a_id)],
         ));
@@ -632,7 +638,7 @@ impl TypeChecker {
             TypeName::Array,
             vec![Type::Variable(var_n_id), Type::Variable(var_b_id)],
         );
-        let tuple_type = types::tuple(vec![Type::Variable(var_a_id), Type::Variable(var_b_id)]);
+        let tuple_type = tuple(vec![Type::Variable(var_a_id), Type::Variable(var_b_id)]);
         let result_array_type =
             Type::Constructed(TypeName::Array, vec![Type::Variable(var_n_id), tuple_type]);
         let zip_arrow1 = Type::arrow(array_b_type, result_array_type);
@@ -715,7 +721,7 @@ impl TypeChecker {
             TypeName::Array,
             vec![Type::Variable(var_n_id), Type::Variable(var_t_id)],
         );
-        let alloc_array_body = Type::arrow(types::i32(), array_type);
+        let alloc_array_body = Type::arrow(i32(), array_type);
 
         let alloc_array_scheme = TypeScheme::Polytype {
             variable: var_n_id,
@@ -751,7 +757,7 @@ impl TypeChecker {
         self.scope_stack.insert("dot".to_string(), dot_scheme);
 
         // Trigonometric functions: f32 -> f32
-        let trig_type = Type::arrow(types::f32(), types::f32());
+        let trig_type = Type::arrow(f32(), f32());
         self.scope_stack.insert("sin".to_string(), TypeScheme::Monotype(trig_type.clone()));
         self.scope_stack.insert("cos".to_string(), TypeScheme::Monotype(trig_type.clone()));
         self.scope_stack.insert("tan".to_string(), TypeScheme::Monotype(trig_type));
@@ -776,10 +782,7 @@ impl TypeChecker {
         }
     }
 
-    pub fn check_program(
-        &mut self,
-        program: &Program,
-    ) -> Result<HashMap<crate::ast::NodeId, TypeScheme<TypeName>>> {
+    pub fn check_program(&mut self, program: &Program) -> Result<HashMap<crate::ast::NodeId, TypeScheme>> {
         // Process library modules first (so they're available to user code)
         // Register each module's declarations with qualified names
         for (module_name, declarations) in &program.library_modules {
@@ -797,7 +800,7 @@ impl TypeChecker {
         self.emit_hole_warnings();
 
         // Apply the context to all types in the type table to resolve type variables
-        let resolved_table: HashMap<crate::ast::NodeId, TypeScheme<TypeName>> = self
+        let resolved_table: HashMap<crate::ast::NodeId, TypeScheme> = self
             .type_table
             .iter()
             .map(|(node_id, scheme)| {
@@ -1063,7 +1066,7 @@ impl TypeChecker {
                 let func_type = param_types
                     .into_iter()
                     .rev()
-                    .fold(result_type, |acc, param_ty| types::function(param_ty, acc));
+                    .fold(result_type, |acc, param_ty| function(param_ty, acc));
 
                 // Register the dispatcher with its polymorphic type
                 let type_scheme = self.generalize(&func_type);
@@ -1086,7 +1089,7 @@ impl TypeChecker {
             let func_type = param_types
                 .into_iter()
                 .rev()
-                .fold(body_type.clone(), |acc, param_ty| types::function(param_ty, acc));
+                .fold(body_type.clone(), |acc, param_ty| function(param_ty, acc));
 
             // Check against declared type if provided
             if let Some(declared_type) = &decl.ty {
@@ -1150,18 +1153,18 @@ impl TypeChecker {
                     let field_ty = self.infer_expression(field_expr)?;
                     field_types.push((field_name.clone(), field_ty));
                 }
-                Ok(types::record(field_types))
+                Ok(record(field_types))
             }
             ExprKind::TypeHole => {
                 // Record this hole for warning emission after type inference completes
                 self.type_holes.push((expr.h.id, expr.h.span.clone()));
                 Ok(self.context.new_variable())
             }
-            ExprKind::IntLiteral(_) => Ok(types::i32()),
-            ExprKind::FloatLiteral(_) => Ok(types::f32()),
-            ExprKind::BoolLiteral(_) => Ok(types::bool_type()),
-            ExprKind::StringLiteral(_) => Ok(types::string()),
-            ExprKind::Unit => Ok(types::unit()),
+            ExprKind::IntLiteral(_) => Ok(i32()),
+            ExprKind::FloatLiteral(_) => Ok(f32()),
+            ExprKind::BoolLiteral(_) => Ok(bool_type()),
+            ExprKind::StringLiteral(_) => Ok(string()),
+            ExprKind::Unit => Ok(unit()),
             ExprKind::OperatorSection(_op) => {
                 // Operator sections like (+), (-), etc. are functions
                 // Their specific type depends on context and will be resolved via unification
@@ -1215,7 +1218,7 @@ impl TypeChecker {
 
                     // Array literals have concrete sizes: [1, 2, 3] has type [3]i32
                     // Variable sizes require explicit type parameters: def f[n]: [n]i32 = ...
-                    Ok(types::sized_array(elements.len(), first_type))
+                    Ok(sized_array(elements.len(), first_type))
                 }
             }
             ExprKind::VecMatLiteral(elements) => {
@@ -1259,7 +1262,7 @@ impl TypeChecker {
                             if let Type::Constructed(TypeName::Size(cols), _) = &args[0] {
                                 let rows = elements.len();
                                 let elem_type = args[1].clone();
-                                Ok(types::mat(rows, *cols, elem_type))
+                                Ok(mat(rows, *cols, elem_type))
                             } else {
                                 Err(err_type_at!(
                                     expr.h.span,
@@ -1288,7 +1291,7 @@ impl TypeChecker {
                             size
                         ))
                     } else {
-                        Ok(types::vec(size, first_type))
+                        Ok(vec(size, first_type))
                     }
                 }
             }
@@ -1299,7 +1302,7 @@ impl TypeChecker {
                 // Unify index type with i32
                 // Per spec: array index may be "any unsigned integer type"
                 // We use i32 for now for compatibility
-                self.context.unify(&index_type, &types::i32()).map_err(|_| {
+                self.context.unify(&index_type, &i32()).map_err(|_| {
                     err_type_at!(
                         index_expr.h.span,
                         "Array index must be an integer type, got {}",
@@ -1310,7 +1313,7 @@ impl TypeChecker {
                 // Constrain array type to be Array(n, a) even if it's currently unknown
                 // This allows indexing arrays whose type is a meta-variable
                 // Strip uniqueness marker - indexing a *[n]T should work like indexing [n]T
-                let array_type_stripped = types::strip_unique(&array_type);
+                let array_type_stripped = strip_unique(&array_type);
                 let size_var = self.context.new_variable();
                 let elem_var = self.context.new_variable();
                 let want_array = Type::Constructed(TypeName::Array, vec![size_var, elem_var.clone()]);
@@ -1358,7 +1361,7 @@ impl TypeChecker {
                 let elem_types: Result<Vec<Type>> =
                     elements.iter().map(|e| self.infer_expression(e)).collect();
 
-                Ok(types::tuple(elem_types?))
+                Ok(tuple(elem_types?))
             }
             ExprKind::Lambda(lambda) => {
                 // Push new scope for lambda parameters
@@ -1404,7 +1407,7 @@ impl TypeChecker {
                 // we used when adding parameters to scope
                 let mut func_type = return_type;
                 for param_type in param_types.iter().rev() {
-                    func_type = types::function(param_type.clone(), func_type);
+                    func_type = function(param_type.clone(), func_type);
                 }
 
                 Ok(func_type)
@@ -1810,18 +1813,18 @@ impl TypeChecker {
                     LoopForm::While(cond) => {
                         // Condition must be bool
                         let cond_type = self.infer_expression(cond)?;
-                        self.context.unify(&cond_type, &types::bool_type()).map_err(|e| {
+                        self.context.unify(&cond_type, &bool_type()).map_err(|e| {
                             err_type_at!(cond.h.span, "While condition must be bool: {:?}", e)
                         })?;
                     }
                     LoopForm::For(var_name, bound) => {
                         // Iteration variable is i32
                         self.scope_stack
-                            .insert(var_name.clone(), TypeScheme::Monotype(types::i32()));
+                            .insert(var_name.clone(), TypeScheme::Monotype(i32()));
 
                         // Bound must be integer
                         let bound_type = self.infer_expression(bound)?;
-                        self.context.unify(&bound_type, &types::i32()).map_err(|e| {
+                        self.context.unify(&bound_type, &i32()).map_err(|e| {
                             err_type_at!(bound.h.span, "Loop bound must be i32: {:?}", e)
                         })?;
                     }
@@ -1878,7 +1881,7 @@ impl TypeChecker {
                 let result_type = self.context.new_variable();
 
                 // Unify func_type with (arg_type -> result_type)
-                let expected_func_type = types::function(arg_type, result_type.clone());
+                let expected_func_type = function(arg_type, result_type.clone());
                 self.context.unify(&func_type, &expected_func_type).map_err(|e| {
                     err_type_at!(expr.h.span, "Pipe operator type error: {:?}", e)
                 })?;
@@ -1958,8 +1961,8 @@ impl TypeChecker {
                 let expected_param_type = param_type_var.apply(&self.context);
 
                 // Strip uniqueness for unification
-                let arg_type_for_unify = types::strip_unique(&arg_type);
-                let expected_param_for_unify = types::strip_unique(&expected_param_type);
+                let arg_type_for_unify = strip_unique(&arg_type);
+                let expected_param_for_unify = strip_unique(&expected_param_type);
 
                 self.context.unify(&arg_type_for_unify, &expected_param_for_unify).map_err(|e| {
                     let error_msg = if arg.h.span.is_generated() {

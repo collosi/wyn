@@ -1,6 +1,7 @@
 use crate::ast::*;
 use crate::error::Result;
 use crate::lexer::{LocatedToken, Token};
+use crate::types;
 use crate::{bail_parse, err_parse};
 use log::trace;
 use std::sync::OnceLock;

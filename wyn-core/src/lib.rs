@@ -12,8 +12,11 @@ pub mod pattern;
 pub mod poly_builtins;
 pub mod reachability;
 pub mod scope;
-pub mod type_checker;
+pub mod types;
 pub mod visitor;
+
+// Re-export type_checker from its new location for backwards compatibility
+pub use types::checker as type_checker;
 
 pub mod alias_checker;
 pub mod binding_lifter;
@@ -32,8 +35,6 @@ mod constant_folding_tests;
 mod flattening_tests;
 #[cfg(test)]
 mod monomorphization_tests;
-#[cfg(test)]
-mod type_checker_tests;
 
 use std::collections::HashMap;
 

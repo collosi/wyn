@@ -1,6 +1,6 @@
-use crate::ast::{Type, TypeName};
+use super::checker::{TypeChecker, TypeWarning};
+use super::{Type, TypeName};
 use crate::error::CompilerError;
-use crate::type_checker::{TypeChecker, TypeWarning};
 
 /// Helper to parse and type check source code, expecting success
 fn typecheck_program(input: &str) {
