@@ -223,7 +223,7 @@ fn generate_annotated_source(
     verbose: bool,
 ) -> Result<(), DriverError> {
     // Parse the source to get the AST
-    let tokens = lexer::tokenize(source).map_err(wyn_core::error::CompilerError::ParseError)?;
+    let tokens = lexer::tokenize(source).map_err(|e| wyn_core::err_parse!("{}", e))?;
     let mut parser = WynParser::new(tokens);
     let _program = parser.parse()?;
 

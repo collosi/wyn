@@ -1,6 +1,7 @@
 use crate::ast::*;
-use crate::error::{CompilerError, Result};
+use crate::error::Result;
 use crate::lexer::{LocatedToken, Token};
+use crate::{bail_parse, err_parse};
 use log::trace;
 use std::sync::OnceLock;
 
@@ -50,15 +51,15 @@ impl Parser {
 
     /// Get the span of the current token
     fn current_span(&self) -> Span {
-        self.tokens.get(self.current).map(|t| t.span).unwrap_or_else(Span::dummy)
+        self.tokens.get(self.current).map(|t| t.span).unwrap_or(Span::new(0, 0, 0, 0))
     }
 
     /// Get the span of the previous token
     fn previous_span(&self) -> Span {
         if self.current > 0 {
-            self.tokens.get(self.current - 1).map(|t| t.span).unwrap_or_else(Span::dummy)
+            self.tokens.get(self.current - 1).map(|t| t.span).unwrap_or(Span::new(0, 0, 0, 0))
         } else {
-            Span::dummy()
+            Span::new(0, 0, 0, 0)
         }
     }
 
@@ -123,10 +124,7 @@ impl Parser {
                 let inner = self.parse_declaration()?;
                 Ok(Declaration::Local(Box::new(inner)))
             }
-            _ => Err(CompilerError::ParseError(format!(
-                "Expected declaration, got {:?}",
-                self.peek()
-            ))),
+            _ => Err(err_parse!("Expected declaration, got {:?}", self.peek())),
         }
     }
 
@@ -137,7 +135,7 @@ impl Parser {
                 self.advance();
                 Ok(s)
             }
-            _ => Err(CompilerError::ParseError("Expected string literal".to_string())),
+            _ => Err(err_parse!("Expected string literal")),
         }
     }
 
@@ -152,17 +150,13 @@ impl Parser {
         if is_uniform {
             // Uniform declaration - delegate to helper
             if keyword != "def" {
-                return Err(CompilerError::ParseError(
-                    "Uniform declarations must use 'def', not 'let'".to_string(),
-                ));
+                bail_parse!("Uniform declarations must use 'def', not 'let'");
             }
             return self.parse_uniform_decl();
         } else if let Some(entry_attr) = entry_type {
             // Entry point: must be 'def', not 'let'
             if keyword != "def" {
-                return Err(CompilerError::ParseError(
-                    "Entry point declarations must use 'def', not 'let'".to_string(),
-                ));
+                bail_parse!("Entry point declarations must use 'def', not 'let'");
             }
             self.expect(Token::Def)?;
 
@@ -176,9 +170,7 @@ impl Parser {
 
             // Entry points must have an explicit return type
             if !self.check(&Token::Colon) {
-                return Err(CompilerError::ParseError(
-                    "Entry point declarations must have an explicit return type".to_string(),
-                ));
+                bail_parse!("Entry point declarations must have an explicit return type");
             }
 
             self.advance(); // consume ':'
@@ -210,7 +202,7 @@ impl Parser {
             match keyword {
                 "let" => self.expect(Token::Let)?,
                 "def" => self.expect(Token::Def)?,
-                _ => return Err(CompilerError::ParseError(format!("Invalid keyword: {}", keyword))),
+                _ => bail_parse!("Invalid keyword: {}", keyword),
             }
 
             // Parse name - either an identifier or an operator in parentheses like (+) or (+^)
@@ -387,9 +379,7 @@ impl Parser {
 
         // Uniforms must NOT have initializers
         if self.check(&Token::Assign) {
-            return Err(CompilerError::ParseError(
-                "Uniform declarations cannot have initializer values".to_string(),
-            ));
+            bail_parse!("Uniform declarations cannot have initializer values");
         }
 
         Ok(Declaration::Uniform(UniformDecl { name, ty }))
@@ -426,10 +416,7 @@ impl Parser {
                     "frag_coord" => spirv::BuiltIn::FragCoord,
                     "frag_depth" => spirv::BuiltIn::FragDepth,
                     _ => {
-                        return Err(CompilerError::ParseError(format!(
-                            "Unknown builtin: {}",
-                            builtin_name
-                        )));
+                        bail_parse!("Unknown builtin: {}", builtin_name);
                     }
                 };
                 Ok(Attribute::BuiltIn(builtin))
@@ -439,16 +426,13 @@ impl Parser {
                 let location = if let Some(Token::IntLiteral(location)) = self.advance() {
                     *location as u32
                 } else {
-                    return Err(CompilerError::ParseError("Expected location number".to_string()));
+                    bail_parse!("Expected location number");
                 };
                 self.expect(Token::RightParen)?;
                 self.expect(Token::RightBracket)?;
                 Ok(Attribute::Location(location))
             }
-            _ => Err(CompilerError::ParseError(format!(
-                "Unknown attribute: {}",
-                attr_name
-            ))),
+            _ => Err(err_parse!("Unknown attribute: {}", attr_name)),
         }
     }
 
@@ -477,9 +461,7 @@ impl Parser {
             Some(Token::Identifier(name)) if name.starts_with('\'') => {
                 Ok(name[1..].to_string()) // Remove the apostrophe
             }
-            _ => Err(CompilerError::ParseError(
-                "Expected type variable (e.g., 'a)".to_string(),
-            )),
+            _ => Err(err_parse!("Expected type variable (e.g., 'a)")),
         }
     }
 
@@ -505,9 +487,7 @@ impl Parser {
         }
 
         if size_vars.is_empty() {
-            return Err(CompilerError::ParseError(
-                "Existential type must have at least one size variable".to_string(),
-            ));
+            bail_parse!("Existential type must have at least one size variable");
         }
 
         self.expect(Token::Dot)?;
@@ -542,9 +522,7 @@ impl Parser {
                         let named_param = types::named_param(param_name, param_type);
                         return Ok(types::function(named_param, return_type));
                     } else {
-                        return Err(CompilerError::ParseError(
-                            "Named parameter must be followed by ->".to_string(),
-                        ));
+                        bail_parse!("Named parameter must be followed by ->");
                     }
                 }
             }
@@ -608,9 +586,7 @@ impl Parser {
                             vec![Type::Constructed(TypeName::Size(size), vec![]), base],
                         );
                     } else {
-                        return Err(CompilerError::ParseError(
-                            "Expected size in array type application".to_string(),
-                        ));
+                        bail_parse!("Expected size in array type application");
                     }
                 }
                 // Regular type argument application
@@ -701,9 +677,7 @@ impl Parser {
                     vec![types::size_var(size_var), elem_type],
                 ))
             } else {
-                Err(CompilerError::ParseError(
-                    "Expected size literal or variable in array type".to_string(),
-                ))
+                Err(err_parse!("Expected size literal or variable in array type"))
             }
         } else {
             self.parse_base_type()
@@ -796,7 +770,7 @@ impl Parser {
             }
             _ => {
                 let span = self.current_span();
-                Err(CompilerError::ParseError(format!("Expected type at {}", span)))
+                Err(err_parse!("Expected type at {}", span))
             }
         }
     }
@@ -820,9 +794,7 @@ impl Parser {
                         num
                     }
                     _ => {
-                        return Err(CompilerError::ParseError(
-                            "Expected field name or number".to_string(),
-                        ));
+                        bail_parse!("Expected field name or number");
                     }
                 };
 
@@ -857,7 +829,7 @@ impl Parser {
                     self.advance();
                     n
                 }
-                _ => return Err(CompilerError::ParseError("Expected constructor name".to_string())),
+                _ => bail_parse!("Expected constructor name"),
             };
 
             // Parse zero or more type arguments for this constructor
@@ -1187,9 +1159,7 @@ impl Parser {
                             .node_counter
                             .mk_node(ExprKind::FieldAccess(Box::new(expr), field_name), span);
                     } else {
-                        return Err(CompilerError::ParseError(
-                            "Expected field name after '.'".to_string(),
-                        ));
+                        bail_parse!("Expected field name after '.'");
                     }
                 }
                 _ => break,
@@ -1328,11 +1298,11 @@ impl Parser {
             Some(Token::Assert) => self.parse_assert(),
             _ => {
                 let span = self.current_span();
-                Err(CompilerError::ParseError(format!(
+                Err(err_parse!(
                     "Expected expression, got {:?} at {}",
                     self.peek(),
                     span
-                )))
+                ))
             }
         }
     }
@@ -1345,7 +1315,7 @@ impl Parser {
             Some(Token::LeftBracket) | Some(Token::LeftBracketSpaced) => {
                 self.advance();
             }
-            _ => return Err(CompilerError::ParseError("Expected '['".to_string())),
+            _ => bail_parse!("Expected '['"),
         }
 
         let mut elements = Vec::new();
@@ -1413,11 +1383,11 @@ impl Parser {
                 self.advance();
                 name
             } else {
-                return Err(CompilerError::ParseError(format!(
+                bail_parse!(
                     "Expected field name in record literal, got {:?} at {}",
                     self.peek(),
                     self.current_span()
-                )));
+                );
             };
 
             // Expect colon
@@ -1463,10 +1433,7 @@ impl Parser {
 
         if params.is_empty() {
             let span = self.current_span();
-            return Err(CompilerError::ParseError(format!(
-                "Lambda must have at least one parameter at {}",
-                span
-            )));
+            bail_parse!("Lambda must have at least one parameter at {}", span);
         }
 
         // Parse optional return type annotation: \pat1 pat2: t ->
@@ -1590,18 +1557,14 @@ impl Parser {
                     LoopForm::For(name, bound)
                 }
             } else {
-                return Err(CompilerError::ParseError(
-                    "Expected pattern in for loop".to_string(),
-                ));
+                bail_parse!("Expected pattern in for loop");
             }
         } else if self.check(&Token::While) {
             self.advance();
             let condition = Box::new(self.parse_expression()?);
             LoopForm::While(condition)
         } else {
-            return Err(CompilerError::ParseError(
-                "Expected 'for' or 'while' in loop".to_string(),
-            ));
+            bail_parse!("Expected 'for' or 'while' in loop");
         };
 
         self.expect(Token::Do)?;
@@ -1640,9 +1603,7 @@ impl Parser {
         }
 
         if cases.is_empty() {
-            return Err(CompilerError::ParseError(
-                "Match expression must have at least one case".to_string(),
-            ));
+            bail_parse!("Match expression must have at least one case");
         }
 
         let span = start_span.merge(&last_span);
@@ -1695,12 +1656,12 @@ impl Parser {
             Ok(())
         } else {
             let span = self.current_span();
-            Err(CompilerError::ParseError(format!(
+            Err(err_parse!(
                 "Expected {:?}, got {:?} at {}",
                 token,
                 self.peek(),
                 span
-            )))
+            ))
         }
     }
 
@@ -1736,28 +1697,23 @@ impl Parser {
                     self.advance();
                 }
                 _ => {
-                    return Err(CompilerError::ParseError(format!(
+                    bail_parse!(
                         "Expected operator or ) in operator section at {}",
                         self.current_span()
-                    )));
+                    );
                 }
             }
         }
 
         if operator.is_empty() {
-            return Err(CompilerError::ParseError(
-                "Operator section cannot be empty".to_string(),
-            ));
+            bail_parse!("Operator section cannot be empty");
         }
 
         // Validate that all characters are valid operator characters
         const VALID_OP_CHARS: &str = "+-*/%=!><&^|";
         for ch in operator.chars() {
             if !VALID_OP_CHARS.contains(ch) {
-                return Err(CompilerError::ParseError(format!(
-                    "Invalid operator character '{}' in operator section",
-                    ch
-                )));
+                bail_parse!("Invalid operator character '{}' in operator section", ch);
             }
         }
 
@@ -1768,10 +1724,7 @@ impl Parser {
         let span = self.current_span();
         match self.advance() {
             Some(Token::Identifier(name)) => Ok(name.clone()),
-            _ => Err(CompilerError::ParseError(format!(
-                "Expected identifier at {}",
-                span
-            ))),
+            _ => Err(err_parse!("Expected identifier at {}", span)),
         }
     }
 

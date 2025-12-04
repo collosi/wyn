@@ -282,15 +282,14 @@ impl<'a> Visitor for AliasChecker<'a> {
         } else if let Some(stores) = self.lookup_variable(name) {
             // Check if any backing store has been consumed
             if let Some((consumed_var, consumed_at)) = self.check_stores_live(&stores) {
-                // Get span from type_table or use a dummy - we need the span
-                // For now, create a dummy span
+                // TODO: Pass AST or SpanTable to get actual span from NodeId
                 self.errors.push(AliasError {
                     kind: AliasErrorKind::UseAfterMove {
                         variable: name.to_string(),
                         consumed_var: consumed_var.to_string(),
                         consumed_at,
                     },
-                    span: Span::dummy(),
+                    span: Span::new(0, 0, 0, 0),
                 });
             }
             self.set_result(id, AliasInfo::references(stores));

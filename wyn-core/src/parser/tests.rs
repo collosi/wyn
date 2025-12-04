@@ -1,4 +1,5 @@
 use super::*;
+use crate::error::CompilerError;
 use crate::lexer::tokenize;
 
 /// Helper function that expects parsing to fail with a specific error.
@@ -788,7 +789,7 @@ fn test_uniform_with_initializer_error() {
     expect_parse_error(
         "#[uniform] def material_color: vec3 = vec3 1.0f32 0.5f32 0.2f32",
         |error| match error {
-            CompilerError::ParseError(msg)
+            CompilerError::ParseError(msg, _)
                 if msg.contains("Uniform declarations cannot have initializer values") =>
             {
                 Ok(())

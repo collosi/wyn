@@ -6,10 +6,11 @@
 //! - Lambda lifting: all functions become top-level Def entries
 
 use crate::ast::{self, ExprKind, Expression, NodeId, PatternKind, Span, Type, TypeName, types};
-use crate::error::{CompilerError, Result};
+use crate::error::Result;
 use crate::mir::{self, Expr};
 use crate::pattern;
 use crate::scope::ScopeStack;
+use crate::{bail_flatten, bail_type_at, err_flatten, err_type, err_type_at};
 use polytype::TypeScheme;
 use std::collections::{HashMap, HashSet};
 
@@ -205,13 +206,10 @@ impl Flattener {
             Type::Constructed(TypeName::Int(bits), _) => Ok(format!("i{}", bits)),
             Type::Constructed(TypeName::UInt(bits), _) => Ok(format!("u{}", bits)),
             Type::Constructed(TypeName::Str(s), _) if *s == "bool" => Ok("bool".to_string()),
-            _ => Err(CompilerError::TypeError(
-                format!(
-                    "Invalid element type for matrix/vector: {:?}. \
-                    Only f16/f32/f64, i8/i16/i32/i64, u8/u16/u32/u64, and bool are supported.",
-                    ty
-                ),
-                Some(Span::dummy()),
+            _ => Err(err_type!(
+                "Invalid element type for matrix/vector: {:?}. \
+                Only f16/f32/f64, i8/i16/i32/i64, u8/u16/u32/u64, and bool are supported.",
+                ty
             )),
         }
     }
@@ -297,11 +295,11 @@ impl Flattener {
 
         // Look up the type of the object
         let scheme = self.type_table.get(&obj.h.id).ok_or_else(|| {
-            CompilerError::FlatteningError(format!("No type information for field access target"))
+            err_flatten!("No type information for field access target")
         })?;
 
         let obj_type = self.get_monotype(scheme).ok_or_else(|| {
-            CompilerError::FlatteningError(format!("Could not extract monotype from scheme"))
+            err_flatten!("Could not extract monotype from scheme")
         })?;
 
         // Resolve based on type
@@ -312,10 +310,7 @@ impl Flattener {
                 "y" => Ok(1),
                 "z" => Ok(2),
                 "w" => Ok(3),
-                _ => Err(CompilerError::FlatteningError(format!(
-                    "Unknown vector field: {}",
-                    field
-                ))),
+                _ => Err(err_flatten!("Unknown vector field: {}", field)),
             },
             // Record types: look up field by name
             Type::Constructed(TypeName::Record(fields), _) => fields
@@ -323,16 +318,17 @@ impl Flattener {
                 .enumerate()
                 .find(|(_, name)| name.as_str() == field)
                 .map(|(idx, _)| idx)
-                .ok_or_else(|| CompilerError::FlatteningError(format!("Unknown record field: {}", field))),
+                .ok_or_else(|| err_flatten!("Unknown record field: {}", field)),
             // Tuple types: should use numeric access
-            Type::Constructed(TypeName::Tuple(_), _) => Err(CompilerError::FlatteningError(format!(
+            Type::Constructed(TypeName::Tuple(_), _) => Err(err_flatten!(
                 "Tuple access must use numeric index, not '{}'",
                 field
-            ))),
-            _ => Err(CompilerError::FlatteningError(format!(
+            )),
+            _ => Err(err_flatten!(
                 "Cannot access field '{}' on type {:?}",
-                field, obj_type
-            ))),
+                field,
+                obj_type
+            )),
         }
     }
 
@@ -597,9 +593,7 @@ impl Flattener {
             PatternKind::Name(name) => Ok(name.clone()),
             PatternKind::Typed(inner, _) => self.extract_param_name(inner),
             PatternKind::Attributed(_, inner) => self.extract_param_name(inner),
-            _ => Err(CompilerError::FlatteningError(
-                "Complex parameter patterns not yet supported".to_string(),
-            )),
+            _ => Err(err_flatten!("Complex parameter patterns not yet supported")),
         }
     }
 
@@ -660,19 +654,18 @@ impl Flattener {
                         // Binary operator: a -> a -> b
                         (param1.clone(), ret.clone())
                     } else {
-                        return Err(CompilerError::TypeError(
-                            format!(
-                                "Operator section has unexpected type structure: expected a -> a -> b, got {:?}",
-                                op_type
-                            ),
+                        bail_type_at!(
                             span,
-                        ));
+                            "Operator section has unexpected type structure: expected a -> a -> b, got {:?}",
+                            op_type
+                        );
                     }
                 } else {
-                    return Err(CompilerError::TypeError(
-                        format!("Operator section must have function type, got {:?}", op_type),
+                    bail_type_at!(
                         span,
-                    ));
+                        "Operator section must have function type, got {:?}",
+                        op_type
+                    );
                 };
 
                 // Build the closure tuple with __lambda_name at the end (no free variables)
@@ -798,9 +791,7 @@ impl Flattener {
             ExprKind::VecMatLiteral(elems) => {
                 // Check if first element is an array literal (matrix) or scalar (vector)
                 if elems.is_empty() {
-                    return Err(CompilerError::FlatteningError(
-                        "Empty vector/matrix literal".to_string(),
-                    ));
+                    bail_flatten!("Empty vector/matrix literal");
                 }
 
                 let is_matrix = matches!(&elems[0].kind, ExprKind::ArrayLiteral(_));
@@ -814,9 +805,7 @@ impl Flattener {
                                 row_elems.iter().map(|e| self.flatten_expr(e).map(|(e, _)| e)).collect();
                             rows.push(row?);
                         } else {
-                            return Err(CompilerError::FlatteningError(
-                                "Matrix rows must be array literals".to_string(),
-                            ));
+                            bail_flatten!("Matrix rows must be array literals");
                         }
                     }
                     (
@@ -885,25 +874,18 @@ impl Flattener {
                     if name == "__closure" {
                         // Use the current closure type from the stack (most recent lambda)
                         let closure_type = self.closure_type_stack.last().cloned().ok_or_else(|| {
-                            CompilerError::FlatteningError(
-                                "Internal error: __closure accessed outside of lambda body".to_string(),
-                            )
+                            err_flatten!("Internal error: __closure accessed outside of lambda body")
                         })?;
 
                         // Resolve field name to index from closure type
                         let idx = match &closure_type {
                             Type::Constructed(TypeName::Record(fields), _) => {
                                 fields.get_index(field).ok_or_else(|| {
-                                    CompilerError::FlatteningError(format!(
-                                        "Unknown closure field: {}",
-                                        field
-                                    ))
+                                    err_flatten!("Unknown closure field: {}", field)
                                 })?
                             }
                             _ => {
-                                return Err(CompilerError::FlatteningError(
-                                    "Closure type is not a record".to_string(),
-                                ));
+                                bail_flatten!("Closure type is not a record");
                             }
                         };
 
@@ -1027,9 +1009,7 @@ impl Flattener {
                         // General case: application
                         let (_rhs_flat, _) = self.flatten_expr(rhs)?;
                         // This would need closure calling, simplified for now
-                        return Err(CompilerError::FlatteningError(
-                            "Complex pipe expressions not yet supported".to_string(),
-                        ));
+                        bail_flatten!("Complex pipe expressions not yet supported");
                     }
                 }
             }
@@ -1049,19 +1029,15 @@ impl Flattener {
                 )
             }
             ExprKind::TypeHole => {
-                return Err(CompilerError::FlatteningError(
-                    "Type holes should be resolved before flattening".to_string(),
-                ));
+                bail_flatten!("Type holes should be resolved before flattening");
             }
             ExprKind::Match(_) => {
-                return Err(CompilerError::FlatteningError(
-                    "Match expressions not yet supported".to_string(),
-                ));
+                bail_flatten!("Match expressions not yet supported");
             }
             ExprKind::Range(_) => {
-                return Err(CompilerError::FlatteningError(
-                    "Range expressions should be desugared before flattening".to_string(),
-                ));
+                bail_flatten!(
+                    "Range expressions should be desugared before flattening"
+                );
             }
         };
 
@@ -1184,16 +1160,12 @@ impl Flattener {
                         PatternKind::Typed(inner, _) => match &inner.kind {
                             PatternKind::Name(n) => n.clone(),
                             _ => {
-                                return Err(CompilerError::FlatteningError(
-                                    "Nested complex patterns not supported".to_string(),
-                                ));
+                                bail_flatten!("Nested complex patterns not supported");
                             }
                         },
                         PatternKind::Wildcard => continue, // Skip wildcards
                         _ => {
-                            return Err(CompilerError::FlatteningError(
-                                "Complex nested patterns not supported".to_string(),
-                            ));
+                            bail_flatten!("Complex nested patterns not supported");
                         }
                     };
 
@@ -1254,10 +1226,10 @@ impl Flattener {
                     body_sv,
                 ))
             }
-            _ => Err(CompilerError::FlatteningError(format!(
+            _ => Err(err_flatten!(
                 "Pattern kind {:?} not yet supported in let",
                 let_in.pattern.kind
-            ))),
+            )),
         }
     }
 
@@ -1332,11 +1304,7 @@ impl Flattener {
         for param in &lambda.params {
             let name = param
                 .simple_name()
-                .ok_or_else(|| {
-                    CompilerError::FlatteningError(
-                        "Complex lambda parameter patterns not supported".to_string(),
-                    )
-                })?
+                .ok_or_else(|| err_flatten!("Complex lambda parameter patterns not supported"))?
                 .to_string();
             let ty = self.get_pattern_type(param);
             params.push(mir::Param {
@@ -1480,11 +1448,11 @@ impl Flattener {
                         StaticValue::Dyn { binding_id: 0 },
                     ))
                 } else {
-                    Err(CompilerError::FlatteningError(format!(
+                    Err(err_flatten!(
                         "Cannot call closure with unknown static value (field access). \
                          Function expression: {:?}",
                         func.kind
-                    )))
+                    ))
                 }
             }
             _ => {
@@ -1502,11 +1470,11 @@ impl Flattener {
                     ))
                 } else {
                     // Unknown closure - this should not happen with proper function value restrictions
-                    Err(CompilerError::FlatteningError(format!(
+                    Err(err_flatten!(
                         "Cannot call closure with unknown static value. \
                          Function expression: {:?}",
                         func.kind
-                    )))
+                    ))
                 }
             }
         }
@@ -1539,9 +1507,7 @@ impl Flattener {
                 let var = match &pat.kind {
                     PatternKind::Name(n) => n.clone(),
                     _ => {
-                        return Err(CompilerError::FlatteningError(
-                            "Complex for-in patterns not supported".to_string(),
-                        ));
+                        bail_flatten!("Complex for-in patterns not supported");
                     }
                 };
                 let (iter, _) = self.flatten_expr(iter)?;
@@ -1575,7 +1541,7 @@ impl Flattener {
         span: Span,
     ) -> Result<(String, Expr, Vec<(String, Expr)>)> {
         let init_expr = init
-            .ok_or_else(|| CompilerError::FlatteningError("Loop must have init expression".to_string()))?;
+            .ok_or_else(|| err_flatten!("Loop must have init expression"))?;
 
         let (init_flat, _) = self.flatten_expr(init_expr)?;
         let init_ty = init_flat.ty.clone();
@@ -1595,10 +1561,10 @@ impl Flattener {
                 self.extract_tuple_bindings(patterns, &loop_var, &init_ty, span)?
             }
             _ => {
-                return Err(CompilerError::FlatteningError(format!(
+                bail_flatten!(
                     "Loop pattern {:?} not supported",
                     pattern.kind
-                )));
+                );
             }
         };
 
@@ -1622,10 +1588,10 @@ impl Flattener {
                 self.extract_bindings_from_pattern(inner, loop_var, init_ty, span)
             }
             PatternKind::Tuple(patterns) => self.extract_tuple_bindings(patterns, loop_var, init_ty, span),
-            _ => Err(CompilerError::FlatteningError(format!(
+            _ => Err(err_flatten!(
                 "Loop pattern {:?} not supported",
                 pattern.kind
-            ))),
+            )),
         }
     }
 
@@ -1641,10 +1607,10 @@ impl Flattener {
         let elem_types: Vec<Type> = match tuple_ty {
             Type::Constructed(TypeName::Tuple(_), args) => args.clone(),
             _ => {
-                return Err(CompilerError::FlatteningError(format!(
+                bail_flatten!(
                     "Expected tuple type for tuple pattern, got {:?}",
                     tuple_ty
-                )));
+                );
             }
         };
 
@@ -1655,23 +1621,19 @@ impl Flattener {
                 PatternKind::Typed(inner, _) => match &inner.kind {
                     PatternKind::Name(n) => n.clone(),
                     _ => {
-                        return Err(CompilerError::FlatteningError(
-                            "Complex loop patterns not supported".to_string(),
-                        ));
+                        bail_flatten!("Complex loop patterns not supported");
                     }
                 },
                 _ => {
-                    return Err(CompilerError::FlatteningError(
-                        "Complex loop patterns not supported".to_string(),
-                    ));
+                    bail_flatten!("Complex loop patterns not supported");
                 }
             };
 
             let elem_ty = elem_types.get(i).cloned().ok_or_else(|| {
-                CompilerError::FlatteningError(format!(
+                err_flatten!(
                     "Tuple pattern element {} has no corresponding type",
                     i
-                ))
+                )
             })?;
             let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
 

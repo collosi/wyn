@@ -73,7 +73,7 @@ pub struct Compiler;
 impl Compiler {
     /// Parse source code into an AST. This is the entry point for the pipeline.
     pub fn parse(source: &str) -> Result<Parsed> {
-        let tokens = lexer::tokenize(source).map_err(error::CompilerError::ParseError)?;
+        let tokens = lexer::tokenize(source).map_err(|e| err_parse!("{}", e))?;
         let mut parser = parser::Parser::new(tokens);
         let ast = parser.parse()?;
         let node_counter = parser.take_node_counter();

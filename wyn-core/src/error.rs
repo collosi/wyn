@@ -44,83 +44,178 @@ impl CompilerError {
 
 pub type Result<T> = std::result::Result<T, CompilerError>;
 
-// Bail macros without span
+// Error creation macros without span
+
+#[macro_export]
+macro_rules! err_parse {
+    ($($arg:tt)*) => {
+        $crate::error::CompilerError::ParseError(format!($($arg)*), None)
+    };
+}
+
+#[macro_export]
+macro_rules! err_type {
+    ($($arg:tt)*) => {
+        $crate::error::CompilerError::TypeError(format!($($arg)*), None)
+    };
+}
+
+#[macro_export]
+macro_rules! err_undef {
+    ($($arg:tt)*) => {
+        $crate::error::CompilerError::UndefinedVariable(format!($($arg)*), None)
+    };
+}
+
+#[macro_export]
+macro_rules! err_spirv {
+    ($($arg:tt)*) => {
+        $crate::error::CompilerError::SpirvError(format!($($arg)*), None)
+    };
+}
+
+#[macro_export]
+macro_rules! err_module {
+    ($($arg:tt)*) => {
+        $crate::error::CompilerError::ModuleError(format!($($arg)*), None)
+    };
+}
+
+#[macro_export]
+macro_rules! err_flatten {
+    ($($arg:tt)*) => {
+        $crate::error::CompilerError::FlatteningError(format!($($arg)*), None)
+    };
+}
+
+// Error creation macros with span
+
+#[macro_export]
+macro_rules! err_parse_at {
+    ($span:expr, $($arg:tt)*) => {
+        $crate::error::CompilerError::ParseError(format!($($arg)*), Some($span))
+    };
+}
+
+#[macro_export]
+macro_rules! err_type_at {
+    ($span:expr, $($arg:tt)*) => {
+        $crate::error::CompilerError::TypeError(format!($($arg)*), Some($span))
+    };
+}
+
+#[macro_export]
+macro_rules! err_undef_at {
+    ($span:expr, $($arg:tt)*) => {
+        $crate::error::CompilerError::UndefinedVariable(format!($($arg)*), Some($span))
+    };
+}
+
+#[macro_export]
+macro_rules! err_spirv_at {
+    ($span:expr, $($arg:tt)*) => {
+        $crate::error::CompilerError::SpirvError(format!($($arg)*), Some($span))
+    };
+}
+
+#[macro_export]
+macro_rules! err_module_at {
+    ($span:expr, $($arg:tt)*) => {
+        $crate::error::CompilerError::ModuleError(format!($($arg)*), Some($span))
+    };
+}
+
+#[macro_export]
+macro_rules! err_flatten_at {
+    ($span:expr, $($arg:tt)*) => {
+        $crate::error::CompilerError::FlatteningError(format!($($arg)*), Some($span))
+    };
+}
+
+// Bail macros without span (delegate to err_x)
 
 #[macro_export]
 macro_rules! bail_parse {
     ($($arg:tt)*) => {
-        return Err($crate::error::CompilerError::ParseError(format!($($arg)*), None))
+        return Err($crate::err_parse!($($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! bail_type {
     ($($arg:tt)*) => {
-        return Err($crate::error::CompilerError::TypeError(format!($($arg)*), None))
+        return Err($crate::err_type!($($arg)*))
+    };
+}
+
+#[macro_export]
+macro_rules! bail_undef {
+    ($($arg:tt)*) => {
+        return Err($crate::err_undef!($($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! bail_spirv {
     ($($arg:tt)*) => {
-        return Err($crate::error::CompilerError::SpirvError(format!($($arg)*), None))
+        return Err($crate::err_spirv!($($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! bail_module {
     ($($arg:tt)*) => {
-        return Err($crate::error::CompilerError::ModuleError(format!($($arg)*), None))
+        return Err($crate::err_module!($($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! bail_flatten {
     ($($arg:tt)*) => {
-        return Err($crate::error::CompilerError::FlatteningError(format!($($arg)*), None))
+        return Err($crate::err_flatten!($($arg)*))
     };
 }
 
-// Bail macros with span
+// Bail macros with span (delegate to err_x_at)
 
 #[macro_export]
 macro_rules! bail_parse_at {
     ($span:expr, $($arg:tt)*) => {
-        return Err($crate::error::CompilerError::ParseError(format!($($arg)*), Some($span)))
+        return Err($crate::err_parse_at!($span, $($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! bail_type_at {
     ($span:expr, $($arg:tt)*) => {
-        return Err($crate::error::CompilerError::TypeError(format!($($arg)*), Some($span)))
+        return Err($crate::err_type_at!($span, $($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! bail_undef_at {
     ($span:expr, $($arg:tt)*) => {
-        return Err($crate::error::CompilerError::UndefinedVariable(format!($($arg)*), Some($span)))
+        return Err($crate::err_undef_at!($span, $($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! bail_spirv_at {
     ($span:expr, $($arg:tt)*) => {
-        return Err($crate::error::CompilerError::SpirvError(format!($($arg)*), Some($span)))
+        return Err($crate::err_spirv_at!($span, $($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! bail_module_at {
     ($span:expr, $($arg:tt)*) => {
-        return Err($crate::error::CompilerError::ModuleError(format!($($arg)*), Some($span)))
+        return Err($crate::err_module_at!($span, $($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! bail_flatten_at {
     ($span:expr, $($arg:tt)*) => {
-        return Err($crate::error::CompilerError::FlatteningError(format!($($arg)*), Some($span)))
+        return Err($crate::err_flatten_at!($span, $($arg)*))
     };
 }

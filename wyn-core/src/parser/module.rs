@@ -1,7 +1,8 @@
 use crate::ast::*;
-use crate::error::{CompilerError, Result};
+use crate::error::Result;
 use crate::lexer::Token;
 use crate::parser::Parser;
+use crate::{bail_parse, err_parse};
 use log::trace;
 
 impl Parser {
@@ -20,7 +21,7 @@ impl Parser {
                 // For simplicity, we'll just use TypeBindKind::Normal for now
                 TypeBindKind::Normal
             }
-            _ => return Err(CompilerError::ParseError("Expected 'type' keyword".to_string())),
+            _ => bail_parse!("Expected 'type' keyword"),
         };
 
         let name = self.expect_identifier()?;
@@ -73,13 +74,10 @@ impl Parser {
                 } else if id.starts_with('\'') {
                     Ok(TypeParam::Type(id[1..].to_string()))
                 } else {
-                    Err(CompilerError::ParseError(format!(
-                        "Invalid type parameter: {}",
-                        id
-                    )))
+                    Err(err_parse!("Invalid type parameter: {}", id))
                 }
             }
-            _ => Err(CompilerError::ParseError("Expected type parameter".to_string())),
+            _ => Err(err_parse!("Expected type parameter")),
         }
     }
 
@@ -119,10 +117,7 @@ impl Parser {
             // The elaborator will recognize this and generate declarations from the signature
             ModuleExpression::Struct(vec![])
         } else {
-            return Err(CompilerError::ParseError(
-                "Module binding must have either a body (= mod_exp) or a signature (: mod_type)"
-                    .to_string(),
-            ));
+            bail_parse!("Module binding must have either a body (= mod_exp) or a signature (: mod_type)");
         };
 
         Ok(ModuleBind {
@@ -240,10 +235,7 @@ impl Parser {
             }
 
             _ => {
-                return Err(CompilerError::ParseError(format!(
-                    "Expected module expression, got {:?}",
-                    self.peek()
-                )));
+                bail_parse!("Expected module expression, got {:?}", self.peek());
             }
         };
 
@@ -294,10 +286,10 @@ impl Parser {
                 Ok(ModuleExpression::Name(name))
             }
 
-            _ => Err(CompilerError::ParseError(format!(
+            _ => Err(err_parse!(
                 "Expected module expression atom, got {:?}",
                 self.peek()
-            ))),
+            )),
         }
     }
 
@@ -369,10 +361,7 @@ impl Parser {
             }
 
             _ => {
-                return Err(CompilerError::ParseError(format!(
-                    "Expected module type expression, got {:?}",
-                    self.peek()
-                )));
+                bail_parse!("Expected module type expression, got {:?}", self.peek());
             }
         };
 
@@ -463,18 +452,16 @@ impl Parser {
                                     self.advance();
                                 }
                                 _ => {
-                                    return Err(CompilerError::ParseError(format!(
+                                    bail_parse!(
                                         "Expected operator or ) in sig spec at {}",
                                         self.current_span()
-                                    )));
+                                    );
                                 }
                             }
                         }
 
                         if operator.is_empty() {
-                            return Err(CompilerError::ParseError(
-                                "Operator section cannot be empty in sig spec".to_string(),
-                            ));
+                            bail_parse!("Operator section cannot be empty in sig spec");
                         }
 
                         operator
@@ -535,10 +522,7 @@ impl Parser {
                 Ok(Spec::Include(sig))
             }
 
-            _ => Err(CompilerError::ParseError(format!(
-                "Expected spec, got {:?}",
-                self.peek()
-            ))),
+            _ => Err(err_parse!("Expected spec, got {:?}", self.peek())),
         }
     }
 }

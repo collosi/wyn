@@ -25,7 +25,8 @@ impl LocatedToken {
         LocatedToken { token, span }
     }
 
-    /// Create a located token with dummy span (for testing/migration)
+    /// Create a located token with dummy span (for testing)
+    #[cfg(test)]
     pub fn dummy(token: Token) -> Self {
         LocatedToken {
             token,

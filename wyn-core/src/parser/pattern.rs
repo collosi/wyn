@@ -1,7 +1,8 @@
 use crate::ast::*;
-use crate::error::{CompilerError, Result};
+use crate::error::Result;
 use crate::lexer::Token;
 use crate::parser::Parser;
+use crate::{bail_parse, err_parse};
 use log::trace;
 
 impl Parser {
@@ -109,10 +110,10 @@ impl Parser {
                 self.parse_pattern_literal()
             }
 
-            _ => Err(CompilerError::ParseError(format!(
+            _ => Err(err_parse!(
                 "Expected pattern, got {:?}",
                 self.peek()
-            ))),
+            )),
         }
     }
 
@@ -286,9 +287,7 @@ impl Parser {
 
             Some(Token::CharLiteral(c)) => {
                 if is_negative {
-                    return Err(CompilerError::ParseError(
-                        "Character literals cannot be negative".to_string(),
-                    ));
+                    bail_parse!("Character literals cannot be negative");
                 }
                 let ch = *c;
                 self.advance();
@@ -297,9 +296,7 @@ impl Parser {
 
             Some(Token::True) => {
                 if is_negative {
-                    return Err(CompilerError::ParseError(
-                        "Boolean literals cannot be negative".to_string(),
-                    ));
+                    bail_parse!("Boolean literals cannot be negative");
                 }
                 self.advance();
                 PatternLiteral::Bool(true)
@@ -307,19 +304,17 @@ impl Parser {
 
             Some(Token::False) => {
                 if is_negative {
-                    return Err(CompilerError::ParseError(
-                        "Boolean literals cannot be negative".to_string(),
-                    ));
+                    bail_parse!("Boolean literals cannot be negative");
                 }
                 self.advance();
                 PatternLiteral::Bool(false)
             }
 
             _ => {
-                return Err(CompilerError::ParseError(format!(
+                bail_parse!(
                     "Expected literal in pattern, got {:?}",
                     self.peek()
-                )));
+                );
             }
         };
 

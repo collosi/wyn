@@ -13,23 +13,19 @@ fn i32_type() -> Type<TypeName> {
     Type::Constructed(TypeName::Int(32), vec![])
 }
 
-fn dummy_span() -> Span {
-    Span::dummy()
-}
-
 // =============================================================================
 // Test Helpers - Expression Constructors
 // =============================================================================
 
 fn var(name: &str, ty: Type<TypeName>) -> Expr {
-    Expr::new(ty, ExprKind::Var(name.to_string()), dummy_span())
+    Expr::new(ty, ExprKind::Var(name.to_string()), Span::dummy())
 }
 
 fn int_lit(n: i32) -> Expr {
     Expr::new(
         i32_type(),
         ExprKind::Literal(Literal::Int(n.to_string())),
-        dummy_span(),
+        Span::dummy(),
     )
 }
 
@@ -42,7 +38,7 @@ fn binop(op: &str, lhs: Expr, rhs: Expr) -> Expr {
             lhs: Box::new(lhs),
             rhs: Box::new(rhs),
         },
-        dummy_span(),
+        Span::dummy(),
     )
 }
 
@@ -56,7 +52,7 @@ fn let_bind(name: &str, value: Expr, body: Expr) -> Expr {
             value: Box::new(value),
             body: Box::new(body),
         },
-        dummy_span(),
+        Span::dummy(),
     )
 }
 
@@ -76,7 +72,7 @@ fn for_range_loop(loop_var: &str, init: Expr, iter_var: &str, bound: Expr, body:
             },
             body: Box::new(body),
         },
-        dummy_span(),
+        Span::dummy(),
     )
 }
 

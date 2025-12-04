@@ -4,9 +4,10 @@ use crate::ast::{
     Decl, Declaration, ModuleExpression, ModuleTypeExpression, Node, NodeCounter, Pattern, PatternKind,
     Program, Spec, Type, TypeName, TypeParam,
 };
-use crate::error::{CompilerError, Result};
+use crate::error::Result;
 use crate::lexer;
 use crate::parser::Parser;
+use crate::{bail_module, err_module, err_parse};
 use crate::scope::ScopeStack;
 use polytype::{Context, TypeScheme};
 use std::collections::{HashMap, HashSet};
@@ -179,7 +180,7 @@ impl ModuleManager {
     /// Load and elaborate modules from a source string
     pub fn load_str(&mut self, source: &str) -> Result<()> {
         // Parse the source
-        let tokens = lexer::tokenize(source).map_err(CompilerError::ParseError)?;
+        let tokens = lexer::tokenize(source).map_err(|e| err_parse!("{}", e))?;
         let counter = std::mem::take(&mut self.node_counter);
         let mut parser = Parser::new_with_counter(tokens, counter);
         let program = parser.parse()?;
@@ -199,10 +200,10 @@ impl ModuleManager {
         for decl in &program.declarations {
             if let Declaration::ModuleBind(mb) = decl {
                 if self.elaborated_modules.contains_key(&mb.name) {
-                    return Err(CompilerError::ModuleError(format!(
+                    bail_module!(
                         "Module '{}' is already defined",
                         mb.name
-                    )));
+                    );
                 }
 
                 // Extract type substitutions from the signature
@@ -261,10 +262,10 @@ impl ModuleManager {
         for decl in &program.declarations {
             if let Declaration::ModuleTypeBind(mtb) = decl {
                 if self.module_type_registry.contains_key(&mtb.name) {
-                    return Err(CompilerError::ModuleError(format!(
+                    bail_module!(
                         "Module type '{}' is already defined",
                         mtb.name
-                    )));
+                    );
                 }
                 self.module_type_registry.insert(mtb.name.clone(), mtb.definition.clone());
             }
@@ -283,7 +284,7 @@ impl ModuleManager {
             ModuleTypeExpression::Name(name) => {
                 // Look up the module type in the registry
                 let definition = self.module_type_registry.get(name).ok_or_else(|| {
-                    CompilerError::ModuleError(format!("Module type '{}' not found", name))
+                    err_module!("Module type '{}' not found", name)
                 })?;
                 // Recurse on the definition
                 self.elaborate_module_type(definition, substitutions)
@@ -318,9 +319,7 @@ impl ModuleManager {
 
             ModuleTypeExpression::Arrow(_, _, _) | ModuleTypeExpression::FunctorType(_, _) => {
                 // Functor types not yet supported
-                Err(CompilerError::ModuleError(
-                    "Functor types are not yet supported".to_string(),
-                ))
+                Err(err_module!("Functor types are not yet supported"))
             }
         }
     }
@@ -512,7 +511,7 @@ impl ModuleManager {
         let elaborated = self
             .elaborated_modules
             .get(module_name)
-            .ok_or_else(|| CompilerError::ModuleError(format!("Module '{}' not found", module_name)))?;
+            .ok_or_else(|| err_module!("Module '{}' not found", module_name))?;
 
         // Search for the function in the elaborated items
         for item in &elaborated.items {
@@ -539,10 +538,10 @@ impl ModuleManager {
             }
         }
 
-        Err(CompilerError::ModuleError(format!(
+        Err(err_module!(
             "Function '{}' not found in module '{}'",
             function_name, module_name
-        )))
+        ))
     }
 
     /// Build the full function type from a declaration's parameters and return type
@@ -557,10 +556,10 @@ impl ModuleManager {
             if let Some(param_ty) = self.extract_type_from_pattern(param) {
                 param_types.push(param_ty);
             } else {
-                return Err(CompilerError::ModuleError(format!(
+                bail_module!(
                     "Function parameter in '{}' lacks type annotation",
                     decl.name
-                )));
+                );
             }
         }
 
@@ -686,9 +685,7 @@ impl ModuleManager {
             }
             _ => {
                 // For now, only handle struct module expressions
-                Err(CompilerError::ModuleError(
-                    "Only struct module expressions are supported".to_string(),
-                ))
+                Err(err_module!("Only struct module expressions are supported"))
             }
         }
     }

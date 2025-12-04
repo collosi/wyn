@@ -71,6 +71,17 @@ impl Span {
         }
     }
 
+    /// Create a dummy/generated span (all zeros) for test code
+    #[cfg(test)]
+    pub fn dummy() -> Self {
+        Span {
+            start_line: 0,
+            start_col: 0,
+            end_line: 0,
+            end_col: 0,
+        }
+    }
+
     /// Check if this is a generated/dummy span (all zeros)
     pub fn is_generated(&self) -> bool {
         self.start_line == 0 && self.start_col == 0 && self.end_line == 0 && self.end_col == 0

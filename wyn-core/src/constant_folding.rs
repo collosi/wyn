@@ -4,6 +4,7 @@
 //! operations on literals to their computed values.
 
 use crate::error::{CompilerError, Result};
+use crate::{err_type_at, bail_type_at};
 use crate::mir::visitor::MirVisitor;
 use crate::mir::{Expr, ExprKind, Literal, Program};
 
@@ -123,10 +124,10 @@ impl ConstantFolder {
             (ExprKind::Literal(Literal::Float(l)), ExprKind::Literal(Literal::Float(r))) => {
                 let l: f64 = l
                     .parse()
-                    .map_err(|_| CompilerError::TypeError("Invalid float literal".to_string(), span))?;
+                    .map_err(|_| err_type_at!(span, "Invalid float literal"))?;
                 let r: f64 = r
                     .parse()
-                    .map_err(|_| CompilerError::TypeError("Invalid float literal".to_string(), span))?;
+                    .map_err(|_| err_type_at!(span, "Invalid float literal"))?;
 
                 let result = match op {
                     "+" => Some(l + r),
@@ -134,10 +135,7 @@ impl ConstantFolder {
                     "*" => Some(l * r),
                     "/" => {
                         if r == 0.0 {
-                            return Err(CompilerError::TypeError(
-                                "Division by zero in constant expression".to_string(),
-                                span,
-                            ));
+                            bail_type_at!(span, "Division by zero in constant expression");
                         }
                         Some(l / r)
                     }
@@ -176,10 +174,10 @@ impl ConstantFolder {
             (ExprKind::Literal(Literal::Int(l)), ExprKind::Literal(Literal::Int(r))) => {
                 let l: i64 = l
                     .parse()
-                    .map_err(|_| CompilerError::TypeError("Invalid integer literal".to_string(), span))?;
+                    .map_err(|_| err_type_at!(span, "Invalid integer literal"))?;
                 let r: i64 = r
                     .parse()
-                    .map_err(|_| CompilerError::TypeError("Invalid integer literal".to_string(), span))?;
+                    .map_err(|_| err_type_at!(span, "Invalid integer literal"))?;
 
                 let result = match op {
                     "+" => Some(l + r),
@@ -187,19 +185,13 @@ impl ConstantFolder {
                     "*" => Some(l * r),
                     "/" => {
                         if r == 0 {
-                            return Err(CompilerError::TypeError(
-                                "Division by zero in constant expression".to_string(),
-                                span,
-                            ));
+                            bail_type_at!(span, "Division by zero in constant expression");
                         }
                         Some(l / r)
                     }
                     "%" => {
                         if r == 0 {
-                            return Err(CompilerError::TypeError(
-                                "Modulo by zero in constant expression".to_string(),
-                                span,
-                            ));
+                            bail_type_at!(span, "Modulo by zero in constant expression");
                         }
                         Some(l % r)
                     }
@@ -272,7 +264,7 @@ impl ConstantFolder {
             ("-", ExprKind::Literal(Literal::Float(val))) => {
                 let v: f64 = val
                     .parse()
-                    .map_err(|_| CompilerError::TypeError("Invalid float literal".to_string(), span))?;
+                    .map_err(|_| err_type_at!(span, "Invalid float literal"))?;
                 Ok(Some(Expr::new(
                     result_ty.clone(),
                     ExprKind::Literal(Literal::Float((-v).to_string())),
@@ -284,7 +276,7 @@ impl ConstantFolder {
             ("-", ExprKind::Literal(Literal::Int(val))) => {
                 let v: i64 = val
                     .parse()
-                    .map_err(|_| CompilerError::TypeError("Invalid integer literal".to_string(), span))?;
+                    .map_err(|_| err_type_at!(span, "Invalid integer literal"))?;
                 Ok(Some(Expr::new(
                     result_ty.clone(),
                     ExprKind::Literal(Literal::Int((-v).to_string())),
