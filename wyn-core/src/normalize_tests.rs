@@ -1,0 +1,162 @@
+//! Tests for the ANF normalization pass.
+
+use crate::ast::{Span, TypeName};
+use crate::error::CompilerError;
+use crate::mir::{Expr, ExprKind, Literal};
+use crate::normalize::{Normalizer, is_atomic};
+use polytype::Type;
+
+/// Helper to run full pipeline through lowering with normalization
+fn compile_through_lowering(input: &str) -> Result<(), CompilerError> {
+    let parsed = crate::Compiler::parse(input)?;
+    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
+    parsed
+        .elaborate(module_manager)?
+        .resolve()?
+        .type_check()?
+        .alias_check()?
+        .flatten()?
+        .normalize()
+        .monomorphize()?
+        .filter_reachable()
+        .fold_constants()?
+        .lift_bindings()?
+        .lower()?;
+    Ok(())
+}
+
+fn dummy_span() -> Span {
+    Span::dummy()
+}
+
+fn i32_type() -> Type<TypeName> {
+    Type::Constructed(TypeName::Int(32), vec![])
+}
+
+fn var(name: &str) -> Expr {
+    Expr::new(i32_type(), ExprKind::Var(name.to_string()), dummy_span())
+}
+
+fn int_lit(n: i32) -> Expr {
+    Expr::new(
+        i32_type(),
+        ExprKind::Literal(Literal::Int(n.to_string())),
+        dummy_span(),
+    )
+}
+
+fn binop(op: &str, lhs: Expr, rhs: Expr) -> Expr {
+    Expr::new(
+        i32_type(),
+        ExprKind::BinOp {
+            op: op.to_string(),
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        },
+        dummy_span(),
+    )
+}
+
+fn call(func: &str, args: Vec<Expr>) -> Expr {
+    Expr::new(
+        i32_type(),
+        ExprKind::Call {
+            func: func.to_string(),
+            args,
+        },
+        dummy_span(),
+    )
+}
+
+#[test]
+fn test_atomic_var() {
+    let expr = var("x");
+    assert!(is_atomic(&expr));
+}
+
+#[test]
+fn test_atomic_int_literal() {
+    let expr = int_lit(42);
+    assert!(is_atomic(&expr));
+}
+
+#[test]
+fn test_not_atomic_binop() {
+    let expr = binop("+", var("a"), var("b"));
+    assert!(!is_atomic(&expr));
+}
+
+#[test]
+fn test_normalize_binop_with_atomic_operands() {
+    // a + b should stay as a + b (no new bindings)
+    let expr = binop("+", var("a"), var("b"));
+    let mut bindings = Vec::new();
+    let mut normalizer = Normalizer::new(0);
+    let result = normalizer.normalize_expr(expr, &mut bindings);
+
+    assert!(bindings.is_empty());
+    matches!(result.kind, ExprKind::BinOp { .. });
+}
+
+#[test]
+fn test_normalize_nested_binop() {
+    // (a + b) + c should become:
+    // let __norm_0 = a + b in __norm_0 + c
+    let inner = binop("+", var("a"), var("b"));
+    let expr = binop("+", inner, var("c"));
+    let mut bindings = Vec::new();
+    let mut normalizer = Normalizer::new(0);
+    let result = normalizer.normalize_expr(expr, &mut bindings);
+
+    // Should have one binding for the inner binop
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].0, "__norm_0");
+
+    // Result should be __norm_0 + c
+    if let ExprKind::BinOp { lhs, rhs, .. } = &result.kind {
+        assert!(matches!(lhs.kind, ExprKind::Var(ref n) if n == "__norm_0"));
+        assert!(matches!(rhs.kind, ExprKind::Var(ref n) if n == "c"));
+    } else {
+        panic!("Expected BinOp");
+    }
+}
+
+#[test]
+fn test_normalize_call_with_binop_arg() {
+    // foo(a + b) should become:
+    // let __norm_0 = a + b in foo(__norm_0)
+    let arg = binop("+", var("a"), var("b"));
+    let expr = call("foo", vec![arg]);
+    let mut bindings = Vec::new();
+    let mut normalizer = Normalizer::new(0);
+    let result = normalizer.normalize_expr(expr, &mut bindings);
+
+    // Should have one binding for the binop
+    assert_eq!(bindings.len(), 1);
+
+    // Result should be foo(__norm_0)
+    if let ExprKind::Call { args, .. } = &result.kind {
+        assert_eq!(args.len(), 1);
+        assert!(matches!(args[0].kind, ExprKind::Var(ref n) if n == "__norm_0"));
+    } else {
+        panic!("Expected Call");
+    }
+}
+
+#[test]
+fn test_normalize_loop_with_tuple_state() {
+    // This tests that loops with tuple state work correctly after normalization.
+    // The loop produces a tuple (acc, i) on each iteration.
+    let source = r#"
+def sum [n] (arr:[n]f32) : f32 =
+  let (result, _) = loop (acc, i) = (0.0f32, 0) while i < length arr do
+    (acc + arr[i], i + 1)
+  in result
+
+#[vertex]
+def vertex_main (vertex_id:i32) : #[builtin(position)] vec4f32 =
+  let result = sum [1.0f32, 1.0f32, 1.0f32] in
+  @[result, result, 0.0f32, 1.0f32]
+"#;
+    compile_through_lowering(source).expect("Should compile with normalized loop");
+}

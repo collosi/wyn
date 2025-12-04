@@ -2293,13 +2293,11 @@ fn lower_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::
             let elem_types: Vec<spirv::Word> =
                 real_elems.iter().map(|e| constructor.ast_type_to_spirv(&e.ty)).collect();
 
-            // Empty tuples should not be lowered as literals.
-            // They occur from closures with no captures, which are handled specially in map.
+            // Empty tuples (closures with no captures) are represented as dummy i32 constants.
+            // They should be handled specially at call sites (map), but if they reach here,
+            // return a dummy value since the closure environment is never accessed.
             if elem_types.is_empty() {
-                panic!(
-                    "BUG: Attempting to lower empty tuple literal. Empty closures should be \
-                    handled at call sites (map special case), not lowered as literals."
-                );
+                return Ok(constructor.const_i32(0));
             }
 
             let tuple_type = constructor.builder.type_struct(elem_types);

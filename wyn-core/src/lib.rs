@@ -24,6 +24,7 @@ pub mod constant_folding;
 pub mod gasm_lowering;
 pub mod lowering;
 pub mod monomorphization;
+pub mod normalize;
 
 #[cfg(test)]
 mod alias_checker_tests;
@@ -35,6 +36,8 @@ mod constant_folding_tests;
 mod flattening_tests;
 #[cfg(test)]
 mod monomorphization_tests;
+#[cfg(test)]
+mod normalize_tests;
 
 use std::collections::HashMap;
 
@@ -61,6 +64,7 @@ pub type TypeTable = HashMap<NodeId, TypeScheme<TypeName>>;
 //       -> .type_check() -> TypeChecked
 //       -> .alias_check() -> AliasChecked
 //       -> .flatten()    -> Flattened
+//       -> .normalize()  -> Normalized (ANF transformation)
 //       -> .monomorphize() -> Monomorphized
 //       -> .filter_reachable() -> Reachable
 //       -> .fold_constants() -> Folded
@@ -222,6 +226,19 @@ pub struct Flattened {
 }
 
 impl Flattened {
+    /// Normalize MIR to A-normal form
+    pub fn normalize(self) -> Normalized {
+        let mir = normalize::normalize_program(self.mir);
+        Normalized { mir }
+    }
+}
+
+/// MIR has been normalized to A-normal form
+pub struct Normalized {
+    pub mir: mir::Program,
+}
+
+impl Normalized {
     /// Monomorphize: specialize polymorphic functions
     pub fn monomorphize(self) -> Result<Monomorphized> {
         let mir = monomorphization::monomorphize(self.mir)?;

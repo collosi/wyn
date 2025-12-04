@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 use thiserror::Error;
-use wyn_core::{Compiler, Flattened, lexer, module_manager::ModuleManager, parser::Parser as WynParser};
+use wyn_core::{Compiler, Normalized, lexer, module_manager::ModuleManager, parser::Parser as WynParser};
 
 /// Times the execution of a closure and prints the elapsed time if verbose.
 fn time<T, F: FnOnce() -> T>(name: &str, verbose: bool, f: F) -> T {
@@ -142,11 +142,12 @@ fn compile_file(
     }
 
     let flattened = time("flatten", verbose, || alias_checked.flatten())?;
+    let normalized = time("normalize", verbose, || flattened.normalize());
 
     // Write MIR if requested (before further passes that might fail)
-    write_mir_if_requested(&flattened, &output_mir, verbose)?;
+    write_mir_if_requested(&normalized, &output_mir, verbose)?;
 
-    let monomorphized = time("monomorphize", verbose, || flattened.monomorphize())?;
+    let monomorphized = time("monomorphize", verbose, || normalized.monomorphize())?;
     let reachable = time("filter_reachable", verbose, || monomorphized.filter_reachable());
     let folded = time("fold_constants", verbose, || reachable.fold_constants())?;
     let lifted = time("lift_bindings", verbose, || folded.lift_bindings())?;
@@ -207,12 +208,12 @@ fn check_file(input: PathBuf, output_annotated: Option<PathBuf>, verbose: bool) 
 }
 
 fn write_mir_if_requested(
-    flattened: &Flattened,
+    normalized: &Normalized,
     output_mir: &Option<PathBuf>,
     verbose: bool,
 ) -> Result<(), DriverError> {
     if let Some(ref mir_path) = output_mir {
-        fs::write(mir_path, format!("{}", flattened.mir))?;
+        fs::write(mir_path, format!("{}", normalized.mir))?;
         if verbose {
             info!("Wrote MIR to {}", mir_path.display());
         }

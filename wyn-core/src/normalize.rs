@@ -1,0 +1,511 @@
+//! A-Normal Form (ANF) normalization pass for MIR.
+//!
+//! This pass ensures that all compound expressions have atomic operands,
+//! enabling code motion optimizations. After normalization:
+//! - BinOp/UnaryOp operands are Var or scalar Literal
+//! - Call/Intrinsic args are Var or scalar Literal
+//! - Tuple/Array/Vector/Matrix elements are Var only
+//! - Materialize inner is Var or scalar Literal
+//! - If/Loop conditions are Var or scalar Literal
+
+use crate::mir::{Def, Expr, ExprKind, Literal, LoopKind, Program};
+
+/// A pending let binding (name, binding_id, value).
+type Binding = (String, u64, Expr);
+
+/// Normalizer state for the ANF transformation.
+pub struct Normalizer {
+    /// Counter for generating unique binding IDs.
+    next_binding_id: u64,
+    /// Counter for generating unique temp names.
+    next_temp_id: usize,
+}
+
+impl Normalizer {
+    /// Create a new normalizer with the given starting binding ID.
+    /// The starting ID should be higher than any existing binding ID in the program.
+    pub fn new(starting_binding_id: u64) -> Self {
+        Normalizer {
+            next_binding_id: starting_binding_id,
+            next_temp_id: 0,
+        }
+    }
+
+    /// Generate a fresh binding ID.
+    fn fresh_binding_id(&mut self) -> u64 {
+        let id = self.next_binding_id;
+        self.next_binding_id += 1;
+        id
+    }
+
+    /// Generate a fresh temp variable name.
+    fn fresh_temp_name(&mut self) -> String {
+        let id = self.next_temp_id;
+        self.next_temp_id += 1;
+        format!("__norm_{}", id)
+    }
+
+    /// Normalize an entire program.
+    pub fn normalize_program(&mut self, program: Program) -> Program {
+        let defs = program.defs.into_iter().map(|d| self.normalize_def(d)).collect();
+        Program {
+            defs,
+            lambda_registry: program.lambda_registry,
+        }
+    }
+
+    /// Normalize a single definition.
+    fn normalize_def(&mut self, def: Def) -> Def {
+        match def {
+            Def::Function {
+                name,
+                params,
+                ret_type,
+                attributes,
+                param_attributes,
+                return_attributes,
+                body,
+                span,
+            } => {
+                let mut bindings = Vec::new();
+                let body = self.normalize_expr(body, &mut bindings);
+                let body = wrap_bindings(body, bindings);
+                Def::Function {
+                    name,
+                    params,
+                    ret_type,
+                    attributes,
+                    param_attributes,
+                    return_attributes,
+                    body,
+                    span,
+                }
+            }
+            // Constants must remain compile-time literals, so don't normalize them
+            Def::Constant { .. } => def,
+            Def::Uniform { .. } => def, // Uniforms have no body to normalize
+        }
+    }
+
+    /// Normalize an expression, collecting pending bindings.
+    pub fn normalize_expr(&mut self, expr: Expr, bindings: &mut Vec<Binding>) -> Expr {
+        let span = expr.span;
+        let ty = expr.ty.clone();
+
+        match expr.kind {
+            // Already atomic - return as-is
+            ExprKind::Var(_) | ExprKind::Unit => expr,
+
+            // Scalar literals are atomic - return as-is
+            ExprKind::Literal(Literal::Int(_))
+            | ExprKind::Literal(Literal::Float(_))
+            | ExprKind::Literal(Literal::Bool(_))
+            | ExprKind::Literal(Literal::String(_)) => expr,
+
+            // Binary operation - atomize both operands
+            ExprKind::BinOp { op, lhs, rhs } => {
+                let lhs = self.normalize_expr(*lhs, bindings);
+                let lhs = self.atomize(lhs, bindings);
+                let rhs = self.normalize_expr(*rhs, bindings);
+                let rhs = self.atomize(rhs, bindings);
+                Expr::new(
+                    ty,
+                    ExprKind::BinOp {
+                        op,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                    span,
+                )
+            }
+
+            // Unary operation - atomize operand
+            ExprKind::UnaryOp { op, operand } => {
+                let operand = self.normalize_expr(*operand, bindings);
+                let operand = self.atomize(operand, bindings);
+                Expr::new(
+                    ty,
+                    ExprKind::UnaryOp {
+                        op,
+                        operand: Box::new(operand),
+                    },
+                    span,
+                )
+            }
+
+            // Function call - atomize all args
+            ExprKind::Call { func, args } => {
+                let args = args
+                    .into_iter()
+                    .map(|a| {
+                        let a = self.normalize_expr(a, bindings);
+                        self.atomize(a, bindings)
+                    })
+                    .collect();
+                Expr::new(ty, ExprKind::Call { func, args }, span)
+            }
+
+            // Intrinsic - atomize all args
+            ExprKind::Intrinsic { name, args } => {
+                let args = args
+                    .into_iter()
+                    .map(|a| {
+                        let a = self.normalize_expr(a, bindings);
+                        self.atomize(a, bindings)
+                    })
+                    .collect();
+                Expr::new(ty, ExprKind::Intrinsic { name, args }, span)
+            }
+
+            // Tuple literal - check if it's a closure (ends with String for __lambda_name)
+            ExprKind::Literal(Literal::Tuple(ref elems)) if is_closure_tuple(elems) => {
+                // Closure tuples are atomic - map lowering expects them as literals
+                expr
+            }
+            ExprKind::Literal(Literal::Tuple(ref elems)) if elems.is_empty() => {
+                // Empty tuples are atomic
+                expr
+            }
+            ExprKind::Literal(Literal::Tuple(elems)) => {
+                let elems = elems
+                    .into_iter()
+                    .map(|e| {
+                        let e = self.normalize_expr(e, bindings);
+                        self.atomize(e, bindings)
+                    })
+                    .collect();
+                Expr::new(ty, ExprKind::Literal(Literal::Tuple(elems)), span)
+            }
+
+            // Array literal - atomize all elements
+            ExprKind::Literal(Literal::Array(elems)) => {
+                let elems = elems
+                    .into_iter()
+                    .map(|e| {
+                        let e = self.normalize_expr(e, bindings);
+                        self.atomize(e, bindings)
+                    })
+                    .collect();
+                Expr::new(ty, ExprKind::Literal(Literal::Array(elems)), span)
+            }
+
+            // Vector literal - atomize all elements
+            ExprKind::Literal(Literal::Vector(elems)) => {
+                let elems = elems
+                    .into_iter()
+                    .map(|e| {
+                        let e = self.normalize_expr(e, bindings);
+                        self.atomize(e, bindings)
+                    })
+                    .collect();
+                Expr::new(ty, ExprKind::Literal(Literal::Vector(elems)), span)
+            }
+
+            // Matrix literal - atomize all elements in all rows
+            ExprKind::Literal(Literal::Matrix(rows)) => {
+                let rows = rows
+                    .into_iter()
+                    .map(|row| {
+                        row.into_iter()
+                            .map(|e| {
+                                let e = self.normalize_expr(e, bindings);
+                                self.atomize(e, bindings)
+                            })
+                            .collect()
+                    })
+                    .collect();
+                Expr::new(ty, ExprKind::Literal(Literal::Matrix(rows)), span)
+            }
+
+            // Materialize - atomize inner
+            ExprKind::Materialize(inner) => {
+                let inner = self.normalize_expr(*inner, bindings);
+                let inner = self.atomize(inner, bindings);
+                Expr::new(ty, ExprKind::Materialize(Box::new(inner)), span)
+            }
+
+            // Let binding - normalize value and body
+            ExprKind::Let {
+                name,
+                binding_id,
+                value,
+                body,
+            } => {
+                // Value gets normalized with outer bindings (value is evaluated before name is bound)
+                let value = self.normalize_expr(*value, bindings);
+
+                // Body gets its own scope - bindings from body may reference `name`
+                let mut body_bindings = Vec::new();
+                let body = self.normalize_expr(*body, &mut body_bindings);
+                let body = wrap_bindings(body, body_bindings);
+
+                Expr::new(
+                    ty,
+                    ExprKind::Let {
+                        name,
+                        binding_id,
+                        value: Box::new(value),
+                        body: Box::new(body),
+                    },
+                    span,
+                )
+            }
+
+            // If expression - atomize condition, normalize branches with fresh scopes
+            ExprKind::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                let cond = self.normalize_expr(*cond, bindings);
+                let cond = self.atomize(cond, bindings);
+
+                // Branches get their own binding scopes
+                let mut then_bindings = Vec::new();
+                let then_branch = self.normalize_expr(*then_branch, &mut then_bindings);
+                let then_branch = wrap_bindings(then_branch, then_bindings);
+
+                let mut else_bindings = Vec::new();
+                let else_branch = self.normalize_expr(*else_branch, &mut else_bindings);
+                let else_branch = wrap_bindings(else_branch, else_bindings);
+
+                Expr::new(
+                    ty,
+                    ExprKind::If {
+                        cond: Box::new(cond),
+                        then_branch: Box::new(then_branch),
+                        else_branch: Box::new(else_branch),
+                    },
+                    span,
+                )
+            }
+
+            // Loop - atomize init, normalize init_bindings and body with fresh scopes
+            ExprKind::Loop {
+                loop_var,
+                init,
+                init_bindings: loop_init_bindings,
+                kind,
+                body,
+            } => {
+                // Init gets atomized
+                let init = self.normalize_expr(*init, bindings);
+                let init = self.atomize(init, bindings);
+
+                // Init bindings get normalized
+                let loop_init_bindings = loop_init_bindings
+                    .into_iter()
+                    .map(|(name, expr)| {
+                        let mut init_b = Vec::new();
+                        let expr = self.normalize_expr(expr, &mut init_b);
+                        let expr = wrap_bindings(expr, init_b);
+                        (name, expr)
+                    })
+                    .collect();
+
+                // Loop kind gets normalized
+                let kind = match kind {
+                    LoopKind::While { cond } => {
+                        let mut cond_bindings = Vec::new();
+                        let cond = self.normalize_expr(*cond, &mut cond_bindings);
+                        let cond = self.atomize(cond, &mut cond_bindings);
+                        let cond = wrap_bindings(cond, cond_bindings);
+                        LoopKind::While { cond: Box::new(cond) }
+                    }
+                    LoopKind::ForRange { var, bound } => {
+                        let mut bound_bindings = Vec::new();
+                        let bound = self.normalize_expr(*bound, &mut bound_bindings);
+                        let bound = self.atomize(bound, &mut bound_bindings);
+                        let bound = wrap_bindings(bound, bound_bindings);
+                        LoopKind::ForRange {
+                            var,
+                            bound: Box::new(bound),
+                        }
+                    }
+                    LoopKind::For { var, iter } => {
+                        let mut iter_bindings = Vec::new();
+                        let iter = self.normalize_expr(*iter, &mut iter_bindings);
+                        let iter = self.atomize(iter, &mut iter_bindings);
+                        let iter = wrap_bindings(iter, iter_bindings);
+                        LoopKind::For {
+                            var,
+                            iter: Box::new(iter),
+                        }
+                    }
+                };
+
+                // Body gets its own scope
+                let mut body_bindings = Vec::new();
+                let body = self.normalize_expr(*body, &mut body_bindings);
+                let body = wrap_bindings(body, body_bindings);
+
+                Expr::new(
+                    ty,
+                    ExprKind::Loop {
+                        loop_var,
+                        init: Box::new(init),
+                        init_bindings: loop_init_bindings,
+                        kind,
+                        body: Box::new(body),
+                    },
+                    span,
+                )
+            }
+
+            // Attributed - normalize inner
+            ExprKind::Attributed {
+                attributes,
+                expr: inner,
+            } => {
+                let inner = self.normalize_expr(*inner, bindings);
+                Expr::new(
+                    ty,
+                    ExprKind::Attributed {
+                        attributes,
+                        expr: Box::new(inner),
+                    },
+                    span,
+                )
+            }
+        }
+    }
+
+    /// Ensure an expression is atomic, creating a temp binding if needed.
+    fn atomize(&mut self, expr: Expr, bindings: &mut Vec<Binding>) -> Expr {
+        if is_atomic(&expr) {
+            expr
+        } else {
+            let name = self.fresh_temp_name();
+            let id = self.fresh_binding_id();
+            let ty = expr.ty.clone();
+            let span = expr.span;
+            bindings.push((name.clone(), id, expr));
+            Expr::new(ty, ExprKind::Var(name), span)
+        }
+    }
+}
+
+/// Check if an expression is atomic (can appear as an operand).
+pub fn is_atomic(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Var(_) | ExprKind::Unit => true,
+        ExprKind::Literal(Literal::Tuple(elems)) => elems.is_empty() || is_closure_tuple(elems),
+        ExprKind::Literal(lit) => is_scalar_literal(lit),
+        _ => false,
+    }
+}
+
+/// Check if tuple elements represent a closure (last element is __lambda_name string).
+fn is_closure_tuple(elems: &[Expr]) -> bool {
+    elems.last().map_or(false, |e| {
+        matches!(&e.kind, ExprKind::Literal(Literal::String(_)))
+    })
+}
+
+/// Check if a literal is a scalar (not a container).
+fn is_scalar_literal(lit: &Literal) -> bool {
+    matches!(
+        lit,
+        Literal::Int(_) | Literal::Float(_) | Literal::Bool(_) | Literal::String(_)
+    )
+}
+
+/// Wrap collected bindings around an expression as nested Lets.
+fn wrap_bindings(mut expr: Expr, bindings: Vec<Binding>) -> Expr {
+    for (name, id, value) in bindings.into_iter().rev() {
+        let ty = expr.ty.clone();
+        let span = expr.span;
+        expr = Expr::new(
+            ty,
+            ExprKind::Let {
+                name,
+                binding_id: id,
+                value: Box::new(value),
+                body: Box::new(expr),
+            },
+            span,
+        );
+    }
+    expr
+}
+
+/// Find the maximum binding ID in a program.
+/// Used to initialize the normalizer with a safe starting ID.
+pub fn find_max_binding_id(program: &Program) -> u64 {
+    let mut max_id = 0;
+    for def in &program.defs {
+        match def {
+            Def::Function { body, .. } | Def::Constant { body, .. } => {
+                max_id = max_id.max(find_max_binding_id_in_expr(body));
+            }
+            Def::Uniform { .. } => {}
+        }
+    }
+    max_id
+}
+
+fn find_max_binding_id_in_expr(expr: &Expr) -> u64 {
+    match &expr.kind {
+        ExprKind::Let {
+            binding_id,
+            value,
+            body,
+            ..
+        } => {
+            let v = find_max_binding_id_in_expr(value);
+            let b = find_max_binding_id_in_expr(body);
+            (*binding_id).max(v).max(b)
+        }
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            find_max_binding_id_in_expr(lhs).max(find_max_binding_id_in_expr(rhs))
+        }
+        ExprKind::UnaryOp { operand, .. } => find_max_binding_id_in_expr(operand),
+        ExprKind::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => find_max_binding_id_in_expr(cond)
+            .max(find_max_binding_id_in_expr(then_branch))
+            .max(find_max_binding_id_in_expr(else_branch)),
+        ExprKind::Loop {
+            init,
+            init_bindings,
+            kind,
+            body,
+            ..
+        } => {
+            let mut max = find_max_binding_id_in_expr(init);
+            for (_, e) in init_bindings {
+                max = max.max(find_max_binding_id_in_expr(e));
+            }
+            max = match kind {
+                LoopKind::While { cond } => max.max(find_max_binding_id_in_expr(cond)),
+                LoopKind::ForRange { bound, .. } => max.max(find_max_binding_id_in_expr(bound)),
+                LoopKind::For { iter, .. } => max.max(find_max_binding_id_in_expr(iter)),
+            };
+            max.max(find_max_binding_id_in_expr(body))
+        }
+        ExprKind::Call { args, .. } | ExprKind::Intrinsic { args, .. } => {
+            args.iter().map(find_max_binding_id_in_expr).max().unwrap_or(0)
+        }
+        ExprKind::Literal(lit) => match lit {
+            Literal::Tuple(elems) | Literal::Array(elems) | Literal::Vector(elems) => {
+                elems.iter().map(find_max_binding_id_in_expr).max().unwrap_or(0)
+            }
+            Literal::Matrix(rows) => {
+                rows.iter().flat_map(|row| row.iter()).map(find_max_binding_id_in_expr).max().unwrap_or(0)
+            }
+            _ => 0,
+        },
+        ExprKind::Materialize(inner) => find_max_binding_id_in_expr(inner),
+        ExprKind::Attributed { expr, .. } => find_max_binding_id_in_expr(expr),
+        ExprKind::Var(_) | ExprKind::Unit => 0,
+    }
+}
+
+/// Normalize a MIR program to A-normal form.
+pub fn normalize_program(program: Program) -> Program {
+    let max_id = find_max_binding_id(&program);
+    let mut normalizer = Normalizer::new(max_id + 1);
+    normalizer.normalize_program(program)
+}
