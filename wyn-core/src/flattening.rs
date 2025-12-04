@@ -23,14 +23,19 @@ enum ArgShape {
 
 /// Static values for defunctionalization (Futhark TFP'18 approach).
 /// Tracks what each expression evaluates to at compile time.
+/// Each variant includes a binding_id for tracking backing stores.
 #[derive(Debug, Clone)]
 enum StaticValue {
-    /// Dynamic runtime value
-    Dyn,
+    /// Dynamic runtime value with its binding ID
+    Dyn {
+        binding_id: u64,
+    },
     /// Defunctionalized closure with known call target
     Closure {
         /// Name of the generated lambda function
         lam_name: String,
+        /// Binding ID for this closure
+        binding_id: u64,
     },
 }
 
@@ -38,6 +43,8 @@ enum StaticValue {
 pub struct Flattener {
     /// Counter for generating unique names
     next_id: usize,
+    /// Counter for generating unique binding IDs
+    next_binding_id: u64,
     /// Generated lambda functions (collected during flattening)
     generated_functions: Vec<mir::Def>,
     /// Stack of enclosing declaration names for lambda naming
@@ -53,12 +60,15 @@ pub struct Flattener {
     builtins: HashSet<String>,
     /// Stack of closure types (for nested lambdas)
     closure_type_stack: Vec<Type>,
+    /// Set of binding IDs that need backing stores (materialization)
+    needs_backing_store: HashSet<u64>,
 }
 
 impl Flattener {
     pub fn new(type_table: HashMap<NodeId, TypeScheme<TypeName>>, builtins: HashSet<String>) -> Self {
         Flattener {
             next_id: 0,
+            next_binding_id: 0,
             generated_functions: Vec::new(),
             enclosing_decl_stack: Vec::new(),
             lambda_registry: Vec::new(),
@@ -66,7 +76,20 @@ impl Flattener {
             static_values: ScopeStack::new(),
             builtins,
             closure_type_stack: Vec::new(),
+            needs_backing_store: HashSet::new(),
         }
+    }
+
+    /// Generate a fresh binding ID
+    fn fresh_binding_id(&mut self) -> u64 {
+        let id = self.next_binding_id;
+        self.next_binding_id += 1;
+        id
+    }
+
+    /// Get the backing store variable name for a binding ID
+    fn backing_store_name(binding_id: u64) -> String {
+        format!("__ptr_{}", binding_id)
     }
 
     /// Register a lambda function.
@@ -216,6 +239,55 @@ impl Flattener {
         format!("__{}{}", prefix, self.fresh_id())
     }
 
+    /// Hoist inner Let expressions out of a Let's value.
+    /// Transforms: let x = (let y = A in B) in C  =>  let y = A in let x = B in C
+    /// This ensures materialized pointers are at the same scope level as their referents.
+    fn hoist_inner_lets(expr_kind: mir::ExprKind, span: Span) -> mir::ExprKind {
+        if let mir::ExprKind::Let {
+            name,
+            binding_id,
+            value,
+            body,
+        } = expr_kind
+        {
+            if let mir::ExprKind::Let {
+                name: inner_name,
+                binding_id: inner_binding_id,
+                value: inner_value,
+                body: inner_body,
+            } = value.kind
+            {
+                // Hoist: let x = (let y = A in B) in C => let y = A in let x = B in C
+                // Capture body's type before moving it
+                let body_ty = body.ty.clone();
+                let new_inner = mir::ExprKind::Let {
+                    name,
+                    binding_id,
+                    value: inner_body,
+                    body,
+                };
+                let new_inner_expr = Expr::new(body_ty.clone(), new_inner, span);
+                // Recursively hoist in case there are more nested Lets
+                let hoisted_inner = Self::hoist_inner_lets(new_inner_expr.kind, span);
+                mir::ExprKind::Let {
+                    name: inner_name,
+                    binding_id: inner_binding_id,
+                    value: inner_value,
+                    body: Box::new(Expr::new(body_ty, hoisted_inner, span)),
+                }
+            } else {
+                mir::ExprKind::Let {
+                    name,
+                    binding_id,
+                    value,
+                    body,
+                }
+            }
+        } else {
+            expr_kind
+        }
+    }
+
     /// Resolve a field name to a numeric index using type information
     fn resolve_field_index(&self, obj: &Expression, field: &str) -> Result<usize> {
         // First try numeric index (for tuple access like .0, .1)
@@ -283,7 +355,16 @@ impl Flattener {
             // Function
             let params = self.flatten_params(&d.params)?;
             let param_attrs = self.extract_param_attributes(&d.params);
+            let span = d.body.h.span;
+
+            // Register params with binding IDs before flattening body
+            let param_bindings = self.register_param_bindings(&d.params)?;
+
             let (body, _) = self.flatten_expr(&d.body)?;
+
+            // Wrap body with backing stores for params that need them
+            let body = self.wrap_param_backing_stores(body, param_bindings, span);
+
             let ret_type = self.get_expr_type(&d.body);
             mir::Def::Function {
                 name: d.name.clone(),
@@ -293,7 +374,7 @@ impl Flattener {
                 param_attributes: param_attrs,
                 return_attributes: vec![],
                 body,
-                span: d.body.h.span,
+                span,
             }
         };
 
@@ -331,7 +412,16 @@ impl Flattener {
 
                     let params = self.flatten_params(&e.params)?;
                     let param_attrs = self.extract_param_attributes(&e.params);
+                    let span = e.body.h.span;
+
+                    // Register params with binding IDs before flattening body
+                    let param_bindings = self.register_param_bindings(&e.params)?;
+
                     let (body, _) = self.flatten_expr(&e.body)?;
+
+                    // Wrap body with backing stores for params that need them
+                    let body = self.wrap_param_backing_stores(body, param_bindings, span);
+
                     let ret_type = self.get_expr_type(&e.body);
                     let attrs = vec![if e.entry_type.is_vertex() {
                         mir::Attribute::Vertex
@@ -361,7 +451,7 @@ impl Flattener {
                         param_attributes: param_attrs,
                         return_attributes: return_attrs,
                         body,
-                        span: e.body.h.span,
+                        span,
                     };
 
                     defs.append(&mut self.generated_functions);
@@ -444,6 +534,63 @@ impl Flattener {
         Ok(result)
     }
 
+    /// Register function parameters with binding IDs for backing store tracking.
+    /// Returns a Vec of (param_name, param_type, binding_id) tuples.
+    fn register_param_bindings(&mut self, params: &[ast::Pattern]) -> Result<Vec<(String, Type, u64)>> {
+        self.static_values.push_scope();
+        let mut param_bindings = Vec::new();
+        for param in params {
+            let name = self.extract_param_name(param)?;
+            let ty = self.get_pattern_type(param);
+            let binding_id = self.fresh_binding_id();
+            self.static_values.insert(name.clone(), StaticValue::Dyn { binding_id });
+            param_bindings.push((name, ty, binding_id));
+        }
+        Ok(param_bindings)
+    }
+
+    /// Wrap a function body with backing store materializations for parameters that need them.
+    fn wrap_param_backing_stores(
+        &mut self,
+        body: Expr,
+        param_bindings: Vec<(String, Type, u64)>,
+        span: Span,
+    ) -> Expr {
+        self.static_values.pop_scope();
+
+        // Collect params that need backing stores (in reverse order for proper nesting)
+        let params_needing_stores: Vec<_> = param_bindings
+            .into_iter()
+            .filter(|(_, _, binding_id)| self.needs_backing_store.contains(binding_id))
+            .collect();
+
+        // Wrap body with backing stores for each param that needs one
+        let mut result = body;
+        for (param_name, param_ty, binding_id) in params_needing_stores.into_iter().rev() {
+            let ptr_name = Self::backing_store_name(binding_id);
+            let ptr_binding_id = self.fresh_binding_id();
+            result = Expr::new(
+                result.ty.clone(),
+                mir::ExprKind::Let {
+                    name: ptr_name,
+                    binding_id: ptr_binding_id,
+                    value: Box::new(Expr::new(
+                        param_ty.clone(),
+                        mir::ExprKind::Materialize(Box::new(Expr::new(
+                            param_ty,
+                            mir::ExprKind::Var(param_name),
+                            span,
+                        ))),
+                        span,
+                    )),
+                    body: Box::new(result),
+                },
+                span,
+            );
+        }
+        result
+    }
+
     /// Extract parameter name from pattern
     fn extract_param_name(&self, pattern: &ast::Pattern) -> Result<String> {
         match &pattern.kind {
@@ -463,27 +610,35 @@ impl Flattener {
         let (kind, sv) = match &expr.kind {
             ExprKind::IntLiteral(n) => (
                 mir::ExprKind::Literal(mir::Literal::Int(n.to_string())),
-                StaticValue::Dyn,
+                StaticValue::Dyn { binding_id: 0 },
             ),
             ExprKind::FloatLiteral(f) => (
                 mir::ExprKind::Literal(mir::Literal::Float(f.to_string())),
-                StaticValue::Dyn,
+                StaticValue::Dyn { binding_id: 0 },
             ),
-            ExprKind::BoolLiteral(b) => (mir::ExprKind::Literal(mir::Literal::Bool(*b)), StaticValue::Dyn),
+            ExprKind::BoolLiteral(b) => (
+                mir::ExprKind::Literal(mir::Literal::Bool(*b)),
+                StaticValue::Dyn { binding_id: 0 },
+            ),
             ExprKind::StringLiteral(s) => (
                 mir::ExprKind::Literal(mir::Literal::String(s.clone())),
-                StaticValue::Dyn,
+                StaticValue::Dyn { binding_id: 0 },
             ),
-            ExprKind::Unit => (mir::ExprKind::Unit, StaticValue::Dyn),
+            ExprKind::Unit => (mir::ExprKind::Unit, StaticValue::Dyn { binding_id: 0 }),
             ExprKind::Identifier(name) => {
                 // Look up static value for this variable
-                let sv = self.static_values.lookup(name).ok().cloned().unwrap_or(StaticValue::Dyn);
+                let sv = self
+                    .static_values
+                    .lookup(name)
+                    .ok()
+                    .cloned()
+                    .unwrap_or(StaticValue::Dyn { binding_id: 0 });
                 (mir::ExprKind::Var(name.clone()), sv)
             }
             ExprKind::QualifiedName(quals, name) => {
                 let full_name =
                     if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) };
-                (mir::ExprKind::Var(full_name), StaticValue::Dyn)
+                (mir::ExprKind::Var(full_name), StaticValue::Dyn { binding_id: 0 })
             }
             ExprKind::OperatorSection(op) => {
                 // Convert operator section to a lambda: (+) becomes \x y -> x + y
@@ -579,7 +734,10 @@ impl Flattener {
                 self.generated_functions.push(func);
 
                 // Return the closure tuple with static value indicating it's a known closure
-                let sv = StaticValue::Closure { lam_name: func_name };
+                let sv = StaticValue::Closure {
+                    lam_name: func_name,
+                    binding_id: 0,
+                };
 
                 (mir::ExprKind::Literal(mir::Literal::Tuple(tuple_elems)), sv)
             }
@@ -592,7 +750,7 @@ impl Flattener {
                         lhs: Box::new(lhs),
                         rhs: Box::new(rhs),
                     },
-                    StaticValue::Dyn,
+                    StaticValue::Dyn { binding_id: 0 },
                 )
             }
             ExprKind::UnaryOp(op, operand) => {
@@ -602,7 +760,7 @@ impl Flattener {
                         op: op.op.clone(),
                         operand: Box::new(operand),
                     },
-                    StaticValue::Dyn,
+                    StaticValue::Dyn { binding_id: 0 },
                 )
             }
             ExprKind::If(if_expr) => {
@@ -615,7 +773,7 @@ impl Flattener {
                         then_branch: Box::new(then_branch),
                         else_branch: Box::new(else_branch),
                     },
-                    StaticValue::Dyn,
+                    StaticValue::Dyn { binding_id: 0 },
                 )
             }
             ExprKind::LetIn(let_in) => self.flatten_let_in(let_in, span)?,
@@ -626,7 +784,7 @@ impl Flattener {
                     elems.iter().map(|e| self.flatten_expr(e).map(|(e, _)| e)).collect();
                 (
                     mir::ExprKind::Literal(mir::Literal::Tuple(elems?)),
-                    StaticValue::Dyn,
+                    StaticValue::Dyn { binding_id: 0 },
                 )
             }
             ExprKind::ArrayLiteral(elems) => {
@@ -634,7 +792,7 @@ impl Flattener {
                     elems.iter().map(|e| self.flatten_expr(e).map(|(e, _)| e)).collect();
                 (
                     mir::ExprKind::Literal(mir::Literal::Array(elems?)),
-                    StaticValue::Dyn,
+                    StaticValue::Dyn { binding_id: 0 },
                 )
             }
             ExprKind::VecMatLiteral(elems) => {
@@ -663,7 +821,7 @@ impl Flattener {
                     }
                     (
                         mir::ExprKind::Literal(mir::Literal::Matrix(rows)),
-                        StaticValue::Dyn,
+                        StaticValue::Dyn { binding_id: 0 },
                     )
                 } else {
                     // Vector
@@ -671,7 +829,7 @@ impl Flattener {
                         elems.iter().map(|e| self.flatten_expr(e).map(|(e, _)| e)).collect();
                     (
                         mir::ExprKind::Literal(mir::Literal::Vector(elems?)),
-                        StaticValue::Dyn,
+                        StaticValue::Dyn { binding_id: 0 },
                     )
                 }
             }
@@ -681,13 +839,35 @@ impl Flattener {
                     fields.iter().map(|(_, expr)| Ok(self.flatten_expr(expr)?.0)).collect();
                 (
                     mir::ExprKind::Literal(mir::Literal::Tuple(elems?)),
-                    StaticValue::Dyn,
+                    StaticValue::Dyn { binding_id: 0 },
                 )
             }
-            ExprKind::ArrayIndex(arr, idx) => {
-                let (arr, _) = self.flatten_expr(arr)?;
-                let (idx, _) = self.flatten_expr(idx)?;
-                // Wrap the array in Materialize so lowering can get a pointer for OpAccessChain
+            ExprKind::ArrayIndex(arr_expr, idx_expr) => {
+                let (arr, _) = self.flatten_expr(arr_expr)?;
+                let (idx, _) = self.flatten_expr(idx_expr)?;
+
+                // Check if arr is a simple Var - if so, use backing store system
+                if let mir::ExprKind::Var(ref var_name) = arr.kind {
+                    // Look up binding_id from static_values
+                    if let Ok(sv) = self.static_values.lookup(var_name) {
+                        let binding_id = match sv {
+                            StaticValue::Dyn { binding_id } => *binding_id,
+                            StaticValue::Closure { binding_id, .. } => *binding_id,
+                        };
+                        // Mark this binding as needing a backing store
+                        self.needs_backing_store.insert(binding_id);
+                        // Use the backing store variable name
+                        let ptr_name = Self::backing_store_name(binding_id);
+                        let ptr_var = Expr::new(arr.ty.clone(), mir::ExprKind::Var(ptr_name), span);
+                        let kind = mir::ExprKind::Intrinsic {
+                            name: "index".to_string(),
+                            args: vec![ptr_var, idx],
+                        };
+                        return Ok((Expr::new(ty, kind, span), StaticValue::Dyn { binding_id: 0 }));
+                    }
+                }
+
+                // Fallback: wrap the array in Materialize inline
                 let materialized_arr =
                     Expr::new(arr.ty.clone(), mir::ExprKind::Materialize(Box::new(arr)), span);
                 (
@@ -695,7 +875,7 @@ impl Flattener {
                         name: "index".to_string(),
                         args: vec![materialized_arr, idx],
                     },
-                    StaticValue::Dyn,
+                    StaticValue::Dyn { binding_id: 0 },
                 )
             }
             ExprKind::FieldAccess(obj_expr, field) => {
@@ -752,14 +932,14 @@ impl Flattener {
                                 },
                                 span,
                             ),
-                            StaticValue::Dyn,
+                            StaticValue::Dyn { binding_id: 0 },
                         ));
                     }
 
                     // FieldAccess on identifier - this is a real record field access
                 }
 
-                let (obj, _) = self.flatten_expr(obj_expr)?;
+                let (obj, obj_sv) = self.flatten_expr(obj_expr)?;
 
                 // Resolve field name to index using type information
                 let idx = self.resolve_field_index(obj_expr, field)?;
@@ -767,15 +947,49 @@ impl Flattener {
                 // Create i32 type for the index literal
                 let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
 
-                // Wrap in Materialize for pointer access
-                let materialized_obj =
-                    Expr::new(obj.ty.clone(), mir::ExprKind::Materialize(Box::new(obj)), span);
+                // Check if obj is a simple Var - if so, use backing store system
+                if let mir::ExprKind::Var(ref var_name) = obj.kind {
+                    // Look up binding_id from static_values
+                    if let Ok(sv) = self.static_values.lookup(var_name) {
+                        let binding_id = match sv {
+                            StaticValue::Dyn { binding_id } => *binding_id,
+                            StaticValue::Closure { binding_id, .. } => *binding_id,
+                        };
+                        // Mark this binding as needing a backing store
+                        self.needs_backing_store.insert(binding_id);
+                        // Use the backing store variable name
+                        let ptr_name = Self::backing_store_name(binding_id);
+                        let ptr_var = Expr::new(obj.ty.clone(), mir::ExprKind::Var(ptr_name), span);
+                        let kind = mir::ExprKind::Intrinsic {
+                            name: "tuple_access".to_string(),
+                            args: vec![
+                                ptr_var,
+                                Expr::new(
+                                    i32_type,
+                                    mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
+                                    span,
+                                ),
+                            ],
+                        };
+                        return Ok((Expr::new(ty, kind, span), StaticValue::Dyn { binding_id: 0 }));
+                    }
+                }
 
-                (
+                // Fallback for complex expressions: inline Materialize+Let
+                let tmp_name = self.fresh_name("ptr");
+                let tmp_binding_id = self.fresh_binding_id();
+                let obj_ty = obj.ty.clone();
+                let materialized_obj =
+                    Expr::new(obj_ty.clone(), mir::ExprKind::Materialize(Box::new(obj)), span);
+
+                // Reference the temp in the tuple_access
+                let tmp_var = Expr::new(obj_ty.clone(), mir::ExprKind::Var(tmp_name.clone()), span);
+                let access_expr = Expr::new(
+                    ty.clone(),
                     mir::ExprKind::Intrinsic {
                         name: "tuple_access".to_string(),
                         args: vec![
-                            materialized_obj,
+                            tmp_var,
                             Expr::new(
                                 i32_type,
                                 mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
@@ -783,7 +997,17 @@ impl Flattener {
                             ),
                         ],
                     },
-                    StaticValue::Dyn,
+                    span,
+                );
+
+                (
+                    mir::ExprKind::Let {
+                        name: tmp_name,
+                        binding_id: tmp_binding_id,
+                        value: Box::new(materialized_obj),
+                        body: Box::new(access_expr),
+                    },
+                    StaticValue::Dyn { binding_id: 0 },
                 )
             }
             ExprKind::Loop(loop_expr) => self.flatten_loop(loop_expr, span)?,
@@ -797,7 +1021,7 @@ impl Flattener {
                             func: name.clone(),
                             args: vec![lhs_flat],
                         },
-                        StaticValue::Dyn,
+                        StaticValue::Dyn { binding_id: 0 },
                     ),
                     _ => {
                         // General case: application
@@ -821,7 +1045,7 @@ impl Flattener {
                         name: "assert".to_string(),
                         args: vec![cond, body],
                     },
-                    StaticValue::Dyn,
+                    StaticValue::Dyn { binding_id: 0 },
                 )
             }
             ExprKind::TypeHole => {
@@ -855,22 +1079,62 @@ impl Flattener {
         // Check if pattern is simple (just a name)
         match &let_in.pattern.kind {
             PatternKind::Name(name) => {
+                // Assign a unique binding ID for this binding
+                let binding_id = self.fresh_binding_id();
+
+                // Create static value with the binding ID
+                let sv_with_id = match value_sv {
+                    StaticValue::Dyn { .. } => StaticValue::Dyn { binding_id },
+                    StaticValue::Closure { lam_name, .. } => StaticValue::Closure { lam_name, binding_id },
+                };
+
                 // Track the static value of this binding
                 self.static_values.push_scope();
-                self.static_values.insert(name.clone(), value_sv);
+                self.static_values.insert(name.clone(), sv_with_id);
 
                 let (body, body_sv) = self.flatten_expr(&let_in.body)?;
 
                 self.static_values.pop_scope();
 
-                Ok((
-                    mir::ExprKind::Let {
-                        name: name.clone(),
-                        value: Box::new(value),
-                        body: Box::new(body),
-                    },
-                    body_sv,
-                ))
+                // Check if this binding needs a backing store
+                let body = if self.needs_backing_store.contains(&binding_id) {
+                    // Wrap body with backing store materialization:
+                    // let __ptr_{id} = materialize(name) in body
+                    let ptr_name = Self::backing_store_name(binding_id);
+                    let ptr_binding_id = self.fresh_binding_id();
+                    Expr::new(
+                        body.ty.clone(),
+                        mir::ExprKind::Let {
+                            name: ptr_name,
+                            binding_id: ptr_binding_id,
+                            value: Box::new(Expr::new(
+                                value.ty.clone(), // Materialize returns pointer to same type
+                                mir::ExprKind::Materialize(Box::new(Expr::new(
+                                    value.ty.clone(),
+                                    mir::ExprKind::Var(name.clone()),
+                                    span,
+                                ))),
+                                span,
+                            )),
+                            body: Box::new(body),
+                        },
+                        span,
+                    )
+                } else {
+                    body
+                };
+
+                // If the value is a Let, hoist it out:
+                // let x = (let y = A in B) in C  =>  let y = A in let x = B in C
+                let result = mir::ExprKind::Let {
+                    name: name.clone(),
+                    binding_id,
+                    value: Box::new(value),
+                    body: Box::new(body),
+                };
+                let result = Self::hoist_inner_lets(result, span);
+
+                Ok((result, body_sv))
             }
             PatternKind::Typed(inner, _) => {
                 // Recursively handle typed pattern
@@ -884,10 +1148,12 @@ impl Flattener {
             }
             PatternKind::Wildcard => {
                 // Bind to ignored variable, just for side effects
+                let binding_id = self.fresh_binding_id();
                 let (body, body_sv) = self.flatten_expr(&let_in.body)?;
                 Ok((
                     mir::ExprKind::Let {
                         name: self.fresh_name("ignored"),
+                        binding_id,
                         value: Box::new(value),
                         body: Box::new(body),
                     },
@@ -963,10 +1229,12 @@ impl Flattener {
                         span,
                     );
 
+                    let elem_binding_id = self.fresh_binding_id();
                     body = Expr::new(
                         body.ty.clone(),
                         mir::ExprKind::Let {
                             name,
+                            binding_id: elem_binding_id,
                             value: Box::new(extract),
                             body: Box::new(body),
                         },
@@ -975,9 +1243,11 @@ impl Flattener {
                 }
 
                 // Wrap with the tuple binding
+                let tuple_binding_id = self.fresh_binding_id();
                 Ok((
                     mir::ExprKind::Let {
                         name: tmp,
+                        binding_id: tuple_binding_id,
                         value: Box::new(value),
                         body: Box::new(body),
                     },
@@ -1100,7 +1370,10 @@ impl Flattener {
         self.generated_functions.push(func);
 
         // Return the closure tuple along with the static value indicating it's a known closure
-        let sv = StaticValue::Closure { lam_name: func_name };
+        let sv = StaticValue::Closure {
+            lam_name: func_name,
+            binding_id: 0,
+        };
 
         Ok((mir::ExprKind::Literal(mir::Literal::Tuple(tuple_elems)), sv))
     }
@@ -1166,7 +1439,7 @@ impl Flattener {
                             func: lam_name,
                             args: all_args,
                         },
-                        StaticValue::Dyn,
+                        StaticValue::Dyn { binding_id: 0 },
                     ))
                 } else {
                     // Desugar overloaded functions based on argument types
@@ -1178,7 +1451,7 @@ impl Flattener {
                             func: desugared_name,
                             args: args_flat,
                         },
-                        StaticValue::Dyn,
+                        StaticValue::Dyn { binding_id: 0 },
                     ))
                 }
             }
@@ -1191,7 +1464,7 @@ impl Flattener {
                         func: full_name,
                         args: args_flat,
                     },
-                    StaticValue::Dyn,
+                    StaticValue::Dyn { binding_id: 0 },
                 ))
             }
             // FieldAccess in application position - must be a closure
@@ -1204,7 +1477,7 @@ impl Flattener {
                             func: lam_name,
                             args: all_args,
                         },
-                        StaticValue::Dyn,
+                        StaticValue::Dyn { binding_id: 0 },
                     ))
                 } else {
                     Err(CompilerError::FlatteningError(format!(
@@ -1225,7 +1498,7 @@ impl Flattener {
                             func: lam_name,
                             args: all_args,
                         },
-                        StaticValue::Dyn,
+                        StaticValue::Dyn { binding_id: 0 },
                     ))
                 } else {
                     // Unknown closure - this should not happen with proper function value restrictions
@@ -1289,7 +1562,7 @@ impl Flattener {
                 kind,
                 body: Box::new(body),
             },
-            StaticValue::Dyn,
+            StaticValue::Dyn { binding_id: 0 },
         ))
     }
 

@@ -148,7 +148,8 @@ fn compile_file(
     let monomorphized = time("monomorphize", verbose, || flattened.monomorphize())?;
     let reachable = time("filter_reachable", verbose, || monomorphized.filter_reachable());
     let folded = time("fold_constants", verbose, || reachable.fold_constants())?;
-    let lowered = time("lower", verbose, || folded.lower_with_options(debug))?;
+    let lifted = time("lift_bindings", verbose, || folded.lift_bindings())?;
+    let lowered = time("lower", verbose, || lifted.lower_with_options(debug))?;
 
     // Determine output path
     let output_path = output.unwrap_or_else(|| {

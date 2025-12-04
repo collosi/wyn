@@ -31,6 +31,7 @@ use crate::mir::{Def, Expr, ExprKind, Literal, LoopKind, Program};
 /// A single binding in linear form, extracted from nested Let chains.
 struct LinearBinding {
     name: String,
+    binding_id: u64,
     value: Expr,
     /// Set of free variables in the value expression.
     free_vars: HashSet<String>,
@@ -57,11 +58,7 @@ impl BindingLifter {
 
     /// Lift bindings in all definitions in a program.
     pub fn lift_program(&mut self, program: Program) -> Result<Program> {
-        let defs = program
-            .defs
-            .into_iter()
-            .map(|def| self.lift_def(def))
-            .collect::<Result<Vec<_>>>()?;
+        let defs = program.defs.into_iter().map(|def| self.lift_def(def)).collect::<Result<Vec<_>>>()?;
 
         Ok(Program {
             defs,
@@ -122,7 +119,12 @@ impl BindingLifter {
         match expr.kind {
             ExprKind::Loop { .. } => self.lift_loop(expr),
 
-            ExprKind::Let { name, value, body } => {
+            ExprKind::Let {
+                name,
+                binding_id,
+                value,
+                body,
+            } => {
                 // Recursively lift in both value and body
                 let value = self.lift_expr(*value)?;
                 let body = self.lift_expr(*body)?;
@@ -130,6 +132,7 @@ impl BindingLifter {
                     ty,
                     ExprKind::Let {
                         name,
+                        binding_id,
                         value: Box::new(value),
                         body: Box::new(body),
                     },
@@ -183,22 +186,19 @@ impl BindingLifter {
             }
 
             ExprKind::Call { func, args } => {
-                let args = args
-                    .into_iter()
-                    .map(|a| self.lift_expr(a))
-                    .collect::<Result<Vec<_>>>()?;
+                let args = args.into_iter().map(|a| self.lift_expr(a)).collect::<Result<Vec<_>>>()?;
                 Ok(Expr::new(ty, ExprKind::Call { func, args }, span))
             }
 
             ExprKind::Intrinsic { name, args } => {
-                let args = args
-                    .into_iter()
-                    .map(|a| self.lift_expr(a))
-                    .collect::<Result<Vec<_>>>()?;
+                let args = args.into_iter().map(|a| self.lift_expr(a)).collect::<Result<Vec<_>>>()?;
                 Ok(Expr::new(ty, ExprKind::Intrinsic { name, args }, span))
             }
 
-            ExprKind::Attributed { attributes, expr: inner } => {
+            ExprKind::Attributed {
+                attributes,
+                expr: inner,
+            } => {
                 let inner = self.lift_expr(*inner)?;
                 Ok(Expr::new(
                     ty,
@@ -229,34 +229,21 @@ impl BindingLifter {
     fn lift_literal(&mut self, lit: Literal) -> Result<Literal> {
         match lit {
             Literal::Tuple(elems) => {
-                let elems = elems
-                    .into_iter()
-                    .map(|e| self.lift_expr(e))
-                    .collect::<Result<Vec<_>>>()?;
+                let elems = elems.into_iter().map(|e| self.lift_expr(e)).collect::<Result<Vec<_>>>()?;
                 Ok(Literal::Tuple(elems))
             }
             Literal::Array(elems) => {
-                let elems = elems
-                    .into_iter()
-                    .map(|e| self.lift_expr(e))
-                    .collect::<Result<Vec<_>>>()?;
+                let elems = elems.into_iter().map(|e| self.lift_expr(e)).collect::<Result<Vec<_>>>()?;
                 Ok(Literal::Array(elems))
             }
             Literal::Vector(elems) => {
-                let elems = elems
-                    .into_iter()
-                    .map(|e| self.lift_expr(e))
-                    .collect::<Result<Vec<_>>>()?;
+                let elems = elems.into_iter().map(|e| self.lift_expr(e)).collect::<Result<Vec<_>>>()?;
                 Ok(Literal::Vector(elems))
             }
             Literal::Matrix(rows) => {
                 let rows = rows
                     .into_iter()
-                    .map(|row| {
-                        row.into_iter()
-                            .map(|e| self.lift_expr(e))
-                            .collect::<Result<Vec<_>>>()
-                    })
+                    .map(|row| row.into_iter().map(|e| self.lift_expr(e)).collect::<Result<Vec<_>>>())
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Literal::Matrix(rows))
             }
@@ -296,7 +283,11 @@ impl BindingLifter {
         // 4. Recursively lift nested loops in body first
         let body = self.lift_expr(*body)?;
 
-        // 5. Linearize the body
+        // 5. Bubble up Lets from inside pure contexts (arrays, function args, etc.)
+        //    so they become visible to linearize_body
+        // let body = bubble_up_lets(body);  // TEMPORARILY DISABLED
+
+        // 6. Linearize the body
         let LinearizedBody { bindings, result } = linearize_body(body);
 
         // If no bindings, nothing to hoist
@@ -369,22 +360,368 @@ impl BindingLifter {
             }
             LoopKind::While { cond } => {
                 let cond = self.lift_expr(*cond)?;
-                Ok(LoopKind::While {
-                    cond: Box::new(cond),
-                })
+                Ok(LoopKind::While { cond: Box::new(cond) })
             }
         }
     }
+}
+
+/// Bubble up Let expressions from inside pure contexts (arrays, tuples, function args, etc.)
+/// to the surface where they can be seen by linearize_body.
+///
+/// Transforms: `@[(let x = A in B), C]` => `let x = A in @[B, C]`
+///
+/// Does NOT extract from if branches since only one branch executes.
+fn bubble_up_lets(expr: Expr) -> Expr {
+    let ty = expr.ty.clone();
+    let span = expr.span;
+
+    match expr.kind {
+        // Already a Let - recurse into value and body, then bubble from value
+        ExprKind::Let {
+            name,
+            binding_id,
+            value,
+            body,
+        } => {
+            let value = bubble_up_lets(*value);
+            let body = bubble_up_lets(*body);
+            // If value is itself a Let, hoist it
+            // let x = (let y = A in B) in C => let y = A in let x = B in C
+            if let ExprKind::Let {
+                name: inner_name,
+                binding_id: inner_binding_id,
+                value: inner_value,
+                body: inner_body,
+            } = value.kind
+            {
+                let new_inner = Expr::new(
+                    ty,
+                    ExprKind::Let {
+                        name,
+                        binding_id,
+                        value: inner_body,
+                        body: Box::new(body),
+                    },
+                    span,
+                );
+                // Recurse to handle chains
+                bubble_up_lets(Expr::new(
+                    new_inner.ty.clone(),
+                    ExprKind::Let {
+                        name: inner_name,
+                        binding_id: inner_binding_id,
+                        value: inner_value,
+                        body: Box::new(new_inner),
+                    },
+                    span,
+                ))
+            } else {
+                Expr::new(
+                    ty,
+                    ExprKind::Let {
+                        name,
+                        binding_id,
+                        value: Box::new(value),
+                        body: Box::new(body),
+                    },
+                    span,
+                )
+            }
+        }
+
+        // Pure contexts - extract Lets from children
+        ExprKind::Literal(lit) => {
+            let (lets, lit) = bubble_up_from_literal(lit);
+            wrap_lets(lets, Expr::new(ty, ExprKind::Literal(lit), span))
+        }
+
+        ExprKind::Call { func, args } => {
+            let (lets, args) = bubble_up_from_exprs(args);
+            wrap_lets(lets, Expr::new(ty, ExprKind::Call { func, args }, span))
+        }
+
+        ExprKind::Intrinsic { name, args } => {
+            let (lets, args) = bubble_up_from_exprs(args);
+            wrap_lets(lets, Expr::new(ty, ExprKind::Intrinsic { name, args }, span))
+        }
+
+        ExprKind::BinOp { op, lhs, rhs } => {
+            let lhs = bubble_up_lets(*lhs);
+            let rhs = bubble_up_lets(*rhs);
+            let (lets, exprs) = bubble_up_from_exprs(vec![lhs, rhs]);
+            let mut it = exprs.into_iter();
+            let lhs = it.next().unwrap();
+            let rhs = it.next().unwrap();
+            wrap_lets(
+                lets,
+                Expr::new(
+                    ty,
+                    ExprKind::BinOp {
+                        op,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                    span,
+                ),
+            )
+        }
+
+        ExprKind::UnaryOp { op, operand } => {
+            let operand = bubble_up_lets(*operand);
+            if let ExprKind::Let {
+                name,
+                binding_id,
+                value,
+                body,
+            } = operand.kind
+            {
+                let inner = Expr::new(ty, ExprKind::UnaryOp { op, operand: body }, span);
+                Expr::new(
+                    inner.ty.clone(),
+                    ExprKind::Let {
+                        name,
+                        binding_id,
+                        value,
+                        body: Box::new(inner),
+                    },
+                    span,
+                )
+            } else {
+                Expr::new(
+                    ty,
+                    ExprKind::UnaryOp {
+                        op,
+                        operand: Box::new(operand),
+                    },
+                    span,
+                )
+            }
+        }
+
+        ExprKind::Materialize(inner) => {
+            let inner = bubble_up_lets(*inner);
+            if let ExprKind::Let {
+                name,
+                binding_id,
+                value,
+                body,
+            } = inner.kind
+            {
+                let mat = Expr::new(ty, ExprKind::Materialize(body), span);
+                Expr::new(
+                    mat.ty.clone(),
+                    ExprKind::Let {
+                        name,
+                        binding_id,
+                        value,
+                        body: Box::new(mat),
+                    },
+                    span,
+                )
+            } else {
+                Expr::new(ty, ExprKind::Materialize(Box::new(inner)), span)
+            }
+        }
+
+        // If branches - recurse but do NOT extract (only one branch executes)
+        ExprKind::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            let cond = bubble_up_lets(*cond);
+            let then_branch = bubble_up_lets(*then_branch);
+            let else_branch = bubble_up_lets(*else_branch);
+            // Only extract from cond (always evaluated), not branches
+            if let ExprKind::Let {
+                name,
+                binding_id,
+                value,
+                body,
+            } = cond.kind
+            {
+                let inner = Expr::new(
+                    ty,
+                    ExprKind::If {
+                        cond: body,
+                        then_branch: Box::new(then_branch),
+                        else_branch: Box::new(else_branch),
+                    },
+                    span,
+                );
+                Expr::new(
+                    inner.ty.clone(),
+                    ExprKind::Let {
+                        name,
+                        binding_id,
+                        value,
+                        body: Box::new(inner),
+                    },
+                    span,
+                )
+            } else {
+                Expr::new(
+                    ty,
+                    ExprKind::If {
+                        cond: Box::new(cond),
+                        then_branch: Box::new(then_branch),
+                        else_branch: Box::new(else_branch),
+                    },
+                    span,
+                )
+            }
+        }
+
+        // Loop - recurse into parts but don't extract from body
+        ExprKind::Loop {
+            loop_var,
+            init,
+            init_bindings,
+            kind,
+            body,
+        } => {
+            let init = bubble_up_lets(*init);
+            let init_bindings =
+                init_bindings.into_iter().map(|(name, e)| (name, bubble_up_lets(e))).collect();
+            let kind = bubble_up_from_loop_kind(kind);
+            let body = bubble_up_lets(*body);
+            Expr::new(
+                ty,
+                ExprKind::Loop {
+                    loop_var,
+                    init: Box::new(init),
+                    init_bindings,
+                    kind,
+                    body: Box::new(body),
+                },
+                span,
+            )
+        }
+
+        ExprKind::Attributed {
+            attributes,
+            expr: inner,
+        } => {
+            let inner = bubble_up_lets(*inner);
+            Expr::new(
+                ty,
+                ExprKind::Attributed {
+                    attributes,
+                    expr: Box::new(inner),
+                },
+                span,
+            )
+        }
+
+        // Leaf nodes - no children
+        ExprKind::Var(_) | ExprKind::Unit => expr,
+    }
+}
+
+/// Extract Lets from a list of expressions.
+/// Returns (extracted_lets, transformed_exprs) where extracted_lets
+/// is a list of (name, value) pairs in order.
+fn bubble_up_from_exprs(exprs: Vec<Expr>) -> (Vec<(String, Expr)>, Vec<Expr>) {
+    let mut lets = Vec::new();
+    let mut results = Vec::new();
+
+    for expr in exprs {
+        let expr = bubble_up_lets(expr);
+        // Peel off any top-level Let
+        let mut current = expr;
+        while let ExprKind::Let {
+            name, value, body, ..
+        } = current.kind
+        {
+            lets.push((name, *value));
+            current = *body;
+        }
+        results.push(current);
+    }
+
+    (lets, results)
+}
+
+/// Extract Lets from a literal (array, tuple, etc.)
+fn bubble_up_from_literal(lit: Literal) -> (Vec<(String, Expr)>, Literal) {
+    match lit {
+        Literal::Tuple(elems) => {
+            let (lets, elems) = bubble_up_from_exprs(elems);
+            (lets, Literal::Tuple(elems))
+        }
+        Literal::Array(elems) => {
+            let (lets, elems) = bubble_up_from_exprs(elems);
+            (lets, Literal::Array(elems))
+        }
+        Literal::Vector(elems) => {
+            let (lets, elems) = bubble_up_from_exprs(elems);
+            (lets, Literal::Vector(elems))
+        }
+        Literal::Matrix(rows) => {
+            let mut all_lets = Vec::new();
+            let mut new_rows = Vec::new();
+            for row in rows {
+                let (lets, row) = bubble_up_from_exprs(row);
+                all_lets.extend(lets);
+                new_rows.push(row);
+            }
+            (all_lets, Literal::Matrix(new_rows))
+        }
+        // Scalar literals - no sub-expressions
+        Literal::Int(_) | Literal::Float(_) | Literal::Bool(_) | Literal::String(_) => (vec![], lit),
+    }
+}
+
+/// Extract Lets from loop kind expressions.
+fn bubble_up_from_loop_kind(kind: LoopKind) -> LoopKind {
+    match kind {
+        LoopKind::For { var, iter } => LoopKind::For {
+            var,
+            iter: Box::new(bubble_up_lets(*iter)),
+        },
+        LoopKind::ForRange { var, bound } => LoopKind::ForRange {
+            var,
+            bound: Box::new(bubble_up_lets(*bound)),
+        },
+        LoopKind::While { cond } => LoopKind::While {
+            cond: Box::new(bubble_up_lets(*cond)),
+        },
+    }
+}
+
+/// Wrap an expression with a series of Let bindings.
+fn wrap_lets(lets: Vec<(String, Expr)>, inner: Expr) -> Expr {
+    lets.into_iter().rev().fold(inner, |body, (name, value)| {
+        let span = body.span;
+        Expr::new(
+            body.ty.clone(),
+            ExprKind::Let {
+                name,
+                binding_id: 0, // TODO: proper binding ID assignment
+                value: Box::new(value),
+                body: Box::new(body),
+            },
+            span,
+        )
+    })
 }
 
 /// Linearize a nested Let chain into a flat list of bindings.
 fn linearize_body(mut expr: Expr) -> LinearizedBody {
     let mut bindings = Vec::new();
 
-    while let ExprKind::Let { name, value, body } = expr.kind {
+    while let ExprKind::Let {
+        name,
+        binding_id,
+        value,
+        body,
+    } = expr.kind
+    {
         let free_vars = collect_free_vars(&value);
         bindings.push(LinearBinding {
             name,
+            binding_id,
             value: *value,
             free_vars,
             ty: expr.ty.clone(),
@@ -429,6 +766,7 @@ fn rebuild_nested_lets(bindings: Vec<LinearBinding>, result: Expr) -> Expr {
             body.ty.clone(),
             ExprKind::Let {
                 name: binding.name,
+                binding_id: binding.binding_id,
                 value: Box::new(binding.value),
                 body: Box::new(body),
             },
@@ -453,7 +791,9 @@ fn collect_free_vars_inner(expr: &Expr, bound: &HashSet<String>, free: &mut Hash
             }
         }
 
-        ExprKind::Let { name, value, body } => {
+        ExprKind::Let {
+            name, value, body, ..
+        } => {
             collect_free_vars_inner(value, bound, free);
             let mut extended = bound.clone();
             extended.insert(name.clone());

@@ -150,6 +150,8 @@ pub enum ExprKind {
     Let {
         /// Bound variable name.
         name: String,
+        /// Unique binding ID for tracking backing stores.
+        binding_id: u64,
         /// Value to bind.
         value: Box<Expr>,
         /// Body expression where the binding is in scope.

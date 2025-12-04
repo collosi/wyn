@@ -737,8 +737,13 @@ impl Display for mir::ExprKind {
             } => {
                 write!(f, "if {} then {} else {}", cond, then_branch, else_branch)
             }
-            mir::ExprKind::Let { name, value, body } => {
-                write!(f, "let {} = {} in {}", name, value, body)
+            mir::ExprKind::Let {
+                name,
+                binding_id,
+                value,
+                body,
+            } => {
+                write!(f, "let {}{{{}}} = {} in\n{}", name, binding_id, value, body)
             }
             mir::ExprKind::Loop {
                 loop_var,

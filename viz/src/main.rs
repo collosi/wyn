@@ -46,6 +46,9 @@ enum Command {
         /// Enable Shadertoy-compatible uniforms (iResolution, iTime)
         #[arg(long)]
         shadertoy: bool,
+        /// Maximum number of frames to render before exiting (for debugging)
+        #[arg(long)]
+        max_frames: Option<u32>,
     },
     /// Show device and driver information
     #[command(name = "info")]
@@ -60,6 +63,7 @@ enum PipelineSpec {
         vertex: String,
         fragment: String,
         shadertoy: bool,
+        max_frames: Option<u32>,
     },
 }
 
@@ -70,8 +74,6 @@ enum PipelineSpec {
 const DEBUG_BUFFER_SIZE: u64 = 16384;
 const DEFAULT_MAX_LOOPS: u32 = 100; // Limit debug output to prevent GPU lockup
 
-/// Maximum frames to render before exiting (for debugging GPU lockups)
-const MAX_FRAMES: u32 = 24;
 
 // Uniform buffers - one per shader uniform
 // iResolution: [2]f32
@@ -104,9 +106,9 @@ struct State {
     time_buffer: Option<wgpu::Buffer>,
     uniform_bind_group: Option<BindGroup>,
     start_time: std::time::Instant,
-    // Frame timing for debugging
+    // Frame limiting (optional, for debugging)
     frame_count: u32,
-    last_frame_time: std::time::Instant,
+    max_frames: Option<u32>,
 }
 
 impl State {
@@ -336,6 +338,11 @@ impl State {
                 (None, None, None, None)
             };
 
+        // Extract max_frames from spec
+        let max_frames = match spec {
+            PipelineSpec::VertexFragment { max_frames, .. } => *max_frames,
+        };
+
         // === Build pipeline from the chosen mode ==============================
         let pipeline = match spec {
             PipelineSpec::VertexFragment {
@@ -343,6 +350,7 @@ impl State {
                 vertex,
                 fragment,
                 shadertoy,
+                ..
             } => {
                 let module = load_spirv_module(&device, path)
                     .with_context(|| format!("load SPIR-V module {:?}", path))?;
@@ -406,7 +414,7 @@ impl State {
             uniform_bind_group,
             start_time: now,
             frame_count: 0,
-            last_frame_time: now,
+            max_frames,
         })
     }
 
@@ -419,13 +427,7 @@ impl State {
     }
 
     fn render(&mut self) {
-        // Frame timing and limit
-        let frame_start = std::time::Instant::now();
-        let since_last = frame_start.duration_since(self.last_frame_time);
-
         self.frame_count += 1;
-        eprintln!("Frame {}: starting ({}ms since last frame)",
-            self.frame_count, since_last.as_millis());
 
         // Update uniform data for this frame if Shadertoy mode is enabled
         if let (Some(ref resolution_buffer), Some(ref time_buffer)) = (&self.resolution_buffer, &self.time_buffer) {
@@ -494,16 +496,13 @@ impl State {
                 self.queue.submit(Some(encoder.finish()));
                 frame.present();
 
-                // Print frame timing and check limit
-                let frame_end = std::time::Instant::now();
-                let frame_duration = frame_end.duration_since(frame_start);
-                eprintln!("Frame {}: completed in {}ms", self.frame_count, frame_duration.as_millis());
-                self.last_frame_time = frame_end;
-
-                if self.frame_count >= MAX_FRAMES {
-                    eprintln!("Reached {} frames, exiting.", MAX_FRAMES);
-                    self.print_debug_output();
-                    std::process::exit(0);
+                // Check frame limit if set
+                if let Some(max) = self.max_frames {
+                    if self.frame_count >= max {
+                        eprintln!("Reached {} frames, exiting.", max);
+                        self.print_debug_output();
+                        std::process::exit(0);
+                    }
                 }
             }
             Err(e @ wgpu::SurfaceError::Lost) | Err(e @ wgpu::SurfaceError::Outdated) => {
@@ -830,12 +829,14 @@ fn main() -> Result<()> {
             vertex,
             fragment,
             shadertoy,
+            max_frames,
         } => {
             let spec = PipelineSpec::VertexFragment {
                 path,
                 vertex,
                 fragment,
                 shadertoy,
+                max_frames,
             };
 
             let event_loop = EventLoop::new().context("failed to create event loop")?;

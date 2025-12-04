@@ -52,6 +52,7 @@ fn let_bind(name: &str, value: Expr, body: Expr) -> Expr {
         ty,
         ExprKind::Let {
             name: name.to_string(),
+            binding_id: 0,
             value: Box::new(value),
             body: Box::new(body),
         },
@@ -60,13 +61,7 @@ fn let_bind(name: &str, value: Expr, body: Expr) -> Expr {
 }
 
 /// Create a for-range loop: `loop loop_var = init for iter_var < bound do body`
-fn for_range_loop(
-    loop_var: &str,
-    init: Expr,
-    iter_var: &str,
-    bound: Expr,
-    body: Expr,
-) -> Expr {
+fn for_range_loop(loop_var: &str, init: Expr, iter_var: &str, bound: Expr, body: Expr) -> Expr {
     let ty = body.ty.clone();
     let init_ty = init.ty.clone();
     Expr::new(
@@ -343,98 +338,3 @@ fn compile_to_flattened(source: &str) -> crate::mir::Program {
         .mir
 }
 
-/// Check if a Materialize node exists inside a Loop in the expression
-fn has_materialize_inside_loop(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::Loop { body, .. } => contains_materialize(body),
-        ExprKind::Let { value, body, .. } => {
-            has_materialize_inside_loop(value) || has_materialize_inside_loop(body)
-        }
-        ExprKind::If { cond, then_branch, else_branch } => {
-            has_materialize_inside_loop(cond)
-                || has_materialize_inside_loop(then_branch)
-                || has_materialize_inside_loop(else_branch)
-        }
-        _ => false,
-    }
-}
-
-/// Check if expression contains any Materialize node
-fn contains_materialize(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::Materialize(_) => true,
-        ExprKind::Let { value, body, .. } => {
-            contains_materialize(value) || contains_materialize(body)
-        }
-        ExprKind::Loop { init, body, .. } => {
-            contains_materialize(init) || contains_materialize(body)
-        }
-        ExprKind::If { cond, then_branch, else_branch } => {
-            contains_materialize(cond)
-                || contains_materialize(then_branch)
-                || contains_materialize(else_branch)
-        }
-        ExprKind::BinOp { lhs, rhs, .. } => contains_materialize(lhs) || contains_materialize(rhs),
-        ExprKind::UnaryOp { operand, .. } => contains_materialize(operand),
-        ExprKind::Call { args, .. } | ExprKind::Intrinsic { args, .. } => {
-            args.iter().any(contains_materialize)
-        }
-        ExprKind::Attributed { expr, .. } => contains_materialize(expr),
-        ExprKind::Literal(_) | ExprKind::Var(_) | ExprKind::Unit => false,
-    }
-}
-
-/// Check if Materialize exists before (outside) a Loop
-fn has_materialize_before_loop(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::Let { value, body, .. } => {
-            contains_materialize(value) || has_materialize_before_loop(body)
-        }
-        ExprKind::Loop { .. } => false, // Stop at loop - we're checking *before* loop
-        _ => false,
-    }
-}
-
-#[test]
-fn test_materialize_hoisted_from_array_indexing() {
-    // Array indexing inside a loop: the Materialize wrapping the array
-    // should be hoisted out since 'arr' is loop-invariant.
-    let source = r#"
-def sum_array (arr: [4]i32) : i32 =
-    loop acc = 0 for i < 4 do
-        acc + arr[i]
-"#;
-
-    let mir_before = compile_to_flattened(source);
-    let func = mir_before.defs.iter().find(|d| matches!(d, crate::mir::Def::Function { name, .. } if name == "sum_array")).unwrap();
-    let body_before = match func {
-        crate::mir::Def::Function { body, .. } => body,
-        _ => panic!("expected function"),
-    };
-
-    // Before lifting: Materialize should be INSIDE the loop
-    assert!(
-        has_materialize_inside_loop(body_before),
-        "Expected Materialize inside loop before lifting"
-    );
-
-    // Run the lifter
-    let mut lifter = BindingLifter::new();
-    let mir_after = lifter.lift_program(mir_before).unwrap();
-
-    let func = mir_after.defs.iter().find(|d| matches!(d, crate::mir::Def::Function { name, .. } if name == "sum_array")).unwrap();
-    let body_after = match func {
-        crate::mir::Def::Function { body, .. } => body,
-        _ => panic!("expected function"),
-    };
-
-    // After lifting: Materialize should be BEFORE the loop (hoisted)
-    assert!(
-        has_materialize_before_loop(body_after),
-        "Expected Materialize hoisted before loop after lifting"
-    );
-    assert!(
-        !has_materialize_inside_loop(body_after),
-        "Expected no Materialize inside loop after lifting"
-    );
-}

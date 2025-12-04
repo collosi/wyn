@@ -295,8 +295,14 @@ impl Monomorphizer {
                 then_branch: Box::new(self.process_expr(*then_branch)?),
                 else_branch: Box::new(self.process_expr(*else_branch)?),
             },
-            ExprKind::Let { name, value, body } => ExprKind::Let {
+            ExprKind::Let {
                 name,
+                binding_id,
+                value,
+                body,
+            } => ExprKind::Let {
+                name,
+                binding_id,
                 value: Box::new(self.process_expr(*value)?),
                 body: Box::new(self.process_expr(*body)?),
             },

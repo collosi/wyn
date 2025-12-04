@@ -71,6 +71,9 @@ struct Constructor {
     // Environment: name -> value ID
     env: HashMap<String, spirv::Word>,
 
+    // Track which variable names hold pointers (from Materialize)
+    pointer_vars: std::collections::HashSet<String>,
+
     // Function map: name -> function ID
     functions: HashMap<String, spirv::Word>,
 
@@ -165,6 +168,7 @@ impl Constructor {
             debug_buffer: None,
             gasm_globals: HashMap::new(),
             gasm_type_cache: HashMap::new(),
+            pointer_vars: std::collections::HashSet::new(),
         }
     }
 
@@ -1400,7 +1404,9 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             }
         }
 
-        ExprKind::Let { name, value, body } => {
+        ExprKind::Let {
+            name, value, body, ..
+        } => {
             // If binding to _, evaluate value for side effects but don't store it
             if name == "_" {
                 let _ = lower_expr(constructor, value)?;
@@ -2065,7 +2071,6 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                     if args.len() != 2 {
                         bail_spirv!("tuple_access requires 2 args");
                     }
-                    let composite_id = lower_expr(constructor, &args[0])?;
                     // Second arg should be a constant index - extract it from the literal
                     let index = match &args[1].kind {
                         ExprKind::Literal(Literal::Int(s)) => {
@@ -2078,6 +2083,23 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                         }
                     };
 
+                    // Check if args[0] is a pointer (Materialize or __ptr variable)
+                    // Matches both __ptr_N (backing store) and __ptrN (inline)
+                    let is_ptr = match &args[0].kind {
+                        ExprKind::Materialize(_) => true,
+                        ExprKind::Var(name) => name.starts_with("__ptr"),
+                        _ => false,
+                    };
+
+                    let composite_id = if is_ptr {
+                        // It's a pointer, load the value
+                        let ptr = lower_expr(constructor, &args[0])?;
+                        let value_type = constructor.ast_type_to_spirv(&args[0].ty);
+                        constructor.builder.load(value_type, None, ptr, None, [])?
+                    } else {
+                        lower_expr(constructor, &args[0])?
+                    };
+
                     Ok(constructor.builder.composite_extract(result_type, None, composite_id, [index])?)
                 }
                 "index" => {
@@ -2085,13 +2107,27 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                         bail_spirv!("index requires 2 args");
                     }
                     // Array indexing with OpAccessChain + OpLoad
-                    let array_val = lower_expr(constructor, &args[0])?;
                     let index_val = lower_expr(constructor, &args[1])?;
 
-                    // Store array in a variable to get a pointer (using declare_variable for proper hoisting)
-                    let array_type = constructor.ast_type_to_spirv(&args[0].ty);
-                    let array_var = constructor.declare_variable("__index_tmp", array_type)?;
-                    constructor.builder.store(array_var, array_val, None, [])?;
+                    // Check if args[0] is a pointer (Materialize or __ptr variable)
+                    // Matches both __ptr_N (backing store) and __ptrN (inline)
+                    let is_ptr = match &args[0].kind {
+                        ExprKind::Materialize(_) => true,
+                        ExprKind::Var(name) => name.starts_with("__ptr"),
+                        _ => false,
+                    };
+
+                    let array_var = if is_ptr {
+                        // It's a pointer, use it directly
+                        lower_expr(constructor, &args[0])?
+                    } else {
+                        // Need to store the value in a variable to get a pointer
+                        let array_val = lower_expr(constructor, &args[0])?;
+                        let array_type = constructor.ast_type_to_spirv(&args[0].ty);
+                        let array_var = constructor.declare_variable("__index_tmp", array_type)?;
+                        constructor.builder.store(array_var, array_val, None, [])?;
+                        array_var
+                    };
 
                     // Use OpAccessChain to get pointer to element
                     let elem_ptr_type =

@@ -127,11 +127,12 @@ pub trait MirVisitor: Sized {
     fn visit_expr_let(
         &mut self,
         name: String,
+        binding_id: u64,
         value: Expr,
         body: Expr,
         expr: Expr,
     ) -> Result<Expr, Self::Error> {
-        walk_expr_let(self, name, value, body, expr)
+        walk_expr_let(self, name, binding_id, value, body, expr)
     }
 
     fn visit_expr_loop(
@@ -406,13 +407,18 @@ pub fn walk_expr<V: MirVisitor>(v: &mut V, e: Expr) -> Result<Expr, V::Error> {
             };
             v.visit_expr_if(*cond, *then_branch, *else_branch, expr)
         }
-        ExprKind::Let { name, value, body } => {
+        ExprKind::Let {
+            name,
+            binding_id,
+            value,
+            body,
+        } => {
             let expr = Expr {
                 ty,
                 kind: ExprKind::Var(String::new()),
                 span,
             };
-            v.visit_expr_let(name, *value, *body, expr)
+            v.visit_expr_let(name, binding_id, *value, *body, expr)
         }
         ExprKind::Loop {
             loop_var,
@@ -524,6 +530,7 @@ pub fn walk_expr_if<V: MirVisitor>(
 pub fn walk_expr_let<V: MirVisitor>(
     v: &mut V,
     name: String,
+    binding_id: u64,
     value: Expr,
     body: Expr,
     expr: Expr,
@@ -533,6 +540,7 @@ pub fn walk_expr_let<V: MirVisitor>(
     Ok(Expr {
         kind: ExprKind::Let {
             name,
+            binding_id,
             value: Box::new(value),
             body: Box::new(body),
         },

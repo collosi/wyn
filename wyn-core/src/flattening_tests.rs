@@ -44,7 +44,9 @@ fn test_simple_function() {
 #[test]
 fn test_let_binding() {
     let mir = flatten_to_string("def f = let x = 1 in x + 2");
-    assert!(mir.contains("let x = 1 in"));
+    // Format now includes binding ID: let x{N} = 1 in
+    assert!(mir.contains("let x{"));
+    assert!(mir.contains("} = 1 in"));
 }
 
 #[test]
@@ -80,8 +82,9 @@ fn test_lambda_with_capture() {
 #[test]
 fn test_nested_let() {
     let mir = flatten_to_string("def f = let x = 1 in let y = 2 in x + y");
-    assert!(mir.contains("let x = 1"));
-    assert!(mir.contains("let y = 2"));
+    // Format now includes binding ID: let x{N} = 1 in
+    assert!(mir.contains("let x{"));
+    assert!(mir.contains("let y{"));
 }
 
 #[test]
