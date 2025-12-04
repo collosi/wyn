@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 use thiserror::Error;
-use wyn_core::{Compiler, Flattened, lexer, parser::Parser as WynParser};
+use wyn_core::{Compiler, Flattened, lexer, module_manager::ModuleManager, parser::Parser as WynParser};
 
 /// Times the execution of a closure and prints the elapsed time if verbose.
 fn time<T, F: FnOnce() -> T>(name: &str, verbose: bool, f: F) -> T {
@@ -129,7 +129,8 @@ fn compile_file(
 
     // Compile through the pipeline
     let parsed = time("parse", verbose, || Compiler::parse(&source))?;
-    let elaborated = time("elaborate", verbose, || parsed.elaborate())?;
+    let module_manager = ModuleManager::new_with_counter(parsed.node_counter.clone());
+    let elaborated = time("elaborate", verbose, || parsed.elaborate(module_manager))?;
     let resolved = time("resolve", verbose, || elaborated.resolve())?;
     let type_checked = time("type_check", verbose, || resolved.type_check())?;
 
@@ -187,7 +188,9 @@ fn check_file(input: PathBuf, output_annotated: Option<PathBuf>, verbose: bool) 
     }
 
     // Type check and alias check, don't generate code
-    let type_checked = Compiler::parse(&source)?.elaborate()?.resolve()?.type_check()?;
+    let parsed = Compiler::parse(&source)?;
+    let module_manager = ModuleManager::new_with_counter(parsed.node_counter.clone());
+    let type_checked = parsed.elaborate(module_manager)?.resolve()?.type_check()?;
 
     type_checked.print_warnings();
 

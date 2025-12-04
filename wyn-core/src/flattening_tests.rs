@@ -7,9 +7,10 @@ use crate::type_checker::TypeChecker;
 
 fn flatten_program(input: &str) -> mir::Program {
     // Use the typestate API to ensure proper compilation pipeline
-    crate::Compiler::parse(input)
-        .expect("Parsing failed")
-        .elaborate()
+    let parsed = crate::Compiler::parse(input).expect("Parsing failed");
+    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
+    parsed
+        .elaborate(module_manager)
         .expect("Elaboration failed")
         .resolve()
         .expect("Name resolution failed")
@@ -172,9 +173,10 @@ def test : [4]i32 =
 
     // Parse
     let parsed = crate::Compiler::parse(source).expect("Parsing failed");
+    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
 
     // Elaborate
-    let elaborated = parsed.elaborate().expect("Elaboration failed");
+    let elaborated = parsed.elaborate(module_manager).expect("Elaboration failed");
 
     // Resolve
     let resolved = elaborated.resolve().expect("Name resolution failed");
@@ -385,17 +387,19 @@ def test : f32 =
 "#;
 
     // This should compile successfully
-    let result = crate::Compiler::parse(source)
-        .and_then(|p| p.elaborate())
-        .and_then(|e| e.resolve())
-        .and_then(|r| r.type_check())
-        .and_then(|t| t.alias_check())
-        .and_then(|b| b.flatten())
-        .and_then(|f| f.monomorphize())
-        .map(|m| m.filter_reachable())
-        .and_then(|r| r.fold_constants())
-        .and_then(|f| f.lift_bindings())
-        .and_then(|l| l.lower());
+    let result = crate::Compiler::parse(source).and_then(|p| {
+        let mm = crate::cached_module_manager(p.node_counter.clone());
+        p.elaborate(mm)
+            .and_then(|e| e.resolve())
+            .and_then(|r| r.type_check())
+            .and_then(|t| t.alias_check())
+            .and_then(|b| b.flatten())
+            .and_then(|f| f.monomorphize())
+            .map(|m| m.filter_reachable())
+            .and_then(|r| r.fold_constants())
+            .and_then(|f| f.lift_bindings())
+            .and_then(|l| l.lower())
+    });
     assert!(result.is_ok(), "Compilation failed: {:?}", result.err());
 }
 

@@ -27,6 +27,16 @@ impl NameResolver {
         }
     }
 
+    /// Create a new NameResolver with an existing ModuleManager
+    pub fn with_module_manager(module_manager: ModuleManager) -> Self {
+        NameResolver { module_manager }
+    }
+
+    /// Consume the resolver and return its ModuleManager
+    pub fn into_module_manager(self) -> ModuleManager {
+        self.module_manager
+    }
+
     /// Resolve names in a program by rewriting FieldAccess -> QualifiedName
     pub fn resolve_program(&mut self, program: &mut Program) -> Result<()> {
         // Resolve names in user code, converting FieldAccess(module, field) -> QualifiedName

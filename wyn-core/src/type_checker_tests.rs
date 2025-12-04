@@ -15,7 +15,9 @@ fn typecheck_program(input: &str) {
 /// Helper to parse and type check source code, returning the checker or error
 fn try_typecheck_program(input: &str) -> Result<TypeChecker, CompilerError> {
     // Use the typestate API to ensure proper pipeline setup
-    let _type_checked = crate::Compiler::parse(input)?.elaborate()?.resolve()?.type_check()?;
+    let parsed = crate::Compiler::parse(input)?;
+    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
+    let _type_checked = parsed.elaborate(module_manager)?.resolve()?.type_check()?;
 
     // Return a new checker for compatibility with existing tests
     // (tests expect to query the checker for type information)

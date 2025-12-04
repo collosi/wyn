@@ -86,13 +86,13 @@ pub struct Parsed {
 }
 
 impl Parsed {
-    /// Elaborate modules: currently a no-op, module elaboration happens in module_manager
-    pub fn elaborate(self) -> Result<Elaborated> {
+    /// Elaborate modules using the provided ModuleManager
+    pub fn elaborate(self, module_manager: module_manager::ModuleManager) -> Result<Elaborated> {
         // TODO: In the future, this could transform module declarations into flat declarations
         // For now, modules are handled via module_manager registry during type checking
         Ok(Elaborated {
             ast: self.ast,
-            node_counter: self.node_counter,
+            module_manager,
         })
     }
 }
@@ -100,27 +100,31 @@ impl Parsed {
 /// Modules have been elaborated
 pub struct Elaborated {
     pub ast: ast::Program,
-    pub node_counter: ast::NodeCounter,
+    module_manager: module_manager::ModuleManager,
 }
 
 impl Elaborated {
     /// Resolve names: rewrite FieldAccess -> QualifiedName and load modules
     pub fn resolve(mut self) -> Result<Resolved> {
-        let mut resolver = name_resolution::NameResolver::new_with_counter(self.node_counter);
+        let mut resolver = name_resolution::NameResolver::with_module_manager(self.module_manager);
         resolver.resolve_program(&mut self.ast)?;
-        Ok(Resolved { ast: self.ast })
+        Ok(Resolved {
+            ast: self.ast,
+            module_manager: resolver.into_module_manager(),
+        })
     }
 }
 
 /// Names have been resolved
 pub struct Resolved {
     pub ast: ast::Program,
+    module_manager: module_manager::ModuleManager,
 }
 
 impl Resolved {
     /// Type check the program
     pub fn type_check(self) -> Result<TypeChecked> {
-        let mut checker = type_checker::TypeChecker::new();
+        let mut checker = type_checker::TypeChecker::with_module_manager(self.module_manager);
         checker.load_builtins()?;
         let type_table = checker.check_program(&self.ast)?;
 
@@ -286,4 +290,29 @@ impl Lifted {
 pub struct Lowered {
     pub mir: mir::Program,
     pub spirv: Vec<u32>,
+}
+
+// =============================================================================
+// Test utilities - cached prelude for faster test execution
+// =============================================================================
+
+#[cfg(test)]
+use std::sync::OnceLock;
+
+#[cfg(test)]
+static PRELUDE_CACHE: OnceLock<module_manager::PreElaboratedPrelude> = OnceLock::new();
+
+/// Get a reference to the cached pre-elaborated prelude (test-only)
+/// This avoids re-parsing prelude files for each test, providing ~10x speedup
+#[cfg(test)]
+fn get_prelude_cache() -> &'static module_manager::PreElaboratedPrelude {
+    PRELUDE_CACHE.get_or_init(|| {
+        module_manager::ModuleManager::create_prelude().expect("Failed to create prelude cache")
+    })
+}
+
+/// Create a ModuleManager using the cached prelude (test-only)
+#[cfg(test)]
+pub fn cached_module_manager(node_counter: ast::NodeCounter) -> module_manager::ModuleManager {
+    module_manager::ModuleManager::from_prelude(get_prelude_cache(), node_counter)
 }

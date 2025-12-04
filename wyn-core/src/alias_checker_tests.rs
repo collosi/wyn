@@ -3,7 +3,8 @@ use crate::alias_checker::{AliasCheckResult, AliasChecker};
 
 fn check_alias(source: &str) -> AliasCheckResult {
     let parsed = Compiler::parse(source).expect("parse failed");
-    let elaborated = parsed.elaborate().expect("elaborate failed");
+    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
+    let elaborated = parsed.elaborate(module_manager).expect("elaborate failed");
     let resolved = elaborated.resolve().expect("resolve failed");
     let type_checked = resolved.type_check().expect("type_check failed");
 

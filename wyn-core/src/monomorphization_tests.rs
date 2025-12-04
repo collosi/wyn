@@ -2,8 +2,10 @@ use crate::error::CompilerError;
 
 /// Helper to run full pipeline through monomorphization AND lowering
 fn compile_through_lowering(input: &str) -> Result<(), CompilerError> {
-    crate::Compiler::parse(input)?
-        .elaborate()?
+    let parsed = crate::Compiler::parse(input)?;
+    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
+    parsed
+        .elaborate(module_manager)?
         .resolve()?
         .type_check()?
         .alias_check()?
@@ -18,8 +20,10 @@ fn compile_through_lowering(input: &str) -> Result<(), CompilerError> {
 
 /// Helper to run full pipeline through monomorphization only
 fn compile_through_monomorphization(input: &str) -> Result<(), CompilerError> {
-    crate::Compiler::parse(input)?
-        .elaborate()?
+    let parsed = crate::Compiler::parse(input)?;
+    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
+    parsed
+        .elaborate(module_manager)?
         .resolve()?
         .type_check()?
         .alias_check()?

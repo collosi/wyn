@@ -622,11 +622,8 @@ impl Flattener {
             ExprKind::Unit => (mir::ExprKind::Unit, StaticValue::Dyn { binding_id: 0 }),
             ExprKind::Identifier(name) => {
                 // Look up static value for this variable
-                let sv = self
-                    .static_values
-                    .lookup(name)
-                    .cloned()
-                    .unwrap_or(StaticValue::Dyn { binding_id: 0 });
+                let sv =
+                    self.static_values.lookup(name).cloned().unwrap_or(StaticValue::Dyn { binding_id: 0 });
                 (mir::ExprKind::Var(name.clone()), sv)
             }
             ExprKind::QualifiedName(quals, name) => {

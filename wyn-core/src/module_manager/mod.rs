@@ -107,6 +107,17 @@ pub struct ElaboratedModule {
     pub items: Vec<ElaboratedItem>,
 }
 
+/// Pre-elaborated prelude data that can be shared across compilations (for test performance)
+#[derive(Clone)]
+pub struct PreElaboratedPrelude {
+    /// Module type registry: type name -> ModuleTypeExpression
+    pub module_type_registry: HashMap<String, ModuleTypeExpression>,
+    /// Elaborated modules: module_name -> ElaboratedModule
+    pub elaborated_modules: HashMap<String, ElaboratedModule>,
+    /// Set of known module names (for name resolution)
+    pub known_modules: HashSet<String>,
+}
+
 /// Manages lazy loading of module files
 pub struct ModuleManager {
     /// Module type registry: type name -> ModuleTypeExpression
@@ -173,6 +184,28 @@ impl ModuleManager {
         self.load_str(include_str!("../../../prelude/math.wyn"))?;
         self.load_str(include_str!("../../../prelude/graphics.wyn"))?;
         Ok(())
+    }
+
+    /// Create a pre-elaborated prelude by loading all prelude files
+    /// This can be cached and reused across compilations
+    pub fn create_prelude() -> Result<PreElaboratedPrelude> {
+        let mut manager = Self::new_empty(NodeCounter::new());
+        manager.load_prelude_files()?;
+        Ok(PreElaboratedPrelude {
+            module_type_registry: manager.module_type_registry,
+            elaborated_modules: manager.elaborated_modules,
+            known_modules: manager.known_modules,
+        })
+    }
+
+    /// Create a ModuleManager using a pre-elaborated prelude (avoids re-parsing)
+    pub fn from_prelude(prelude: &PreElaboratedPrelude, node_counter: NodeCounter) -> Self {
+        ModuleManager {
+            module_type_registry: prelude.module_type_registry.clone(),
+            elaborated_modules: prelude.elaborated_modules.clone(),
+            known_modules: prelude.known_modules.clone(),
+            node_counter,
+        }
     }
 
     /// Check if a name is a known module

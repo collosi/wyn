@@ -231,6 +231,11 @@ impl TypeChecker {
     }
 
     pub fn new() -> Self {
+        Self::with_module_manager(crate::module_manager::ModuleManager::new())
+    }
+
+    /// Create a new TypeChecker with an existing ModuleManager
+    pub fn with_module_manager(module_manager: crate::module_manager::ModuleManager) -> Self {
         let mut context = Context::default();
         let impl_source = crate::impl_source::ImplSource::new();
         let poly_builtins = crate::poly_builtins::PolyBuiltins::new(&mut context);
@@ -241,7 +246,7 @@ impl TypeChecker {
             record_field_map: HashMap::new(),
             impl_source,
             poly_builtins,
-            module_manager: crate::module_manager::ModuleManager::new(),
+            module_manager,
             type_table: HashMap::new(),
             warnings: Vec::new(),
             type_holes: Vec::new(),
