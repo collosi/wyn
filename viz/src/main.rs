@@ -242,23 +242,36 @@ struct State {
 impl State {
     /// Print VRAM memory statistics from the allocator
     fn print_memory_stats(&self, label: &str) {
-        if let Some(report) = self.device.generate_allocator_report() {
-            let allocated_mb = report.total_allocated_bytes as f64 / (1024.0 * 1024.0);
-            let reserved_mb = report.total_reserved_bytes as f64 / (1024.0 * 1024.0);
-            eprintln!(
-                "[Memory {}] Allocated: {:.2} MB, Reserved: {:.2} MB, Blocks: {}, Allocations: {}",
-                label,
-                allocated_mb,
-                reserved_mb,
-                report.blocks.len(),
-                report.allocations.len()
-            );
-        } else {
-            eprintln!(
-                "[Memory {}] Allocator report not available on this backend",
-                label
-            );
+        use std::io::Write;
+        eprintln!("[Memory {}] Querying allocator...", label);
+        let _ = std::io::stderr().flush();
+
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.device.generate_allocator_report()
+        })) {
+            Ok(Some(report)) => {
+                let allocated_mb = report.total_allocated_bytes as f64 / (1024.0 * 1024.0);
+                let reserved_mb = report.total_reserved_bytes as f64 / (1024.0 * 1024.0);
+                eprintln!(
+                    "[Memory {}] Allocated: {:.2} MB, Reserved: {:.2} MB, Blocks: {}, Allocations: {}",
+                    label,
+                    allocated_mb,
+                    reserved_mb,
+                    report.blocks.len(),
+                    report.allocations.len()
+                );
+            }
+            Ok(None) => {
+                eprintln!(
+                    "[Memory {}] Allocator report not available on this backend",
+                    label
+                );
+            }
+            Err(_) => {
+                eprintln!("[Memory {}] Allocator report panicked!", label);
+            }
         }
+        let _ = std::io::stderr().flush();
     }
 }
 
@@ -889,7 +902,9 @@ impl ApplicationHandler for App {
 
         match pollster::block_on(State::new(window, &self.spec)) {
             Ok(state) => {
+                eprintln!("State::new succeeded, calling print_memory_stats...");
                 state.print_memory_stats("startup");
+                eprintln!("print_memory_stats returned, storing state");
                 self.state = Some(state);
             }
             Err(e) => {
