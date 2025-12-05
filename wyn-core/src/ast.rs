@@ -111,6 +111,30 @@ impl Span {
             end_col,
         }
     }
+
+    /// Check if this span contains a position (1-based line/col)
+    pub fn contains(&self, line: usize, col: usize) -> bool {
+        if line < self.start_line || line > self.end_line {
+            return false;
+        }
+        if line == self.start_line && col < self.start_col {
+            return false;
+        }
+        if line == self.end_line && col > self.end_col {
+            return false;
+        }
+        true
+    }
+
+    /// Calculate the "size" of a span for comparison (smaller = more specific)
+    pub fn size(&self) -> usize {
+        if self.end_line == self.start_line {
+            self.end_col.saturating_sub(self.start_col)
+        } else {
+            // Rough estimate: 100 chars per line
+            (self.end_line - self.start_line) * 100 + self.end_col
+        }
+    }
 }
 
 impl std::fmt::Display for Span {

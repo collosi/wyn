@@ -478,3 +478,54 @@ pub fn pointee(ty: &Type) -> Option<&Type> {
         _ => None,
     }
 }
+
+/// Format a type for display (standalone, without TypeChecker context)
+pub fn format_type(ty: &Type) -> String {
+    match ty {
+        Type::Constructed(TypeName::Arrow, args) if args.len() == 2 => {
+            format!("{} -> {}", format_type(&args[0]), format_type(&args[1]))
+        }
+        Type::Constructed(TypeName::Tuple(_), args) => {
+            let arg_strs: Vec<String> = args.iter().map(format_type).collect();
+            format!("({})", arg_strs.join(", "))
+        }
+        Type::Constructed(TypeName::Array, args) if args.len() == 2 => {
+            format!("[{}]{}", format_type(&args[0]), format_type(&args[1]))
+        }
+        // Vec[Size(n), elem] -> vecNelem (e.g., vec3f32)
+        Type::Constructed(TypeName::Vec, args) if args.len() == 2 => {
+            if let Type::Constructed(TypeName::Size(n), _) = &args[0] {
+                format!("vec{}{}", n, format_type(&args[1]))
+            } else {
+                format!("vec{}{}", format_type(&args[0]), format_type(&args[1]))
+            }
+        }
+        // Mat[Size(cols), Size(rows), elem] -> matCxRelem (e.g., mat4x4f32)
+        Type::Constructed(TypeName::Mat, args) if args.len() == 3 => {
+            match (&args[0], &args[1]) {
+                (Type::Constructed(TypeName::Size(cols), _), Type::Constructed(TypeName::Size(rows), _)) => {
+                    format!("mat{}x{}{}", cols, rows, format_type(&args[2]))
+                }
+                _ => {
+                    format!("mat{}x{}{}", format_type(&args[0]), format_type(&args[1]), format_type(&args[2]))
+                }
+            }
+        }
+        Type::Constructed(name, args) if args.is_empty() => format!("{}", name),
+        Type::Constructed(name, args) => {
+            let arg_strs: Vec<String> = args.iter().map(format_type).collect();
+            format!("{}[{}]", name, arg_strs.join(", "))
+        }
+        Type::Variable(id) => format!("?{}", id),
+    }
+}
+
+/// Format a type scheme for display (standalone, without TypeChecker context)
+pub fn format_scheme(scheme: &TypeScheme) -> String {
+    match scheme {
+        TypeScheme::Monotype(ty) => format_type(ty),
+        TypeScheme::Polytype { variable, body } => {
+            format!("∀{}. {}", variable, format_scheme(body))
+        }
+    }
+}

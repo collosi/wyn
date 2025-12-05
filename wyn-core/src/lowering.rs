@@ -734,7 +734,9 @@ impl<'a> LowerCtx<'a> {
                 // Store constant ID for lookup
                 self.constructor.global_constants.insert(name.clone(), const_id);
             }
-            Def::Uniform { name, ty, binding, .. } => {
+            Def::Uniform {
+                name, ty, binding, ..
+            } => {
                 // Create a SPIR-V uniform variable
                 let uniform_type = self.constructor.ast_type_to_spirv(ty);
                 let ptr_type =
@@ -1856,34 +1858,6 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
 
                                         // Load and return the updated array
                                         Ok(constructor.builder.load(arr_type, None, arr_var, None, [])?)
-                                    }
-                                    Intrinsic::Placeholder if func == "length" => {
-                                        // Array length: extract size from array type
-                                        if args.len() != 1 {
-                                            bail_spirv!("length expects exactly 1 argument");
-                                        }
-                                        if let PolyType::Constructed(TypeName::Array, type_args) =
-                                            &args[0].ty
-                                        {
-                                            match type_args.get(0) {
-                                                Some(PolyType::Constructed(TypeName::Size(n), _)) => {
-                                                    Ok(constructor.const_i32(*n as i32))
-                                                }
-                                                _ => bail_spirv!(
-                                                    "Cannot determine compile-time array size for length: {:?}",
-                                                    type_args.get(0)
-                                                ),
-                                            }
-                                        } else {
-                                            bail_spirv!("length called on non-array type: {:?}", args[0].ty)
-                                        }
-                                    }
-                                    Intrinsic::Placeholder => {
-                                        // Other placeholder intrinsics should have been desugared
-                                        bail_spirv!(
-                                            "Placeholder intrinsic '{}' should have been desugared before lowering",
-                                            func
-                                        )
                                     }
                                     Intrinsic::DebugI32 => {
                                         // Debug intrinsic: call GASM @gdp_encode_int32
