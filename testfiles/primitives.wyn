@@ -465,7 +465,8 @@ def setCamera (ro:vec3f32) (ta:vec3f32) (cr:f32) : mat3f32 =
   let cp = @[f32.sin cr, f32.cos cr, 0.0] in
   let cu = normalize3 (cross3 cw cp) in
   let cv = cross3 cu cw in
-  @[[cu.x, cu.y, cu.z], [cv.x, cv.y, cv.z], [cw.x, cw.y, cw.z]]
+  -- Row-vector convention: transpose from GLSL's mat3(cu, cv, cw)
+  @[[cu.x, cv.x, cw.x], [cu.y, cv.y, cw.y], [cu.z, cv.z, cw.z]]
 
 ------------------------------------------------------------
 -- Fragment Shader (Main Entry Point)
@@ -484,8 +485,9 @@ def fragment_main (#[builtin(position)] fragCoord:vec4f32) : #[location(0)] vec4
   let ca = setCamera ro ta 0.0 in
 
   -- pixel coordinates (AA=1, no antialiasing)
+  -- Note: negate Y to flip from Vulkan (Y=0 at top) to OpenGL convention (Y=0 at bottom)
   let p = @[(2.0*fragCoord.x - iResolution.x) / iResolution.y,
-            (2.0*fragCoord.y - iResolution.y) / iResolution.y] in
+            -((2.0*fragCoord.y - iResolution.y) / iResolution.y)] in
 
   -- focal length
   let fl = 2.5 in
@@ -494,11 +496,11 @@ def fragment_main (#[builtin(position)] fragCoord:vec4f32) : #[location(0)] vec4
   let rd_local = normalize3 @[p.x, p.y, fl] in
   let rd = mul rd_local ca in
 
-  -- ray differentials
+  -- ray differentials (with Y flip)
   let px = @[(2.0*(fragCoord.x + 1.0) - iResolution.x) / iResolution.y,
-             (2.0*fragCoord.y - iResolution.y) / iResolution.y] in
+             -((2.0*fragCoord.y - iResolution.y) / iResolution.y)] in
   let py = @[(2.0*fragCoord.x - iResolution.x) / iResolution.y,
-             (2.0*(fragCoord.y + 1.0) - iResolution.y) / iResolution.y] in
+             -((2.0*(fragCoord.y + 1.0) - iResolution.y) / iResolution.y)] in
   let rdx_local = normalize3 @[px.x, px.y, fl] in
   let rdy_local = normalize3 @[py.x, py.y, fl] in
   let rdx = mul rdx_local ca in
