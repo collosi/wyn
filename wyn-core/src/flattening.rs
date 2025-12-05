@@ -951,30 +951,21 @@ impl Flattener {
                             }
                         };
 
-                        let obj = self.mk_expr(
-                            closure_type.clone(),
-                            mir::ExprKind::Var("__closure".to_string()),
-                            span,
-                        );
-                        // Wrap in Materialize for pointer access
-                        let materialized_obj = self.mk_expr(
-                            types::pointer(closure_type),
-                            mir::ExprKind::Materialize(Box::new(obj)),
-                            span,
-                        );
+                        let obj =
+                            self.mk_expr(closure_type, mir::ExprKind::Var("__closure".to_string()), span);
                         let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
-                        // Build index literal first to avoid nested mutable borrow
                         let idx_expr = self.mk_expr(
                             i32_type,
                             mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
                             span,
                         );
+                        // Pass value directly to tuple_access - no Materialize needed
                         return Ok((
                             self.mk_expr(
                                 ty,
                                 mir::ExprKind::Intrinsic {
                                     name: "tuple_access".to_string(),
-                                    args: vec![materialized_obj, idx_expr],
+                                    args: vec![obj, idx_expr],
                                 },
                                 span,
                             ),
@@ -992,70 +983,18 @@ impl Flattener {
 
                 // Create i32 type for the index literal
                 let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
-
-                // Check if obj is a simple Var - if so, use backing store system
-                if let mir::ExprKind::Var(ref var_name) = obj.kind {
-                    // Look up binding_id from static_values
-                    if let Some(sv) = self.static_values.lookup(var_name) {
-                        let binding_id = match sv {
-                            StaticValue::Dyn { binding_id } => *binding_id,
-                            StaticValue::Closure { binding_id, .. } => *binding_id,
-                        };
-                        // Mark this binding as needing a backing store
-                        self.needs_backing_store.insert(binding_id);
-                        // Use the backing store variable name
-                        let ptr_name = Self::backing_store_name(binding_id);
-                        let ptr_var = self.mk_expr(
-                            types::pointer(obj.ty.clone()),
-                            mir::ExprKind::Var(ptr_name),
-                            span,
-                        );
-                        let kind = mir::ExprKind::Intrinsic {
-                            name: "tuple_access".to_string(),
-                            args: vec![
-                                ptr_var,
-                                self.mk_expr(
-                                    i32_type,
-                                    mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
-                                    span,
-                                ),
-                            ],
-                        };
-                        return Ok((self.mk_expr(ty, kind, span), StaticValue::Dyn { binding_id: 0 }));
-                    }
-                }
-
-                // Fallback for complex expressions: inline Materialize+Let
-                let tmp_name = self.fresh_name("ptr");
-                let tmp_binding_id = self.fresh_binding_id();
-                let obj_ty = obj.ty.clone();
-                let ptr_ty = types::pointer(obj_ty.clone());
-                let materialized_obj =
-                    self.mk_expr(ptr_ty.clone(), mir::ExprKind::Materialize(Box::new(obj)), span);
-
-                // Reference the temp in the tuple_access
-                let tmp_var = self.mk_expr(ptr_ty, mir::ExprKind::Var(tmp_name.clone()), span);
-                // Build idx literal first to avoid nested mutable borrow
                 let idx_expr = self.mk_expr(
                     i32_type,
                     mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
                     span,
                 );
-                let access_expr = self.mk_expr(
-                    ty.clone(),
+
+                // Pass value directly to tuple_access - no Materialize/backing store needed
+                // Lowering handles both pointer and value inputs correctly
+                (
                     mir::ExprKind::Intrinsic {
                         name: "tuple_access".to_string(),
-                        args: vec![tmp_var, idx_expr],
-                    },
-                    span,
-                );
-
-                (
-                    mir::ExprKind::Let {
-                        name: tmp_name,
-                        binding_id: tmp_binding_id,
-                        value: Box::new(materialized_obj),
-                        body: Box::new(access_expr),
+                        args: vec![obj, idx_expr],
                     },
                     StaticValue::Dyn { binding_id: 0 },
                 )
