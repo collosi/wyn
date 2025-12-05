@@ -2338,28 +2338,28 @@ fn lower_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::
             // Construct the vector
             Ok(constructor.builder.composite_construct(vec_type, None, elem_ids)?)
         }
-        Literal::Matrix(rows) => {
-            // Matrix literal: rows are the outer vec, columns are inner
-            // SPIR-V matrices are column-major, so we need to transpose
-            if rows.is_empty() || rows[0].is_empty() {
+        Literal::Matrix(cols) => {
+            // Matrix literal: outer array = columns, inner array = column elements
+            // Each inner array becomes a SPIR-V column directly (row-vector convention)
+            if cols.is_empty() || cols[0].is_empty() {
                 bail_spirv!("Empty matrix literal");
             }
 
-            let num_rows = rows.len();
-            let num_cols = rows[0].len();
+            let num_cols = cols.len();
+            let num_rows = cols[0].len(); // elements per column
 
             // Get element type from first element
-            let elem_type = constructor.ast_type_to_spirv(&rows[0][0].ty);
+            let elem_type = constructor.ast_type_to_spirv(&cols[0][0].ty);
 
-            // Create column vector type
+            // Create column vector type (num_rows elements per column)
             let col_vec_type = constructor.get_or_create_vec_type(elem_type, num_rows as u32);
 
-            // Transpose: build column vectors from row data
+            // Build column vectors directly from inner arrays (no transpose)
             let mut col_ids = Vec::with_capacity(num_cols);
-            for col in 0..num_cols {
+            for col in cols {
                 let mut col_elem_ids = Vec::with_capacity(num_rows);
-                for row in rows {
-                    let elem_id = lower_expr(constructor, &row[col])?;
+                for elem in col {
+                    let elem_id = lower_expr(constructor, elem)?;
                     col_elem_ids.push(elem_id);
                 }
                 let col_vec = constructor.builder.composite_construct(col_vec_type, None, col_elem_ids)?;
