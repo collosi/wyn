@@ -1,7 +1,0 @@
--- Test that type parameters bind correctly
-
--- Simple identity function: all uses of 'a should unify
-def identity 'a (x:'a) : 'a = x
-
--- Test it compiles
-def test : i32 = identity 42

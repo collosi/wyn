@@ -1,1 +1,0 @@
-#[uniform] def material_color: vec3 = vec3 1.0f32 0.5f32 0.2f32

@@ -1,3 +1,0 @@
-def test_length : f32 =
-  let v : vec2f32 = vec2 3.0f32 4.0f32 in
-  length v

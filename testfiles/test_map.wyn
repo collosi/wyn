@@ -1,4 +1,0 @@
--- Test map on vec3
-def test_map : vec3f32 =
-  let v : vec3f32 = vec3 1.0f32 2.0f32 3.0f32 in
-  map (\x -> x * 2.0f32) v

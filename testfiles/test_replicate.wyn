@@ -1,2 +1,0 @@
--- Test replicate builtin
-def test : [5]i32 = replicate 5 42

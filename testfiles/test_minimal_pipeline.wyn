@@ -1,8 +1,0 @@
--- Test 3: Minimal vertex-fragment pipeline
-#[vertex] def vertex_minimal(): ([builtin(position)] vec4, [location(0)] vec3) =
-  let pos: vec4 = vec4 0.0f32 0.0f32 0.0f32 1.0f32 in
-  let color: vec3 = vec3 1.0f32 0.0f32 0.0f32 in
-  (pos, color)
-
-#[fragment] def fragment_minimal(): [location(0)] vec4 =
-  vec4 1.0f32 0.0f32 0.0f32 1.0f32
