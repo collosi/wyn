@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 use thiserror::Error;
-use wyn_core::{Compiler, Normalized, lexer, module_manager::ModuleManager, parser::Parser as WynParser};
+use wyn_core::{Compiler, lexer, module_manager::ModuleManager, parser::Parser as WynParser};
 
 /// Times the execution of a closure and prints the elapsed time if verbose.
 fn time<T, F: FnOnce() -> T>(name: &str, verbose: bool, f: F) -> T {
@@ -38,9 +38,13 @@ enum Commands {
         #[arg(short, long, value_name = "FILE")]
         output: Option<PathBuf>,
 
-        /// Output MIR (Mid-level IR) to a file
+        /// Output initial MIR (right after flattening, before optimizations)
         #[arg(long, value_name = "FILE")]
-        output_mir: Option<PathBuf>,
+        output_init_mir: Option<PathBuf>,
+
+        /// Output final MIR (right before lowering to SPIR-V)
+        #[arg(long, value_name = "FILE")]
+        output_final_mir: Option<PathBuf>,
 
         /// Output annotated source code with block IDs and locations
         #[arg(long, value_name = "FILE")]
@@ -88,12 +92,21 @@ fn main() -> Result<(), DriverError> {
         Commands::Compile {
             input,
             output,
-            output_mir,
+            output_init_mir,
+            output_final_mir,
             output_annotated,
             debug,
             verbose,
         } => {
-            compile_file(input, output, output_mir, output_annotated, debug, verbose)?;
+            compile_file(
+                input,
+                output,
+                output_init_mir,
+                output_final_mir,
+                output_annotated,
+                debug,
+                verbose,
+            )?;
         }
         Commands::Check {
             input,
@@ -110,7 +123,8 @@ fn main() -> Result<(), DriverError> {
 fn compile_file(
     input: PathBuf,
     output: Option<PathBuf>,
-    output_mir: Option<PathBuf>,
+    output_init_mir: Option<PathBuf>,
+    output_final_mir: Option<PathBuf>,
     output_annotated: Option<PathBuf>,
     debug: bool,
     verbose: bool,
@@ -141,16 +155,26 @@ fn compile_file(
         alias_checked.print_alias_errors();
     }
 
-    let flattened = time("flatten", verbose, || alias_checked.flatten())?;
-    let normalized = time("normalize", verbose, || flattened.normalize());
+    let ast_folded = time("fold_ast_constants", verbose, || {
+        alias_checked.fold_ast_constants()
+    });
+    let flattened = time("flatten", verbose, || ast_folded.flatten())?;
 
-    // Write MIR if requested (before further passes that might fail)
-    write_mir_if_requested(&normalized, &output_mir, verbose)?;
+    // Write initial MIR if requested (right after flattening)
+    write_mir_if_requested(&flattened.mir, &output_init_mir, "initial MIR", verbose)?;
 
+    let hoisted = time("hoist_materializations", verbose, || {
+        flattened.hoist_materializations()
+    });
+    let normalized = time("normalize", verbose, || hoisted.normalize());
     let monomorphized = time("monomorphize", verbose, || normalized.monomorphize())?;
     let reachable = time("filter_reachable", verbose, || monomorphized.filter_reachable());
     let folded = time("fold_constants", verbose, || reachable.fold_constants())?;
     let lifted = time("lift_bindings", verbose, || folded.lift_bindings())?;
+
+    // Write final MIR if requested (right before lowering)
+    write_mir_if_requested(&lifted.mir, &output_final_mir, "final MIR", verbose)?;
+
     let lowered = time("lower", verbose, || lifted.lower_with_options(debug))?;
 
     // Determine output path
@@ -208,14 +232,15 @@ fn check_file(input: PathBuf, output_annotated: Option<PathBuf>, verbose: bool) 
 }
 
 fn write_mir_if_requested(
-    normalized: &Normalized,
+    mir: &wyn_core::mir::Program,
     output_mir: &Option<PathBuf>,
+    description: &str,
     verbose: bool,
 ) -> Result<(), DriverError> {
     if let Some(ref mir_path) = output_mir {
-        fs::write(mir_path, format!("{}", normalized.mir))?;
+        fs::write(mir_path, format!("{}", mir))?;
         if verbose {
-            info!("Wrote MIR to {}", mir_path.display());
+            info!("Wrote {} to {}", description, mir_path.display());
         }
     }
     Ok(())

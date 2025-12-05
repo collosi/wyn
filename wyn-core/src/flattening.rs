@@ -1193,14 +1193,8 @@ impl Flattener {
                         });
                     let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
 
-                    // Wrap the tuple var in Materialize for pointer access
+                    // Pass value directly to tuple_access - no Materialize needed
                     let tuple_var = self.mk_expr(tuple_ty.clone(), mir::ExprKind::Var(tmp.clone()), span);
-                    let materialized_tuple = self.mk_expr(
-                        types::pointer(tuple_ty.clone()),
-                        mir::ExprKind::Materialize(Box::new(tuple_var)),
-                        span,
-                    );
-                    // Build idx literal first to avoid nested mutable borrow
                     let idx_expr = self.mk_expr(
                         i32_type,
                         mir::ExprKind::Literal(mir::Literal::Int(i.to_string())),
@@ -1211,7 +1205,7 @@ impl Flattener {
                         elem_ty.clone(),
                         mir::ExprKind::Intrinsic {
                             name: "tuple_access".to_string(),
-                            args: vec![materialized_tuple, idx_expr],
+                            args: vec![tuple_var, idx_expr],
                         },
                         span,
                     );
@@ -1637,15 +1631,9 @@ impl Flattener {
                 .ok_or_else(|| err_flatten!("Tuple pattern element {} has no corresponding type", i))?;
             let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
 
-            // Wrap the loop var in Materialize for pointer access
+            // Pass value directly to tuple_access - no Materialize needed
             let loop_var_expr =
                 self.mk_expr(tuple_ty.clone(), mir::ExprKind::Var(loop_var.to_string()), span);
-            let materialized_loop_var = self.mk_expr(
-                types::pointer(tuple_ty.clone()),
-                mir::ExprKind::Materialize(Box::new(loop_var_expr)),
-                span,
-            );
-            // Build idx literal first to avoid nested mutable borrow
             let idx_expr = self.mk_expr(
                 i32_type,
                 mir::ExprKind::Literal(mir::Literal::Int(i.to_string())),
@@ -1656,7 +1644,7 @@ impl Flattener {
                 elem_ty,
                 mir::ExprKind::Intrinsic {
                     name: "tuple_access".to_string(),
-                    args: vec![materialized_loop_var, idx_expr],
+                    args: vec![loop_var_expr, idx_expr],
                 },
                 span,
             );

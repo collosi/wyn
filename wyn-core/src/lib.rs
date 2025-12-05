@@ -19,10 +19,12 @@ pub mod visitor;
 pub use types::checker as type_checker;
 
 pub mod alias_checker;
+pub mod ast_const_fold;
 pub mod binding_lifter;
 pub mod constant_folding;
 pub mod gasm_lowering;
 pub mod lowering;
+pub mod materialize_hoisting;
 pub mod monomorphization;
 pub mod normalize;
 
@@ -63,11 +65,13 @@ pub type TypeTable = HashMap<NodeId, TypeScheme<TypeName>>;
 //       -> .resolve()    -> Resolved
 //       -> .type_check() -> TypeChecked
 //       -> .alias_check() -> AliasChecked
+//       -> .fold_ast_constants() -> AstConstFolded (integer constant folding/inlining)
 //       -> .flatten()    -> Flattened
+//       -> .hoist_materializations() -> MaterializationsHoisted
 //       -> .normalize()  -> Normalized (ANF transformation)
 //       -> .monomorphize() -> Monomorphized
 //       -> .filter_reachable() -> Reachable
-//       -> .fold_constants() -> Folded
+//       -> .fold_constants() -> Folded (MIR-level constant folding)
 //       -> .lower()      -> Lowered (contains MIR + SPIR-V)
 
 /// Entry point for the compiler. Use `Compiler::parse()` to start the pipeline.
@@ -211,6 +215,37 @@ impl AliasChecked {
         self.alias_result.print_errors();
     }
 
+    /// Fold AST-level integer constants
+    pub fn fold_ast_constants(mut self) -> AstConstFolded {
+        ast_const_fold::fold_ast_constants(&mut self.ast);
+        AstConstFolded {
+            ast: self.ast,
+            type_table: self.type_table,
+            warnings: self.warnings,
+            alias_result: self.alias_result,
+        }
+    }
+
+    /// Flatten AST to MIR (with defunctionalization and desugaring)
+    /// Note: Consider using fold_ast_constants() first for better optimization
+    pub fn flatten(self) -> Result<Flattened> {
+        let builtins = impl_source::ImplSource::default().all_names();
+        let mut flattener = flattening::Flattener::new(self.type_table, builtins);
+        let mir = flattener.flatten_program(&self.ast)?;
+        let node_counter = flattener.into_node_counter();
+        Ok(Flattened { mir, node_counter })
+    }
+}
+
+/// AST integer constants have been folded and inlined
+pub struct AstConstFolded {
+    pub ast: ast::Program,
+    pub type_table: TypeTable,
+    pub warnings: Vec<type_checker::TypeWarning>,
+    pub alias_result: alias_checker::AliasCheckResult,
+}
+
+impl AstConstFolded {
     /// Flatten AST to MIR (with defunctionalization and desugaring)
     pub fn flatten(self) -> Result<Flattened> {
         let builtins = impl_source::ImplSource::default().all_names();
@@ -228,6 +263,23 @@ pub struct Flattened {
 }
 
 impl Flattened {
+    /// Hoist duplicate materializations to let bindings
+    pub fn hoist_materializations(self) -> MaterializationsHoisted {
+        let mir = materialize_hoisting::hoist_materializations(self.mir);
+        MaterializationsHoisted {
+            mir,
+            node_counter: self.node_counter,
+        }
+    }
+}
+
+/// Duplicate materializations have been hoisted
+pub struct MaterializationsHoisted {
+    pub mir: mir::Program,
+    pub node_counter: NodeCounter,
+}
+
+impl MaterializationsHoisted {
     /// Normalize MIR to A-normal form
     pub fn normalize(self) -> Normalized {
         let (mir, node_counter) = normalize::normalize_program(self.mir, self.node_counter);

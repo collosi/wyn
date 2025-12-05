@@ -18,6 +18,7 @@ fn flatten_program(input: &str) -> mir::Program {
         .expect("Type checking failed")
         .alias_check()
         .expect("Borrow checking failed")
+        .fold_ast_constants()
         .flatten()
         .expect("Flattening failed")
         .mir
@@ -197,8 +198,8 @@ def test : [4]i32 =
     // Alias check
     let alias_checked = typed.alias_check().expect("Alias checking failed");
 
-    // Flatten - this is where it fails
-    let flattened = alias_checked.flatten().expect("Flattening failed");
+    // Fold AST constants and flatten
+    let flattened = alias_checked.fold_ast_constants().flatten().expect("Flattening failed");
     let mir_str = format!("{}", flattened.mir);
     println!("MIR: {}", mir_str);
     assert!(mir_str.contains("def test"));
@@ -393,9 +394,11 @@ def test : f32 =
             .and_then(|e| e.resolve())
             .and_then(|r| r.type_check())
             .and_then(|t| t.alias_check())
+            .map(|a| a.fold_ast_constants())
             .and_then(|b| b.flatten())
-            .map(|f| f.normalize())
-            .and_then(|n| n.monomorphize())
+            .map(|f| f.hoist_materializations())
+            .map(|h| h.normalize())
+            .and_then(|h| h.monomorphize())
             .map(|m| m.filter_reachable())
             .and_then(|r| r.fold_constants())
             .and_then(|f| f.lift_bindings())
@@ -501,4 +504,120 @@ def test_mul_overloads (m1: mat4f32) (m2: mat4f32) (v: vec4f32) : vec4f32 =
     assert!(mir_str.contains("mul_mat_mat"), "Expected mul_mat_mat in MIR");
     assert!(mir_str.contains("mul_mat_vec"), "Expected mul_mat_vec in MIR");
     assert!(mir_str.contains("mul_vec_mat"), "Expected mul_vec_mat in MIR");
+}
+
+#[test]
+fn test_no_redundant_materializations_simple_var() {
+    // Test that accessing the same array with dynamic index in multiple branches
+    // does not create redundant materializations for simple variables.
+    // The backing store should be created once at the top level and reused.
+    let mir = flatten_program(
+        r#"
+def test (arr: [3]i32) (i: i32) : i32 =
+  let x = arr[i] in
+  if true then arr[i] else x
+"#,
+    );
+    let mir_str = format!("{}", mir);
+    println!("MIR output:\n{}", mir_str);
+
+    // Count materializations - should be exactly 1 (for the backing store)
+    let materialize_count = mir_str.matches("@materialize").count();
+    assert!(
+        materialize_count <= 1,
+        "Expected at most 1 materialize, found {}. MIR:\n{}",
+        materialize_count,
+        mir_str
+    );
+}
+
+#[test]
+fn test_no_redundant_materializations_complex_expr() {
+    // Test that indexing a complex expression (not a simple variable) in both
+    // branches of an if does not create TWO separate materializations.
+    // The materialize_hoisting pass should hoist the common materialization.
+    let source = r#"
+def identity (arr: [3]i32) : [3]i32 = arr
+def test (arr: [3]i32) (i: i32) : i32 =
+  if true then (identity arr)[i] else (identity arr)[i]
+"#;
+
+    // Run through normalize + hoist_materializations
+    let parsed = crate::Compiler::parse(source).expect("parse failed");
+    let mm = crate::cached_module_manager(parsed.node_counter.clone());
+    let hoisted = parsed
+        .elaborate(mm)
+        .expect("elaborate failed")
+        .resolve()
+        .expect("resolve failed")
+        .type_check()
+        .expect("type_check failed")
+        .alias_check()
+        .expect("alias_check failed")
+        .fold_ast_constants()
+        .flatten()
+        .expect("flatten failed")
+        .hoist_materializations();
+
+    let mir_str = format!("{}", hoisted.mir);
+    println!("MIR output after hoisting:\n{}", mir_str);
+
+    // After hoisting, there should be at most 1 materialize
+    let materialize_count = mir_str.matches("@materialize").count();
+    assert!(
+        materialize_count <= 1,
+        "Expected at most 1 materialize, found {}. MIR:\n{}",
+        materialize_count,
+        mir_str
+    );
+}
+
+#[test]
+fn test_no_materialize_for_loop_tuple_destructuring() {
+    // Loop tuple destructuring should use tuple_access directly, not materialize
+    let mir = flatten_program(
+        r#"
+def test (arr: [10]i32): i32 =
+  let (sum, _) = loop (acc, i) = (0, 0) while i < 10 do
+    (acc + arr[i], i + 1)
+  in sum
+"#,
+    );
+
+    let mir_str = format!("{}", mir);
+    println!("MIR:\n{}", mir_str);
+
+    // The loop tuple pattern (acc, i) should NOT require materialize
+    // Only the array index arr[i] might need it
+    let materialize_count = mir_str.matches("@materialize").count();
+    assert!(
+        materialize_count <= 1,
+        "Loop tuple destructuring should not use materialize. Found {} materializations. MIR:\n{}",
+        materialize_count,
+        mir_str
+    );
+}
+
+#[test]
+fn test_no_materialize_for_let_tuple_destructuring() {
+    // Let tuple destructuring should use tuple_access directly, not materialize
+    let mir = flatten_program(
+        r#"
+def test (x: i32): i32 =
+  let pair = (x, x + 1) in
+  let (a, b) = pair in
+  a + b
+"#,
+    );
+
+    let mir_str = format!("{}", mir);
+    println!("MIR:\n{}", mir_str);
+
+    // Tuple destructuring should NOT require materialize at all
+    let materialize_count = mir_str.matches("@materialize").count();
+    assert_eq!(
+        materialize_count, 0,
+        "Let tuple destructuring should not use materialize. Found {} materializations. MIR:\n{}",
+        materialize_count, mir_str
+    );
 }

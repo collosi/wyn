@@ -9,7 +9,9 @@ fn compile_through_lowering(input: &str) -> Result<(), CompilerError> {
         .resolve()?
         .type_check()?
         .alias_check()?
+        .fold_ast_constants()
         .flatten()?
+        .hoist_materializations()
         .normalize()
         .monomorphize()?
         .filter_reachable()
@@ -28,7 +30,9 @@ fn compile_through_monomorphization(input: &str) -> Result<(), CompilerError> {
         .resolve()?
         .type_check()?
         .alias_check()?
+        .fold_ast_constants()
         .flatten()?
+        .hoist_materializations()
         .normalize()
         .monomorphize()?;
     Ok(())
