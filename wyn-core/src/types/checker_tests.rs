@@ -1145,3 +1145,41 @@ def test : f32 =
 "#,
     );
 }
+
+// Tests for polymorphic builtins with different vector sizes
+// Bug: polymorphic builtins get monomorphized on first use
+// See BUGS.txt for details
+
+#[test]
+fn test_polymorphic_builtin_magnitude_different_sizes() {
+    // This test verifies that polymorphic builtins like magnitude can be
+    // used with different vector sizes in the same file.
+    // Bug: Type gets fixed on first use due to Monotype instead of Polytype
+    typecheck_program(
+        r#"
+def test1 (v:vec3f32): f32 = magnitude v
+def test2 (v:vec2f32): f32 = magnitude v
+def test3 (v:vec4f32): f32 = magnitude v
+        "#,
+    );
+}
+
+#[test]
+fn test_polymorphic_builtin_normalize_different_sizes() {
+    typecheck_program(
+        r#"
+def test1 (v:vec3f32): vec3f32 = normalize v
+def test2 (v:vec2f32): vec2f32 = normalize v
+        "#,
+    );
+}
+
+#[test]
+fn test_polymorphic_builtin_dot_different_sizes() {
+    typecheck_program(
+        r#"
+def test1 (a:vec3f32) (b:vec3f32): f32 = dot a b
+def test2 (a:vec2f32) (b:vec2f32): f32 = dot a b
+        "#,
+    );
+}

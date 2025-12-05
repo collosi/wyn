@@ -164,10 +164,19 @@ impl PolyBuiltins {
             func_type = Type::arrow(param_type.clone(), func_type);
         }
 
-        let entry = BuiltinEntry {
-            scheme: TypeScheme::Monotype(func_type),
-        };
+        // Collect all type variables in the function type
+        let type_vars = collect_type_vars(&func_type);
 
+        // Wrap in nested Polytype for each type variable (proper quantification)
+        let mut scheme = TypeScheme::Monotype(func_type);
+        for var_id in type_vars.into_iter().rev() {
+            scheme = TypeScheme::Polytype {
+                variable: var_id,
+                body: Box::new(scheme),
+            };
+        }
+
+        let entry = BuiltinEntry { scheme };
         self.add_overload(name.to_string(), entry);
     }
 
@@ -255,36 +264,7 @@ impl PolyBuiltins {
         let mat_n_m_a = Type::Constructed(TypeName::Mat, vec![n, m, a]);
         self.register_poly("outer", vec![vec_n_a, vec_m_a], mat_n_m_a);
 
-        // Internal multiplication variants (desugared from surface "mul")
-        // mul_mat_mat : ∀n m p a. mat<n,m,a> -> mat<m,p,a> -> mat<n,p,a>
-        let n = ctx.new_variable();
-        let m = ctx.new_variable();
-        let p = ctx.new_variable();
-        let a = ctx.new_variable();
-        let mat_n_m_a = Type::Constructed(TypeName::Mat, vec![n.clone(), m.clone(), a.clone()]);
-        let mat_m_p_a = Type::Constructed(TypeName::Mat, vec![m, p.clone(), a.clone()]);
-        let mat_n_p_a = Type::Constructed(TypeName::Mat, vec![n, p, a]);
-        self.register_poly("mul_mat_mat", vec![mat_n_m_a, mat_m_p_a], mat_n_p_a);
-
-        // mul_mat_vec : ∀n m a. mat<n,m,a> -> vec<m,a> -> vec<n,a>
-        let n = ctx.new_variable();
-        let m = ctx.new_variable();
-        let a = ctx.new_variable();
-        let vec_m_a = Type::Constructed(TypeName::Vec, vec![m.clone(), a.clone()]);
-        let vec_n_a = Type::Constructed(TypeName::Vec, vec![n.clone(), a.clone()]);
-        let mat_n_m = Type::Constructed(TypeName::Mat, vec![n, m, a]);
-        self.register_poly("mul_mat_vec", vec![mat_n_m, vec_m_a], vec_n_a);
-
-        // mul_vec_mat : ∀n m a. vec<n,a> -> mat<n,m,a> -> vec<m,a>
-        let n = ctx.new_variable();
-        let m = ctx.new_variable();
-        let a = ctx.new_variable();
-        let vec_n_a = Type::Constructed(TypeName::Vec, vec![n.clone(), a.clone()]);
-        let vec_m_a = Type::Constructed(TypeName::Vec, vec![m.clone(), a.clone()]);
-        let mat_n_m = Type::Constructed(TypeName::Mat, vec![n, m, a]);
-        self.register_poly("mul_vec_mat", vec![vec_n_a, mat_n_m], vec_m_a);
-
-        // Surface "mul" overloads (will be desugared to the above variants)
+        // Surface "mul" overloads (desugared to mul_mat_mat, mul_mat_vec, mul_vec_mat in flattening)
         // mul : ∀n m p a. mat<n,m,a> -> mat<m,p,a> -> mat<n,p,a>
         let n = ctx.new_variable();
         let m = ctx.new_variable();
@@ -358,5 +338,27 @@ impl Default for PolyBuiltins {
     fn default() -> Self {
         let mut ctx = polytype::Context::<TypeName>::default();
         Self::new(&mut ctx)
+    }
+}
+
+/// Collect all type variable IDs from a type (in order of first occurrence)
+fn collect_type_vars(ty: &Type) -> Vec<polytype::Variable> {
+    let mut vars = Vec::new();
+    collect_type_vars_inner(ty, &mut vars);
+    vars
+}
+
+fn collect_type_vars_inner(ty: &Type, vars: &mut Vec<polytype::Variable>) {
+    match ty {
+        Type::Variable(id) => {
+            if !vars.contains(id) {
+                vars.push(*id);
+            }
+        }
+        Type::Constructed(_, args) => {
+            for arg in args {
+                collect_type_vars_inner(arg, vars);
+            }
+        }
     }
 }
