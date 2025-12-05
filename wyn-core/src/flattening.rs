@@ -892,7 +892,18 @@ impl Flattener {
                 let (arr, _) = self.flatten_expr(arr_expr)?;
                 let (idx, _) = self.flatten_expr(idx_expr)?;
 
-                // Check if arr is a simple Var - if so, use backing store system
+                // Check if index is a constant - if so, use tuple_access (OpCompositeExtract)
+                // which doesn't need a backing store
+                if let mir::ExprKind::Literal(mir::Literal::Int(_)) = &idx.kind {
+                    // Constant index: use tuple_access directly on value
+                    let kind = mir::ExprKind::Intrinsic {
+                        name: "tuple_access".to_string(),
+                        args: vec![arr, idx],
+                    };
+                    return Ok((self.mk_expr(ty, kind, span), StaticValue::Dyn { binding_id: 0 }));
+                }
+
+                // Dynamic index: need backing store for OpAccessChain
                 if let mir::ExprKind::Var(ref var_name) = arr.kind {
                     // Look up binding_id from static_values
                     if let Some(sv) = self.static_values.lookup(var_name) {
@@ -917,7 +928,7 @@ impl Flattener {
                     }
                 }
 
-                // Fallback: wrap the array in Materialize inline
+                // Fallback for dynamic index on complex expression: wrap in Materialize
                 let materialized_arr = self.mk_expr(
                     types::pointer(arr.ty.clone()),
                     mir::ExprKind::Materialize(Box::new(arr)),
