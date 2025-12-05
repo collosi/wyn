@@ -21,6 +21,10 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowAttributes};
 
+use rspirv::binary::parse_words;
+use rspirv::dr::{Loader, Operand};
+use rspirv::spirv::ExecutionModel;
+
 // --- CLI ---------------------------------------------------------------------
 
 #[derive(Parser, Debug)]
@@ -37,12 +41,12 @@ enum Command {
     VertexFragment {
         /// Path to the SPIR-V module containing both entry points
         path: PathBuf,
-        /// Vertex shader entry point name (default: main)
-        #[arg(long, default_value = "main")]
-        vertex: String,
-        /// Fragment shader entry point name (default: main)
-        #[arg(long, default_value = "main")]
-        fragment: String,
+        /// Vertex shader entry point name (auto-detected if omitted)
+        #[arg(long)]
+        vertex: Option<String>,
+        /// Fragment shader entry point name (auto-detected if omitted)
+        #[arg(long)]
+        fragment: Option<String>,
         /// Enable Shadertoy-compatible uniforms (iResolution, iTime)
         #[arg(long)]
         shadertoy: bool,
@@ -67,13 +71,137 @@ enum PipelineSpec {
     },
 }
 
+// --- Entry point detection ---------------------------------------------------
+
+/// Parse SPIR-V words and extract all entry points with their execution models.
+fn detect_entry_points(spirv_words: &[u32]) -> Result<Vec<(String, ExecutionModel)>> {
+    let mut loader = Loader::new();
+    parse_words(spirv_words, &mut loader).map_err(|e| anyhow!("Failed to parse SPIR-V: {:?}", e))?;
+    let module = loader.module();
+
+    let mut entry_points = Vec::new();
+
+    // module.entry_points contains OpEntryPoint instructions
+    // Operands: [0] ExecutionModel, [1] IdRef (function), [2] LiteralString (name), [3..] interfaces
+    for instruction in &module.entry_points {
+        if instruction.operands.len() < 3 {
+            continue;
+        }
+
+        let execution_model = match &instruction.operands[0] {
+            Operand::ExecutionModel(model) => *model,
+            _ => continue,
+        };
+
+        let name = match &instruction.operands[2] {
+            Operand::LiteralString(s) => s.clone(),
+            _ => continue,
+        };
+
+        entry_points.push((name, execution_model));
+    }
+
+    Ok(entry_points)
+}
+
+/// Resolve vertex and fragment entry point names.
+/// If both provided, use them. If neither, auto-detect. If only one, error.
+fn resolve_entry_points(
+    path: &Path,
+    vertex_arg: Option<String>,
+    fragment_arg: Option<String>,
+) -> Result<(String, String)> {
+    match (vertex_arg, fragment_arg) {
+        (Some(v), Some(f)) => Ok((v, f)),
+        (None, None) => auto_detect_entry_points(path),
+        (Some(_), None) => Err(anyhow!(
+            "--vertex was provided but --fragment was not. Provide both or neither for auto-detection."
+        )),
+        (None, Some(_)) => Err(anyhow!(
+            "--fragment was provided but --vertex was not. Provide both or neither for auto-detection."
+        )),
+    }
+}
+
+/// Auto-detect entry points from a SPIR-V file.
+/// Succeeds if exactly one Vertex and one Fragment entry point exist (and no others).
+fn auto_detect_entry_points(path: &Path) -> Result<(String, String)> {
+    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+
+    if bytes.len() % 4 != 0 {
+        return Err(anyhow!("SPIR-V file size is not aligned to 4-byte words"));
+    }
+
+    let spirv_words: Vec<u32> = bytes
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect();
+
+    let entry_points = detect_entry_points(&spirv_words)?;
+
+    let vertex_entries: Vec<_> =
+        entry_points.iter().filter(|(_, m)| *m == ExecutionModel::Vertex).collect();
+
+    let fragment_entries: Vec<_> =
+        entry_points.iter().filter(|(_, m)| *m == ExecutionModel::Fragment).collect();
+
+    let other_entries: Vec<_> = entry_points
+        .iter()
+        .filter(|(_, m)| *m != ExecutionModel::Vertex && *m != ExecutionModel::Fragment)
+        .collect();
+
+    match (vertex_entries.len(), fragment_entries.len(), other_entries.len()) {
+        (1, 1, 0) => {
+            let vertex_name = vertex_entries[0].0.clone();
+            let fragment_name = fragment_entries[0].0.clone();
+            eprintln!(
+                "Auto-detected entry points: vertex='{}', fragment='{}'",
+                vertex_name, fragment_name
+            );
+            Ok((vertex_name, fragment_name))
+        }
+        _ => {
+            let mut msg = String::from("Cannot auto-detect entry points.\n\nFound entry points:\n");
+
+            if !vertex_entries.is_empty() {
+                msg.push_str("  Vertex:\n");
+                for (name, _) in &vertex_entries {
+                    msg.push_str(&format!("    - {}\n", name));
+                }
+            }
+
+            if !fragment_entries.is_empty() {
+                msg.push_str("  Fragment:\n");
+                for (name, _) in &fragment_entries {
+                    msg.push_str(&format!("    - {}\n", name));
+                }
+            }
+
+            if !other_entries.is_empty() {
+                msg.push_str("  Other:\n");
+                for (name, model) in &other_entries {
+                    msg.push_str(&format!("    - {} ({:?})\n", name, model));
+                }
+            }
+
+            if entry_points.is_empty() {
+                msg.push_str("  (none found)\n");
+            }
+
+            msg.push_str("\nExpected exactly 1 Vertex and 1 Fragment entry point.\n");
+            msg.push_str("Use --vertex and --fragment to specify entry points manually.");
+
+            Err(anyhow!(msg))
+        }
+    }
+}
+
 // --- App state ---------------------------------------------------------------
 
 /// Debug buffer size: 16KB = 4096 u32s
 /// Layout: { write_head: u32, read_head: u32, max_loops: u32, data: [4093]u32 }
 const DEBUG_BUFFER_SIZE: u64 = 16384;
 const DEFAULT_MAX_LOOPS: u32 = 100; // Limit debug output to prevent GPU lockup
-
 
 // Uniform buffers - one per shader uniform
 // iResolution: [2]f32
@@ -126,7 +254,10 @@ impl State {
                 report.allocations.len()
             );
         } else {
-            eprintln!("[Memory {}] Allocator report not available on this backend", label);
+            eprintln!(
+                "[Memory {}] Allocator report not available on this backend",
+                label
+            );
         }
     }
 }
@@ -304,31 +435,32 @@ impl State {
                 let initial_time = TimeUniform { time: 0.0 };
                 queue.write_buffer(&time_buffer, 0, bytemuck::cast_slice(&[initial_time]));
 
-                let uniform_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                    label: Some("uniform_bind_group_layout"),
-                    entries: &[
-                        BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: ShaderStages::VERTEX_FRAGMENT,
-                            ty: BindingType::Buffer {
-                                ty: BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
+                let uniform_bind_group_layout =
+                    device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                        label: Some("uniform_bind_group_layout"),
+                        entries: &[
+                            BindGroupLayoutEntry {
+                                binding: 0,
+                                visibility: ShaderStages::VERTEX_FRAGMENT,
+                                ty: BindingType::Buffer {
+                                    ty: BufferBindingType::Uniform,
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
                             },
-                            count: None,
-                        },
-                        BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: ShaderStages::VERTEX_FRAGMENT,
-                            ty: BindingType::Buffer {
-                                ty: BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
+                            BindGroupLayoutEntry {
+                                binding: 1,
+                                visibility: ShaderStages::VERTEX_FRAGMENT,
+                                ty: BindingType::Buffer {
+                                    ty: BufferBindingType::Uniform,
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
                             },
-                            count: None,
-                        },
-                    ],
-                });
+                        ],
+                    });
 
                 let uniform_bind_group = device.create_bind_group(&BindGroupDescriptor {
                     label: Some("uniform_bind_group"),
@@ -353,7 +485,12 @@ impl State {
                     ],
                 });
 
-                (Some(resolution_buffer), Some(time_buffer), Some(uniform_bind_group), Some(uniform_bind_group_layout))
+                (
+                    Some(resolution_buffer),
+                    Some(time_buffer),
+                    Some(uniform_bind_group),
+                    Some(uniform_bind_group_layout),
+                )
             } else {
                 (None, None, None, None)
             };
@@ -450,7 +587,9 @@ impl State {
         self.frame_count += 1;
 
         // Update uniform data for this frame if Shadertoy mode is enabled
-        if let (Some(ref resolution_buffer), Some(ref time_buffer)) = (&self.resolution_buffer, &self.time_buffer) {
+        if let (Some(ref resolution_buffer), Some(ref time_buffer)) =
+            (&self.resolution_buffer, &self.time_buffer)
+        {
             let now = std::time::Instant::now();
             let elapsed = now.duration_since(self.start_time).as_secs_f32();
 
@@ -570,7 +709,7 @@ impl State {
             let u32_data: &[u32] = bytemuck::cast_slice(&data);
 
             // Buffer layout: [write_head, read_head, max_loops, data[4093]]
-            let write_head_global = u32_data[0] as usize;  // Unbounded counter
+            let write_head_global = u32_data[0] as usize; // Unbounded counter
             let _read_head = u32_data[1] as usize;
             let max_loops = u32_data[2] as usize;
             let data_start = 3;
@@ -585,8 +724,10 @@ impl State {
             let loop_count = write_head_global / data_len;
             let words_to_read = write_head_global.min(data_len);
 
-            eprintln!("\n=== Debug Output ({} words written, loops={}/{}) ===",
-                write_head_global, loop_count, max_loops);
+            eprintln!(
+                "\n=== Debug Output ({} words written, loops={}/{}) ===",
+                write_head_global, loop_count, max_loops
+            );
 
             // Print raw hex data (first 100 words)
             eprintln!("Raw buffer hex (first 100 u32s):");
@@ -856,10 +997,13 @@ fn main() -> Result<()> {
             shadertoy,
             max_frames,
         } => {
+            // Resolve entry points: use provided names or auto-detect
+            let (vertex_name, fragment_name) = resolve_entry_points(&path, vertex, fragment)?;
+
             let spec = PipelineSpec::VertexFragment {
                 path,
-                vertex,
-                fragment,
+                vertex: vertex_name,
+                fragment: fragment_name,
                 shadertoy,
                 max_frames,
             };
