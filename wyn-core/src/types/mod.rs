@@ -501,16 +501,19 @@ pub fn format_type(ty: &Type) -> String {
             }
         }
         // Mat[Size(cols), Size(rows), elem] -> matCxRelem (e.g., mat4x4f32)
-        Type::Constructed(TypeName::Mat, args) if args.len() == 3 => {
-            match (&args[0], &args[1]) {
-                (Type::Constructed(TypeName::Size(cols), _), Type::Constructed(TypeName::Size(rows), _)) => {
-                    format!("mat{}x{}{}", cols, rows, format_type(&args[2]))
-                }
-                _ => {
-                    format!("mat{}x{}{}", format_type(&args[0]), format_type(&args[1]), format_type(&args[2]))
-                }
+        Type::Constructed(TypeName::Mat, args) if args.len() == 3 => match (&args[0], &args[1]) {
+            (Type::Constructed(TypeName::Size(cols), _), Type::Constructed(TypeName::Size(rows), _)) => {
+                format!("mat{}x{}{}", cols, rows, format_type(&args[2]))
             }
-        }
+            _ => {
+                format!(
+                    "mat{}x{}{}",
+                    format_type(&args[0]),
+                    format_type(&args[1]),
+                    format_type(&args[2])
+                )
+            }
+        },
         Type::Constructed(name, args) if args.is_empty() => format!("{}", name),
         Type::Constructed(name, args) => {
             let arg_strs: Vec<String> = args.iter().map(format_type).collect();

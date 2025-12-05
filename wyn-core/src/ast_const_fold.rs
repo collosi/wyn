@@ -9,8 +9,8 @@
 //! Float and boolean constants can be added later if needed.
 
 use crate::ast::{
-    Declaration, Decl, EntryDecl, Expression, ExprKind, IfExpr, LetInExpr, LoopExpr, LoopForm,
-    MatchExpr, Program, RangeExpr,
+    Decl, Declaration, EntryDecl, ExprKind, Expression, IfExpr, LetInExpr, LoopExpr, LoopForm, MatchExpr,
+    Program, RangeExpr,
 };
 use std::collections::HashMap;
 
@@ -346,11 +346,7 @@ mod tests {
     fn make_binop(op: &str, lhs: Expression, rhs: Expression) -> Expression {
         Expression {
             h: test_header(),
-            kind: ExprKind::BinaryOp(
-                BinaryOp { op: op.to_string() },
-                Box::new(lhs),
-                Box::new(rhs),
-            ),
+            kind: ExprKind::BinaryOp(BinaryOp { op: op.to_string() }, Box::new(lhs), Box::new(rhs)),
         }
     }
 

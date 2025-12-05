@@ -69,9 +69,6 @@ struct Constructor {
     // Function map: name -> function ID
     functions: HashMap<String, spirv::Word>,
 
-    // GASM builtin function cache: name -> function ID
-    gasm_function_cache: HashMap<String, spirv::Word>,
-
     // GLSL extended instruction set
     glsl_ext_inst_id: spirv::Word,
 
@@ -102,12 +99,6 @@ struct Constructor {
     // Debug mode: when Some, contains buffer_var_id for the @gdp_buffer global
     // The buffer is a StorageBuffer with layout: [write_head, read_head, max_loops, data[4093]]
     debug_buffer: Option<spirv::Word>,
-
-    // GASM globals: maps GASM global names (like "@gdp_buffer") to SPIR-V variable IDs
-    gasm_globals: HashMap<String, spirv::Word>,
-
-    // GASM type cache: shared across GASM function lowerings to ensure type deduplication
-    gasm_type_cache: HashMap<gasm::Type, spirv::Word>,
 }
 
 impl Constructor {
@@ -139,7 +130,6 @@ impl Constructor {
             first_code_block: None,
             env: HashMap::new(),
             functions: HashMap::new(),
-            gasm_function_cache: HashMap::new(),
             glsl_ext_inst_id,
             vec_type_cache: HashMap::new(),
             mat_type_cache: HashMap::new(),
@@ -156,8 +146,6 @@ impl Constructor {
             lambda_registry: Vec::new(),
             impl_source: ImplSource::default(),
             debug_buffer: None,
-            gasm_globals: HashMap::new(),
-            gasm_type_cache: HashMap::new(),
         }
     }
 
@@ -203,9 +191,6 @@ impl Constructor {
 
         // Store debug buffer ID
         self.debug_buffer = Some(buffer_var);
-
-        // Register as GASM global "gdp_buffer" (without @ prefix - the parser strips it)
-        self.gasm_globals.insert("gdp_buffer".to_string(), buffer_var);
     }
 
     /// Get or create a pointer type
@@ -221,33 +206,6 @@ impl Constructor {
         let ty = self.builder.type_pointer(None, storage_class, pointee_id);
         self.ptr_type_cache.insert(key, ty);
         ty
-    }
-
-    /// Lower a GASM builtin function to SPIR-V (with caching)
-    /// Returns the SPIR-V function ID for calling
-    fn lower_gasm_function(&mut self, gasm_func: &gasm::Function) -> Result<spirv::Word> {
-        // Check cache first
-        if let Some(&func_id) = self.gasm_function_cache.get(&gasm_func.name) {
-            return Ok(func_id);
-        }
-
-        // Lower the GASM function to SPIR-V using gasm_lowering module
-        // Pass gasm_globals so references like @gdp_buffer resolve correctly
-        // Pass gasm_type_cache to ensure type deduplication across functions
-        // Pass gasm_function_cache so call instructions can reference other GASM functions
-        let func_id = crate::gasm_lowering::lower_function_into_builder(
-            &mut self.builder,
-            gasm_func,
-            self.gasm_globals.clone(),
-            &mut self.gasm_type_cache,
-            self.gasm_function_cache.clone(),
-        )
-        .map_err(|e| err_spirv!("Failed to lower GASM function {}: {}", gasm_func.name, e))?;
-
-        // Cache it
-        self.gasm_function_cache.insert(gasm_func.name.clone(), func_id);
-
-        Ok(func_id)
     }
 
     /// Convert a polytype Type to a SPIR-V type ID
@@ -596,11 +554,7 @@ impl Constructor {
 
     /// Emit GDP write_two_words logic: atomically reserve 2 words and write them
     /// Returns Ok(()) on success, or Ok(()) if debug_buffer is None (no-op)
-    fn emit_gdp_write_two_words(
-        &mut self,
-        word0: spirv::Word,
-        word1: spirv::Word,
-    ) -> Result<()> {
+    fn emit_gdp_write_two_words(&mut self, word0: spirv::Word, word1: spirv::Word) -> Result<()> {
         let buffer_var = match self.debug_buffer {
             Some(v) => v,
             None => return Ok(()), // No debug buffer, no-op
@@ -615,9 +569,7 @@ impl Constructor {
         let u32_type = self.u32_type;
 
         // Create pointer type for StorageBuffer u32
-        let ptr_type = self
-            .builder
-            .type_pointer(None, spirv::StorageClass::StorageBuffer, u32_type);
+        let ptr_type = self.builder.type_pointer(None, spirv::StorageClass::StorageBuffer, u32_type);
 
         // Get pointer to write_head (buffer[0])
         let write_head_ptr = self.builder.access_chain(ptr_type, None, buffer_var, [zero, zero])?;
@@ -650,6 +602,87 @@ impl Constructor {
 
         Ok(())
     }
+
+    /// Emit GDP write_string logic for compile-time constant strings.
+    /// Unrolls the loop since string length is known at compile time.
+    /// Format: [header, data words...] where header = 0x02 | (word_count << 8)
+    fn emit_gdp_write_string(&mut self, s: &str) -> Result<()> {
+        let buffer_var = match self.debug_buffer {
+            Some(v) => v,
+            None => return Ok(()), // No debug buffer, no-op
+        };
+
+        // Pack string bytes into u32 words (little-endian)
+        let str_bytes: Vec<u8> = s.bytes().collect();
+        let byte_len = str_bytes.len().min(64); // Cap at 64 bytes
+
+        // Calculate word count: (byte_len + 4) / 4 ensures at least 1 trailing zero
+        let word_count = (byte_len + 4) / 4;
+        let total_words = word_count + 1; // +1 for header
+
+        // Pack bytes into u32 words
+        let mut packed_words: Vec<u32> = vec![0u32; word_count];
+        for (i, chunk) in str_bytes[..byte_len].chunks(4).enumerate() {
+            if i >= word_count {
+                break;
+            }
+            let mut word: u32 = 0;
+            for (j, &byte) in chunk.iter().enumerate() {
+                word |= (byte as u32) << (j * 8);
+            }
+            packed_words[i] = word;
+        }
+
+        // Build header: type=0x02, size=word_count
+        let header_val = 0x02u32 | ((word_count as u32) << 8);
+
+        // Constants
+        let zero = self.const_u32(0);
+        let three = self.const_u32(3);
+        let ring_size = self.const_u32(4093);
+        let total_words_const = self.const_u32(total_words as u32);
+        let u32_type = self.u32_type;
+
+        // Create pointer type for StorageBuffer u32
+        let ptr_type = self.builder.type_pointer(None, spirv::StorageClass::StorageBuffer, u32_type);
+
+        // Get pointer to write_head (buffer[0])
+        let write_head_ptr = self.builder.access_chain(ptr_type, None, buffer_var, [zero, zero])?;
+
+        // Atomic add total_words to reserve space, returns old position
+        let scope = self.const_u32(1); // Device
+        let semantics = self.const_u32(0x8); // AcquireRelease
+        let start_pos = self.builder.atomic_i_add(
+            u32_type,
+            None,
+            write_head_ptr,
+            scope,
+            semantics,
+            total_words_const,
+        )?;
+
+        // ring_pos = start_pos % 4093
+        let ring_pos = self.builder.u_mod(u32_type, None, start_pos, ring_size)?;
+
+        // Write header at ring_pos + 3
+        let header_idx = self.builder.i_add(u32_type, None, ring_pos, three)?;
+        let header_ptr = self.builder.access_chain(ptr_type, None, buffer_var, [zero, header_idx])?;
+        let header_const = self.const_u32(header_val);
+        self.builder.store(header_ptr, header_const, None, [])?;
+
+        // Write data words (unrolled loop)
+        for (i, &word_val) in packed_words.iter().enumerate() {
+            let offset = self.const_u32((i + 1) as u32); // +1 because header is at position 0
+            let dest_ring_idx = self.builder.i_add(u32_type, None, ring_pos, offset)?;
+            let dest_ring_wrapped = self.builder.u_mod(u32_type, None, dest_ring_idx, ring_size)?;
+            let dest_idx = self.builder.i_add(u32_type, None, dest_ring_wrapped, three)?;
+            let dest_ptr = self.builder.access_chain(ptr_type, None, buffer_var, [zero, dest_idx])?;
+            let word_const = self.const_u32(word_val);
+            self.builder.store(dest_ptr, word_const, None, [])?;
+        }
+
+        Ok(())
+    }
 }
 
 impl<'a> LowerCtx<'a> {
@@ -658,30 +691,6 @@ impl<'a> LowerCtx<'a> {
         constructor.lambda_registry = program.lambda_registry.clone();
         if debug_enabled {
             constructor.setup_debug_buffer();
-
-            // Pre-lower GASM builtin functions needed for debug output
-            // This must be done before lowering user functions to avoid nested function definitions
-            let gasm_funcs_to_preload = [
-                "gdp_write_two_words",
-                "gdp_encode_uint",
-                "gdp_encode_int32",
-                "gdp_encode_float32",
-                "gdp_encode_string_local",
-            ];
-            for func_name in &gasm_funcs_to_preload {
-                if let Some(gasm_func) = constructor.impl_source.get_gasm_function(func_name) {
-                    let gasm_func = gasm_func.clone();
-                    let func_id = crate::gasm_lowering::lower_function_into_builder(
-                        &mut constructor.builder,
-                        &gasm_func,
-                        constructor.gasm_globals.clone(),
-                        &mut constructor.gasm_type_cache,
-                        constructor.gasm_function_cache.clone(),
-                    )
-                    .expect(&format!("Failed to pre-lower GASM function {}", func_name));
-                    constructor.gasm_function_cache.insert(gasm_func.name.clone(), func_id);
-                }
-            }
         }
 
         // Build index from name to def position
@@ -1673,9 +1682,6 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                 return Ok(constructor.builder.composite_construct(result_type, None, result_elements)?);
             }
 
-            // TODO: Special case for debug_str - implement GASM string encoding
-            // For now, strings are handled in the later Intrinsic::DebugStr case
-
             // For all other calls, lower arguments normally
             let arg_ids: Vec<spirv::Word> =
                 args.iter().map(|a| lower_expr(constructor, a)).collect::<Result<Vec<_>>>()?;
@@ -1967,7 +1973,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                         }
                                     }
                                     Intrinsic::DebugStr => {
-                                        // Debug intrinsic: call GASM @gdp_encode_string
+                                        // Debug intrinsic: emit inline string encoding
                                         if constructor.debug_buffer.is_some() {
                                             // Extract string from the literal argument
                                             let str_value = match &args[0].kind {
@@ -1975,81 +1981,8 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                                 _ => "????".to_string(),
                                             };
 
-                                            // Pack string bytes into u32 words (little-endian)
-                                            // GASM function expects fixed 16-word array (max 64 bytes)
-                                            const MAX_WORDS: usize = 16;
-                                            let str_bytes: Vec<u8> = str_value.bytes().collect();
-                                            let byte_len = str_bytes.len().min(64) as u32; // Cap at 64 bytes
-
-                                            // Pack bytes into u32 words, padding to 16 words
-                                            let mut packed_words: Vec<u32> = vec![0u32; MAX_WORDS];
-                                            for (i, chunk) in str_bytes.chunks(4).enumerate() {
-                                                if i >= MAX_WORDS {
-                                                    break;
-                                                }
-                                                let mut word: u32 = 0;
-                                                for (j, &byte) in chunk.iter().enumerate() {
-                                                    word |= (byte as u32) << (j * 8);
-                                                }
-                                                packed_words[i] = word;
-                                            }
-
-                                            // Use the same [16; u32] array type from GASM type cache
-                                            // This ensures type compatibility with the GASM function parameter
-                                            let gasm_array_type = gasm::Type::Array(
-                                                Box::new(gasm::Type::U32),
-                                                MAX_WORDS as u32,
-                                            );
-                                            let array_type = *constructor.gasm_type_cache.get(&gasm_array_type)
-                                                .expect("[16; u32] array type should be in GASM type cache after pre-lowering");
-
-                                            // Create constants for each packed word
-                                            let word_constants: Vec<spirv::Word> = packed_words
-                                                .iter()
-                                                .map(|&w| {
-                                                    constructor
-                                                        .builder
-                                                        .constant_bit32(constructor.u32_type, w)
-                                                })
-                                                .collect();
-
-                                            // Create array constant
-                                            let array_const = constructor
-                                                .builder
-                                                .constant_composite(array_type, word_constants.clone());
-
-                                            // Create function-local variable for the fixed-size array
-                                            let local_var =
-                                                constructor.declare_variable("__str_data", array_type)?;
-                                            // Initialize by storing the constant array
-                                            constructor.builder.store(
-                                                local_var,
-                                                array_const,
-                                                None,
-                                                None,
-                                            )?;
-
-                                            // Length in bytes as u32
-                                            let str_len = constructor
-                                                .builder
-                                                .constant_bit32(constructor.u32_type, byte_len);
-
-                                            // Call @gdp_encode_string_local GASM builtin
-                                            // Pass the array pointer directly (not element pointer)
-                                            let gasm_func = constructor
-                                                .impl_source
-                                                .get_gasm_function("gdp_encode_string_local")
-                                                .ok_or_else(|| {
-                                                    err_spirv!("gdp_encode_string_local not found")
-                                                })?
-                                                .clone();
-                                            let func_id = constructor.lower_gasm_function(&gasm_func)?;
-                                            constructor.builder.function_call(
-                                                constructor.void_type,
-                                                None,
-                                                func_id,
-                                                vec![local_var, str_len],
-                                            )?;
+                                            // Emit inline SPIR-V for string encoding (unrolled loop)
+                                            constructor.emit_gdp_write_string(&str_value)?;
                                             Ok(constructor.const_i32(0))
                                         } else {
                                             // Debug not enabled, no-op
@@ -2085,12 +2018,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                             let scope = constructor.const_u32(1); // Device
                                             let semantics = constructor.const_u32(0x8); // AcquireRelease
                                             Ok(constructor.builder.atomic_i_add(
-                                                u32_type,
-                                                None,
-                                                elem_ptr,
-                                                scope,
-                                                semantics,
-                                                delta_id,
+                                                u32_type, None, elem_ptr, scope, semantics, delta_id,
                                             )?)
                                         } else {
                                             // Debug not enabled, return 0
@@ -2184,18 +2112,6 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                     .get(core_fn_name)
                                     .ok_or_else(|| err_spirv!("CoreFn not found: {}", core_fn_name))?;
 
-                                Ok(constructor.builder.function_call(
-                                    result_type,
-                                    None,
-                                    func_id,
-                                    arg_ids,
-                                )?)
-                            }
-                            BuiltinImpl::GasmFn(gasm_func) => {
-                                // GASM builtin: lower to SPIR-V once and call
-                                // Clone to avoid borrow checker issues
-                                let gasm_func_clone = gasm_func.clone();
-                                let func_id = constructor.lower_gasm_function(&gasm_func_clone)?;
                                 Ok(constructor.builder.function_call(
                                     result_type,
                                     None,

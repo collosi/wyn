@@ -151,11 +151,7 @@ impl Parser {
         let entry_type =
             attributes.iter().find(|attr| matches!(attr, Attribute::Vertex | Attribute::Fragment));
         let uniform_binding = attributes.iter().find_map(|attr| {
-            if let Attribute::Uniform { binding } = attr {
-                Some(*binding)
-            } else {
-                None
-            }
+            if let Attribute::Uniform { binding } = attr { Some(*binding) } else { None }
         });
 
         if let Some(binding) = uniform_binding {

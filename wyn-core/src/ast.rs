@@ -262,7 +262,9 @@ pub enum Attribute {
     Location(u32),
     Vertex,
     Fragment,
-    Uniform { binding: u32 },
+    Uniform {
+        binding: u32,
+    },
 }
 
 impl Attribute {
@@ -340,8 +342,8 @@ pub struct SigDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct UniformDecl {
     pub name: String,
-    pub ty: Type,       // Uniforms always have an explicit type
-    pub binding: u32,   // Explicit binding number (required)
+    pub ty: Type,     // Uniforms always have an explicit type
+    pub binding: u32, // Explicit binding number (required)
 }
 
 // Module system types

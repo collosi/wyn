@@ -4,18 +4,16 @@ use std::sync::{Arc, OnceLock, RwLock};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
+use wyn_core::TypeTable;
 use wyn_core::ast::{self, NodeCounter, NodeId, Span};
 use wyn_core::module_manager::{ModuleManager, PreElaboratedPrelude};
 use wyn_core::types::format_scheme;
-use wyn_core::TypeTable;
 
 /// Cached prelude to avoid re-parsing for each document check
 static PRELUDE_CACHE: OnceLock<PreElaboratedPrelude> = OnceLock::new();
 
 fn get_prelude() -> &'static PreElaboratedPrelude {
-    PRELUDE_CACHE.get_or_init(|| {
-        ModuleManager::create_prelude().expect("Failed to create prelude cache")
-    })
+    PRELUDE_CACHE.get_or_init(|| ModuleManager::create_prelude().expect("Failed to create prelude cache"))
 }
 
 /// Cached document state after successful type checking
@@ -47,9 +45,7 @@ impl LanguageServer for Backend {
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
             }),
             capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
-                )),
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions {
                     resolve_provider: Some(false),
@@ -63,9 +59,7 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        self.client
-            .log_message(MessageType::INFO, "wyn-analyzer initialized")
-            .await;
+        self.client.log_message(MessageType::INFO, "wyn-analyzer initialized").await;
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -166,9 +160,7 @@ impl Backend {
             }
         }
 
-        self.client
-            .publish_diagnostics(doc.uri, diagnostics, Some(doc.version))
-            .await;
+        self.client.publish_diagnostics(doc.uri, diagnostics, Some(doc.version)).await;
     }
 
     fn check_document(&self, text: &str) -> (Vec<Diagnostic>, Option<DocumentState>) {
@@ -204,8 +196,14 @@ impl Backend {
                     }
                 } else {
                     Range {
-                        start: Position { line: 0, character: 0 },
-                        end: Position { line: 0, character: 1 },
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 0,
+                            character: 1,
+                        },
                     }
                 };
 
@@ -239,7 +237,12 @@ fn find_node_at_position(ast: &ast::Program, line: usize, col: usize) -> Option<
     best
 }
 
-fn find_in_declaration(decl: &ast::Declaration, line: usize, col: usize, best: &mut Option<(NodeId, Span)>) {
+fn find_in_declaration(
+    decl: &ast::Declaration,
+    line: usize,
+    col: usize,
+    best: &mut Option<(NodeId, Span)>,
+) {
     match decl {
         ast::Declaration::Decl(def) => {
             find_in_expr(&def.body, line, col, best);

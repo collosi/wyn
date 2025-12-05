@@ -1,5 +1,5 @@
 // Implementation source for builtin functions and intrinsics
-// Provides code generation implementations (SPIR-V opcodes, intrinsics, GASM functions)
+// Provides code generation implementations (SPIR-V opcodes, intrinsics)
 // Types for functions are provided by modules or PolymorphicBuiltins
 
 use crate::ast::{Type, TypeName};
@@ -7,11 +7,10 @@ use std::collections::HashMap;
 
 /// Implementation strategy for a builtin function
 ///
-/// Builtins are organized into four semantic categories:
+/// Builtins are organized into three semantic categories:
 /// 1. Library-level (CoreFn): Can be written in the language itself
 /// 2. Core primitives (PrimOp): Map fairly directly to backend operations
 /// 3. Genuine intrinsics (Intrinsic): Require backend-specific lowering
-/// 4. GASM functions (GasmFn): GPU assembly implementations from builtins/*.gasm
 #[derive(Debug, Clone, PartialEq)]
 pub enum BuiltinImpl {
     /// Library-level builtin: implemented as normal function in prelude/core IR
@@ -26,10 +25,6 @@ pub enum BuiltinImpl {
     /// Genuine intrinsic: needs backend-specific lowering, can't be written in language
     /// Examples: atomics, barriers, subgroup ops, uninit/poison
     Intrinsic(Intrinsic),
-
-    /// GASM function: GPU assembly implementation loaded from builtins/*.gasm
-    /// These are lowered to SPIR-V once and called via OpFunctionCall
-    GasmFn(gasm::Function),
 }
 
 /// Core primitive operations that map fairly directly to SPIR-V/backend ops
@@ -144,16 +139,12 @@ pub enum Intrinsic {
 pub struct ImplSource {
     /// Maps function name to implementation
     impls: HashMap<String, BuiltinImpl>,
-    /// GASM functions that can be called directly from SPIR-V lowering
-    /// This includes functions with pointer parameters that can't be registered as Wyn builtins
-    gasm_functions: HashMap<String, gasm::Function>,
 }
 
 impl ImplSource {
     pub fn new() -> Self {
         let mut source = ImplSource {
             impls: HashMap::new(),
-            gasm_functions: HashMap::new(),
         };
 
         source.register_from_prim_module();
@@ -165,83 +156,8 @@ impl ImplSource {
         source.register_matrix_operations();
         source.register_higher_order_functions();
         source.register_debug_intrinsics();
-        source.load_gasm_builtins();
 
         source
-    }
-
-    /// Load all GASM builtin functions from the builtins directory
-    fn load_gasm_builtins(&mut self) {
-        // Find the builtins directory relative to the crate root
-        let builtins_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("builtins");
-
-        if !builtins_dir.exists() {
-            eprintln!("Warning: builtins directory not found at {:?}", builtins_dir);
-            return;
-        }
-
-        // Read all .gasm files in the directory
-        let gasm_files = match std::fs::read_dir(&builtins_dir) {
-            Ok(entries) => entries,
-            Err(e) => {
-                eprintln!("Warning: failed to read builtins directory: {}", e);
-                return;
-            }
-        };
-
-        for entry in gasm_files.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("gasm") {
-                if let Err(e) = self.load_gasm_file(&path) {
-                    eprintln!("Warning: failed to load GASM builtin {:?}: {}", path, e);
-                }
-            }
-        }
-    }
-
-    /// Load a single GASM file and register its functions as builtins
-    fn load_gasm_file(&mut self, path: &std::path::Path) -> std::io::Result<()> {
-        let content = std::fs::read_to_string(path)?;
-
-        let module = match gasm::parse_module(&content) {
-            Ok(m) => m,
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("GASM parse error: {:?}", e),
-                ));
-            }
-        };
-
-        // Check if we got any functions - if the file looks like it should have functions but doesn't, panic
-        if module.functions.is_empty() {
-            // Check if the file content looks like it should have functions
-            if content.contains("func @") {
-                panic!(
-                    "GASM parser failed silently! File {:?} contains 'func @' but parsed 0 functions. File has {} globals. This is a parser bug.",
-                    path.file_name().unwrap_or_default(),
-                    module.globals.len()
-                );
-            }
-        }
-
-        for function in module.functions {
-            self.register_gasm_function(function);
-        }
-
-        Ok(())
-    }
-
-    /// Register a GASM function as a builtin
-    fn register_gasm_function(&mut self, function: gasm::Function) {
-        // Strip "@" prefix from GASM function name
-        let name = function.name.strip_prefix('@').unwrap_or(&function.name).to_string();
-
-        // Store the function in gasm_functions map for direct SPIR-V access
-        self.gasm_functions.insert(name, function);
-
-        // GASM functions registered for direct access via gasm_functions map
-        // Types come from modules or will be handled separately
     }
 
     /// Check if a name is a registered implementation
@@ -254,16 +170,9 @@ impl ImplSource {
         self.impls.keys().cloned().collect()
     }
 
-    /// Get a builtin by name, returning either a single entry or an overload set
     /// Get the implementation for a function by name
     pub fn get(&self, name: &str) -> Option<&BuiltinImpl> {
         self.impls.get(name)
-    }
-
-    /// Get a GASM function directly by name (without going through Wyn type system)
-    /// This is used for functions with pointer parameters that can't be registered as Wyn builtins
-    pub fn get_gasm_function(&self, name: &str) -> Option<&gasm::Function> {
-        self.gasm_functions.get(name)
     }
 
     /// Get the type of a field on a given type (e.g., vec3f32.x returns f32)
@@ -711,10 +620,16 @@ impl ImplSource {
 
         // GDP (GPU Debug Protocol) intrinsics for ring buffer access
         // These are low-level primitives used by the GDP Wyn module
-        self.register("__gdp_atomic_add", BuiltinImpl::Intrinsic(Intrinsic::GdpAtomicAdd));
+        self.register(
+            "__gdp_atomic_add",
+            BuiltinImpl::Intrinsic(Intrinsic::GdpAtomicAdd),
+        );
         self.register("__gdp_load", BuiltinImpl::Intrinsic(Intrinsic::GdpLoad));
         self.register("__gdp_store", BuiltinImpl::Intrinsic(Intrinsic::GdpStore));
-        self.register("__bitcast_i32_to_u32", BuiltinImpl::Intrinsic(Intrinsic::BitcastI32ToU32));
+        self.register(
+            "__bitcast_i32_to_u32",
+            BuiltinImpl::Intrinsic(Intrinsic::BitcastI32ToU32),
+        );
     }
 }
 

@@ -408,11 +408,7 @@ impl PolyBuiltins {
         self.register_poly("__gdp_load", vec![u32_ty.clone()], u32_ty.clone());
 
         // __gdp_store : u32 -> u32 -> () (index, value -> ())
-        self.register_poly(
-            "__gdp_store",
-            vec![u32_ty.clone(), u32_ty],
-            unit_ty.clone(),
-        );
+        self.register_poly("__gdp_store", vec![u32_ty.clone(), u32_ty], unit_ty.clone());
 
         // __bitcast_i32_to_u32 : i32 -> u32
         self.register_poly(

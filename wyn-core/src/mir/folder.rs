@@ -345,7 +345,12 @@ pub fn walk_def<V: MirFolder>(v: &mut V, d: Def, ctx: &mut V::Ctx) -> Result<Def
             body,
             span,
         } => v.visit_constant(id, name, ty, attributes, body, span, ctx),
-        Def::Uniform { id, name, ty, binding } => v.visit_uniform(id, name, ty, binding, ctx),
+        Def::Uniform {
+            id,
+            name,
+            ty,
+            binding,
+        } => v.visit_uniform(id, name, ty, binding, ctx),
     }
 }
 
@@ -430,7 +435,12 @@ pub fn walk_uniform<V: MirFolder>(
     ctx: &mut V::Ctx,
 ) -> Result<Def, V::Error> {
     let ty = v.visit_type(ty, ctx)?;
-    Ok(Def::Uniform { id, name, ty, binding })
+    Ok(Def::Uniform {
+        id,
+        name,
+        ty,
+        binding,
+    })
 }
 
 pub fn walk_param<V: MirFolder>(v: &mut V, p: Param, ctx: &mut V::Ctx) -> Result<Param, V::Error> {
