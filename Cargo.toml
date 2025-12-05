@@ -1,5 +1,5 @@
 [workspace]
-members = ["wyn-core", "wyn", "spirv-validator", "gasm"]
+members = ["wyn-core", "wyn", "spirv-validator", "gasm", "wyn-analyzer"]
 resolver = "2"
 exclude = [ "viz" ]
 
