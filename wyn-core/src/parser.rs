@@ -2,7 +2,7 @@ use crate::ast::*;
 use crate::error::Result;
 use crate::lexer::{LocatedToken, Token};
 use crate::types;
-use crate::{bail_parse, err_parse};
+use crate::{bail_parse, err_parse, err_parse_at};
 use log::trace;
 use std::sync::OnceLock;
 
@@ -125,7 +125,11 @@ impl Parser {
                 let inner = self.parse_declaration()?;
                 Ok(Declaration::Local(Box::new(inner)))
             }
-            _ => Err(err_parse!("Expected declaration, got {:?}", self.peek())),
+            _ => Err(err_parse_at!(
+                self.current_span(),
+                "Expected declaration, got {:?}",
+                self.peek()
+            )),
         }
     }
 

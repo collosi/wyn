@@ -218,6 +218,13 @@ struct TimeUniform {
     time: f32,
 }
 
+// iMouse: vec4f32 (x, y, click_x, click_y)
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct MouseUniform {
+    mouse: [f32; 4],
+}
+
 struct State {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -229,9 +236,10 @@ struct State {
     debug_buffer: Option<wgpu::Buffer>,
     debug_staging_buffer: Option<wgpu::Buffer>,
     debug_bind_group: Option<BindGroup>,
-    // Uniform support - separate buffers for iResolution and iTime (optional, enabled with --shadertoy)
+    // Uniform support - separate buffers for iResolution, iTime, iMouse (optional, enabled with --shadertoy)
     resolution_buffer: Option<wgpu::Buffer>,
     time_buffer: Option<wgpu::Buffer>,
+    mouse_buffer: Option<wgpu::Buffer>,
     uniform_bind_group: Option<BindGroup>,
     start_time: std::time::Instant,
     // Frame limiting (optional, for debugging)
@@ -411,9 +419,19 @@ impl State {
         });
 
         // === Conditionally create uniform buffers (set=1) based on spec ======
-        let (resolution_buffer, time_buffer, uniform_bind_group, uniform_bind_group_layout) =
+        let (resolution_buffer, time_buffer, mouse_buffer, uniform_bind_group, uniform_bind_group_layout) =
             if let PipelineSpec::VertexFragment { shadertoy: true, .. } = spec {
-                // Binding 0: iResolution ([2]f32)
+                // Binding 0: iMouse (vec4f32) - Wyn assigns this first due to alphabetical/hash order
+                let mouse_buffer = device.create_buffer(&BufferDescriptor {
+                    label: Some("mouse_buffer"),
+                    size: std::mem::size_of::<MouseUniform>() as u64,
+                    usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let initial_mouse = MouseUniform { mouse: [0.0, 0.0, 0.0, 0.0] };
+                queue.write_buffer(&mouse_buffer, 0, bytemuck::cast_slice(&[initial_mouse]));
+
+                // Binding 1: iResolution ([2]f32)
                 let resolution_buffer = device.create_buffer(&BufferDescriptor {
                     label: Some("resolution_buffer"),
                     size: std::mem::size_of::<ResolutionUniform>() as u64,
@@ -425,7 +443,7 @@ impl State {
                 };
                 queue.write_buffer(&resolution_buffer, 0, bytemuck::cast_slice(&[initial_resolution]));
 
-                // Binding 1: iTime (f32)
+                // Binding 2: iTime (f32)
                 let time_buffer = device.create_buffer(&BufferDescriptor {
                     label: Some("time_buffer"),
                     size: std::mem::size_of::<TimeUniform>() as u64,
@@ -459,6 +477,16 @@ impl State {
                                 },
                                 count: None,
                             },
+                            BindGroupLayoutEntry {
+                                binding: 2,
+                                visibility: ShaderStages::VERTEX_FRAGMENT,
+                                ty: BindingType::Buffer {
+                                    ty: BufferBindingType::Uniform,
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
                         ],
                     });
 
@@ -469,13 +497,21 @@ impl State {
                         BindGroupEntry {
                             binding: 0,
                             resource: BindingResource::Buffer(wgpu::BufferBinding {
-                                buffer: &resolution_buffer,
+                                buffer: &mouse_buffer,
                                 offset: 0,
                                 size: None,
                             }),
                         },
                         BindGroupEntry {
                             binding: 1,
+                            resource: BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &resolution_buffer,
+                                offset: 0,
+                                size: None,
+                            }),
+                        },
+                        BindGroupEntry {
+                            binding: 2,
                             resource: BindingResource::Buffer(wgpu::BufferBinding {
                                 buffer: &time_buffer,
                                 offset: 0,
@@ -488,11 +524,12 @@ impl State {
                 (
                     Some(resolution_buffer),
                     Some(time_buffer),
+                    Some(mouse_buffer),
                     Some(uniform_bind_group),
                     Some(uniform_bind_group_layout),
                 )
             } else {
-                (None, None, None, None)
+                (None, None, None, None, None)
             };
 
         // Extract max_frames from spec
@@ -568,6 +605,7 @@ impl State {
             debug_bind_group: Some(debug_bind_group),
             resolution_buffer,
             time_buffer,
+            mouse_buffer,
             uniform_bind_group,
             start_time: now,
             frame_count: 0,

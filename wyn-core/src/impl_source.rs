@@ -586,7 +586,17 @@ impl ImplSource {
 
     /// Register f32 type conversion builtins (implementations only)
     fn register_f32_conversions(&mut self) {
-        // Conversions from signed integers to f32
+        // User-facing conversions: f32.i32, f32.u32, etc.
+        self.register("f32.i8", BuiltinImpl::PrimOp(PrimOp::SIToFP));
+        self.register("f32.i16", BuiltinImpl::PrimOp(PrimOp::SIToFP));
+        self.register("f32.i32", BuiltinImpl::PrimOp(PrimOp::SIToFP));
+        self.register("f32.i64", BuiltinImpl::PrimOp(PrimOp::SIToFP));
+        self.register("f32.u8", BuiltinImpl::PrimOp(PrimOp::UIToFP));
+        self.register("f32.u16", BuiltinImpl::PrimOp(PrimOp::UIToFP));
+        self.register("f32.u32", BuiltinImpl::PrimOp(PrimOp::UIToFP));
+        self.register("f32.u64", BuiltinImpl::PrimOp(PrimOp::UIToFP));
+
+        // Conversions from signed integers to f32 (internal builtins)
         self.register("__builtin_f32_from_i8", BuiltinImpl::PrimOp(PrimOp::SIToFP));
         self.register("__builtin_f32_from_i16", BuiltinImpl::PrimOp(PrimOp::SIToFP));
         self.register("__builtin_f32_from_i32", BuiltinImpl::PrimOp(PrimOp::SIToFP));

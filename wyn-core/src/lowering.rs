@@ -880,8 +880,22 @@ impl<'a> LowerCtx<'a> {
 
 /// Lower a MIR program to SPIR-V
 pub fn lower(program: &mir::Program, debug_enabled: bool) -> Result<Vec<u32>> {
-    let ctx = LowerCtx::new(program, debug_enabled);
-    ctx.run()
+    // Use a thread with larger stack size to handle deeply nested expressions
+    // Default Rust stack is 2MB on macOS which is too small for complex shaders
+    const STACK_SIZE: usize = 16 * 1024 * 1024; // 16MB
+
+    // Clone program since we need 'static lifetime for thread
+    let program_clone = program.clone();
+
+    let handle = std::thread::Builder::new()
+        .stack_size(STACK_SIZE)
+        .spawn(move || {
+            let ctx = LowerCtx::new(&program_clone, debug_enabled);
+            ctx.run()
+        })
+        .expect("Failed to spawn lowering thread");
+
+    handle.join().expect("Lowering thread panicked")
 }
 
 fn lower_regular_function(

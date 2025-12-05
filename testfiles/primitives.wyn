@@ -1,0 +1,1186 @@
+-- Wyn port of Inigo Quilez's SDF primitives
+-- Original: https://www.shadertoy.com/view/Xds3zN
+-- License: MIT (see original GLSL below)
+
+-- Uniforms from host
+#[uniform] def iResolution: vec2f32
+#[uniform] def iTime: f32
+#[uniform] def iMouse: vec4f32
+
+-- Vertex shader: full-screen triangle
+def verts: [3]vec4f32 =
+  [@[-1.0, -1.0, 0.0, 1.0],
+   @[3.0, -1.0, 0.0, 1.0],
+   @[-1.0, 3.0, 0.0, 1.0]]
+
+#[vertex]
+def vertex_main (#[builtin(vertex_index)] vertex_id:i32) : #[builtin(position)] vec4f32 = verts[vertex_id]
+
+-- Helper functions
+def clamp (x:f32) (lo:f32) (hi:f32) : f32 =
+  if x < lo then lo else if x > hi then hi else x
+
+def clamp2 (v:vec2f32) (lo:f32) (hi:f32) : vec2f32 =
+  @[clamp v.x lo hi, clamp v.y lo hi]
+
+def clamp3 (v:vec3f32) (lo:f32) (hi:f32) : vec3f32 =
+  @[clamp v.x lo hi, clamp v.y lo hi, clamp v.z lo hi]
+
+def max2 (a:vec2f32) (b:vec2f32) : vec2f32 =
+  @[f32.max a.x b.x, f32.max a.y b.y]
+
+def max3 (a:vec3f32) (b:vec3f32) : vec3f32 =
+  @[f32.max a.x b.x, f32.max a.y b.y, f32.max a.z b.z]
+
+def min3 (a:vec3f32) (b:vec3f32) : vec3f32 =
+  @[f32.min a.x b.x, f32.min a.y b.y, f32.min a.z b.z]
+
+def abs2 (v:vec2f32) : vec2f32 =
+  @[f32.abs v.x, f32.abs v.y]
+
+def abs3 (v:vec3f32) : vec3f32 =
+  @[f32.abs v.x, f32.abs v.y, f32.abs v.z]
+
+def sign (x:f32) : f32 =
+  if x > 0.0 then 1.0 else if x < 0.0 then 0.0 - 1.0 else 0.0
+
+def mix (a:f32) (b:f32) (t:f32) : f32 = a + (b - a) * t
+
+def mix2 (a:vec2f32) (b:vec2f32) (t:f32) : vec2f32 =
+  @[mix a.x b.x t, mix a.y b.y t]
+
+def mix3v (a:vec3f32) (b:vec3f32) (t:f32) : vec3f32 =
+  @[mix a.x b.x t, mix a.y b.y t, mix a.z b.z t]
+
+def fract (x:f32) : f32 = x - f32.floor x
+
+def fract2 (v:vec2f32) : vec2f32 =
+  @[fract v.x, fract v.y]
+
+def smoothstep (edge0:f32) (edge1:f32) (x:f32) : f32 =
+  let t = clamp ((x - edge0) / (edge1 - edge0)) 0.0 1.0 in
+  t * t * (3.0 - 2.0 * t)
+
+def pow (x:f32) (n:f32) : f32 = f32.exp (n * f32.log x)
+
+def length2 (v:vec2f32) : f32 = f32.sqrt (v.x*v.x + v.y*v.y)
+
+def length3 (v:vec3f32) : f32 = f32.sqrt (v.x*v.x + v.y*v.y + v.z*v.z)
+
+-- dot2: squared length (dot with self)
+def dot2_v2 (v:vec2f32) : f32 = v.x*v.x + v.y*v.y
+
+def dot2_v3 (v:vec3f32) : f32 = v.x*v.x + v.y*v.y + v.z*v.z
+
+-- ndot: a.x*b.x - a.y*b.y
+def ndot (a:vec2f32) (b:vec2f32) : f32 = a.x*b.x - a.y*b.y
+
+def dot2v (a:vec2f32) (b:vec2f32) : f32 = a.x*b.x + a.y*b.y
+
+def dot3v (a:vec3f32) (b:vec3f32) : f32 = a.x*b.x + a.y*b.y + a.z*b.z
+
+def normalize3 (v:vec3f32) : vec3f32 =
+  let len = length3 v in
+  if len == 0.0 then @[0.0, 0.0, 0.0] else @[v.x/len, v.y/len, v.z/len]
+
+def normalize2 (v:vec2f32) : vec2f32 =
+  let len = length2 v in
+  if len == 0.0 then @[0.0, 0.0] else @[v.x/len, v.y/len]
+
+def reflect3 (rd:vec3f32) (n:vec3f32) : vec3f32 =
+  let d = dot3v rd n in
+  @[rd.x - 2.0*d*n.x, rd.y - 2.0*d*n.y, rd.z - 2.0*d*n.z]
+
+def cross3 (a:vec3f32) (b:vec3f32) : vec3f32 =
+  @[a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x]
+
+------------------------------------------------------------
+-- SDF Primitives
+------------------------------------------------------------
+
+def sdPlane (p:vec3f32) : f32 = p.y
+
+def sdSphere (p:vec3f32) (s:f32) : f32 = length3 p - s
+
+def sdBox (p:vec3f32) (b:vec3f32) : f32 =
+  let d = @[f32.abs p.x - b.x, f32.abs p.y - b.y, f32.abs p.z - b.z] in
+  let inside = f32.min (f32.max d.x (f32.max d.y d.z)) 0.0 in
+  let outside = length3 (max3 d @[0.0, 0.0, 0.0]) in
+  inside + outside
+
+def sdBoxFrame (p:vec3f32) (b:vec3f32) (e:f32) : f32 =
+  let pa = @[f32.abs p.x - b.x, f32.abs p.y - b.y, f32.abs p.z - b.z] in
+  let q = @[f32.abs (pa.x + e) - e, f32.abs (pa.y + e) - e, f32.abs (pa.z + e) - e] in
+  let d1 = length3 (max3 @[pa.x, q.y, q.z] @[0.0, 0.0, 0.0]) +
+           f32.min (f32.max pa.x (f32.max q.y q.z)) 0.0 in
+  let d2 = length3 (max3 @[q.x, pa.y, q.z] @[0.0, 0.0, 0.0]) +
+           f32.min (f32.max q.x (f32.max pa.y q.z)) 0.0 in
+  let d3 = length3 (max3 @[q.x, q.y, pa.z] @[0.0, 0.0, 0.0]) +
+           f32.min (f32.max q.x (f32.max q.y pa.z)) 0.0 in
+  f32.min (f32.min d1 d2) d3
+
+def sdEllipsoid (p:vec3f32) (r:vec3f32) : f32 =
+  let pr = @[p.x/r.x, p.y/r.y, p.z/r.z] in
+  let rr = @[r.x*r.x, r.y*r.y, r.z*r.z] in
+  let prr = @[p.x/rr.x, p.y/rr.y, p.z/rr.z] in
+  let k0 = length3 pr in
+  let k1 = length3 prr in
+  k0 * (k0 - 1.0) / k1
+
+def sdTorus (p:vec3f32) (t:vec2f32) : f32 =
+  let q = @[length2 @[p.x, p.z] - t.x, p.y] in
+  length2 q - t.y
+
+def sdCappedTorus (p:vec3f32) (sc:vec2f32) (ra:f32) (rb:f32) : f32 =
+  let px = f32.abs p.x in
+  let k = if sc.y * px > sc.x * p.y
+          then dot2v @[px, p.y] sc
+          else length2 @[px, p.y] in
+  f32.sqrt (dot3v p p + ra*ra - 2.0*ra*k) - rb
+
+def sdCapsule (p:vec3f32) (a:vec3f32) (b:vec3f32) (r:f32) : f32 =
+  let pa = @[p.x - a.x, p.y - a.y, p.z - a.z] in
+  let ba = @[b.x - a.x, b.y - a.y, b.z - a.z] in
+  let h = clamp (dot3v pa ba / dot3v ba ba) 0.0 1.0 in
+  length3 @[pa.x - ba.x*h, pa.y - ba.y*h, pa.z - ba.z*h] - r
+
+def sdVerticalCylinder (p:vec3f32) (h:vec2f32) : f32 =
+  let d = @[f32.abs (length2 @[p.x, p.z]) - h.x, f32.abs p.y - h.y] in
+  f32.min (f32.max d.x d.y) 0.0 + length2 (max2 d @[0.0, 0.0])
+
+def sdCylinder (p:vec3f32) (a:vec3f32) (b:vec3f32) (r:f32) : f32 =
+  let pa = @[p.x - a.x, p.y - a.y, p.z - a.z] in
+  let ba = @[b.x - a.x, b.y - a.y, b.z - a.z] in
+  let baba = dot3v ba ba in
+  let paba = dot3v pa ba in
+  let x = length3 @[pa.x*baba - ba.x*paba, pa.y*baba - ba.y*paba, pa.z*baba - ba.z*paba] - r*baba in
+  let y = f32.abs (paba - baba*0.5) - baba*0.5 in
+  let x2 = x*x in
+  let y2 = y*y*baba in
+  let d = if f32.max x y < 0.0
+          then 0.0 - f32.min x2 y2
+          else (if x > 0.0 then x2 else 0.0) + (if y > 0.0 then y2 else 0.0) in
+  sign d * f32.sqrt (f32.abs d) / baba
+
+def sdVerticalCone (p:vec3f32) (c:vec2f32) (h:f32) : f32 =
+  let q = @[h * c.x / c.y, 0.0 - h] in
+  let w = @[length2 @[p.x, p.z], p.y] in
+  let a_t = clamp (dot2v w q / dot2v q q) 0.0 1.0 in
+  let a = @[w.x - q.x*a_t, w.y - q.y*a_t] in
+  let b_t = clamp (w.x / q.x) 0.0 1.0 in
+  let b = @[w.x - q.x*b_t, w.y - q.y] in
+  let k = sign q.y in
+  let d = f32.min (dot2v a a) (dot2v b b) in
+  let s = f32.max (k * (w.x*q.y - w.y*q.x)) (k * (w.y - q.y)) in
+  f32.sqrt d * sign s
+
+def sdCappedCone (p:vec3f32) (h:f32) (r1:f32) (r2:f32) : f32 =
+  let q = @[length2 @[p.x, p.z], p.y] in
+  let k1 = @[r2, h] in
+  let k2 = @[r2 - r1, 2.0*h] in
+  let ca = @[q.x - f32.min q.x (if q.y < 0.0 then r1 else r2), f32.abs q.y - h] in
+  let cb_t = clamp (dot2v @[k1.x - q.x, k1.y - q.y] k2 / dot2v k2 k2) 0.0 1.0 in
+  let cb = @[q.x - k1.x + k2.x*cb_t, q.y - k1.y + k2.y*cb_t] in
+  let s = if cb.x < 0.0 then (if ca.y < 0.0 then 0.0 - 1.0 else 1.0) else 1.0 in
+  s * f32.sqrt (f32.min (dot2v ca ca) (dot2v cb cb))
+
+def sdRoundCone (p:vec3f32) (r1:f32) (r2:f32) (h:f32) : f32 =
+  let q = @[length2 @[p.x, p.z], p.y] in
+  let b = (r1 - r2) / h in
+  let a = f32.sqrt (1.0 - b*b) in
+  let k = dot2v q @[0.0 - b, a] in
+  if k < 0.0 then length2 q - r1
+  else if k > a*h then length2 @[q.x, q.y - h] - r2
+  else dot2v q @[a, b] - r1
+
+def sdOctahedron (p:vec3f32) (s:f32) : f32 =
+  let pa = abs3 p in
+  let m = pa.x + pa.y + pa.z - s in
+  if 3.0*pa.x < m then
+    let k = clamp (0.5*(pa.z - pa.y + s)) 0.0 s in length3 @[pa.x, pa.y - s + k, pa.z - k]
+  else if 3.0*pa.y < m then
+    let q = @[pa.y, pa.z, pa.x] in
+    let k = clamp (0.5*(q.z - q.y + s)) 0.0 s in length3 @[q.x, q.y - s + k, q.z - k]
+  else if 3.0*pa.z < m then
+    let q = @[pa.z, pa.x, pa.y] in
+    let k = clamp (0.5*(q.z - q.y + s)) 0.0 s in length3 @[q.x, q.y - s + k, q.z - k]
+  else m * 0.57735027
+
+def sdPyramid (p:vec3f32) (h:f32) : f32 =
+  let m2 = h*h + 0.25 in
+  let pxz = @[f32.abs p.x, f32.abs p.z] in
+  let pxz2 = if pxz.y > pxz.x then @[pxz.y, pxz.x] else pxz in
+  let pxz3 = @[pxz2.x - 0.5, pxz2.y - 0.5] in
+  let q = @[pxz3.y, h*p.y - 0.5*pxz3.x, h*pxz3.x + 0.5*p.y] in
+  let s = f32.max (0.0 - q.x) 0.0 in
+  let t = clamp ((q.y - 0.5*pxz3.y) / (m2 + 0.25)) 0.0 1.0 in
+  let a = m2*(q.x + s)*(q.x + s) + q.y*q.y in
+  let b = m2*(q.x + 0.5*t)*(q.x + 0.5*t) + (q.y - m2*t)*(q.y - m2*t) in
+  let d2 = if f32.min q.y (0.0 - q.x*m2 - q.y*0.5) > 0.0 then 0.0 else f32.min a b in
+  f32.sqrt ((d2 + q.z*q.z) / m2) * sign (f32.max q.z (0.0 - p.y))
+
+def sdRhombus (p:vec3f32) (la:f32) (lb:f32) (h:f32) (ra:f32) : f32 =
+  let pa = abs3 p in
+  let b = @[la, lb] in
+  let f = clamp ((ndot b @[b.x - 2.0*pa.x, b.y - 2.0*pa.z]) / (dot2v b b)) (0.0 - 1.0) 1.0 in
+  let q_len = length2 @[pa.x - 0.5*b.x*(1.0 - f), pa.z - 0.5*b.y*(1.0 + f)] in
+  let q = @[q_len * sign (pa.x*b.y + pa.z*b.x - b.x*b.y) - ra, pa.y - h] in
+  f32.min (f32.max q.x q.y) 0.0 + length2 (max2 q @[0.0, 0.0])
+
+------------------------------------------------------------
+-- Scene Composition
+------------------------------------------------------------
+
+-- Union operation returning closest surface
+def opU (d1:vec2f32) (d2:vec2f32) : vec2f32 =
+  if d1.x < d2.x then d1 else d2
+
+------------------------------------------------------------
+-- The Scene Map
+------------------------------------------------------------
+
+def sdfScene (pos:vec3f32) : vec2f32 =
+  let res = @[pos.y, 0.0] in
+
+  -- bounding box check 1
+  let res = if sdBox @[pos.x - -2.0, pos.y - 0.3, pos.z - 0.25] @[0.3, 0.3, 1.0] < res.x
+    then let r1 = opU res @[sdSphere @[pos.x - -2.0, pos.y - 0.25, pos.z] 0.25, 26.9] in
+         let r2 = opU r1 @[sdRhombus @[pos.x - -2.0, pos.z - 1.0, pos.y - 0.25] 0.15 0.25 0.04 0.08, 17.0] in
+         r2
+    else res in
+
+  -- bounding box check 2
+  let res = if sdBox @[pos.x, pos.y - 0.3, pos.z - -1.0] @[0.35, 0.3, 2.5] < res.x
+    then let r1 = opU res @[sdCappedTorus @[(pos.x) * 1.0, (pos.y - 0.30) * -1.0, (pos.z - 1.0) * 1.0] @[0.866025, -0.5] 0.25 0.05, 25.0] in
+         let r2 = opU r1 @[sdBoxFrame @[pos.x, pos.y - 0.25, pos.z] @[0.3, 0.25, 0.2] 0.025, 16.9] in
+         let r3 = opU r2 @[sdVerticalCone @[pos.x, pos.y - 0.45, pos.z - -1.0] @[0.6, 0.8] 0.45, 55.0] in
+         let r4 = opU r3 @[sdCappedCone @[pos.x, pos.y - 0.25, pos.z - -2.0] 0.25 0.25 0.1, 13.67] in
+         let r5 = opU r4 @[sdOctahedron @[pos.x, pos.y, pos.z - -3.0] 0.4, 49.13] in
+         r5
+    else res in
+
+  -- bounding box check 3
+  let res = if sdBox @[pos.x - 1.0, pos.y - 0.3, pos.z - -1.0] @[0.35, 0.3, 2.5] < res.x
+    then let r1 = opU res @[sdTorus @[pos.x - 1.0, pos.z - 1.0, pos.y - 0.30] @[0.25, 0.05], 7.1] in
+         let r2 = opU r1 @[sdBox @[pos.x - 1.0, pos.y - 0.25, pos.z] @[0.3, 0.25, 0.1], 3.0] in
+         let r3 = opU r2 @[sdCapsule @[pos.x - 1.0, pos.y, pos.z - -1.0] @[-0.1, 0.1, -0.1] @[0.2, 0.4, 0.2] 0.1, 31.9] in
+         let r4 = opU r3 @[sdVerticalCylinder @[pos.x - 1.0, pos.y - 0.25, pos.z - -2.0] @[0.15, 0.25], 8.0] in
+         r4
+    else res in
+
+  -- bounding box check 4
+  let res = if sdBox @[pos.x - -1.0, pos.y - 0.35, pos.z - -1.0] @[0.35, 0.35, 2.5] < res.x
+    then let r1 = opU res @[sdPyramid @[pos.x - -1.0, pos.y - -0.6, pos.z - -3.0] 1.0, 13.56] in
+         let r2 = opU r1 @[sdOctahedron @[pos.x - -1.0, pos.y - 0.15, pos.z - -2.0] 0.35, 23.56] in
+         let r3 = opU r2 @[sdEllipsoid @[pos.x - -1.0, pos.y - 0.25, pos.z] @[0.2, 0.25, 0.05], 43.17] in
+         r3
+    else res in
+
+  -- bounding box check 5
+  let res = if sdBox @[pos.x - 2.0, pos.y - 0.3, pos.z - -1.0] @[0.35, 0.3, 2.5] < res.x
+    then let r1 = opU res @[sdCylinder @[pos.x - 2.0, pos.y - 0.14, pos.z - -2.0] @[0.1, -0.1, 0.0] @[-0.2, 0.35, 0.1] 0.08, 31.2] in
+         let r2 = opU r1 @[sdRoundCone @[pos.x - 2.0, pos.y - 0.15, pos.z] 0.15 0.05 0.35, 51.7] in
+         let r3 = opU r2 @[sdRoundCone @[pos.x - 2.0, pos.y - 0.20, pos.z - 1.0] 0.2 0.1 0.3, 37.0] in
+         r3
+    else res in
+
+  res
+
+------------------------------------------------------------
+-- Ray-Box Intersection
+------------------------------------------------------------
+
+def iBox (ro:vec3f32) (rd:vec3f32) (rad:vec3f32) : vec2f32 =
+  let m = @[1.0/rd.x, 1.0/rd.y, 1.0/rd.z] in
+  let n = @[m.x*ro.x, m.y*ro.y, m.z*ro.z] in
+  let k = @[f32.abs m.x * rad.x, f32.abs m.y * rad.y, f32.abs m.z * rad.z] in
+  let t1 = @[0.0 - n.x - k.x, 0.0 - n.y - k.y, 0.0 - n.z - k.z] in
+  let t2 = @[0.0 - n.x + k.x, 0.0 - n.y + k.y, 0.0 - n.z + k.z] in
+  @[f32.max (f32.max t1.x t1.y) t1.z, f32.min (f32.min t2.x t2.y) t2.z]
+
+------------------------------------------------------------
+-- Raycast
+------------------------------------------------------------
+
+def raycast (ro:vec3f32) (rd:vec3f32) : vec2f32 =
+  let tmin = 1.0 in
+  let tmax = 20.0 in
+
+  -- raytrace floor plane
+  let tp1 = (0.0 - ro.y) / rd.y in
+  let (tmax, res) = if tp1 > 0.0
+    then (f32.min tmax tp1, @[tp1, 1.0])
+    else (tmax, @[0.0 - 1.0, 0.0 - 1.0]) in
+
+  -- raymarch primitives
+  let tb = iBox @[ro.x, ro.y - 0.4, ro.z - -0.5] rd @[2.5, 0.41, 3.0] in
+  if tb.x < tb.y then
+    if tb.y > 0.0 then
+      if tb.x < tmax then
+        let tmin2 = f32.max tb.x tmin in
+        let tmax2 = f32.min tb.y tmax in
+        let (_, _, res2) = loop (i, t, r) = (0, tmin2, res) while i < 70 do
+          if t < tmax2 then
+            let h = sdfScene @[ro.x + rd.x*t, ro.y + rd.y*t, ro.z + rd.z*t] in
+            if f32.abs h.x < 0.0001 * t then (70, t, @[t, h.y])
+            else (i + 1, t + h.x, r)
+          else (70, t, r)
+        in res2
+      else res
+    else res
+  else res
+
+------------------------------------------------------------
+-- Normal Calculation
+------------------------------------------------------------
+
+def calcNormal (pos:vec3f32) : vec3f32 =
+  let (_, n) = loop (i, acc) = (0, @[0.0, 0.0, 0.0]) while i < 4 do
+    let e_base = @[
+      (if ((i+3)/2) % 2 == 1 then 1.0 else -1.0),
+      (if (i/2) % 2 == 1 then 1.0 else -1.0),
+      (if i % 2 == 1 then 1.0 else -1.0)
+    ] in
+    let e = @[0.5773 * e_base.x, 0.5773 * e_base.y, 0.5773 * e_base.z] in
+    let m = (sdfScene @[pos.x + 0.0005*e.x, pos.y + 0.0005*e.y, pos.z + 0.0005*e.z]).x in
+    (i + 1, @[acc.x + e.x*m, acc.y + e.y*m, acc.z + e.z*m])
+  in normalize3 n
+
+------------------------------------------------------------
+-- Ambient Occlusion
+------------------------------------------------------------
+
+def calcAO (pos:vec3f32) (nor:vec3f32) : f32 =
+  let (_, occ, _) = loop (i, occ, sca) = (0, 0.0, 1.0) while i < 5 do
+    let h = 0.01 + 0.12 * (f32.i32 i) / 4.0 in
+    let d = (sdfScene @[pos.x + h*nor.x, pos.y + h*nor.y, pos.z + h*nor.z]).x in
+    let occ2 = occ + (h - d) * sca in
+    let sca2 = sca * 0.95 in
+    if occ2 > 0.35 then (5, occ2, sca2) else (i + 1, occ2, sca2)
+  in clamp (1.0 - 3.0*occ) 0.0 1.0 * (0.5 + 0.5*nor.y)
+
+------------------------------------------------------------
+-- Soft Shadow
+------------------------------------------------------------
+
+def calcSoftshadow (ro:vec3f32) (rd:vec3f32) (mint:f32) (tmax_in:f32) : f32 =
+  let tp = (0.8 - ro.y) / rd.y in
+  let tmax = if tp > 0.0 then f32.min tmax_in tp else tmax_in in
+  let (_, res, _) = loop (i, res, t) = (0, 1.0, mint) while i < 24 do
+    let h = (sdfScene @[ro.x + rd.x*t, ro.y + rd.y*t, ro.z + rd.z*t]).x in
+    let s = clamp (8.0*h/t) 0.0 1.0 in
+    let res2 = f32.min res s in
+    let t2 = t + clamp h 0.01 0.2 in
+    if res2 < 0.004 then (24, res2, t2)
+    else if t2 > tmax then (24, res2, t2)
+    else (i + 1, res2, t2)
+  in let res_clamped = clamp res 0.0 1.0 in
+  res_clamped * res_clamped * (3.0 - 2.0*res_clamped)
+
+------------------------------------------------------------
+-- Checkerboard Pattern
+------------------------------------------------------------
+
+def checkersGradBox (p:vec2f32) (dpdx:vec2f32) (dpdy:vec2f32) : f32 =
+  let w = @[f32.abs dpdx.x + f32.abs dpdy.x + 0.001, f32.abs dpdx.y + f32.abs dpdy.y + 0.001] in
+  let i1 = fract2 @[(p.x - 0.5*w.x)*0.5, (p.y - 0.5*w.y)*0.5] in
+  let i2 = fract2 @[(p.x + 0.5*w.x)*0.5, (p.y + 0.5*w.y)*0.5] in
+  let ix = 2.0 * (f32.abs (i1.x - 0.5) - f32.abs (i2.x - 0.5)) / w.x in
+  let iy = 2.0 * (f32.abs (i1.y - 0.5) - f32.abs (i2.y - 0.5)) / w.y in
+  0.5 - 0.5*ix*iy
+
+------------------------------------------------------------
+-- Render
+------------------------------------------------------------
+
+def render (ro:vec3f32) (rd:vec3f32) (rdx:vec3f32) (rdy:vec3f32) : vec3f32 =
+  -- background
+  let col = @[0.7 - f32.max rd.y 0.0 * 0.3, 0.7 - f32.max rd.y 0.0 * 0.3, 0.9 - f32.max rd.y 0.0 * 0.3] in
+
+  -- raycast scene
+  let res = raycast ro rd in
+  let t = res.x in
+  let m = res.y in
+
+  if m > 0.0 - 0.5 then
+    let pos = @[ro.x + t*rd.x, ro.y + t*rd.y, ro.z + t*rd.z] in
+    let nor = if m < 1.5 then @[0.0, 1.0, 0.0] else calcNormal pos in
+    let ref = reflect3 rd nor in
+
+    -- material
+    let mat_col = @[0.2 + 0.2*f32.sin (m*2.0), 0.2 + 0.2*f32.sin (m*2.0 + 1.0), 0.2 + 0.2*f32.sin (m*2.0 + 2.0)] in
+    let (col2, ks) = if m < 1.5 then
+      -- floor with checkerboard
+      let dpdx = @[ro.y * (rd.x/rd.y - rdx.x/rdx.y), 0.0, ro.y * (rd.z/rd.y - rdx.z/rdx.y)] in
+      let dpdy = @[ro.y * (rd.x/rd.y - rdy.x/rdy.y), 0.0, ro.y * (rd.z/rd.y - rdy.z/rdy.y)] in
+      let f = checkersGradBox @[3.0*pos.x, 3.0*pos.z] @[3.0*dpdx.x, 3.0*dpdx.z] @[3.0*dpdy.x, 3.0*dpdy.z] in
+      (@[0.15 + f*0.05, 0.15 + f*0.05, 0.15 + f*0.05], 0.4)
+    else (mat_col, 1.0) in
+
+    -- lighting
+    let occ = calcAO pos nor in
+
+    -- sun
+    let lig = normalize3 @[0.0 - 0.5, 0.4, 0.0 - 0.6] in
+    let hal = normalize3 @[lig.x - rd.x, lig.y - rd.y, lig.z - rd.z] in
+    let dif_raw = clamp (dot3v nor lig) 0.0 1.0 in
+    let dif = dif_raw * calcSoftshadow pos lig 0.02 2.5 in
+    let spe_raw = pow (clamp (dot3v nor hal) 0.0 1.0) 16.0 in
+    let spe = spe_raw * dif * (0.04 + 0.96 * pow (clamp (1.0 - dot3v hal lig) 0.0 1.0) 5.0) in
+    let lin_sun = @[col2.x * 2.20 * dif * 1.30, col2.y * 2.20 * dif * 1.00, col2.z * 2.20 * dif * 0.70] in
+    let lin_spe = @[5.00 * spe * 1.30 * ks, 5.00 * spe * 1.00 * ks, 5.00 * spe * 0.70 * ks] in
+
+    -- sky
+    let dif_sky = f32.sqrt (clamp (0.5 + 0.5*nor.y) 0.0 1.0) * occ in
+    let spe_sky_raw = smoothstep -0.2 0.2 ref.y * dif_sky in
+    let spe_sky = spe_sky_raw * (0.04 + 0.96 * pow (clamp (1.0 + dot3v nor rd) 0.0 1.0) 5.0) * calcSoftshadow pos ref 0.02 2.5 in
+    let lin_sky = @[col2.x * 0.60 * dif_sky * 0.40, col2.y * 0.60 * dif_sky * 0.60, col2.z * 0.60 * dif_sky * 1.15] in
+    let lin_sky_spe = @[2.00 * spe_sky * 0.40 * ks, 2.00 * spe_sky * 0.60 * ks, 2.00 * spe_sky * 1.30 * ks] in
+
+    -- back light
+    let back_dir = normalize3 @[0.5, 0.0, 0.6] in
+    let dif_back = clamp (dot3v nor back_dir) 0.0 1.0 * clamp (1.0 - pos.y) 0.0 1.0 * occ in
+    let lin_back = @[col2.x * 0.55 * dif_back * 0.25, col2.y * 0.55 * dif_back * 0.25, col2.z * 0.55 * dif_back * 0.25] in
+
+    -- subsurface scattering
+    let dif_sss = pow (clamp (1.0 + dot3v nor rd) 0.0 1.0) 2.0 * occ in
+    let lin_sss = @[col2.x * 0.25 * dif_sss, col2.y * 0.25 * dif_sss, col2.z * 0.25 * dif_sss] in
+
+    -- combine
+    let col3 = @[lin_sun.x + lin_spe.x + lin_sky.x + lin_sky_spe.x + lin_back.x + lin_sss.x,
+                 lin_sun.y + lin_spe.y + lin_sky.y + lin_sky_spe.y + lin_back.y + lin_sss.y,
+                 lin_sun.z + lin_spe.z + lin_sky.z + lin_sky_spe.z + lin_back.z + lin_sss.z] in
+
+    -- fog
+    let fog = 1.0 - f32.exp (0.0 - 0.0001 * t * t * t) in
+    mix3v col3 @[0.7, 0.7, 0.9] fog
+  else col
+
+------------------------------------------------------------
+-- Camera Setup
+------------------------------------------------------------
+
+def setCamera (ro:vec3f32) (ta:vec3f32) (cr:f32) : mat3f32 =
+  let cw = normalize3 @[ta.x - ro.x, ta.y - ro.y, ta.z - ro.z] in
+  let cp = @[f32.sin cr, f32.cos cr, 0.0] in
+  let cu = normalize3 (cross3 cw cp) in
+  let cv = cross3 cu cw in
+  @[[cu.x, cu.y, cu.z], [cv.x, cv.y, cv.z], [cw.x, cw.y, cw.z]]
+
+------------------------------------------------------------
+-- Fragment Shader (Main Entry Point)
+------------------------------------------------------------
+
+#[fragment]
+def fragment_main (#[builtin(position)] fragCoord:vec4f32) : #[location(0)] vec4f32 =
+  let mo = @[iMouse.x / iResolution.x, iMouse.y / iResolution.y] in
+  let time = 32.0 + iTime * 1.5 in
+
+  -- camera
+  let ta = @[0.25, 0.0 - 0.75, 0.0 - 0.75] in
+  let ro = @[ta.x + 4.5 * f32.cos (0.1*time + 7.0*mo.x),
+             ta.y + 2.2,
+             ta.z + 4.5 * f32.sin (0.1*time + 7.0*mo.x)] in
+  let ca = setCamera ro ta 0.0 in
+
+  -- pixel coordinates (AA=1, no antialiasing)
+  let p = @[(2.0*fragCoord.x - iResolution.x) / iResolution.y,
+            (2.0*fragCoord.y - iResolution.y) / iResolution.y] in
+
+  -- focal length
+  let fl = 2.5 in
+
+  -- ray direction (mat3 * vec3)
+  let rd_local = normalize3 @[p.x, p.y, fl] in
+  let rd = mul rd_local ca in
+
+  -- ray differentials
+  let px = @[(2.0*(fragCoord.x + 1.0) - iResolution.x) / iResolution.y,
+             (2.0*fragCoord.y - iResolution.y) / iResolution.y] in
+  let py = @[(2.0*fragCoord.x - iResolution.x) / iResolution.y,
+             (2.0*(fragCoord.y + 1.0) - iResolution.y) / iResolution.y] in
+  let rdx_local = normalize3 @[px.x, px.y, fl] in
+  let rdy_local = normalize3 @[py.x, py.y, fl] in
+  let rdx = mul rdx_local ca in
+  let rdy = mul rdy_local ca in
+
+  -- render
+  let col = render ro rd rdx rdy in
+
+  -- gamma correction
+  let gamma = 0.4545 in
+  let col_gamma = @[pow (clamp col.x 0.0 1.0) gamma,
+                    pow (clamp col.y 0.0 1.0) gamma,
+                    pow (clamp col.z 0.0 1.0) gamma] in
+
+  @[col_gamma.x, col_gamma.y, col_gamma.z, 1.0]
+
+------------------------------------------------------------
+-- Original GLSL Source (commented out)
+------------------------------------------------------------
+
+-- // The MIT License
+-- // Copyright © 2013 Inigo Quilez
+-- // Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+-- //
+-- // The license is here only not because I want to (can one
+-- // license pieces of math?), but because people get upset
+-- // if I don't add one...
+-- 
+-- // A list of useful distance function to simple primitives. All
+-- // these functions (except for ellipsoid) return an exact
+-- // euclidean distance, meaning they produce a better SDF than
+-- // what you'd get if you were constructing them from boolean
+-- // operations (such as cutting an infinite cylinder with two planes).
+-- 
+-- // List of other 3D SDFs:
+-- //    https://www.shadertoy.com/playlist/43cXRl
+-- // and
+-- //    https://iquilezles.org/articles/distfunctions
+-- 
+-- #if HW_PERFORMANCE==0
+-- #define AA 1
+-- #else
+-- #define AA 2   // make this 2 or 3 for antialiasing
+-- #endif
+-- 
+-- //------------------------------------------------------------------
+-- float dot2( in vec2 v ) { return dot(v,v); }
+-- float dot2( in vec3 v ) { return dot(v,v); }
+-- float ndot( in vec2 a, in vec2 b ) { return a.x*b.x - a.y*b.y; }
+-- 
+-- float sdPlane( vec3 p )
+-- {
+-- 	return p.y;
+-- }
+-- 
+-- float sdSphere( vec3 p, float s )
+-- {
+--     return length(p)-s;
+-- }
+-- 
+-- float sdBox( vec3 p, vec3 b )
+-- {
+--     vec3 d = abs(p) - b;
+--     return min(max(d.x,max(d.y,d.z)),0.0) + length(max(d,0.0));
+-- }
+-- 
+-- float sdBoxFrame( vec3 p, vec3 b, float e )
+-- {
+--        p = abs(p  )-b;
+--   vec3 q = abs(p+e)-e;
+-- 
+--   return min(min(
+--       length(max(vec3(p.x,q.y,q.z),0.0))+min(max(p.x,max(q.y,q.z)),0.0),
+--       length(max(vec3(q.x,p.y,q.z),0.0))+min(max(q.x,max(p.y,q.z)),0.0)),
+--       length(max(vec3(q.x,q.y,p.z),0.0))+min(max(q.x,max(q.y,p.z)),0.0));
+-- }
+-- float sdEllipsoid( in vec3 p, in vec3 r ) // approximated
+-- {
+--     float k0 = length(p/r);
+--     float k1 = length(p/(r*r));
+--     return k0*(k0-1.0)/k1;
+-- }
+-- 
+-- float sdTorus( vec3 p, vec2 t )
+-- {
+--     return length( vec2(length(p.xz)-t.x,p.y) )-t.y;
+-- }
+-- 
+-- float sdCappedTorus(in vec3 p, in vec2 sc, in float ra, in float rb)
+-- {
+--     p.x = abs(p.x);
+--     float k = (sc.y*p.x>sc.x*p.y) ? dot(p.xy,sc) : length(p.xy);
+--     return sqrt( dot(p,p) + ra*ra - 2.0*ra*k ) - rb;
+-- }
+-- 
+-- float sdHexPrism( vec3 p, vec2 h )
+-- {
+--     vec3 q = abs(p);
+-- 
+--     const vec3 k = vec3(-0.8660254, 0.5, 0.57735);
+--     p = abs(p);
+--     p.xy -= 2.0*min(dot(k.xy, p.xy), 0.0)*k.xy;
+--     vec2 d = vec2(
+--        length(p.xy - vec2(clamp(p.x, -k.z*h.x, k.z*h.x), h.x))*sign(p.y - h.x),
+--        p.z-h.y );
+--     return min(max(d.x,d.y),0.0) + length(max(d,0.0));
+-- }
+-- 
+-- float sdOctogonPrism( in vec3 p, in float r, float h )
+-- {
+--   const vec3 k = vec3(-0.9238795325,   // sqrt(2+sqrt(2))/2 
+--                        0.3826834323,   // sqrt(2-sqrt(2))/2
+--                        0.4142135623 ); // sqrt(2)-1 
+--   // reflections
+--   p = abs(p);
+--   p.xy -= 2.0*min(dot(vec2( k.x,k.y),p.xy),0.0)*vec2( k.x,k.y);
+--   p.xy -= 2.0*min(dot(vec2(-k.x,k.y),p.xy),0.0)*vec2(-k.x,k.y);
+--   // polygon side
+--   p.xy -= vec2(clamp(p.x, -k.z*r, k.z*r), r);
+--   vec2 d = vec2( length(p.xy)*sign(p.y), p.z-h );
+--   return min(max(d.x,d.y),0.0) + length(max(d,0.0));
+-- }
+-- 
+-- float sdCapsule( vec3 p, vec3 a, vec3 b, float r )
+-- {
+-- 	vec3 pa = p-a, ba = b-a;
+-- 	float h = clamp( dot(pa,ba)/dot(ba,ba), 0.0, 1.0 );
+-- 	return length( pa - ba*h ) - r;
+-- }
+-- 
+-- float sdRoundCone( in vec3 p, in float r1, float r2, float h )
+-- {
+--     vec2 q = vec2( length(p.xz), p.y );
+--     
+--     float b = (r1-r2)/h;
+--     float a = sqrt(1.0-b*b);
+--     float k = dot(q,vec2(-b,a));
+--     
+--     if( k < 0.0 ) return length(q) - r1;
+--     if( k > a*h ) return length(q-vec2(0.0,h)) - r2;
+--         
+--     return dot(q, vec2(a,b) ) - r1;
+-- }
+-- 
+-- float sdRoundCone(vec3 p, vec3 a, vec3 b, float r1, float r2)
+-- {
+--     // sampling independent computations (only depend on shape)
+--     vec3  ba = b - a;
+--     float l2 = dot(ba,ba);
+--     float rr = r1 - r2;
+--     float a2 = l2 - rr*rr;
+--     float il2 = 1.0/l2;
+--     
+--     // sampling dependant computations
+--     vec3 pa = p - a;
+--     float y = dot(pa,ba);
+--     float z = y - l2;
+--     float x2 = dot2( pa*l2 - ba*y );
+--     float y2 = y*y*l2;
+--     float z2 = z*z*l2;
+-- 
+--     // single square root!
+--     float k = sign(rr)*rr*rr*x2;
+--     if( sign(z)*a2*z2 > k ) return  sqrt(x2 + z2)        *il2 - r2;
+--     if( sign(y)*a2*y2 < k ) return  sqrt(x2 + y2)        *il2 - r1;
+--                             return (sqrt(x2*a2*il2)+y*rr)*il2 - r1;
+-- }
+-- 
+-- float sdTriPrism( vec3 p, vec2 h )
+-- {
+--     const float k = sqrt(3.0);
+--     h.x *= 0.5*k;
+--     p.xy /= h.x;
+--     p.x = abs(p.x) - 1.0;
+--     p.y = p.y + 1.0/k;
+--     if( p.x+k*p.y>0.0 ) p.xy=vec2(p.x-k*p.y,-k*p.x-p.y)/2.0;
+--     p.x -= clamp( p.x, -2.0, 0.0 );
+--     float d1 = length(p.xy)*sign(-p.y)*h.x;
+--     float d2 = abs(p.z)-h.y;
+--     return length(max(vec2(d1,d2),0.0)) + min(max(d1,d2), 0.);
+-- }
+-- 
+-- // vertical
+-- float sdCylinder( vec3 p, vec2 h )
+-- {
+--     vec2 d = abs(vec2(length(p.xz),p.y)) - h;
+--     return min(max(d.x,d.y),0.0) + length(max(d,0.0));
+-- }
+-- 
+-- // arbitrary orientation
+-- float sdCylinder(vec3 p, vec3 a, vec3 b, float r)
+-- {
+--     vec3 pa = p - a;
+--     vec3 ba = b - a;
+--     float baba = dot(ba,ba);
+--     float paba = dot(pa,ba);
+-- 
+--     float x = length(pa*baba-ba*paba) - r*baba;
+--     float y = abs(paba-baba*0.5)-baba*0.5;
+--     float x2 = x*x;
+--     float y2 = y*y*baba;
+--     float d = (max(x,y)<0.0)?-min(x2,y2):(((x>0.0)?x2:0.0)+((y>0.0)?y2:0.0));
+--     return sign(d)*sqrt(abs(d))/baba;
+-- }
+-- 
+-- // vertical
+-- float sdCone( in vec3 p, in vec2 c, float h )
+-- {
+--     vec2 q = h*vec2(c.x,-c.y)/c.y;
+--     vec2 w = vec2( length(p.xz), p.y );
+--     
+-- 	vec2 a = w - q*clamp( dot(w,q)/dot(q,q), 0.0, 1.0 );
+--     vec2 b = w - q*vec2( clamp( w.x/q.x, 0.0, 1.0 ), 1.0 );
+--     float k = sign( q.y );
+--     float d = min(dot( a, a ),dot(b, b));
+--     float s = max( k*(w.x*q.y-w.y*q.x),k*(w.y-q.y)  );
+-- 	return sqrt(d)*sign(s);
+-- }
+-- 
+-- float sdCappedCone( in vec3 p, in float h, in float r1, in float r2 )
+-- {
+--     vec2 q = vec2( length(p.xz), p.y );
+--     
+--     vec2 k1 = vec2(r2,h);
+--     vec2 k2 = vec2(r2-r1,2.0*h);
+--     vec2 ca = vec2(q.x-min(q.x,(q.y < 0.0)?r1:r2), abs(q.y)-h);
+--     vec2 cb = q - k1 + k2*clamp( dot(k1-q,k2)/dot2(k2), 0.0, 1.0 );
+--     float s = (cb.x < 0.0 && ca.y < 0.0) ? -1.0 : 1.0;
+--     return s*sqrt( min(dot2(ca),dot2(cb)) );
+-- }
+-- 
+-- float sdCappedCone(vec3 p, vec3 a, vec3 b, float ra, float rb)
+-- {
+--     float rba  = rb-ra;
+--     float baba = dot(b-a,b-a);
+--     float papa = dot(p-a,p-a);
+--     float paba = dot(p-a,b-a)/baba;
+-- 
+--     float x = sqrt( papa - paba*paba*baba );
+-- 
+--     float cax = max(0.0,x-((paba<0.5)?ra:rb));
+--     float cay = abs(paba-0.5)-0.5;
+-- 
+--     float k = rba*rba + baba;
+--     float f = clamp( (rba*(x-ra)+paba*baba)/k, 0.0, 1.0 );
+-- 
+--     float cbx = x-ra - f*rba;
+--     float cby = paba - f;
+--     
+--     float s = (cbx < 0.0 && cay < 0.0) ? -1.0 : 1.0;
+--     
+--     return s*sqrt( min(cax*cax + cay*cay*baba,
+--                        cbx*cbx + cby*cby*baba) );
+-- }
+-- 
+-- // c is the sin/cos of the desired cone angle
+-- float sdSolidAngle(vec3 pos, vec2 c, float ra)
+-- {
+--     vec2 p = vec2( length(pos.xz), pos.y );
+--     float l = length(p) - ra;
+-- 	float m = length(p - c*clamp(dot(p,c),0.0,ra) );
+--     return max(l,m*sign(c.y*p.x-c.x*p.y));
+-- }
+-- 
+-- float sdOctahedron(vec3 p, float s)
+-- {
+--     p = abs(p);
+--     float m = p.x + p.y + p.z - s;
+-- 
+--     // exact distance
+--     #if 0
+--     vec3 o = min(3.0*p - m, 0.0);
+--     o = max(6.0*p - m*2.0 - o*3.0 + (o.x+o.y+o.z), 0.0);
+--     return length(p - s*o/(o.x+o.y+o.z));
+--     #endif
+--     
+--     // exact distance
+--     #if 1
+--  	vec3 q;
+--          if( 3.0*p.x < m ) q = p.xyz;
+--     else if( 3.0*p.y < m ) q = p.yzx;
+--     else if( 3.0*p.z < m ) q = p.zxy;
+--     else return m*0.57735027;
+--     float k = clamp(0.5*(q.z-q.y+s),0.0,s); 
+--     return length(vec3(q.x,q.y-s+k,q.z-k)); 
+--     #endif
+--     
+--     // bound, not exact
+--     #if 0
+-- 	return m*0.57735027;
+--     #endif
+-- }
+-- 
+-- float sdPyramid( in vec3 p, in float h )
+-- {
+--     float m2 = h*h + 0.25;
+--     
+--     // symmetry
+--     p.xz = abs(p.xz);
+--     p.xz = (p.z>p.x) ? p.zx : p.xz;
+--     p.xz -= 0.5;
+-- 	
+--     // project into face plane (2D)
+--     vec3 q = vec3( p.z, h*p.y - 0.5*p.x, h*p.x + 0.5*p.y);
+--    
+--     float s = max(-q.x,0.0);
+--     float t = clamp( (q.y-0.5*p.z)/(m2+0.25), 0.0, 1.0 );
+--     
+--     float a = m2*(q.x+s)*(q.x+s) + q.y*q.y;
+-- 	float b = m2*(q.x+0.5*t)*(q.x+0.5*t) + (q.y-m2*t)*(q.y-m2*t);
+--     
+--     float d2 = min(q.y,-q.x*m2-q.y*0.5) > 0.0 ? 0.0 : min(a,b);
+--     
+--     // recover 3D and scale, and add sign
+--     return sqrt( (d2+q.z*q.z)/m2 ) * sign(max(q.z,-p.y));;
+-- }
+-- 
+-- // la,lb=semi axis, h=height, ra=corner
+-- float sdRhombus(vec3 p, float la, float lb, float h, float ra)
+-- {
+--     p = abs(p);
+--     vec2 b = vec2(la,lb);
+--     float f = clamp( (ndot(b,b-2.0*p.xz))/dot(b,b), -1.0, 1.0 );
+-- 	vec2 q = vec2(length(p.xz-0.5*b*vec2(1.0-f,1.0+f))*sign(p.x*b.y+p.z*b.x-b.x*b.y)-ra, p.y-h);
+--     return min(max(q.x,q.y),0.0) + length(max(q,0.0));
+-- }
+-- 
+-- float sdHorseshoe( in vec3 p, in vec2 c, in float r, in float le, vec2 w )
+-- {
+--     p.x = abs(p.x);
+--     float l = length(p.xy);
+--     p.xy = mat2(-c.x, c.y, 
+--               c.y, c.x)*p.xy;
+--     p.xy = vec2((p.y>0.0 || p.x>0.0)?p.x:l*sign(-c.x),
+--                 (p.x>0.0)?p.y:l );
+--     p.xy = vec2(p.x,abs(p.y-r))-vec2(le,0.0);
+--     
+--     vec2 q = vec2(length(max(p.xy,0.0)) + min(0.0,max(p.x,p.y)),p.z);
+--     vec2 d = abs(q) - w;
+--     return min(max(d.x,d.y),0.0) + length(max(d,0.0));
+-- }
+-- 
+-- float sdU( in vec3 p, in float r, in float le, vec2 w )
+-- {
+--     p.x = (p.y>0.0) ? abs(p.x) : length(p.xy);
+--     p.x = abs(p.x-r);
+--     p.y = p.y - le;
+--     float k = max(p.x,p.y);
+--     vec2 q = vec2( (k<0.0) ? -k : length(max(p.xy,0.0)), abs(p.z) ) - w;
+--     return length(max(q,0.0)) + min(max(q.x,q.y),0.0);
+-- }
+-- 
+-- //------------------------------------------------------------------
+-- 
+-- vec2 opU( vec2 d1, vec2 d2 )
+-- {
+-- 	return (d1.x<d2.x) ? d1 : d2;
+-- }
+-- 
+-- //------------------------------------------------------------------
+-- 
+-- #define ZERO (min(iFrame,0))
+-- 
+-- //------------------------------------------------------------------
+-- 
+-- vec2 map( in vec3 pos )
+-- {
+--     vec2 res = vec2( pos.y, 0.0 );
+-- 
+--     // bounding box
+--     if( sdBox( pos-vec3(-2.0,0.3,0.25),vec3(0.3,0.3,1.0) )<res.x )
+--     {
+--       res = opU( res, vec2( sdSphere(    pos-vec3(-2.0,0.25, 0.0), 0.25 ), 26.9 ) );
+-- 	  res = opU( res, vec2( sdRhombus(  (pos-vec3(-2.0,0.25, 1.0)).xzy, 0.15, 0.25, 0.04, 0.08 ),17.0 ) );
+--     }
+-- 
+--     // bounding box
+--     if( sdBox( pos-vec3(0.0,0.3,-1.0),vec3(0.35,0.3,2.5) )<res.x )
+--     {
+-- 	res = opU( res, vec2( sdCappedTorus((pos-vec3( 0.0,0.30, 1.0))*vec3(1,-1,1), vec2(0.866025,-0.5), 0.25, 0.05), 25.0) );
+--     res = opU( res, vec2( sdBoxFrame(    pos-vec3( 0.0,0.25, 0.0), vec3(0.3,0.25,0.2), 0.025 ), 16.9 ) );
+-- 	res = opU( res, vec2( sdCone(        pos-vec3( 0.0,0.45,-1.0), vec2(0.6,0.8),0.45 ), 55.0 ) );
+--     res = opU( res, vec2( sdCappedCone(  pos-vec3( 0.0,0.25,-2.0), 0.25, 0.25, 0.1 ), 13.67 ) );
+--     res = opU( res, vec2( sdSolidAngle(  pos-vec3( 0.0,0.00,-3.0), vec2(3,4)/5.0, 0.4 ), 49.13 ) );
+--     }
+-- 
+--     // bounding box
+--     if( sdBox( pos-vec3(1.0,0.3,-1.0),vec3(0.35,0.3,2.5) )<res.x )
+--     {
+-- 	res = opU( res, vec2( sdTorus(      (pos-vec3( 1.0,0.30, 1.0)).xzy, vec2(0.25,0.05) ), 7.1 ) );
+--     res = opU( res, vec2( sdBox(         pos-vec3( 1.0,0.25, 0.0), vec3(0.3,0.25,0.1) ), 3.0 ) );
+--     res = opU( res, vec2( sdCapsule(     pos-vec3( 1.0,0.00,-1.0),vec3(-0.1,0.1,-0.1), vec3(0.2,0.4,0.2), 0.1  ), 31.9 ) );
+-- 	res = opU( res, vec2( sdCylinder(    pos-vec3( 1.0,0.25,-2.0), vec2(0.15,0.25) ), 8.0 ) );
+--     res = opU( res, vec2( sdHexPrism(    pos-vec3( 1.0,0.2,-3.0), vec2(0.2,0.05) ), 18.4 ) );
+--     }
+-- 
+--     // bounding box
+--     if( sdBox( pos-vec3(-1.0,0.35,-1.0),vec3(0.35,0.35,2.5))<res.x )
+--     {
+-- 	res = opU( res, vec2( sdPyramid(    pos-vec3(-1.0,-0.6,-3.0), 1.0 ), 13.56 ) );
+-- 	res = opU( res, vec2( sdOctahedron( pos-vec3(-1.0,0.15,-2.0), 0.35 ), 23.56 ) );
+--     res = opU( res, vec2( sdTriPrism(   pos-vec3(-1.0,0.15,-1.0), vec2(0.3,0.05) ),43.5 ) );
+--     res = opU( res, vec2( sdEllipsoid(  pos-vec3(-1.0,0.25, 0.0), vec3(0.2, 0.25, 0.05) ), 43.17 ) );
+--     res = opU( res, vec2( sdHorseshoe(  pos-vec3(-1.0,0.25, 1.0), vec2(cos(1.3),sin(1.3)), 0.2, 0.3, vec2(0.03,0.08) ), 11.5 ) );
+--     }
+-- 
+--     // bounding box
+--     if( sdBox( pos-vec3(2.0,0.3,-1.0),vec3(0.35,0.3,2.5) )<res.x )
+--     {
+--     res = opU( res, vec2( sdOctogonPrism(pos-vec3( 2.0,0.2,-3.0), 0.2, 0.05), 51.8 ) );
+--     res = opU( res, vec2( sdCylinder(    pos-vec3( 2.0,0.14,-2.0), vec3(0.1,-0.1,0.0), vec3(-0.2,0.35,0.1), 0.08), 31.2 ) );
+-- 	res = opU( res, vec2( sdCappedCone(  pos-vec3( 2.0,0.09,-1.0), vec3(0.1,0.0,0.0), vec3(-0.2,0.40,0.1), 0.15, 0.05), 46.1 ) );
+--     res = opU( res, vec2( sdRoundCone(   pos-vec3( 2.0,0.15, 0.0), vec3(0.1,0.0,0.0), vec3(-0.1,0.35,0.1), 0.15, 0.05), 51.7 ) );
+--     res = opU( res, vec2( sdRoundCone(   pos-vec3( 2.0,0.20, 1.0), 0.2, 0.1, 0.3 ), 37.0 ) );
+--     }
+--     
+--     return res;
+-- }
+-- 
+-- // https://iquilezles.org/articles/boxfunctions
+-- vec2 iBox( in vec3 ro, in vec3 rd, in vec3 rad ) 
+-- {
+--     vec3 m = 1.0/rd;
+--     vec3 n = m*ro;
+--     vec3 k = abs(m)*rad;
+--     vec3 t1 = -n - k;
+--     vec3 t2 = -n + k;
+-- 	return vec2( max( max( t1.x, t1.y ), t1.z ),
+-- 	             min( min( t2.x, t2.y ), t2.z ) );
+-- }
+-- 
+-- vec2 raycast( in vec3 ro, in vec3 rd )
+-- {
+--     vec2 res = vec2(-1.0,-1.0);
+-- 
+--     float tmin = 1.0;
+--     float tmax = 20.0;
+-- 
+--     // raytrace floor plane
+--     float tp1 = (-ro.y)/rd.y;
+--     if( tp1>0.0 )
+--     {
+--         tmax = min( tmax, tp1 );
+--         res = vec2( tp1, 1.0 );
+--     }
+--     //else return res;
+--     
+--     // raymarch primitives   
+--     vec2 tb = iBox( ro-vec3(0.0,0.4,-0.5), rd, vec3(2.5,0.41,3.0) );
+--     if( tb.x<tb.y && tb.y>0.0 && tb.x<tmax)
+--     {
+--         //return vec2(tb.x,2.0);
+--         tmin = max(tb.x,tmin);
+--         tmax = min(tb.y,tmax);
+-- 
+--         float t = tmin;
+--         for( int i=0; i<70 && t<tmax; i++ )
+--         {
+--             vec2 h = map( ro+rd*t );
+--             if( abs(h.x)<(0.0001*t) )
+--             { 
+--                 res = vec2(t,h.y); 
+--                 break;
+--             }
+--             t += h.x;
+--         }
+--     }
+--     
+--     return res;
+-- }
+-- 
+-- // https://iquilezles.org/articles/rmshadows
+-- float calcSoftshadow( in vec3 ro, in vec3 rd, in float mint, in float tmax )
+-- {
+--     // bounding volume
+--     float tp = (0.8-ro.y)/rd.y; if( tp>0.0 ) tmax = min( tmax, tp );
+-- 
+--     float res = 1.0;
+--     float t = mint;
+--     for( int i=ZERO; i<24; i++ )
+--     {
+-- 		float h = map( ro + rd*t ).x;
+--         float s = clamp(8.0*h/t,0.0,1.0);
+--         res = min( res, s );
+--         t += clamp( h, 0.01, 0.2 );
+--         if( res<0.004 || t>tmax ) break;
+--     }
+--     res = clamp( res, 0.0, 1.0 );
+--     return res*res*(3.0-2.0*res);
+-- }
+-- 
+-- // https://iquilezles.org/articles/normalsSDF
+-- vec3 calcNormal( in vec3 pos )
+-- {
+-- #if 0
+--     // do NOT call map() many times inside calcNormal()
+--     vec2 e = vec2(1.0,-1.0)*0.5773*0.0005;
+--     return normalize( e.xyy*map( pos + e.xyy ).x + 
+-- 					  e.yyx*map( pos + e.yyx ).x + 
+-- 					  e.yxy*map( pos + e.yxy ).x + 
+-- 					  e.xxx*map( pos + e.xxx ).x );
+-- #else
+--     // instead put it only once and in a loop to prevet
+--     // code expansion - inspired by tdhooper and klems - a way to prevent the compiler from inlining map() 4 times
+--     vec3 n = vec3(0.0);
+--     for( int i=ZERO; i<4; i++ )
+--     {
+--         vec3 e = 0.5773*(2.0*vec3((((i+3)>>1)&1),((i>>1)&1),(i&1))-1.0);
+--         n += e*map(pos+0.0005*e).x;
+--       //if( n.x+n.y+n.z>100.0 ) break;
+--     }
+--     return normalize(n);
+-- #endif    
+-- }
+-- 
+-- // https://iquilezles.org/articles/nvscene2008/rwwtt.pdf
+-- float calcAO( in vec3 pos, in vec3 nor )
+-- {
+-- 	float occ = 0.0;
+--     float sca = 1.0;
+--     for( int i=ZERO; i<5; i++ )
+--     {
+--         float h = 0.01 + 0.12*float(i)/4.0;
+--         float d = map( pos + h*nor ).x;
+--         occ += (h-d)*sca;
+--         sca *= 0.95;
+--         if( occ>0.35 ) break;
+--     }
+--     return clamp( 1.0 - 3.0*occ, 0.0, 1.0 ) * (0.5+0.5*nor.y);
+-- }
+-- 
+-- // https://iquilezles.org/articles/checkerfiltering
+-- float checkersGradBox( in vec2 p, in vec2 dpdx, in vec2 dpdy )
+-- {
+--     // filter kernel
+--     vec2 w = abs(dpdx)+abs(dpdy) + 0.001;
+--     // analytical integral (box filter)
+--     vec2 i = 2.0*(abs(fract((p-0.5*w)*0.5)-0.5)-abs(fract((p+0.5*w)*0.5)-0.5))/w;
+--     // xor pattern
+--     return 0.5 - 0.5*i.x*i.y;                  
+-- }
+-- 
+-- vec3 render( in vec3 ro, in vec3 rd, in vec3 rdx, in vec3 rdy )
+-- { 
+--     // background
+--     vec3 col = vec3(0.7, 0.7, 0.9) - max(rd.y,0.0)*0.3;
+--     
+--     // raycast scene
+--     vec2 res = raycast(ro,rd);
+--     float t = res.x;
+-- 	float m = res.y;
+--     if( m>-0.5 )
+--     {
+--         vec3 pos = ro + t*rd;
+--         vec3 nor = (m<1.5) ? vec3(0.0,1.0,0.0) : calcNormal( pos );
+--         vec3 ref = reflect( rd, nor );
+--         
+--         // material        
+--         col = 0.2 + 0.2*sin( m*2.0 + vec3(0.0,1.0,2.0) );
+--         float ks = 1.0;
+--         
+--         if( m<1.5 )
+--         {
+--             // project pixel footprint into the plane
+--             vec3 dpdx = ro.y*(rd/rd.y-rdx/rdx.y);
+--             vec3 dpdy = ro.y*(rd/rd.y-rdy/rdy.y);
+-- 
+--             float f = checkersGradBox( 3.0*pos.xz, 3.0*dpdx.xz, 3.0*dpdy.xz );
+--             col = 0.15 + f*vec3(0.05);
+--             ks = 0.4;
+--         }
+-- 
+--         // lighting
+--         float occ = calcAO( pos, nor );
+--         
+-- 		vec3 lin = vec3(0.0);
+-- 
+--         // sun
+--         {
+--             vec3  lig = normalize( vec3(-0.5, 0.4, -0.6) );
+--             vec3  hal = normalize( lig-rd );
+--             float dif = clamp( dot( nor, lig ), 0.0, 1.0 );
+--           //if( dif>0.0001 )
+--         	      dif *= calcSoftshadow( pos, lig, 0.02, 2.5 );
+-- 			float spe = pow( clamp( dot( nor, hal ), 0.0, 1.0 ),16.0);
+--                   spe *= dif;
+--                   spe *= 0.04+0.96*pow(clamp(1.0-dot(hal,lig),0.0,1.0),5.0);
+--                 //spe *= 0.04+0.96*pow(clamp(1.0-sqrt(0.5*(1.0-dot(rd,lig))),0.0,1.0),5.0);
+--             lin += col*2.20*dif*vec3(1.30,1.00,0.70);
+--             lin +=     5.00*spe*vec3(1.30,1.00,0.70)*ks;
+--         }
+--         // sky
+--         {
+--             float dif = sqrt(clamp( 0.5+0.5*nor.y, 0.0, 1.0 ));
+--                   dif *= occ;
+--             float spe = smoothstep( -0.2, 0.2, ref.y );
+--                   spe *= dif;
+--                   spe *= 0.04+0.96*pow(clamp(1.0+dot(nor,rd),0.0,1.0), 5.0 );
+--           //if( spe>0.001 )
+--                   spe *= calcSoftshadow( pos, ref, 0.02, 2.5 );
+--             lin += col*0.60*dif*vec3(0.40,0.60,1.15);
+--             lin +=     2.00*spe*vec3(0.40,0.60,1.30)*ks;
+--         }
+--         // back
+--         {
+--         	float dif = clamp( dot( nor, normalize(vec3(0.5,0.0,0.6))), 0.0, 1.0 )*clamp( 1.0-pos.y,0.0,1.0);
+--                   dif *= occ;
+--         	lin += col*0.55*dif*vec3(0.25,0.25,0.25);
+--         }
+--         // sss
+--         {
+--             float dif = pow(clamp(1.0+dot(nor,rd),0.0,1.0),2.0);
+--                   dif *= occ;
+--         	lin += col*0.25*dif*vec3(1.00,1.00,1.00);
+--         }
+--         
+-- 		col = lin;
+-- 
+--         col = mix( col, vec3(0.7,0.7,0.9), 1.0-exp( -0.0001*t*t*t ) );
+--     }
+-- 
+-- 	return vec3( clamp(col,0.0,1.0) );
+-- }
+-- 
+-- mat3 setCamera( in vec3 ro, in vec3 ta, float cr )
+-- {
+-- 	vec3 cw = normalize(ta-ro);
+-- 	vec3 cp = vec3(sin(cr), cos(cr),0.0);
+-- 	vec3 cu = normalize( cross(cw,cp) );
+-- 	vec3 cv =          ( cross(cu,cw) );
+--     return mat3( cu, cv, cw );
+-- }
+-- 
+-- void mainImage( out vec4 fragColor, in vec2 fragCoord )
+-- {
+--     vec2 mo = iMouse.xy/iResolution.xy;
+-- 	float time = 32.0 + iTime*1.5;
+-- 
+--     // camera	
+--     vec3 ta = vec3( 0.25, -0.75, -0.75 );
+--     vec3 ro = ta + vec3( 4.5*cos(0.1*time + 7.0*mo.x), 2.2, 4.5*sin(0.1*time + 7.0*mo.x) );
+--     // camera-to-world transformation
+--     mat3 ca = setCamera( ro, ta, 0.0 );
+-- 
+--     vec3 tot = vec3(0.0);
+-- #if AA>1
+--     for( int m=ZERO; m<AA; m++ )
+--     for( int n=ZERO; n<AA; n++ )
+--     {
+--         // pixel coordinates
+--         vec2 o = vec2(float(m),float(n)) / float(AA) - 0.5;
+--         vec2 p = (2.0*(fragCoord+o)-iResolution.xy)/iResolution.y;
+-- #else    
+--         vec2 p = (2.0*fragCoord-iResolution.xy)/iResolution.y;
+-- #endif
+-- 
+--         // focal length
+--         const float fl = 2.5;
+--         
+--         // ray direction
+--         vec3 rd = ca * normalize( vec3(p,fl) );
+-- 
+--          // ray differentials
+--         vec2 px = (2.0*(fragCoord+vec2(1.0,0.0))-iResolution.xy)/iResolution.y;
+--         vec2 py = (2.0*(fragCoord+vec2(0.0,1.0))-iResolution.xy)/iResolution.y;
+--         vec3 rdx = ca * normalize( vec3(px,fl) );
+--         vec3 rdy = ca * normalize( vec3(py,fl) );
+--         
+--         // render	
+--         vec3 col = render( ro, rd, rdx, rdy );
+-- 
+--         // gain
+--         // col = col*3.0/(2.5+col);
+--         
+-- 		// gamma
+--         col = pow( col, vec3(0.4545) );
+-- 
+--         tot += col;
+-- #if AA>1
+--     }
+--     tot /= float(AA*AA);
+-- #endif
+--     
+--     fragColor = vec4( tot, 1.0 );
+-- }
