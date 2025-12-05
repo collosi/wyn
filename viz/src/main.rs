@@ -112,6 +112,26 @@ struct State {
 }
 
 impl State {
+    /// Print VRAM memory statistics from the allocator
+    fn print_memory_stats(&self, label: &str) {
+        if let Some(report) = self.device.generate_allocator_report() {
+            let allocated_mb = report.total_allocated_bytes as f64 / (1024.0 * 1024.0);
+            let reserved_mb = report.total_reserved_bytes as f64 / (1024.0 * 1024.0);
+            eprintln!(
+                "[Memory {}] Allocated: {:.2} MB, Reserved: {:.2} MB, Blocks: {}, Allocations: {}",
+                label,
+                allocated_mb,
+                reserved_mb,
+                report.blocks.len(),
+                report.allocations.len()
+            );
+        } else {
+            eprintln!("[Memory {}] Allocator report not available on this backend", label);
+        }
+    }
+}
+
+impl State {
     async fn new(window: Arc<Window>, spec: &PipelineSpec) -> Result<Self> {
         let instance = Instance::new(&InstanceDescriptor::default());
 
@@ -500,6 +520,7 @@ impl State {
                 if let Some(max) = self.max_frames {
                     if self.frame_count >= max {
                         eprintln!("Reached {} frames, exiting.", max);
+                        self.print_memory_stats("exit");
                         self.print_debug_output();
                         std::process::exit(0);
                     }
@@ -726,7 +747,10 @@ impl ApplicationHandler for App {
         };
 
         match pollster::block_on(State::new(window, &self.spec)) {
-            Ok(state) => self.state = Some(state),
+            Ok(state) => {
+                state.print_memory_stats("startup");
+                self.state = Some(state);
+            }
             Err(e) => {
                 eprintln!("failed to initialize GPU state: {e:#}");
                 std::process::exit(1);
@@ -744,6 +768,7 @@ impl ApplicationHandler for App {
             if state.window.id() == window_id {
                 match event {
                     WindowEvent::CloseRequested => {
+                        state.print_memory_stats("exit");
                         state.print_debug_output();
                         std::process::exit(0);
                     }
