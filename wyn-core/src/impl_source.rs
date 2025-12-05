@@ -125,6 +125,19 @@ pub enum Intrinsic {
     DebugF32,
     /// Debug output: write string literal to debug ring buffer
     DebugStr,
+    // GDP (GPU Debug Protocol) intrinsics for ring buffer access
+    /// Atomic add on GDP buffer at index, returns old value
+    /// __gdp_atomic_add : u32 -> u32 -> u32 (index, delta -> old_value)
+    GdpAtomicAdd,
+    /// Load u32 from GDP buffer at index
+    /// __gdp_load : u32 -> u32 (index -> value)
+    GdpLoad,
+    /// Store u32 to GDP buffer at index
+    /// __gdp_store : u32 -> u32 -> () (index, value -> ())
+    GdpStore,
+    /// Bitcast i32 to u32 (reinterpret bits)
+    /// __bitcast_i32_to_u32 : i32 -> u32
+    BitcastI32ToU32,
 }
 
 /// Implementation source for all builtin functions and intrinsics
@@ -695,6 +708,13 @@ impl ImplSource {
         self.register("debug_i32", BuiltinImpl::Intrinsic(Intrinsic::DebugI32));
         self.register("debug_f32", BuiltinImpl::Intrinsic(Intrinsic::DebugF32));
         self.register("debug_str", BuiltinImpl::Intrinsic(Intrinsic::DebugStr));
+
+        // GDP (GPU Debug Protocol) intrinsics for ring buffer access
+        // These are low-level primitives used by the GDP Wyn module
+        self.register("__gdp_atomic_add", BuiltinImpl::Intrinsic(Intrinsic::GdpAtomicAdd));
+        self.register("__gdp_load", BuiltinImpl::Intrinsic(Intrinsic::GdpLoad));
+        self.register("__gdp_store", BuiltinImpl::Intrinsic(Intrinsic::GdpStore));
+        self.register("__bitcast_i32_to_u32", BuiltinImpl::Intrinsic(Intrinsic::BitcastI32ToU32));
     }
 }
 

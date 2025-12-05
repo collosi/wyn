@@ -165,6 +165,7 @@ impl ModuleManager {
             "bool",
             "graphics32",
             "graphics64",
+            "gdp",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -183,6 +184,7 @@ impl ModuleManager {
         // Load all prelude files using include_str!
         self.load_str(include_str!("../../../prelude/math.wyn"))?;
         self.load_str(include_str!("../../../prelude/graphics.wyn"))?;
+        self.load_str(include_str!("../../../prelude/gdp.wyn"))?;
         Ok(())
     }
 

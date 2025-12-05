@@ -593,6 +593,63 @@ impl Constructor {
         let length_id = self.const_i32(length as i32);
         self.builder.type_array(elem_type, length_id)
     }
+
+    /// Emit GDP write_two_words logic: atomically reserve 2 words and write them
+    /// Returns Ok(()) on success, or Ok(()) if debug_buffer is None (no-op)
+    fn emit_gdp_write_two_words(
+        &mut self,
+        word0: spirv::Word,
+        word1: spirv::Word,
+    ) -> Result<()> {
+        let buffer_var = match self.debug_buffer {
+            Some(v) => v,
+            None => return Ok(()), // No debug buffer, no-op
+        };
+
+        // Constants
+        let zero = self.const_u32(0);
+        let two = self.const_u32(2);
+        let three = self.const_u32(3);
+        let ring_size = self.const_u32(4093);
+        let one = self.const_u32(1);
+        let u32_type = self.u32_type;
+
+        // Create pointer type for StorageBuffer u32
+        let ptr_type = self
+            .builder
+            .type_pointer(None, spirv::StorageClass::StorageBuffer, u32_type);
+
+        // Get pointer to write_head (buffer[0])
+        let write_head_ptr = self.builder.access_chain(ptr_type, None, buffer_var, [zero, zero])?;
+
+        // Atomic add 2 to reserve space, returns old position
+        let scope = self.const_u32(1); // Device
+        let semantics = self.const_u32(0x8); // AcquireRelease
+        let pos = self.builder.atomic_i_add(u32_type, None, write_head_ptr, scope, semantics, two)?;
+
+        // idx = pos % 4093
+        let idx = self.builder.u_mod(u32_type, None, pos, ring_size)?;
+
+        // data_idx0 = idx + 3 (skip header words)
+        let data_idx0 = self.builder.i_add(u32_type, None, idx, three)?;
+
+        // Write word0 to buffer[data_idx0]
+        let ptr0 = self.builder.access_chain(ptr_type, None, buffer_var, [zero, data_idx0])?;
+        self.builder.store(ptr0, word0, None, [])?;
+
+        // idx1 = (idx + 1) % 4093
+        let idx_plus_1 = self.builder.i_add(u32_type, None, idx, one)?;
+        let idx1 = self.builder.u_mod(u32_type, None, idx_plus_1, ring_size)?;
+
+        // data_idx1 = idx1 + 3
+        let data_idx1 = self.builder.i_add(u32_type, None, idx1, three)?;
+
+        // Write word1 to buffer[data_idx1]
+        let ptr1 = self.builder.access_chain(ptr_type, None, buffer_var, [zero, data_idx1])?;
+        self.builder.store(ptr1, word1, None, [])?;
+
+        Ok(())
+    }
 }
 
 impl<'a> LowerCtx<'a> {
@@ -1860,21 +1917,24 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                         Ok(constructor.builder.load(arr_type, None, arr_var, None, [])?)
                                     }
                                     Intrinsic::DebugI32 => {
-                                        // Debug intrinsic: call GASM @gdp_encode_int32
+                                        // Debug intrinsic: encode i32 to GDP format
+                                        // Header = 0x01 | 0x100 (type=i32, size=1)
                                         if constructor.debug_buffer.is_some() {
-                                            // Call @gdp_encode_int32 GASM builtin
-                                            let gasm_func = constructor
-                                                .impl_source
-                                                .get_gasm_function("gdp_encode_int32")
-                                                .ok_or_else(|| err_spirv!("gdp_encode_int32 not found"))?
-                                                .clone();
-                                            let func_id = constructor.lower_gasm_function(&gasm_func)?;
-                                            constructor.builder.function_call(
-                                                constructor.void_type,
+                                            let value_id = arg_ids[0];
+
+                                            // Bitcast i32 to u32
+                                            let bits = constructor.builder.bitcast(
+                                                constructor.u32_type,
                                                 None,
-                                                func_id,
-                                                vec![arg_ids[0]],
+                                                value_id,
                                             )?;
+
+                                            // Header: 0x01 | 0x100 = 0x101
+                                            let header = constructor.const_u32(0x101);
+
+                                            // Write two words: [header, bits]
+                                            constructor.emit_gdp_write_two_words(header, bits)?;
+
                                             Ok(constructor.const_i32(0)) // void return
                                         } else {
                                             // Debug not enabled, no-op
@@ -1882,21 +1942,24 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                         }
                                     }
                                     Intrinsic::DebugF32 => {
-                                        // Debug intrinsic: call GASM @gdp_encode_float32
+                                        // Debug intrinsic: encode f32 to GDP format
+                                        // Header = 0x03 | 0x100 (type=f32, size=1)
                                         if constructor.debug_buffer.is_some() {
-                                            // Call @gdp_encode_float32 GASM builtin
-                                            let gasm_func = constructor
-                                                .impl_source
-                                                .get_gasm_function("gdp_encode_float32")
-                                                .ok_or_else(|| err_spirv!("gdp_encode_float32 not found"))?
-                                                .clone();
-                                            let func_id = constructor.lower_gasm_function(&gasm_func)?;
-                                            constructor.builder.function_call(
-                                                constructor.void_type,
+                                            let value_id = arg_ids[0];
+
+                                            // Bitcast f32 to u32
+                                            let bits = constructor.builder.bitcast(
+                                                constructor.u32_type,
                                                 None,
-                                                func_id,
-                                                vec![arg_ids[0]],
+                                                value_id,
                                             )?;
+
+                                            // Header: 0x03 | 0x100 = 0x103
+                                            let header = constructor.const_u32(0x103);
+
+                                            // Write two words: [header, bits]
+                                            constructor.emit_gdp_write_two_words(header, bits)?;
+
                                             Ok(constructor.const_i32(0)) // void return
                                         } else {
                                             // Debug not enabled, no-op
@@ -1992,6 +2055,124 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                             // Debug not enabled, no-op
                                             Ok(constructor.const_i32(0))
                                         }
+                                    }
+                                    Intrinsic::GdpAtomicAdd => {
+                                        // __gdp_atomic_add(index, delta) -> old_value
+                                        // Performs atomic add on GDP buffer at index
+                                        if let Some(buffer_var) = constructor.debug_buffer {
+                                            let index_id = arg_ids[0];
+                                            let delta_id = arg_ids[1];
+
+                                            // Create constant for struct member index (first field)
+                                            let zero_idx = constructor.const_u32(0);
+                                            let u32_type = constructor.u32_type;
+
+                                            // Create pointer to buffer[index]
+                                            let ptr_type = constructor.builder.type_pointer(
+                                                None,
+                                                spirv::StorageClass::StorageBuffer,
+                                                u32_type,
+                                            );
+                                            let elem_ptr = constructor.builder.access_chain(
+                                                ptr_type,
+                                                None,
+                                                buffer_var,
+                                                [zero_idx, index_id],
+                                            )?;
+
+                                            // OpAtomicIAdd: returns old value
+                                            // Device scope (1), AcquireRelease semantics (0x8)
+                                            let scope = constructor.const_u32(1); // Device
+                                            let semantics = constructor.const_u32(0x8); // AcquireRelease
+                                            Ok(constructor.builder.atomic_i_add(
+                                                u32_type,
+                                                None,
+                                                elem_ptr,
+                                                scope,
+                                                semantics,
+                                                delta_id,
+                                            )?)
+                                        } else {
+                                            // Debug not enabled, return 0
+                                            Ok(constructor.const_u32(0))
+                                        }
+                                    }
+                                    Intrinsic::GdpLoad => {
+                                        // __gdp_load(index) -> value
+                                        // Load u32 from GDP buffer at index
+                                        if let Some(buffer_var) = constructor.debug_buffer {
+                                            let index_id = arg_ids[0];
+
+                                            // Create constant for struct member index (first field)
+                                            let zero_idx = constructor.const_u32(0);
+                                            let u32_type = constructor.u32_type;
+
+                                            // Create pointer to buffer[index]
+                                            let ptr_type = constructor.builder.type_pointer(
+                                                None,
+                                                spirv::StorageClass::StorageBuffer,
+                                                u32_type,
+                                            );
+                                            let elem_ptr = constructor.builder.access_chain(
+                                                ptr_type,
+                                                None,
+                                                buffer_var,
+                                                [zero_idx, index_id],
+                                            )?;
+
+                                            Ok(constructor.builder.load(
+                                                u32_type,
+                                                None,
+                                                elem_ptr,
+                                                None,
+                                                [],
+                                            )?)
+                                        } else {
+                                            // Debug not enabled, return 0
+                                            Ok(constructor.const_u32(0))
+                                        }
+                                    }
+                                    Intrinsic::GdpStore => {
+                                        // __gdp_store(index, value) -> ()
+                                        // Store u32 to GDP buffer at index
+                                        if let Some(buffer_var) = constructor.debug_buffer {
+                                            let index_id = arg_ids[0];
+                                            let value_id = arg_ids[1];
+
+                                            // Create constant for struct member index (first field)
+                                            let zero_idx = constructor.const_u32(0);
+                                            let u32_type = constructor.u32_type;
+
+                                            // Create pointer to buffer[index]
+                                            let ptr_type = constructor.builder.type_pointer(
+                                                None,
+                                                spirv::StorageClass::StorageBuffer,
+                                                u32_type,
+                                            );
+                                            let elem_ptr = constructor.builder.access_chain(
+                                                ptr_type,
+                                                None,
+                                                buffer_var,
+                                                [zero_idx, index_id],
+                                            )?;
+
+                                            constructor.builder.store(elem_ptr, value_id, None, [])?;
+                                            // Return unit (0)
+                                            Ok(constructor.const_i32(0))
+                                        } else {
+                                            // Debug not enabled, no-op
+                                            Ok(constructor.const_i32(0))
+                                        }
+                                    }
+                                    Intrinsic::BitcastI32ToU32 => {
+                                        // __bitcast_i32_to_u32(i) -> u32
+                                        // Reinterpret i32 bits as u32
+                                        let value_id = arg_ids[0];
+                                        Ok(constructor.builder.bitcast(
+                                            constructor.u32_type,
+                                            None,
+                                            value_id,
+                                        )?)
                                     }
                                 }
                             }

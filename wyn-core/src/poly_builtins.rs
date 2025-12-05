@@ -384,6 +384,52 @@ impl PolyBuiltins {
         self.register_poly("__array_update", vec![array_a.clone(), i32_ty, a], array_a);
 
         // TODO: zip, reduce, etc.
+
+        // GDP (GPU Debug Protocol) intrinsics - monomorphic types
+        self.register_gdp_intrinsics();
+    }
+
+    /// Register GDP intrinsics for ring buffer access
+    fn register_gdp_intrinsics(&mut self) {
+        let u32_ty = Type::Constructed(TypeName::UInt(32), vec![]);
+        let i32_ty = Type::Constructed(TypeName::Int(32), vec![]);
+        let f32_ty = Type::Constructed(TypeName::Float(32), vec![]);
+        let unit_ty = Type::Constructed(TypeName::Unit, vec![]);
+        let string_ty = Type::Constructed(TypeName::Str("string"), vec![]);
+
+        // __gdp_atomic_add : u32 -> u32 -> u32 (index, delta -> old_value)
+        self.register_poly(
+            "__gdp_atomic_add",
+            vec![u32_ty.clone(), u32_ty.clone()],
+            u32_ty.clone(),
+        );
+
+        // __gdp_load : u32 -> u32 (index -> value)
+        self.register_poly("__gdp_load", vec![u32_ty.clone()], u32_ty.clone());
+
+        // __gdp_store : u32 -> u32 -> () (index, value -> ())
+        self.register_poly(
+            "__gdp_store",
+            vec![u32_ty.clone(), u32_ty],
+            unit_ty.clone(),
+        );
+
+        // __bitcast_i32_to_u32 : i32 -> u32
+        self.register_poly(
+            "__bitcast_i32_to_u32",
+            vec![i32_ty.clone()],
+            Type::Constructed(TypeName::UInt(32), vec![]),
+        );
+
+        // Debug output intrinsics
+        // debug_i32 : i32 -> ()
+        self.register_poly("debug_i32", vec![i32_ty], unit_ty.clone());
+
+        // debug_f32 : f32 -> ()
+        self.register_poly("debug_f32", vec![f32_ty], unit_ty.clone());
+
+        // debug_str : String -> ()
+        self.register_poly("debug_str", vec![string_ty], unit_ty);
     }
 }
 
