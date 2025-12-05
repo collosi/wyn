@@ -134,6 +134,7 @@ impl PolyBuiltins {
             builtins: HashMap::new(),
         };
 
+        registry.register_scalar_math_functions(ctx);
         registry.register_vector_operations(ctx);
         registry.register_matrix_operations(ctx);
         registry.register_higher_order_functions(ctx);
@@ -192,6 +193,27 @@ impl PolyBuiltins {
         })
     }
 
+    /// Register scalar math functions (abs, sign, floor, ceil, fract, min, max, clamp, mix, smoothstep)
+    fn register_scalar_math_functions(&mut self, ctx: &mut impl TypeVarGenerator) {
+        // Unary: abs, sign, floor, ceil, fract
+        for name in ["abs", "sign", "floor", "ceil", "fract"] {
+            let a = ctx.new_variable();
+            self.register_poly(name, vec![a.clone()], a);
+        }
+
+        // Binary: min, max
+        for name in ["min", "max"] {
+            let a = ctx.new_variable();
+            self.register_poly(name, vec![a.clone(), a.clone()], a);
+        }
+
+        // Ternary: clamp lo hi x, mix a b t, smoothstep edge0 edge1 x
+        for name in ["clamp", "mix", "smoothstep"] {
+            let a = ctx.new_variable();
+            self.register_poly(name, vec![a.clone(), a.clone(), a.clone()], a);
+        }
+    }
+
     /// Register vector operations (magnitude, normalize, dot, cross, etc.)
     fn register_vector_operations(&mut self, ctx: &mut impl TypeVarGenerator) {
         // magnitude : ∀n a. vec<n,a> -> a
@@ -239,6 +261,37 @@ impl PolyBuiltins {
         let a = ctx.new_variable();
         let vec_n_a = Type::Constructed(TypeName::Vec, vec![n, a.clone()]);
         self.register_poly("refract", vec![vec_n_a.clone(), vec_n_a.clone(), a], vec_n_a);
+
+        // Component-wise unary: abs, sign, floor, ceil, fract : vec<n,a> -> vec<n,a>
+        for name in ["abs", "sign", "floor", "ceil", "fract"] {
+            let n = ctx.new_variable();
+            let a = ctx.new_variable();
+            let vec_n_a = Type::Constructed(TypeName::Vec, vec![n, a]);
+            self.register_poly(name, vec![vec_n_a.clone()], vec_n_a);
+        }
+
+        // Component-wise binary: min, max : vec<n,a> -> vec<n,a> -> vec<n,a>
+        for name in ["min", "max"] {
+            let n = ctx.new_variable();
+            let a = ctx.new_variable();
+            let vec_n_a = Type::Constructed(TypeName::Vec, vec![n, a]);
+            self.register_poly(name, vec![vec_n_a.clone(), vec_n_a.clone()], vec_n_a);
+        }
+
+        // clamp : a -> a -> vec<n,a> -> vec<n,a> (currying-friendly: bounds first)
+        let n = ctx.new_variable();
+        let a = ctx.new_variable();
+        let vec_n_a = Type::Constructed(TypeName::Vec, vec![n, a.clone()]);
+        self.register_poly("clamp", vec![a.clone(), a, vec_n_a.clone()], vec_n_a);
+
+        // Note: vector mix with scalar interpolant doesn't work with GLSL FMix
+        // (requires all operands same type). Use scalar mix component-wise instead.
+
+        // smoothstep : a -> a -> vec<n,a> -> vec<n,a>
+        let n = ctx.new_variable();
+        let a = ctx.new_variable();
+        let vec_n_a = Type::Constructed(TypeName::Vec, vec![n, a.clone()]);
+        self.register_poly("smoothstep", vec![a.clone(), a, vec_n_a.clone()], vec_n_a);
     }
 
     /// Register matrix operations

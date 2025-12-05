@@ -1183,3 +1183,82 @@ def test2 (a:vec2f32) (b:vec2f32): f32 = dot a b
         "#,
     );
 }
+
+// Tests for new GLSL builtins (abs, sign, floor, ceil, fract, min, max, clamp, mix, smoothstep)
+
+#[test]
+fn test_builtin_abs_scalar_and_vector() {
+    typecheck_program(
+        r#"
+def test1 (x:f32): f32 = abs x
+def test2 (v:vec3f32): vec3f32 = abs v
+def test3 (v:vec2f32): vec2f32 = abs v
+def test4 (x:i32): i32 = abs x
+def test5 (v:vec3i32): vec3i32 = abs v
+        "#,
+    );
+}
+
+#[test]
+fn test_builtin_sign_scalar_and_vector() {
+    typecheck_program(
+        r#"
+def test1 (x:f32): f32 = sign x
+def test2 (v:vec3f32): vec3f32 = sign v
+def test3 (x:i32): i32 = sign x
+        "#,
+    );
+}
+
+#[test]
+fn test_builtin_floor_ceil_fract() {
+    typecheck_program(
+        r#"
+def test1 (x:f32): f32 = floor x
+def test2 (x:f32): f32 = ceil x
+def test3 (x:f32): f32 = fract x
+def test4 (v:vec3f32): vec3f32 = floor v
+def test5 (v:vec3f32): vec3f32 = ceil v
+def test6 (v:vec3f32): vec3f32 = fract v
+        "#,
+    );
+}
+
+#[test]
+fn test_builtin_min_max_overloaded() {
+    typecheck_program(
+        r#"
+def test1 (a:f32) (b:f32): f32 = min a b
+def test2 (a:vec3f32) (b:vec3f32): vec3f32 = min a b
+def test3 (a:f32) (b:f32): f32 = max a b
+def test4 (a:i32) (b:i32): i32 = min a b
+def test5 (a:u32) (b:u32): u32 = max a b
+def test6 (a:vec2i32) (b:vec2i32): vec2i32 = min a b
+        "#,
+    );
+}
+
+#[test]
+fn test_builtin_clamp_curried() {
+    typecheck_program(
+        r#"
+def test1 (x:f32): f32 = clamp 0.0 1.0 x
+def test2 (v:vec3f32): vec3f32 = clamp 0.0 1.0 v
+def test3 (x:i32): i32 = clamp 0i32 100i32 x
+def test4 (lo:u32) (hi:u32) (x:u32): u32 = clamp lo hi x
+        "#,
+    );
+}
+
+#[test]
+fn test_builtin_mix_smoothstep() {
+    // Note: vector mix with scalar interpolant requires a helper function
+    // because GLSL FMix requires all operands to be the same type
+    typecheck_program(
+        r#"
+def test1 (a:f32) (b:f32) (t:f32): f32 = mix a b t
+def test3 (x:f32): f32 = smoothstep 0.0 1.0 x
+def test4 (v:vec3f32): vec3f32 = smoothstep 0.0 1.0 v
+        "#,
+    );
+}

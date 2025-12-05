@@ -449,31 +449,46 @@ impl ImplSource {
             },
         );
 
-        // min, max, abs functions
+        // min, max, abs, sign, clamp functions
         if is_float {
             self.register_binop(ty_name, "min", BuiltinImpl::PrimOp(PrimOp::GlslExt(37))); // FMin
             self.register_binop(ty_name, "max", BuiltinImpl::PrimOp(PrimOp::GlslExt(40))); // FMax
             self.register_unop(ty_name, "abs", BuiltinImpl::PrimOp(PrimOp::GlslExt(4))); // FAbs
+            self.register_unop(ty_name, "sign", BuiltinImpl::PrimOp(PrimOp::GlslExt(6))); // FSign
+            self.register_ternop(ty_name, "clamp", BuiltinImpl::PrimOp(PrimOp::GlslExt(43))); // FClamp
         } else {
             self.register_binop(
                 ty_name,
                 "min",
                 if is_signed {
-                    BuiltinImpl::PrimOp(PrimOp::GlslExt(39))
+                    BuiltinImpl::PrimOp(PrimOp::GlslExt(39)) // SMin
                 } else {
-                    BuiltinImpl::PrimOp(PrimOp::GlslExt(38))
+                    BuiltinImpl::PrimOp(PrimOp::GlslExt(38)) // UMin
                 },
             );
             self.register_binop(
                 ty_name,
                 "max",
                 if is_signed {
-                    BuiltinImpl::PrimOp(PrimOp::GlslExt(42))
+                    BuiltinImpl::PrimOp(PrimOp::GlslExt(42)) // SMax
                 } else {
-                    BuiltinImpl::PrimOp(PrimOp::GlslExt(41))
+                    BuiltinImpl::PrimOp(PrimOp::GlslExt(41)) // UMax
                 },
             );
-            self.register_unop(ty_name, "abs", BuiltinImpl::PrimOp(PrimOp::GlslExt(5))); // SAbs
+            self.register_ternop(
+                ty_name,
+                "clamp",
+                if is_signed {
+                    BuiltinImpl::PrimOp(PrimOp::GlslExt(45)) // SClamp
+                } else {
+                    BuiltinImpl::PrimOp(PrimOp::GlslExt(44)) // UClamp
+                },
+            );
+            if is_signed {
+                self.register_unop(ty_name, "abs", BuiltinImpl::PrimOp(PrimOp::GlslExt(5))); // SAbs
+                self.register_unop(ty_name, "sign", BuiltinImpl::PrimOp(PrimOp::GlslExt(7))); // SSign
+            }
+            // Note: abs and sign don't make sense for unsigned types
         }
     }
 
@@ -568,8 +583,7 @@ impl ImplSource {
         self.register_unop(ty_name, "round", BuiltinImpl::PrimOp(PrimOp::GlslExt(1)));
         self.register_unop(ty_name, "trunc", BuiltinImpl::PrimOp(PrimOp::GlslExt(3)));
 
-        // Misc operations
-        self.register_ternop(ty_name, "clamp", BuiltinImpl::PrimOp(PrimOp::GlslExt(43)));
+        // Misc operations (clamp is registered in register_numeric_ops)
         self.register_ternop(ty_name, "lerp", BuiltinImpl::PrimOp(PrimOp::GlslExt(46))); // FMix
         self.register_ternop(ty_name, "fma", BuiltinImpl::PrimOp(PrimOp::GlslExt(50))); // Fused multiply-add
 
@@ -642,6 +656,13 @@ impl ImplSource {
         self.register("distance", BuiltinImpl::PrimOp(PrimOp::GlslExt(67)));
         self.register("reflect", BuiltinImpl::PrimOp(PrimOp::GlslExt(71)));
         self.register("refract", BuiltinImpl::PrimOp(PrimOp::GlslExt(72)));
+
+        // Float-only operations (no integer variants needed)
+        self.register("floor", BuiltinImpl::PrimOp(PrimOp::GlslExt(8)));
+        self.register("ceil", BuiltinImpl::PrimOp(PrimOp::GlslExt(9)));
+        self.register("fract", BuiltinImpl::PrimOp(PrimOp::GlslExt(10)));
+        self.register("mix", BuiltinImpl::PrimOp(PrimOp::GlslExt(46))); // FMix
+        self.register("smoothstep", BuiltinImpl::PrimOp(PrimOp::GlslExt(49)));
     }
 
     /// Register matrix operations (implementations only, types in PolymorphicBuiltins)

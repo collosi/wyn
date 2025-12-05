@@ -142,10 +142,15 @@ impl Flattener {
     /// Desugar overloaded function names based on argument types
     /// - mul -> mul_mat_mat, mul_mat_vec, mul_vec_mat
     /// - matav -> matav_n_m
+    /// - abs/sign -> abs_f32, abs_i32, abs_u32, sign_f32, sign_i32
+    /// - min/max -> min_f32, min_i32, min_u32, max_f32, max_i32, max_u32
+    /// - clamp -> clamp_f32, clamp_i32, clamp_u32
     fn desugar_function_name(&self, name: &str, args: &[Expression]) -> Result<String> {
         match name {
             "mul" => self.desugar_mul(args),
             "matav" => self.desugar_matav(args),
+            // Type-dispatched math functions (different GLSL opcodes for float/signed/unsigned)
+            "abs" | "sign" | "min" | "max" | "clamp" => self.desugar_numeric_op(name, args),
             _ => Ok(name.to_string()),
         }
     }
@@ -199,6 +204,37 @@ impl Flattener {
         }
 
         Ok("matav".to_string()) // Fall back to original name
+    }
+
+    /// Desugar numeric operations (abs, sign, min, max, clamp) based on element type
+    /// Transforms: abs x → f32.abs x (or i32.abs, etc. based on type)
+    fn desugar_numeric_op(&self, name: &str, args: &[Expression]) -> Result<String> {
+        if args.is_empty() {
+            return Ok(name.to_string());
+        }
+
+        // Get the type of the first argument
+        let arg_ty = self.get_expr_type(&args[0]);
+
+        // Extract the element type (scalar or vector element)
+        let elem_ty = Self::extract_element_type(&arg_ty);
+
+        // Get the type prefix (f32, i32, u32, etc.)
+        let type_prefix = Self::primitive_type_to_string(&elem_ty)?;
+
+        // Produce qualified name: f32.abs, i32.min, etc.
+        Ok(format!("{}.{}", type_prefix, name))
+    }
+
+    /// Extract the element type from a scalar or vector type
+    fn extract_element_type(ty: &Type) -> Type {
+        match ty {
+            Type::Constructed(TypeName::Vec, args) if args.len() >= 2 => {
+                // vec<n, elem> -> elem
+                args[1].clone()
+            }
+            _ => ty.clone(), // Scalar type, return as-is
+        }
     }
 
     /// Classify argument shape for desugaring

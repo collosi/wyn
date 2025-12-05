@@ -16,80 +16,22 @@ def verts: [3]vec4f32 =
 #[vertex]
 def vertex_main (#[builtin(vertex_index)] vertex_id:i32) : #[builtin(position)] vec4f32 = verts[vertex_id]
 
--- Helper functions
-def clamp (x:f32) (lo:f32) (hi:f32) : f32 =
-  if x < lo then lo else if x > hi then hi else x
+-- Helper functions that are not yet builtins
 
-def clamp2 (v:vec2f32) (lo:f32) (hi:f32) : vec2f32 =
-  @[clamp v.x lo hi, clamp v.y lo hi]
+-- pow: wrapper for ** operator for readability
+def pow (x:f32) (n:f32) : f32 = x ** n
 
-def clamp3 (v:vec3f32) (lo:f32) (hi:f32) : vec3f32 =
-  @[clamp v.x lo hi, clamp v.y lo hi, clamp v.z lo hi]
-
-def max2 (a:vec2f32) (b:vec2f32) : vec2f32 =
-  @[f32.max a.x b.x, f32.max a.y b.y]
-
-def max3 (a:vec3f32) (b:vec3f32) : vec3f32 =
-  @[f32.max a.x b.x, f32.max a.y b.y, f32.max a.z b.z]
-
-def min3 (a:vec3f32) (b:vec3f32) : vec3f32 =
-  @[f32.min a.x b.x, f32.min a.y b.y, f32.min a.z b.z]
-
-def abs2 (v:vec2f32) : vec2f32 =
-  @[f32.abs v.x, f32.abs v.y]
-
-def abs3 (v:vec3f32) : vec3f32 =
-  @[f32.abs v.x, f32.abs v.y, f32.abs v.z]
-
-def sign (x:f32) : f32 =
-  if x > 0.0 then 1.0 else if x < 0.0 then 0.0 - 1.0 else 0.0
-
-def mix (a:f32) (b:f32) (t:f32) : f32 = a + (b - a) * t
-
-def mix2 (a:vec2f32) (b:vec2f32) (t:f32) : vec2f32 =
-  @[mix a.x b.x t, mix a.y b.y t]
-
+-- mix3v: vector mix with scalar interpolant (GLSL FMix expects vector interpolant)
 def mix3v (a:vec3f32) (b:vec3f32) (t:f32) : vec3f32 =
   @[mix a.x b.x t, mix a.y b.y t, mix a.z b.z t]
 
-def fract (x:f32) : f32 = x - f32.floor x
 
-def fract2 (v:vec2f32) : vec2f32 =
-  @[fract v.x, fract v.y]
+-- dot2: squared length (dot with self) - not in GLSL
+def dot2 'e 't (v: 't) : 'e = dot v v
 
-def smoothstep (edge0:f32) (edge1:f32) (x:f32) : f32 =
-  let t = clamp ((x - edge0) / (edge1 - edge0)) 0.0 1.0 in
-  t * t * (3.0 - 2.0 * t)
-
-def pow (x:f32) (n:f32) : f32 = f32.exp (n * f32.log x)
-
--- Vector functions (TODO: use builtins once polymorphism bug is fixed)
-def length2 (v:vec2f32) : f32 = f32.sqrt (v.x*v.x + v.y*v.y)
-
-def length3 (v:vec3f32) : f32 = f32.sqrt (v.x*v.x + v.y*v.y + v.z*v.z)
-
--- dot2: squared length (dot with self)
-def dot2_v2 (v:vec2f32) : f32 = v.x*v.x + v.y*v.y
-
-def dot2_v3 (v:vec3f32) : f32 = v.x*v.x + v.y*v.y + v.z*v.z
-
--- ndot: a.x*b.x - a.y*b.y (not a regular dot product)
+-- ndot: a.x*b.x - a.y*b.y (not a regular dot product, Wyn doesn't have this)
 def ndot (a:vec2f32) (b:vec2f32) : f32 = a.x*b.x - a.y*b.y
 
-def dot2v (a:vec2f32) (b:vec2f32) : f32 = a.x*b.x + a.y*b.y
-
-def dot3v (a:vec3f32) (b:vec3f32) : f32 = a.x*b.x + a.y*b.y + a.z*b.z
-
-def normalize3 (v:vec3f32) : vec3f32 =
-  let len = length3 v in
-  if len == 0.0 then @[0.0, 0.0, 0.0] else @[v.x/len, v.y/len, v.z/len]
-
-def reflect3 (rd:vec3f32) (n:vec3f32) : vec3f32 =
-  let d = dot3v rd n in
-  @[rd.x - 2.0*d*n.x, rd.y - 2.0*d*n.y, rd.z - 2.0*d*n.z]
-
-def cross3 (a:vec3f32) (b:vec3f32) : vec3f32 =
-  @[a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x]
 
 ------------------------------------------------------------
 -- SDF Primitives
@@ -97,22 +39,22 @@ def cross3 (a:vec3f32) (b:vec3f32) : vec3f32 =
 
 def sdPlane (p:vec3f32) : f32 = p.y
 
-def sdSphere (p:vec3f32) (s:f32) : f32 = length3 p - s
+def sdSphere (p:vec3f32) (s:f32) : f32 = magnitude p - s
 
 def sdBox (p:vec3f32) (b:vec3f32) : f32 =
   let d = @[f32.abs p.x - b.x, f32.abs p.y - b.y, f32.abs p.z - b.z] in
   let inside = f32.min (f32.max d.x (f32.max d.y d.z)) 0.0 in
-  let outside = length3 (max3 d @[0.0, 0.0, 0.0]) in
+  let outside = magnitude (max d @[0.0, 0.0, 0.0]) in
   inside + outside
 
 def sdBoxFrame (p:vec3f32) (b:vec3f32) (e:f32) : f32 =
   let pa = @[f32.abs p.x - b.x, f32.abs p.y - b.y, f32.abs p.z - b.z] in
   let q = @[f32.abs (pa.x + e) - e, f32.abs (pa.y + e) - e, f32.abs (pa.z + e) - e] in
-  let d1 = length3 (max3 @[pa.x, q.y, q.z] @[0.0, 0.0, 0.0]) +
+  let d1 = magnitude (max @[pa.x, q.y, q.z] @[0.0, 0.0, 0.0]) +
            f32.min (f32.max pa.x (f32.max q.y q.z)) 0.0 in
-  let d2 = length3 (max3 @[q.x, pa.y, q.z] @[0.0, 0.0, 0.0]) +
+  let d2 = magnitude (max @[q.x, pa.y, q.z] @[0.0, 0.0, 0.0]) +
            f32.min (f32.max q.x (f32.max pa.y q.z)) 0.0 in
-  let d3 = length3 (max3 @[q.x, q.y, pa.z] @[0.0, 0.0, 0.0]) +
+  let d3 = magnitude (max @[q.x, q.y, pa.z] @[0.0, 0.0, 0.0]) +
            f32.min (f32.max q.x (f32.max q.y pa.z)) 0.0 in
   f32.min (f32.min d1 d2) d3
 
@@ -120,37 +62,37 @@ def sdEllipsoid (p:vec3f32) (r:vec3f32) : f32 =
   let pr = @[p.x/r.x, p.y/r.y, p.z/r.z] in
   let rr = @[r.x*r.x, r.y*r.y, r.z*r.z] in
   let prr = @[p.x/rr.x, p.y/rr.y, p.z/rr.z] in
-  let k0 = length3 pr in
-  let k1 = length3 prr in
+  let k0 = magnitude pr in
+  let k1 = magnitude prr in
   k0 * (k0 - 1.0) / k1
 
 def sdTorus (p:vec3f32) (t:vec2f32) : f32 =
-  let q = @[length2 @[p.x, p.z] - t.x, p.y] in
-  length2 q - t.y
+  let q = @[magnitude @[p.x, p.z] - t.x, p.y] in
+  magnitude q - t.y
 
 def sdCappedTorus (p:vec3f32) (sc:vec2f32) (ra:f32) (rb:f32) : f32 =
   let px = f32.abs p.x in
   let k = if sc.y * px > sc.x * p.y
           then dot @[px, p.y] sc
-          else length2 @[px, p.y] in
-  f32.sqrt (dot p p + ra*ra - 2.0*ra*k) - rb
+          else magnitude @[px, p.y] in
+  f32.sqrt (dot2 p + ra*ra - 2.0*ra*k) - rb
 
 def sdCapsule (p:vec3f32) (a:vec3f32) (b:vec3f32) (r:f32) : f32 =
   let pa = @[p.x - a.x, p.y - a.y, p.z - a.z] in
   let ba = @[b.x - a.x, b.y - a.y, b.z - a.z] in
-  let h = clamp (dot pa ba / dot ba ba) 0.0 1.0 in
-  length3 @[pa.x - ba.x*h, pa.y - ba.y*h, pa.z - ba.z*h] - r
+  let h = clamp (dot pa ba / dot2 ba) 0.0 1.0 in
+  magnitude @[pa.x - ba.x*h, pa.y - ba.y*h, pa.z - ba.z*h] - r
 
 def sdVerticalCylinder (p:vec3f32) (h:vec2f32) : f32 =
-  let d = @[f32.abs (length2 @[p.x, p.z]) - h.x, f32.abs p.y - h.y] in
-  f32.min (f32.max d.x d.y) 0.0 + length2 (max2 d @[0.0, 0.0])
+  let d = @[f32.abs (magnitude @[p.x, p.z]) - h.x, f32.abs p.y - h.y] in
+  f32.min (f32.max d.x d.y) 0.0 + magnitude (max d @[0.0, 0.0])
 
 def sdCylinder (p:vec3f32) (a:vec3f32) (b:vec3f32) (r:f32) : f32 =
   let pa = @[p.x - a.x, p.y - a.y, p.z - a.z] in
   let ba = @[b.x - a.x, b.y - a.y, b.z - a.z] in
-  let baba = dot ba ba in
+  let baba = dot2 ba in
   let paba = dot pa ba in
-  let x = length3 @[pa.x*baba - ba.x*paba, pa.y*baba - ba.y*paba, pa.z*baba - ba.z*paba] - r*baba in
+  let x = magnitude @[pa.x*baba - ba.x*paba, pa.y*baba - ba.y*paba, pa.z*baba - ba.z*paba] - r*baba in
   let y = f32.abs (paba - baba*0.5) - baba*0.5 in
   let x2 = x*x in
   let y2 = y*y*baba in
@@ -161,46 +103,46 @@ def sdCylinder (p:vec3f32) (a:vec3f32) (b:vec3f32) (r:f32) : f32 =
 
 def sdVerticalCone (p:vec3f32) (c:vec2f32) (h:f32) : f32 =
   let q = @[h * c.x / c.y, 0.0 - h] in
-  let w = @[length2 @[p.x, p.z], p.y] in
-  let a_t = clamp (dot2v w q / dot2v q q) 0.0 1.0 in
+  let w = @[magnitude @[p.x, p.z], p.y] in
+  let a_t = clamp (dot w q / dot2 q) 0.0 1.0 in
   let a = @[w.x - q.x*a_t, w.y - q.y*a_t] in
   let b_t = clamp (w.x / q.x) 0.0 1.0 in
   let b = @[w.x - q.x*b_t, w.y - q.y] in
   let k = sign q.y in
-  let d = f32.min (dot2v a a) (dot2v b b) in
+  let d = f32.min (dot2 a) (dot2 b) in
   let s = f32.max (k * (w.x*q.y - w.y*q.x)) (k * (w.y - q.y)) in
   f32.sqrt d * sign s
 
 def sdCappedCone (p:vec3f32) (h:f32) (r1:f32) (r2:f32) : f32 =
-  let q = @[length2 @[p.x, p.z], p.y] in
+  let q = @[magnitude @[p.x, p.z], p.y] in
   let k1 = @[r2, h] in
   let k2 = @[r2 - r1, 2.0*h] in
   let ca = @[q.x - f32.min q.x (if q.y < 0.0 then r1 else r2), f32.abs q.y - h] in
-  let cb_t = clamp (dot2v @[k1.x - q.x, k1.y - q.y] k2 / dot2v k2 k2) 0.0 1.0 in
+  let cb_t = clamp (dot @[k1.x - q.x, k1.y - q.y] k2 / dot2 k2) 0.0 1.0 in
   let cb = @[q.x - k1.x + k2.x*cb_t, q.y - k1.y + k2.y*cb_t] in
   let s = if cb.x < 0.0 then (if ca.y < 0.0 then 0.0 - 1.0 else 1.0) else 1.0 in
-  s * f32.sqrt (f32.min (dot2v ca ca) (dot2v cb cb))
+  s * f32.sqrt (f32.min (dot2 ca) (dot2 cb))
 
 def sdRoundCone (p:vec3f32) (r1:f32) (r2:f32) (h:f32) : f32 =
-  let q = @[length2 @[p.x, p.z], p.y] in
+  let q = @[magnitude @[p.x, p.z], p.y] in
   let b = (r1 - r2) / h in
   let a = f32.sqrt (1.0 - b*b) in
-  let k = dot2v q @[0.0 - b, a] in
-  if k < 0.0 then length2 q - r1
-  else if k > a*h then length2 @[q.x, q.y - h] - r2
-  else dot2v q @[a, b] - r1
+  let k = dot q @[0.0 - b, a] in
+  if k < 0.0 then magnitude q - r1
+  else if k > a*h then magnitude @[q.x, q.y - h] - r2
+  else dot q @[a, b] - r1
 
 def sdOctahedron (p:vec3f32) (s:f32) : f32 =
-  let pa = abs3 p in
+  let pa = abs p in
   let m = pa.x + pa.y + pa.z - s in
   if 3.0*pa.x < m then
-    let k = clamp (0.5*(pa.z - pa.y + s)) 0.0 s in length3 @[pa.x, pa.y - s + k, pa.z - k]
+    let k = clamp (0.5*(pa.z - pa.y + s)) 0.0 s in magnitude @[pa.x, pa.y - s + k, pa.z - k]
   else if 3.0*pa.y < m then
     let q = @[pa.y, pa.z, pa.x] in
-    let k = clamp (0.5*(q.z - q.y + s)) 0.0 s in length3 @[q.x, q.y - s + k, q.z - k]
+    let k = clamp (0.5*(q.z - q.y + s)) 0.0 s in magnitude @[q.x, q.y - s + k, q.z - k]
   else if 3.0*pa.z < m then
     let q = @[pa.z, pa.x, pa.y] in
-    let k = clamp (0.5*(q.z - q.y + s)) 0.0 s in length3 @[q.x, q.y - s + k, q.z - k]
+    let k = clamp (0.5*(q.z - q.y + s)) 0.0 s in magnitude @[q.x, q.y - s + k, q.z - k]
   else m * 0.57735027
 
 def sdPyramid (p:vec3f32) (h:f32) : f32 =
@@ -217,12 +159,12 @@ def sdPyramid (p:vec3f32) (h:f32) : f32 =
   f32.sqrt ((d2 + q.z*q.z) / m2) * sign (f32.max q.z (0.0 - p.y))
 
 def sdRhombus (p:vec3f32) (la:f32) (lb:f32) (h:f32) (ra:f32) : f32 =
-  let pa = abs3 p in
+  let pa = abs p in
   let b = @[la, lb] in
-  let f = clamp ((ndot b @[b.x - 2.0*pa.x, b.y - 2.0*pa.z]) / (dot2v b b)) (0.0 - 1.0) 1.0 in
-  let q_len = length2 @[pa.x - 0.5*b.x*(1.0 - f), pa.z - 0.5*b.y*(1.0 + f)] in
+  let f = clamp ((ndot b @[b.x - 2.0*pa.x, b.y - 2.0*pa.z]) / (dot2 b)) (0.0 - 1.0) 1.0 in
+  let q_len = magnitude @[pa.x - 0.5*b.x*(1.0 - f), pa.z - 0.5*b.y*(1.0 + f)] in
   let q = @[q_len * sign (pa.x*b.y + pa.z*b.x - b.x*b.y) - ra, pa.y - h] in
-  f32.min (f32.max q.x q.y) 0.0 + length2 (max2 q @[0.0, 0.0])
+  f32.min (f32.max q.x q.y) 0.0 + magnitude (max q @[0.0, 0.0])
 
 ------------------------------------------------------------
 -- Scene Composition
@@ -315,9 +257,9 @@ def raycast (ro:vec3f32) (rd:vec3f32) : vec2f32 =
     if tb.y > 0.0 then
       if tb.x < tmax then
         let tmin2 = f32.max tb.x tmin in
-        let tmax2 = f32.min tb.y tmax in
+        let tmax = f32.min tb.y tmax in
         let (_, _, res2) = loop (i, t, r) = (0, tmin2, res) while i < 70 do
-          if t < tmax2 then
+          if t < tmax then
             let h = sdfScene @[ro.x + rd.x*t, ro.y + rd.y*t, ro.z + rd.z*t] in
             if f32.abs h.x < 0.0001 * t then (70, t, @[t, h.y])
             else (i + 1, t + h.x, r)
@@ -341,7 +283,7 @@ def calcNormal (pos:vec3f32) : vec3f32 =
     let e = @[0.5773 * e_base.x, 0.5773 * e_base.y, 0.5773 * e_base.z] in
     let m = (sdfScene @[pos.x + 0.0005*e.x, pos.y + 0.0005*e.y, pos.z + 0.0005*e.z]).x in
     (i + 1, @[acc.x + e.x*m, acc.y + e.y*m, acc.z + e.z*m])
-  in normalize3 n
+  in normalize n
 
 ------------------------------------------------------------
 -- Ambient Occlusion
@@ -380,8 +322,8 @@ def calcSoftshadow (ro:vec3f32) (rd:vec3f32) (mint:f32) (tmax_in:f32) : f32 =
 
 def checkersGradBox (p:vec2f32) (dpdx:vec2f32) (dpdy:vec2f32) : f32 =
   let w = @[f32.abs dpdx.x + f32.abs dpdy.x + 0.001, f32.abs dpdx.y + f32.abs dpdy.y + 0.001] in
-  let i1 = fract2 @[(p.x - 0.5*w.x)*0.5, (p.y - 0.5*w.y)*0.5] in
-  let i2 = fract2 @[(p.x + 0.5*w.x)*0.5, (p.y + 0.5*w.y)*0.5] in
+  let i1 = fract @[(p.x - 0.5*w.x)*0.5, (p.y - 0.5*w.y)*0.5] in
+  let i2 = fract @[(p.x + 0.5*w.x)*0.5, (p.y + 0.5*w.y)*0.5] in
   let ix = 2.0 * (f32.abs (i1.x - 0.5) - f32.abs (i2.x - 0.5)) / w.x in
   let iy = 2.0 * (f32.abs (i1.y - 0.5) - f32.abs (i2.y - 0.5)) / w.y in
   0.5 - 0.5*ix*iy
@@ -418,8 +360,8 @@ def render (ro:vec3f32) (rd:vec3f32) (rdx:vec3f32) (rdy:vec3f32) : vec3f32 =
     let occ = calcAO pos nor in
 
     -- sun
-    let lig = normalize3 @[0.0 - 0.5, 0.4, 0.0 - 0.6] in
-    let hal = normalize3 @[lig.x - rd.x, lig.y - rd.y, lig.z - rd.z] in
+    let lig = normalize @[0.0 - 0.5, 0.4, 0.0 - 0.6] in
+    let hal = normalize @[lig.x - rd.x, lig.y - rd.y, lig.z - rd.z] in
     let dif_raw = clamp (dot nor lig) 0.0 1.0 in
     let dif = dif_raw * calcSoftshadow pos lig 0.02 2.5 in
     let spe_raw = pow (clamp (dot nor hal) 0.0 1.0) 16.0 in
@@ -435,7 +377,7 @@ def render (ro:vec3f32) (rd:vec3f32) (rdx:vec3f32) (rdy:vec3f32) : vec3f32 =
     let lin_sky_spe = @[2.00 * spe_sky * 0.40 * ks, 2.00 * spe_sky * 0.60 * ks, 2.00 * spe_sky * 1.30 * ks] in
 
     -- back light
-    let back_dir = normalize3 @[0.5, 0.0, 0.6] in
+    let back_dir = normalize @[0.5, 0.0, 0.6] in
     let dif_back = clamp (dot nor back_dir) 0.0 1.0 * clamp (1.0 - pos.y) 0.0 1.0 * occ in
     let lin_back = @[col2.x * 0.55 * dif_back * 0.25, col2.y * 0.55 * dif_back * 0.25, col2.z * 0.55 * dif_back * 0.25] in
 
@@ -458,9 +400,9 @@ def render (ro:vec3f32) (rd:vec3f32) (rdx:vec3f32) (rdy:vec3f32) : vec3f32 =
 ------------------------------------------------------------
 
 def setCamera (ro:vec3f32) (ta:vec3f32) (cr:f32) : mat3f32 =
-  let cw = normalize3 @[ta.x - ro.x, ta.y - ro.y, ta.z - ro.z] in
+  let cw = normalize @[ta.x - ro.x, ta.y - ro.y, ta.z - ro.z] in
   let cp = @[f32.sin cr, f32.cos cr, 0.0] in
-  let cu = normalize3 (cross cw cp) in
+  let cu = normalize (cross cw cp) in
   let cv = cross cu cw in
   -- Row-vector convention: transpose from GLSL's mat3(cu, cv, cw)
   @[[cu.x, cv.x, cw.x], [cu.y, cv.y, cw.y], [cu.z, cv.z, cw.z]]
@@ -490,7 +432,7 @@ def fragment_main (#[builtin(position)] fragCoord:vec4f32) : #[location(0)] vec4
   let fl = 2.5 in
 
   -- ray direction (mat3 * vec3)
-  let rd_local = normalize3 @[p.x, p.y, fl] in
+  let rd_local = normalize @[p.x, p.y, fl] in
   let rd = mul rd_local ca in
 
   -- ray differentials (with Y flip)
@@ -498,8 +440,8 @@ def fragment_main (#[builtin(position)] fragCoord:vec4f32) : #[location(0)] vec4
              -((2.0*fragCoord.y - iResolution.y) / iResolution.y)] in
   let py = @[(2.0*fragCoord.x - iResolution.x) / iResolution.y,
              -((2.0*(fragCoord.y + 1.0) - iResolution.y) / iResolution.y)] in
-  let rdx_local = normalize3 @[px.x, px.y, fl] in
-  let rdy_local = normalize3 @[py.x, py.y, fl] in
+  let rdx_local = normalize @[px.x, px.y, fl] in
+  let rdy_local = normalize @[py.x, py.y, fl] in
   let rdx = mul rdx_local ca in
   let rdy = mul rdy_local ca in
 
@@ -995,7 +937,7 @@ def fragment_main (#[builtin(position)] fragCoord:vec4f32) : #[location(0)] vec4
 -- #if 0
 --     // do NOT call map() many times inside calcNormal()
 --     vec2 e = vec2(1.0,-1.0)*0.5773*0.0005;
---     return normalize3( e.xyy*map( pos + e.xyy ).x + 
+--     return normalize( e.xyy*map( pos + e.xyy ).x + 
 -- 					  e.yyx*map( pos + e.yyx ).x + 
 -- 					  e.yxy*map( pos + e.yxy ).x + 
 -- 					  e.xxx*map( pos + e.xxx ).x );
@@ -1009,7 +951,7 @@ def fragment_main (#[builtin(position)] fragCoord:vec4f32) : #[location(0)] vec4
 --         n += e*map(pos+0.0005*e).x;
 --       //if( n.x+n.y+n.z>100.0 ) break;
 --     }
---     return normalize3(n);
+--     return normalize(n);
 -- #endif    
 -- }
 -- 
@@ -1077,8 +1019,8 @@ def fragment_main (#[builtin(position)] fragCoord:vec4f32) : #[location(0)] vec4
 -- 
 --         // sun
 --         {
---             vec3  lig = normalize3( vec3(-0.5, 0.4, -0.6) );
---             vec3  hal = normalize3( lig-rd );
+--             vec3  lig = normalize( vec3(-0.5, 0.4, -0.6) );
+--             vec3  hal = normalize( lig-rd );
 --             float dif = clamp( dot( nor, lig ), 0.0, 1.0 );
 --           //if( dif>0.0001 )
 --         	      dif *= calcSoftshadow( pos, lig, 0.02, 2.5 );
@@ -1103,7 +1045,7 @@ def fragment_main (#[builtin(position)] fragCoord:vec4f32) : #[location(0)] vec4
 --         }
 --         // back
 --         {
---         	float dif = clamp( dot( nor, normalize3(vec3(0.5,0.0,0.6))), 0.0, 1.0 )*clamp( 1.0-pos.y,0.0,1.0);
+--         	float dif = clamp( dot( nor, normalize(vec3(0.5,0.0,0.6))), 0.0, 1.0 )*clamp( 1.0-pos.y,0.0,1.0);
 --                   dif *= occ;
 --         	lin += col*0.55*dif*vec3(0.25,0.25,0.25);
 --         }
@@ -1124,9 +1066,9 @@ def fragment_main (#[builtin(position)] fragCoord:vec4f32) : #[location(0)] vec4
 -- 
 -- mat3 setCamera( in vec3 ro, in vec3 ta, float cr )
 -- {
--- 	vec3 cw = normalize3(ta-ro);
+-- 	vec3 cw = normalize(ta-ro);
 -- 	vec3 cp = vec3(sin(cr), cos(cr),0.0);
--- 	vec3 cu = normalize3( cross(cw,cp) );
+-- 	vec3 cu = normalize( cross(cw,cp) );
 -- 	vec3 cv =          ( cross(cu,cw) );
 --     return mat3( cu, cv, cw );
 -- }
@@ -1158,13 +1100,13 @@ def fragment_main (#[builtin(position)] fragCoord:vec4f32) : #[location(0)] vec4
 --         const float fl = 2.5;
 --         
 --         // ray direction
---         vec3 rd = ca * normalize3( vec3(p,fl) );
+--         vec3 rd = ca * normalize( vec3(p,fl) );
 -- 
 --          // ray differentials
 --         vec2 px = (2.0*(fragCoord+vec2(1.0,0.0))-iResolution.xy)/iResolution.y;
 --         vec2 py = (2.0*(fragCoord+vec2(0.0,1.0))-iResolution.xy)/iResolution.y;
---         vec3 rdx = ca * normalize3( vec3(px,fl) );
---         vec3 rdy = ca * normalize3( vec3(py,fl) );
+--         vec3 rdx = ca * normalize( vec3(px,fl) );
+--         vec3 rdy = ca * normalize( vec3(py,fl) );
 --         
 --         // render	
 --         vec3 col = render( ro, rd, rdx, rdy );

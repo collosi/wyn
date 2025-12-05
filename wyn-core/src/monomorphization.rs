@@ -109,15 +109,22 @@ impl TypeKey {
                 // For other constructed types, use a string name + args
                 let name_str = match name {
                     TypeName::Str(s) => s.to_string(),
+                    TypeName::Float(bits) => format!("f{}", bits),
+                    TypeName::UInt(bits) => format!("u{}", bits),
+                    TypeName::Int(bits) => format!("i{}", bits),
                     TypeName::Array => "array".to_string(),
                     TypeName::Vec => "vec".to_string(),
                     TypeName::Mat => "mat".to_string(),
                     TypeName::Unsized => "unsized".to_string(),
+                    TypeName::Arrow => "arrow".to_string(),
                     TypeName::SizeVar(s) => format!("sizevar_{}", s),
                     TypeName::UserVar(s) => format!("uservar_{}", s),
                     TypeName::Named(s) => s.clone(),
                     TypeName::Unique => "unique".to_string(),
-                    _ => unreachable!("Should have been handled above"),
+                    TypeName::Unit => "unit".to_string(),
+                    TypeName::Tuple(n) => format!("tuple{}", n),
+                    TypeName::Pointer => "ptr".to_string(),
+                    _ => unreachable!("Should have been handled above: {:?}", name),
                 };
                 TypeKey::Constructed(name_str, args.iter().map(TypeKey::from_type).collect())
             }
