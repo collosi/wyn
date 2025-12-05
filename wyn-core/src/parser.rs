@@ -150,14 +150,20 @@ impl Parser {
         // Check for special attributes that require specific declaration types
         let entry_type =
             attributes.iter().find(|attr| matches!(attr, Attribute::Vertex | Attribute::Fragment));
-        let is_uniform = attributes.iter().any(|attr| matches!(attr, Attribute::Uniform));
+        let uniform_binding = attributes.iter().find_map(|attr| {
+            if let Attribute::Uniform { binding } = attr {
+                Some(*binding)
+            } else {
+                None
+            }
+        });
 
-        if is_uniform {
+        if let Some(binding) = uniform_binding {
             // Uniform declaration - delegate to helper
             if keyword != "def" {
                 bail_parse!("Uniform declarations must use 'def', not 'let'");
             }
-            return self.parse_uniform_decl();
+            return self.parse_uniform_decl(binding);
         } else if let Some(entry_attr) = entry_type {
             // Entry point: must be 'def', not 'let'
             if keyword != "def" {
@@ -372,7 +378,7 @@ impl Parser {
         }
     }
 
-    fn parse_uniform_decl(&mut self) -> Result<Declaration> {
+    fn parse_uniform_decl(&mut self, binding: u32) -> Result<Declaration> {
         // Consume 'def' keyword
         self.expect(Token::Def)?;
 
@@ -387,7 +393,7 @@ impl Parser {
             bail_parse!("Uniform declarations cannot have initializer values");
         }
 
-        Ok(Declaration::Uniform(UniformDecl { name, ty }))
+        Ok(Declaration::Uniform(UniformDecl { name, ty, binding }))
     }
 
     fn parse_attribute(&mut self) -> Result<Attribute> {
@@ -404,8 +410,17 @@ impl Parser {
                 Ok(Attribute::Fragment)
             }
             "uniform" => {
+                // Require (binding=N) parameter
+                self.expect(Token::LeftParen)?;
+                let param_name = self.expect_identifier()?;
+                if param_name != "binding" {
+                    bail_parse!("Unknown uniform parameter: {}, expected 'binding'", param_name);
+                }
+                self.expect(Token::Assign)?;
+                let binding = self.expect_integer()? as u32;
+                self.expect(Token::RightParen)?;
                 self.expect(Token::RightBracket)?;
-                Ok(Attribute::Uniform)
+                Ok(Attribute::Uniform { binding })
             }
             "builtin" => {
                 self.expect(Token::LeftParen)?;
@@ -1730,6 +1745,14 @@ impl Parser {
         match self.advance() {
             Some(Token::Identifier(name)) => Ok(name.clone()),
             _ => Err(err_parse!("Expected identifier at {}", span)),
+        }
+    }
+
+    fn expect_integer(&mut self) -> Result<i32> {
+        let span = self.current_span();
+        match self.advance() {
+            Some(Token::IntLiteral(n)) => Ok(*n),
+            _ => Err(err_parse!("Expected integer at {}", span)),
         }
     }
 

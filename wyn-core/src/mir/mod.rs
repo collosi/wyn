@@ -74,6 +74,8 @@ pub enum Def {
         name: String,
         /// The type of this uniform.
         ty: Type<TypeName>,
+        /// Explicit binding number.
+        binding: u32,
     },
 }
 

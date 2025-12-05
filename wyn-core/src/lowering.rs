@@ -92,7 +92,6 @@ struct Constructor {
     global_constants: HashMap<String, spirv::Word>,
     uniform_variables: HashMap<String, spirv::Word>,
     uniform_types: HashMap<String, spirv::Word>, // uniform name -> SPIR-V type ID
-    next_uniform_binding: u32,                   // Next binding number for uniforms
 
     // Lambda registry: tag index -> (function_name, arity)
     lambda_registry: Vec<(String, usize)>,
@@ -154,7 +153,6 @@ impl Constructor {
             global_constants: HashMap::new(),
             uniform_variables: HashMap::new(),
             uniform_types: HashMap::new(),
-            next_uniform_binding: 0,
             lambda_registry: Vec::new(),
             impl_source: ImplSource::default(),
             debug_buffer: None,
@@ -736,7 +734,7 @@ impl<'a> LowerCtx<'a> {
                 // Store constant ID for lookup
                 self.constructor.global_constants.insert(name.clone(), const_id);
             }
-            Def::Uniform { name, ty, .. } => {
+            Def::Uniform { name, ty, binding, .. } => {
                 // Create a SPIR-V uniform variable
                 let uniform_type = self.constructor.ast_type_to_spirv(ty);
                 let ptr_type =
@@ -744,9 +742,7 @@ impl<'a> LowerCtx<'a> {
                 let var_id =
                     self.constructor.builder.variable(ptr_type, None, spirv::StorageClass::Uniform, None);
 
-                // Decorate with descriptor set=1, binding=next available binding
-                let binding = self.constructor.next_uniform_binding;
-                self.constructor.next_uniform_binding += 1;
+                // Decorate with descriptor set=1 and explicit binding
                 self.constructor.builder.decorate(
                     var_id,
                     spirv::Decoration::DescriptorSet,
@@ -755,7 +751,7 @@ impl<'a> LowerCtx<'a> {
                 self.constructor.builder.decorate(
                     var_id,
                     spirv::Decoration::Binding,
-                    [Operand::LiteralBit32(binding)],
+                    [Operand::LiteralBit32(*binding)],
                 );
 
                 // Store uniform variable ID and type for lookup

@@ -753,7 +753,7 @@ fn test_parse_vector_arithmetic() {
 
 #[test]
 fn test_parse_uniform_attribute() {
-    let program = parse_ok("#[uniform] def material_color: vec3");
+    let program = parse_ok("#[uniform(binding=0)] def material_color: vec3");
     assert_eq!(program.declarations.len(), 1);
 
     let uniform_decl = match &program.declarations[0] {
@@ -761,6 +761,7 @@ fn test_parse_uniform_attribute() {
         _ => panic!("Expected Uniform declaration"),
     };
     assert_eq!(uniform_decl.name, "material_color");
+    assert_eq!(uniform_decl.binding, 0);
     assert_matches!(
         &uniform_decl.ty,
         Type::Constructed(TypeName::Named(name), args) if name == "vec3" && args.is_empty()
@@ -769,7 +770,7 @@ fn test_parse_uniform_attribute() {
 
 #[test]
 fn test_parse_uniform_without_initializer() {
-    let program = parse_ok("#[uniform] def material_color: vec3");
+    let program = parse_ok("#[uniform(binding=5)] def material_color: vec3");
     assert_eq!(program.declarations.len(), 1);
 
     let uniform_decl = match &program.declarations[0] {
@@ -777,6 +778,7 @@ fn test_parse_uniform_without_initializer() {
         _ => panic!("Expected Uniform declaration"),
     };
     assert_eq!(uniform_decl.name, "material_color");
+    assert_eq!(uniform_decl.binding, 5);
     assert_matches!(
         &uniform_decl.ty,
         Type::Constructed(TypeName::Named(name), args) if name == "vec3" && args.is_empty()
@@ -787,7 +789,7 @@ fn test_parse_uniform_without_initializer() {
 #[test]
 fn test_uniform_with_initializer_error() {
     expect_parse_error(
-        "#[uniform] def material_color: vec3 = vec3 1.0f32 0.5f32 0.2f32",
+        "#[uniform(binding=0)] def material_color: vec3 = vec3 1.0f32 0.5f32 0.2f32",
         |error| match error {
             CompilerError::ParseError(msg, _)
                 if msg.contains("Uniform declarations cannot have initializer values") =>
@@ -831,8 +833,8 @@ fn test_parse_complete_shader_example() {
     let program = parse_ok(
         r#"
             -- Complete shader example with multiple outputs
-            #[uniform] def material_color: vec3
-            #[uniform] def time: f32
+            #[uniform(binding=0)] def material_color: vec3
+            #[uniform(binding=1)] def time: f32
 
             #[vertex] def vertex_main(): (#[builtin(position)] vec4, #[location(0)] vec3) =
               let angle: f32 = time in

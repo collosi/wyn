@@ -177,8 +177,8 @@
 
 
 -- Uniforms from host
-#[uniform] def iResolution: vec2f32
-#[uniform] def iTime: f32
+#[uniform(binding=0)] def iResolution: vec2f32
+#[uniform(binding=1)] def iTime: f32
 
 -- Vertex shader: full-screen triangle
 def verts: [3]vec4f32 =

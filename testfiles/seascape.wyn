@@ -6,9 +6,9 @@
 ------------------------------------------------------------
 -- Uniforms
 ------------------------------------------------------------
-#[uniform] def iResolution: vec2f32
-#[uniform] def iTime: f32
-#[uniform] def iMouse: vec4f32
+#[uniform(binding=0)] def iResolution: vec2f32
+#[uniform(binding=1)] def iTime: f32
+#[uniform(binding=5)] def iMouse: vec4f32
 
 ------------------------------------------------------------
 -- Constants

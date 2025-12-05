@@ -520,6 +520,7 @@ impl Flattener {
                         id: self.next_node_id(),
                         name: uniform_decl.name.clone(),
                         ty: uniform_decl.ty.clone(),
+                        binding: uniform_decl.binding,
                     });
                 }
                 ast::Declaration::Sig(_)
@@ -552,7 +553,8 @@ impl Flattener {
             ast::Attribute::Location(loc) => mir::Attribute::Location(*loc),
             ast::Attribute::Vertex => mir::Attribute::Vertex,
             ast::Attribute::Fragment => mir::Attribute::Fragment,
-            ast::Attribute::Uniform => mir::Attribute::Uniform,
+            // The binding is stored in Def::Uniform, not the Attribute
+            ast::Attribute::Uniform { .. } => mir::Attribute::Uniform,
         }
     }
 
