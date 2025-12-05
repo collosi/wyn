@@ -263,6 +263,54 @@ def fragment (p:vec3f32) (iTime:f32) : vec3f32 =
   let col = mix3 red green blue t in
   @[(col.x * fog), (col.y * fog), (col.z * fog)]
 
+def cube_corners = 
+    [ @[-1.0, -1.0, 1.0],
+      @[-1.0, 1.0, 1.0],
+      @[1.0, 1.0, 1.0],
+      @[1.0, -1.0, 1.0],
+      @[-1.0, -1.0, -1.0],
+      @[-1.0, 1.0, -1.0],
+      @[1.0, 1.0, -1.0],
+      @[1.0, -1.0, -1.0] ]
+
+def instances_a = 
+  -- Instances (first batch, 18 boxes)
+    [ @[0.0, 0.0, -1.0],
+      @[-1.0, 0.0, -1.0],
+      @[1.0, 0.0, -1.0],
+      @[0.0, 1.0, -1.0],
+      @[0.0, -1.0, -1.0],
+      @[-1.0, 0.0, 0.0],
+      @[1.0, 0.0, 0.0],
+      @[0.0, 1.0, 0.0],
+      @[0.0, -1.0, 0.0],
+      @[-1.0, -1.0, 0.0],
+      @[1.0, 1.0, 0.0],
+      @[-1.0, 1.0, 0.0],
+      @[1.0, -1.0, 0.0],
+      @[0.0, 0.0, 1.0],
+      @[-1.0, 0.0, 1.0],
+      @[1.0, 0.0, 1.0],
+      @[0.0, 1.0, 1.0],
+      @[0.0, -1.0, 1.0] ]
+
+def instances_b = 
+    -- Second instances (8 circles)
+    [ @[-1.0, 1.0, -1.0],
+      @[1.0, 1.0, -1.0],
+      @[-1.0, -1.0, -1.0],
+      @[1.0, -1.0, -1.0],
+      @[-1.0, 1.0, 1.0],
+      @[1.0, 1.0, 1.0],
+      @[-1.0, -1.0, 1.0],
+      @[1.0, -1.0, 1.0] ]
+
+def edge_indexes = 
+  -- Edge indices (loop invariant)
+    [ [0,1],[1,2],[2,3],[3,0],
+      [4,5],[5,6],[6,7],[7,4],
+      [0,4],[1,5],[2,6],[3,7] ]
+
 -- Main per-fragment function
 -- Inputs:
 --   iResolution : [w, h]
@@ -290,60 +338,23 @@ def main_image (iResolution:vec2f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
   -- Precompute rot * cam (loop invariant)
   let rot_cam : mat4f32 = mul rot cam in
 
-  -- 8 cube corners in object space (loop invariant)
-  let verts0 : [8]vec3f32 =
-    [ @[-1.0, -1.0, 1.0],
-      @[-1.0, 1.0, 1.0],
-      @[1.0, 1.0, 1.0],
-      @[1.0, -1.0, 1.0],
-      @[-1.0, -1.0, -1.0],
-      @[-1.0, 1.0, -1.0],
-      @[1.0, 1.0, -1.0],
-      @[1.0, -1.0, -1.0] ] in
-
-  -- Edge indices (loop invariant)
-  let edges : [12][2]i32 =
-    [ [0,1],[1,2],[2,3],[3,0],
-      [4,5],[5,6],[6,7],[7,4],
-      [0,4],[1,5],[2,6],[3,7] ] in
-
-  -- Instances (first batch, 18 boxes)
-  let instA : [18]vec3f32 =
-    [ @[0.0, 0.0, -1.0],
-      @[-1.0, 0.0, -1.0],
-      @[1.0, 0.0, -1.0],
-      @[0.0, 1.0, -1.0],
-      @[0.0, -1.0, -1.0],
-      @[-1.0, 0.0, 0.0],
-      @[1.0, 0.0, 0.0],
-      @[0.0, 1.0, 0.0],
-      @[0.0, -1.0, 0.0],
-      @[-1.0, -1.0, 0.0],
-      @[1.0, 1.0, 0.0],
-      @[-1.0, 1.0, 0.0],
-      @[1.0, -1.0, 0.0],
-      @[0.0, 0.0, 1.0],
-      @[-1.0, 0.0, 1.0],
-      @[1.0, 0.0, 1.0],
-      @[0.0, 1.0, 1.0],
-      @[0.0, -1.0, 1.0] ] in
 
   -- Accumulate color
   let c_box_result =
     loop (idx, acc) = (0i32, base_col) while idx < 18 do
-      let inst = instA[idx] in
+      let inst = instances_a[idx] in
       let pos  = translation @[(inst.x * 4.0), (inst.y * 4.0), (inst.z * 4.0)] in
       let mat  : mat4f32 = mul pos rot_cam in
 
       -- Transform & perspective
-      let v4s : [8]vec4f32 = map (\(v:vec3f32) -> mul mat @[v.x, v.y, v.z, 1.0]) verts0 in
+      let v4s : [8]vec4f32 = map (\(v:vec3f32) -> mul mat @[v.x, v.y, v.z, 1.0]) cube_corners in
       let verts1 : [8]vec3f32 =
         map (\(q:vec4f32) ->
                   let zinv = 1.0 / q.z in
                   @[(q.x*zinv), (q.y*zinv), zinv])
                v4s in
 
-      let i_sum = sum_edges verts1 weight uv line_width edges in
+      let i_sum = sum_edges verts1 weight uv line_width edge_indexes in
 
       let shade = fragment verts1[0] iTime in
       let intensity = f32.min i_sum 1.0 in
@@ -352,20 +363,10 @@ def main_image (iResolution:vec2f32) (iTime:f32) (fragCoord:vec2f32) : vec4f32 =
       (idx + 1, acc') in
   let (dummy1, c_box) = c_box_result in
 
-  -- Second instances (8 circles)
-  let instB : [8]vec3f32 =
-    [ @[-1.0, 1.0, -1.0],
-      @[1.0, 1.0, -1.0],
-      @[-1.0, -1.0, -1.0],
-      @[1.0, -1.0, -1.0],
-      @[-1.0, 1.0, 1.0],
-      @[1.0, 1.0, 1.0],
-      @[-1.0, -1.0, 1.0],
-      @[1.0, -1.0, 1.0] ] in
 
   let c_final_result =
     loop (idx, acc) = (0i32, c_box) while idx < 8 do
-      let inst = instB[idx] in
+      let inst = instances_b[idx] in
       let pos = translation @[(inst.x * 4.0), (inst.y * 4.0), (inst.z * 4.0)] in
       let mat : mat4f32 = mul pos rot_cam in
       let v4  : vec4f32 = mul mat @[0.0, 0.0, 0.0, 1.0] in
