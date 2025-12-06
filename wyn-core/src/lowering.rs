@@ -89,6 +89,7 @@ struct Constructor {
     global_constants: HashMap<String, spirv::Word>,
     uniform_variables: HashMap<String, spirv::Word>,
     uniform_types: HashMap<String, spirv::Word>, // uniform name -> SPIR-V type ID
+    uniform_load_cache: HashMap<String, spirv::Word>, // cached OpLoad results per function
 
     // Lambda registry: tag index -> (function_name, arity)
     lambda_registry: Vec<(String, usize)>,
@@ -143,6 +144,7 @@ impl Constructor {
             global_constants: HashMap::new(),
             uniform_variables: HashMap::new(),
             uniform_types: HashMap::new(),
+            uniform_load_cache: HashMap::new(),
             lambda_registry: Vec::new(),
             impl_source: ImplSource::default(),
             debug_buffer: None,
@@ -454,6 +456,7 @@ impl Constructor {
         self.variables_block = None;
         self.first_code_block = None;
         self.env.clear();
+        self.uniform_load_cache.clear();
 
         Ok(())
     }
@@ -1312,13 +1315,19 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             }
             // Check if it's a uniform variable
             if let Some(&var_id) = constructor.uniform_variables.get(name) {
-                // Load from the uniform variable
+                // Check cache first to avoid redundant OpLoads
+                if let Some(&cached_id) = constructor.uniform_load_cache.get(name) {
+                    return Ok(cached_id);
+                }
+                // Load from the uniform variable and cache the result
                 let value_type_id = constructor
                     .uniform_types
                     .get(name)
                     .copied()
                     .ok_or_else(|| err_spirv!("Could not find type for uniform variable: {}", name))?;
-                return Ok(constructor.builder.load(value_type_id, None, var_id, None, [])?);
+                let load_id = constructor.builder.load(value_type_id, None, var_id, None, [])?;
+                constructor.uniform_load_cache.insert(name.to_string(), load_id);
+                return Ok(load_id);
             }
             Err(err_spirv!("Undefined variable: {}", name))
         }
