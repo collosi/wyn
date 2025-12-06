@@ -7,6 +7,7 @@
 use crate::ast::TypeName;
 use crate::error::Result;
 use crate::impl_source::{BuiltinImpl, ImplSource, PrimOp};
+use crate::lowering_common::is_empty_closure_type;
 use crate::mir::{self, Def, Expr, ExprKind, Literal, LoopKind, Program};
 use crate::types;
 use crate::{bail_spirv, err_spirv};
@@ -990,18 +991,6 @@ fn lower_regular_function(
 
     constructor.end_function()?;
     Ok(())
-}
-
-/// Check if a type is an empty closure (tuple/record with no real fields)
-fn is_empty_closure_type(ty: &PolyType<TypeName>) -> bool {
-    match ty {
-        PolyType::Constructed(TypeName::Tuple(_), args) => args.is_empty(),
-        PolyType::Constructed(TypeName::Record(fields), _) => {
-            // Empty if only field is __lambda_name
-            fields.iter().all(|name| name == "__lambda_name")
-        }
-        _ => false,
-    }
 }
 
 fn lower_entry_point(

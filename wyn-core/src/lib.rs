@@ -22,6 +22,8 @@ pub mod alias_checker;
 pub mod ast_const_fold;
 pub mod binding_lifter;
 pub mod constant_folding;
+pub mod glsl;
+pub mod lowering_common;
 pub mod materialize_hoisting;
 pub mod monomorphization;
 pub mod normalize;

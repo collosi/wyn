@@ -15,6 +15,9 @@ pub enum CompilerError {
     #[error("SPIR-V generation error: {0}")]
     SpirvError(String, Option<Span>),
 
+    #[error("GLSL generation error: {0}")]
+    GlslError(String, Option<Span>),
+
     #[error("Module system error: {0}")]
     ModuleError(String, Option<Span>),
 
@@ -35,6 +38,7 @@ impl CompilerError {
             Self::TypeError(_, span) => *span,
             Self::UndefinedVariable(_, span) => *span,
             Self::SpirvError(_, span) => *span,
+            Self::GlslError(_, span) => *span,
             Self::ModuleError(_, span) => *span,
             Self::FlatteningError(_, span) => *span,
             Self::IoError(_) | Self::SpirvBuilderError(_) => None,
@@ -71,6 +75,13 @@ macro_rules! err_undef {
 macro_rules! err_spirv {
     ($($arg:tt)*) => {
         $crate::error::CompilerError::SpirvError(format!($($arg)*), None)
+    };
+}
+
+#[macro_export]
+macro_rules! err_glsl {
+    ($($arg:tt)*) => {
+        $crate::error::CompilerError::GlslError(format!($($arg)*), None)
     };
 }
 
@@ -159,6 +170,13 @@ macro_rules! bail_undef {
 macro_rules! bail_spirv {
     ($($arg:tt)*) => {
         return Err($crate::err_spirv!($($arg)*))
+    };
+}
+
+#[macro_export]
+macro_rules! bail_glsl {
+    ($($arg:tt)*) => {
+        return Err($crate::err_glsl!($($arg)*))
     };
 }
 
