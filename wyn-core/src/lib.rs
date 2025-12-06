@@ -22,10 +22,10 @@ pub mod alias_checker;
 pub mod ast_const_fold;
 pub mod binding_lifter;
 pub mod constant_folding;
-pub mod lowering;
 pub mod materialize_hoisting;
 pub mod monomorphization;
 pub mod normalize;
+pub mod spirv;
 
 #[cfg(test)]
 mod alias_checker_tests;
@@ -370,7 +370,7 @@ impl Lifted {
 
     /// Lower MIR to SPIR-V with debug mode option
     pub fn lower_with_options(self, debug_enabled: bool) -> Result<Lowered> {
-        let spirv = lowering::lower(&self.mir, debug_enabled)?;
+        let spirv = spirv::lower(&self.mir, debug_enabled)?;
         Ok(Lowered { mir: self.mir, spirv })
     }
 }
