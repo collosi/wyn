@@ -53,6 +53,9 @@ enum Command {
         /// Maximum number of frames to render before exiting (for debugging)
         #[arg(long)]
         max_frames: Option<u32>,
+        /// Print frame timing statistics
+        #[arg(short, long)]
+        verbose: bool,
     },
     /// Show device and driver information
     #[command(name = "info")]
@@ -68,6 +71,7 @@ enum PipelineSpec {
         fragment: String,
         shadertoy: bool,
         max_frames: Option<u32>,
+        verbose: bool,
     },
 }
 
@@ -245,6 +249,10 @@ struct State {
     // Frame limiting (optional, for debugging)
     frame_count: u32,
     max_frames: Option<u32>,
+    // Frame timing (includes GPU wait)
+    frame_times: [f64; 60], // Recent frame times in ms (ring buffer)
+    frame_time_idx: usize,
+    verbose: bool,
 }
 
 impl State {
@@ -454,7 +462,9 @@ impl State {
                     usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
-                let initial_mouse = MouseUniform { mouse: [0.0, 0.0, 0.0, 0.0] };
+                let initial_mouse = MouseUniform {
+                    mouse: [0.0, 0.0, 0.0, 0.0],
+                };
                 queue.write_buffer(&mouse_buffer, 0, bytemuck::cast_slice(&[initial_mouse]));
 
                 let uniform_bind_group_layout =
@@ -536,9 +546,11 @@ impl State {
                 (None, None, None, None, None)
             };
 
-        // Extract max_frames from spec
-        let max_frames = match spec {
-            PipelineSpec::VertexFragment { max_frames, .. } => *max_frames,
+        // Extract max_frames and verbose from spec
+        let (max_frames, verbose) = match spec {
+            PipelineSpec::VertexFragment {
+                max_frames, verbose, ..
+            } => (*max_frames, *verbose),
         };
 
         // === Build pipeline from the chosen mode ==============================
@@ -614,6 +626,9 @@ impl State {
             start_time: now,
             frame_count: 0,
             max_frames,
+            frame_times: [0.0; 60],
+            frame_time_idx: 0,
+            verbose,
         })
     }
 
@@ -626,6 +641,9 @@ impl State {
     }
 
     fn render(&mut self) {
+        // Start frame timing (only when verbose)
+        let frame_start = if self.verbose { Some(std::time::Instant::now()) } else { None };
+
         self.frame_count += 1;
 
         // Update uniform data for this frame if Shadertoy mode is enabled
@@ -696,6 +714,26 @@ impl State {
 
                 self.queue.submit(Some(encoder.finish()));
                 frame.present();
+
+                // Wait for GPU to finish to get accurate frame timing (only when verbose)
+                if let Some(frame_start) = frame_start {
+                    let _ = self.device.poll(wgpu::PollType::Wait);
+
+                    let frame_time_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
+                    self.frame_times[self.frame_time_idx] = frame_time_ms;
+                    self.frame_time_idx += 1;
+                    if self.frame_time_idx >= 60 {
+                        let avg = self.frame_times.iter().sum::<f64>() / 60.0;
+                        let min = self.frame_times.iter().cloned().fold(f64::INFINITY, f64::min);
+                        let max = self.frame_times.iter().cloned().fold(0.0, f64::max);
+                        let fps = 1000.0 / avg;
+                        eprintln!(
+                            "[Frame {}] avg: {:.2}ms, min: {:.2}ms, max: {:.2}ms, fps: {:.1}",
+                            self.frame_count, avg, min, max, fps
+                        );
+                        self.frame_time_idx = 0;
+                    }
+                }
 
                 // Check frame limit if set
                 if let Some(max) = self.max_frames {
@@ -1038,6 +1076,7 @@ fn main() -> Result<()> {
             fragment,
             shadertoy,
             max_frames,
+            verbose,
         } => {
             // Resolve entry points: use provided names or auto-detect
             let (vertex_name, fragment_name) = resolve_entry_points(&path, vertex, fragment)?;
@@ -1048,6 +1087,7 @@ fn main() -> Result<()> {
                 fragment: fragment_name,
                 shadertoy,
                 max_frames,
+                verbose,
             };
 
             let event_loop = EventLoop::new().context("failed to create event loop")?;
