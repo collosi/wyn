@@ -10,6 +10,7 @@ use crate::impl_source::{BuiltinImpl, ImplSource, PrimOp};
 use crate::lowering_common::{ShaderStage, is_entry_point};
 use crate::mir::{Attribute, Def, Expr, ExprKind, Literal, LoopKind, Program};
 use polytype::Type as PolyType;
+use rspirv::spirv;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
@@ -39,6 +40,16 @@ struct LowerCtx<'a> {
     impl_source: ImplSource,
     /// Current indentation level
     indent: usize,
+    /// Tuple types that need struct definitions (keyed by struct name)
+    tuple_structs: HashMap<String, Vec<String>>,
+    /// Counter for unique tuple struct names
+    tuple_counter: usize,
+    /// Cache from tuple type signature to struct name
+    tuple_type_cache: HashMap<String, String>,
+    /// Variables declared in the current function (to avoid redeclarations)
+    declared_vars: HashSet<String>,
+    /// Counter for generating unique temporary names
+    temp_counter: usize,
 }
 
 impl<'a> LowerCtx<'a> {
@@ -59,6 +70,26 @@ impl<'a> LowerCtx<'a> {
             lowered: HashSet::new(),
             impl_source: ImplSource::default(),
             indent: 0,
+            tuple_structs: HashMap::new(),
+            tuple_counter: 0,
+            tuple_type_cache: HashMap::new(),
+            declared_vars: HashSet::new(),
+            temp_counter: 0,
+        }
+    }
+
+    fn fresh_id(&mut self) -> usize {
+        let id = self.temp_counter;
+        self.temp_counter += 1;
+        id
+    }
+
+    /// Check if a type is a struct (tuple or record) that can't be used in ternary
+    fn is_struct_type(&self, ty: &PolyType<TypeName>) -> bool {
+        match ty {
+            PolyType::Constructed(TypeName::Tuple(_), _) => true,
+            PolyType::Constructed(TypeName::Record(_), _) => true,
+            _ => false,
         }
     }
 
@@ -90,11 +121,13 @@ impl<'a> LowerCtx<'a> {
     }
 
     fn lower_shader(&mut self, entry_name: &str, stage: ShaderStage) -> Result<String> {
-        let mut output = String::new();
+        // Clear tuple structs from previous shader
+        self.tuple_structs.clear();
+        self.tuple_type_cache.clear();
+        self.tuple_counter = 0;
 
-        // GLSL version
-        writeln!(output, "#version 450").unwrap();
-        writeln!(output).unwrap();
+        // First pass: lower code to discover tuple types
+        let mut code = String::new();
 
         // Collect dependencies and emit them
         self.lowered.clear();
@@ -107,7 +140,7 @@ impl<'a> LowerCtx<'a> {
             } = def
             {
                 writeln!(
-                    output,
+                    code,
                     "layout(binding = {}) uniform {} {};",
                     binding,
                     self.type_to_glsl(ty),
@@ -116,21 +149,48 @@ impl<'a> LowerCtx<'a> {
                 .unwrap();
             }
         }
-        writeln!(output).unwrap();
+        writeln!(code).unwrap();
 
         // Emit helper functions (non-entry points first)
         for dep_name in &deps {
             if dep_name != entry_name {
                 if let Some(&idx) = self.def_index.get(dep_name) {
-                    self.lower_def(&self.program.defs[idx].clone(), &mut output)?;
+                    self.lower_def(&self.program.defs[idx].clone(), &mut code)?;
                 }
             }
         }
 
         // Emit entry point
         if let Some(&idx) = self.def_index.get(entry_name) {
-            self.lower_entry_point(&self.program.defs[idx].clone(), stage, &mut output)?;
+            self.lower_entry_point(&self.program.defs[idx].clone(), stage, &mut code)?;
         }
+
+        // Now build the final output with struct definitions first
+        let mut output = String::new();
+
+        // GLSL version and extensions
+        writeln!(output, "#version 450").unwrap();
+        writeln!(output, "#extension GL_ARB_shading_language_420pack : enable").unwrap();
+        writeln!(output).unwrap();
+
+        // Emit struct definitions for tuple types
+        if !self.tuple_structs.is_empty() {
+            writeln!(output, "// Tuple struct definitions").unwrap();
+            // Sort by name for deterministic output
+            let mut structs: Vec<_> = self.tuple_structs.iter().collect();
+            structs.sort_by_key(|(name, _)| *name);
+            for (struct_name, field_types) in structs {
+                writeln!(output, "struct {} {{", struct_name).unwrap();
+                for (i, field_type) in field_types.iter().enumerate() {
+                    writeln!(output, "    {} _{};", field_type, i).unwrap();
+                }
+                writeln!(output, "}};").unwrap();
+            }
+            writeln!(output).unwrap();
+        }
+
+        // Append the code
+        output.push_str(&code);
 
         Ok(output)
     }
@@ -155,8 +215,14 @@ impl<'a> LowerCtx<'a> {
 
         if let Some(&idx) = self.def_index.get(name) {
             let def = &self.program.defs[idx];
-            if let Def::Function { body, .. } = def {
-                self.collect_expr_deps(body, deps, visited)?;
+            match def {
+                Def::Function { body, .. } => {
+                    self.collect_expr_deps(body, deps, visited)?;
+                }
+                Def::Constant { body, .. } => {
+                    self.collect_expr_deps(body, deps, visited)?;
+                }
+                Def::Uniform { .. } => {}
             }
         }
 
@@ -218,7 +284,15 @@ impl<'a> LowerCtx<'a> {
             ExprKind::Literal(lit) => {
                 self.collect_literal_deps(lit, deps, visited)?;
             }
-            ExprKind::Var(_) | ExprKind::Unit => {}
+            ExprKind::Var(name) => {
+                // Check if this references a constant
+                if let Some(&idx) = self.def_index.get(name) {
+                    if matches!(self.program.defs[idx], Def::Constant { .. }) {
+                        self.collect_deps_recursive(name, deps, visited)?;
+                    }
+                }
+            }
+            ExprKind::Unit => {}
         }
         Ok(())
     }
@@ -261,6 +335,9 @@ impl<'a> LowerCtx<'a> {
                     return Ok(()); // Entry points handled separately
                 }
 
+                // Clear declared variables for this function
+                self.declared_vars.clear();
+
                 // Function signature
                 write!(output, "{} {}(", self.type_to_glsl(ret_type), name).unwrap();
                 for (i, param) in params.iter().enumerate() {
@@ -268,6 +345,8 @@ impl<'a> LowerCtx<'a> {
                         write!(output, ", ").unwrap();
                     }
                     write!(output, "{} {}", self.type_to_glsl(&param.ty), param.name).unwrap();
+                    // Track params as declared
+                    self.declared_vars.insert(param.name.clone());
                 }
                 writeln!(output, ") {{").unwrap();
 
@@ -301,7 +380,11 @@ impl<'a> LowerCtx<'a> {
             ..
         } = def
         {
-            // Emit input declarations
+            // Clear declared variables for this entry point
+            self.declared_vars.clear();
+
+            // Collect input declarations and builtin mappings
+            let mut builtin_assignments = Vec::new();
             for (i, param) in params.iter().enumerate() {
                 let attrs = param_attributes.get(i).map(|v| v.as_slice()).unwrap_or(&[]);
                 for attr in attrs {
@@ -317,7 +400,28 @@ impl<'a> LowerCtx<'a> {
                             .unwrap();
                         }
                         Attribute::BuiltIn(builtin) => {
-                            // Built-ins are accessed via gl_* variables
+                            // Map builtin to GLSL gl_* variable
+                            let gl_var = match builtin {
+                                spirv::BuiltIn::Position => {
+                                    if stage == ShaderStage::Fragment {
+                                        "gl_FragCoord"
+                                    } else {
+                                        "gl_Position"
+                                    }
+                                }
+                                spirv::BuiltIn::VertexIndex => "gl_VertexID",
+                                spirv::BuiltIn::InstanceIndex => "gl_InstanceID",
+                                spirv::BuiltIn::FragCoord => "gl_FragCoord",
+                                spirv::BuiltIn::FrontFacing => "gl_FrontFacing",
+                                spirv::BuiltIn::PointSize => "gl_PointSize",
+                                spirv::BuiltIn::FragDepth => "gl_FragDepth",
+                                _ => continue,
+                            };
+                            builtin_assignments.push((
+                                param.name.clone(),
+                                self.type_to_glsl(&param.ty),
+                                gl_var.to_string(),
+                            ));
                         }
                         _ => {}
                     }
@@ -349,6 +453,12 @@ impl<'a> LowerCtx<'a> {
             writeln!(output).unwrap();
             writeln!(output, "void main() {{").unwrap();
             self.indent += 1;
+
+            // Emit builtin variable assignments
+            for (name, ty, gl_var) in &builtin_assignments {
+                writeln!(output, "{}{} {} = {};", self.indent_str(), ty, name, gl_var).unwrap();
+                self.declared_vars.insert(name.clone());
+            }
 
             let result = self.lower_expr(body, output)?;
 
@@ -386,7 +496,11 @@ impl<'a> LowerCtx<'a> {
             ExprKind::BinOp { op, lhs, rhs } => {
                 let l = self.lower_expr(lhs, output)?;
                 let r = self.lower_expr(rhs, output)?;
-                Ok(format!("({} {} {})", l, op, r))
+                // Handle operators that don't exist in GLSL
+                match op.as_str() {
+                    "**" => Ok(format!("pow({}, {})", l, r)),
+                    _ => Ok(format!("({} {} {})", l, op, r)),
+                }
             }
 
             ExprKind::UnaryOp { op, operand } => {
@@ -399,25 +513,59 @@ impl<'a> LowerCtx<'a> {
                 then_branch,
                 else_branch,
             } => {
-                let c = self.lower_expr(cond, output)?;
-                let t = self.lower_expr(then_branch, output)?;
-                let e = self.lower_expr(else_branch, output)?;
-                Ok(format!("({} ? {} : {})", c, t, e))
+                // Use if-else statements for struct/tuple types (better compatibility)
+                // Use ternary for simple scalar types
+                if self.is_struct_type(&expr.ty) {
+                    let result_var = format!("_w_if_{}", self.fresh_id());
+                    let ty_str = self.type_to_glsl(&expr.ty);
+
+                    // Declare result variable
+                    writeln!(output, "{}{} {};", self.indent_str(), ty_str, result_var).unwrap();
+                    self.declared_vars.insert(result_var.clone());
+
+                    // Emit if-else
+                    let c = self.lower_expr(cond, output)?;
+                    writeln!(output, "{}if ({}) {{", self.indent_str(), c).unwrap();
+                    self.indent += 1;
+                    let t = self.lower_expr(then_branch, output)?;
+                    writeln!(output, "{}{} = {};", self.indent_str(), result_var, t).unwrap();
+                    self.indent -= 1;
+                    writeln!(output, "{}}} else {{", self.indent_str()).unwrap();
+                    self.indent += 1;
+                    let e = self.lower_expr(else_branch, output)?;
+                    writeln!(output, "{}{} = {};", self.indent_str(), result_var, e).unwrap();
+                    self.indent -= 1;
+                    writeln!(output, "{}}}", self.indent_str()).unwrap();
+
+                    Ok(result_var)
+                } else {
+                    let c = self.lower_expr(cond, output)?;
+                    let t = self.lower_expr(then_branch, output)?;
+                    let e = self.lower_expr(else_branch, output)?;
+                    Ok(format!("({} ? {} : {})", c, t, e))
+                }
             }
 
             ExprKind::Let {
                 name, value, body, ..
             } => {
                 let v = self.lower_expr(value, output)?;
-                writeln!(
-                    output,
-                    "{}{} {} = {};",
-                    self.indent_str(),
-                    self.type_to_glsl(&value.ty),
-                    name,
-                    v
-                )
-                .unwrap();
+                if self.declared_vars.contains(name) {
+                    // Variable already declared, just assign
+                    writeln!(output, "{}{} = {};", self.indent_str(), name, v).unwrap();
+                } else {
+                    // New variable, declare with type
+                    writeln!(
+                        output,
+                        "{}{} {} = {};",
+                        self.indent_str(),
+                        self.type_to_glsl(&value.ty),
+                        name,
+                        v
+                    )
+                    .unwrap();
+                    self.declared_vars.insert(name.clone());
+                }
                 self.lower_expr(body, output)
             }
 
@@ -484,10 +632,13 @@ impl<'a> LowerCtx<'a> {
             }
             Literal::Matrix(rows) => {
                 let mut parts = Vec::new();
-                // GLSL matrices are column-major, so we need to transpose
-                for row in rows {
-                    for elem in row {
-                        parts.push(self.lower_expr(elem, output)?);
+                // GLSL matrices are column-major, so iterate column-by-column
+                let num_cols = rows.first().map(|r| r.len()).unwrap_or(0);
+                for col in 0..num_cols {
+                    for row in rows {
+                        if col < row.len() {
+                            parts.push(self.lower_expr(&row[col], output)?);
+                        }
                     }
                 }
                 Ok(format!("{}({})", self.type_to_glsl(ty), parts.join(", ")))
@@ -500,8 +651,13 @@ impl<'a> LowerCtx<'a> {
                 Ok(format!("{}[]({})", self.type_to_glsl(ty), parts.join(", ")))
             }
             Literal::Tuple(elems) => {
-                // Tuples don't exist in GLSL - this shouldn't happen for valid shaders
-                bail_glsl!("Tuples are not supported in GLSL")
+                // Emit tuple as struct constructor
+                let mut parts = Vec::new();
+                for e in elems {
+                    parts.push(self.lower_expr(e, output)?);
+                }
+                let struct_name = self.type_to_glsl(ty);
+                Ok(format!("{}({})", struct_name, parts.join(", ")))
             }
         }
     }
@@ -584,8 +740,27 @@ impl<'a> LowerCtx<'a> {
     ) -> Result<String> {
         match name {
             "tuple_access" => {
-                // args[0] is the tuple, args[1] is the index
-                Ok(format!("{}[{}]", args[0], args[1]))
+                // args[0] is the tuple/vector, args[1] is the index
+                if let ExprKind::Literal(Literal::Int(idx_str)) = &arg_exprs[1].kind {
+                    let idx: usize = idx_str.parse().unwrap_or(0);
+                    // Check if this is a vector type - use swizzle syntax
+                    if self.is_vector_type(&arg_exprs[0].ty) {
+                        let swizzle = match idx {
+                            0 => "x",
+                            1 => "y",
+                            2 => "z",
+                            3 => "w",
+                            _ => "x",
+                        };
+                        Ok(format!("{}.{}", args[0], swizzle))
+                    } else {
+                        // Tuple - use struct field syntax ._N
+                        Ok(format!("{}._{}", args[0], idx))
+                    }
+                } else {
+                    // Fallback for dynamic index
+                    Ok(format!("{}[{}]", args[0], args[1]))
+                }
             }
             "record_access" => {
                 // args[0] is the record, args[1] is the field name (as string literal)
@@ -613,34 +788,48 @@ impl<'a> LowerCtx<'a> {
     ) -> Result<String> {
         // Emit init
         let init_val = self.lower_expr(init, output)?;
-        writeln!(
-            output,
-            "{}{} {} = {};",
-            self.indent_str(),
-            self.type_to_glsl(&init.ty),
-            loop_var,
-            init_val
-        )
-        .unwrap();
-
-        // Emit init bindings
-        for (name, expr) in init_bindings {
-            let val = self.lower_expr(expr, output)?;
+        if self.declared_vars.contains(loop_var) {
+            writeln!(output, "{}{} = {};", self.indent_str(), loop_var, init_val).unwrap();
+        } else {
             writeln!(
                 output,
                 "{}{} {} = {};",
                 self.indent_str(),
-                self.type_to_glsl(&expr.ty),
-                name,
-                val
+                self.type_to_glsl(&init.ty),
+                loop_var,
+                init_val
             )
             .unwrap();
+            self.declared_vars.insert(loop_var.to_string());
+        }
+
+        // Emit init bindings
+        for (name, expr) in init_bindings {
+            let val = self.lower_expr(expr, output)?;
+            if self.declared_vars.contains(name) {
+                writeln!(output, "{}{} = {};", self.indent_str(), name, val).unwrap();
+            } else {
+                writeln!(
+                    output,
+                    "{}{} {} = {};",
+                    self.indent_str(),
+                    self.type_to_glsl(&expr.ty),
+                    name,
+                    val
+                )
+                .unwrap();
+                self.declared_vars.insert(name.clone());
+            }
         }
 
         match kind {
             LoopKind::While { cond } => {
+                // Use while(true) with break to ensure condition is re-evaluated each iteration
+                writeln!(output, "{}while (true) {{", self.indent_str()).unwrap();
+                self.indent += 1;
                 let cond_str = self.lower_expr(cond, output)?;
-                writeln!(output, "{}while ({}) {{", self.indent_str(), cond_str).unwrap();
+                writeln!(output, "{}if (!{}) break;", self.indent_str(), cond_str).unwrap();
+                self.indent -= 1;
             }
             LoopKind::ForRange { var, bound } => {
                 let bound_str = self.lower_expr(bound, output)?;
@@ -681,6 +870,13 @@ impl<'a> LowerCtx<'a> {
         self.indent += 1;
         let body_result = self.lower_expr(body, output)?;
         writeln!(output, "{}{} = {};", self.indent_str(), loop_var, body_result).unwrap();
+
+        // Re-extract loop bindings from the updated tuple
+        for (name, expr) in init_bindings {
+            let val = self.lower_expr(expr, output)?;
+            writeln!(output, "{}{} = {};", self.indent_str(), name, val).unwrap();
+        }
+
         self.indent -= 1;
 
         writeln!(output, "{}}}", self.indent_str()).unwrap();
@@ -688,7 +884,7 @@ impl<'a> LowerCtx<'a> {
         Ok(loop_var.to_string())
     }
 
-    fn type_to_glsl(&self, ty: &PolyType<TypeName>) -> String {
+    fn type_to_glsl(&mut self, ty: &PolyType<TypeName>) -> String {
         match ty {
             PolyType::Constructed(name, args) => match name {
                 TypeName::Float(32) => "float".to_string(),
@@ -699,6 +895,27 @@ impl<'a> LowerCtx<'a> {
                 TypeName::UInt(64) => "uint64_t".to_string(),
                 TypeName::Str(s) if *s == "bool" => "bool".to_string(),
                 TypeName::Unit => "void".to_string(),
+                // Tuple: generate a struct type
+                TypeName::Tuple(_) => {
+                    // Get element types
+                    let elem_types: Vec<String> = args.iter().map(|a| self.type_to_glsl(a)).collect();
+                    let sig = elem_types.join(",");
+
+                    // Check cache
+                    if let Some(name) = self.tuple_type_cache.get(&sig) {
+                        return name.clone();
+                    }
+
+                    // Generate new struct name
+                    let struct_name = format!("_Tuple{}", self.tuple_counter);
+                    self.tuple_counter += 1;
+
+                    // Register the struct
+                    self.tuple_structs.insert(struct_name.clone(), elem_types);
+                    self.tuple_type_cache.insert(sig, struct_name.clone());
+
+                    struct_name
+                }
                 // Vec: args[0] is Size(n), args[1] is element type
                 TypeName::Vec if args.len() >= 2 => {
                     let n = match &args[0] {
@@ -757,60 +974,68 @@ impl<'a> LowerCtx<'a> {
     fn indent_str(&self) -> String {
         "    ".repeat(self.indent)
     }
+
+    fn is_vector_type(&self, ty: &PolyType<TypeName>) -> bool {
+        matches!(ty, PolyType::Constructed(TypeName::Vec, _))
+    }
 }
 
-/// Map GLSL.std.450 extended instruction IDs to GLSL function names
+/// Map GLSLstd450 extended instruction opcodes to GLSL function names
 fn glsl_ext_to_name(id: u32) -> &'static str {
     match id {
-        1 => "round",
-        2 => "roundEven",
-        3 => "trunc",
-        4 => "abs",
-        5 => "sign",
-        6 => "floor",
-        7 => "ceil",
-        8 => "fract",
-        9 => "radians",
-        10 => "degrees",
-        11 => "sin",
-        12 => "cos",
-        13 => "tan",
-        14 => "asin",
-        15 => "acos",
-        16 => "atan",
-        17 => "sinh",
-        18 => "cosh",
-        19 => "tanh",
-        20 => "asinh",
-        21 => "acosh",
-        22 => "atanh",
-        23 => "atan", // atan2
-        24 => "pow",
-        25 => "exp",
-        26 => "log",
-        27 => "exp2",
-        28 => "log2",
-        29 => "sqrt",
-        30 => "inversesqrt",
-        31 => "determinant",
-        32 => "inverse",
-        37 => "min",
-        38 => "max", // UMin
-        39 => "max", // SMin
-        40 => "max", // FMin
-        41 => "max", // UMax
-        42 => "max", // SMax
-        43 => "max", // FMax
-        44 => "clamp",
-        45 => "clamp", // FClamp
-        46 => "mix",
-        66 => "length",
-        67 => "distance",
-        68 => "cross",
-        69 => "normalize",
-        70 => "faceforward",
-        71 => "reflect",
-        72 => "refract",
+        1 => "round",         // Round
+        2 => "roundEven",     // RoundEven
+        3 => "trunc",         // Trunc
+        4 => "abs",           // FAbs
+        5 => "abs",           // SAbs
+        6 => "sign",          // FSign
+        7 => "sign",          // SSign
+        8 => "floor",         // Floor
+        9 => "ceil",          // Ceil
+        10 => "fract",        // Fract
+        11 => "radians",      // Radians
+        12 => "degrees",      // Degrees
+        13 => "sin",          // Sin
+        14 => "cos",          // Cos
+        15 => "tan",          // Tan
+        16 => "asin",         // Asin
+        17 => "acos",         // Acos
+        18 => "atan",         // Atan
+        19 => "sinh",         // Sinh
+        20 => "cosh",         // Cosh
+        21 => "tanh",         // Tanh
+        22 => "asinh",        // Asinh
+        23 => "acosh",        // Acosh
+        24 => "atanh",        // Atanh
+        25 => "atan",         // Atan2
+        26 => "pow",          // Pow
+        27 => "exp",          // Exp
+        28 => "log",          // Log
+        29 => "exp2",         // Exp2
+        30 => "log2",         // Log2
+        31 => "sqrt",         // Sqrt
+        32 => "inversesqrt",  // InverseSqrt
+        33 => "determinant",  // Determinant
+        34 => "inverse",      // MatrixInverse
+        37 => "min",          // FMin
+        38 => "min",          // UMin
+        39 => "min",          // SMin
+        40 => "max",          // FMax
+        41 => "max",          // UMax
+        42 => "max",          // SMax
+        43 => "clamp",        // FClamp
+        44 => "clamp",        // UClamp
+        45 => "clamp",        // SClamp
+        46 => "mix",          // FMix
+        48 => "step",         // Step
+        49 => "smoothstep",   // SmoothStep
+        66 => "length",       // Length
+        67 => "distance",     // Distance
+        68 => "cross",        // Cross
+        69 => "normalize",    // Normalize
+        70 => "faceforward",  // FaceForward
+        71 => "reflect",      // Reflect
+        72 => "refract",      // Refract
         _ => "/* unknown_glsl_ext */",
     }
 }
