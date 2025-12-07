@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use log::info;
 use std::fs;
 use std::io::Write;
@@ -6,6 +6,18 @@ use std::path::PathBuf;
 use std::time::Instant;
 use thiserror::Error;
 use wyn_core::{Compiler, lexer, module_manager::ModuleManager, parser::Parser as WynParser};
+
+/// Target output format
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum Target {
+    /// SPIR-V binary (default)
+    #[default]
+    Spirv,
+    /// GLSL source code
+    Glsl,
+    /// GLSL for Shadertoy (fragment shader only, mainImage entry point)
+    Shadertoy,
+}
 
 /// Times the execution of a closure and prints the elapsed time if verbose.
 fn time<T, F: FnOnce() -> T>(name: &str, verbose: bool, f: F) -> T {
@@ -28,21 +40,25 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Compile a source file to SPIR-V
+    /// Compile a source file to SPIR-V or GLSL
     Compile {
         /// Input source file
         #[arg(value_name = "FILE")]
         input: PathBuf,
 
-        /// Output SPIR-V file (defaults to input name with .spv extension)
+        /// Output file (defaults to input name with .spv or .glsl extension)
         #[arg(short, long, value_name = "FILE")]
         output: Option<PathBuf>,
+
+        /// Target output format
+        #[arg(short, long, default_value = "spirv")]
+        target: Target,
 
         /// Output initial MIR (right after flattening, before optimizations)
         #[arg(long, value_name = "FILE")]
         output_init_mir: Option<PathBuf>,
 
-        /// Output final MIR (right before lowering to SPIR-V)
+        /// Output final MIR (right before lowering)
         #[arg(long, value_name = "FILE")]
         output_final_mir: Option<PathBuf>,
 
@@ -92,6 +108,7 @@ fn main() -> Result<(), DriverError> {
         Commands::Compile {
             input,
             output,
+            target,
             output_init_mir,
             output_final_mir,
             output_annotated,
@@ -101,6 +118,7 @@ fn main() -> Result<(), DriverError> {
             compile_file(
                 input,
                 output,
+                target,
                 output_init_mir,
                 output_final_mir,
                 output_annotated,
@@ -123,6 +141,7 @@ fn main() -> Result<(), DriverError> {
 fn compile_file(
     input: PathBuf,
     output: Option<PathBuf>,
+    target: Target,
     output_init_mir: Option<PathBuf>,
     output_final_mir: Option<PathBuf>,
     output_annotated: Option<PathBuf>,
@@ -175,25 +194,74 @@ fn compile_file(
     // Write final MIR if requested (right before lowering)
     write_mir_if_requested(&lifted.mir, &output_final_mir, "final MIR", verbose)?;
 
-    let lowered = time("lower", verbose, || lifted.lower_with_options(debug))?;
+    match target {
+        Target::Spirv => {
+            let lowered = time("lower", verbose, || lifted.lower_with_options(debug))?;
 
-    // Determine output path
-    let output_path = output.unwrap_or_else(|| {
-        let mut path = input.clone();
-        path.set_extension("spv");
-        path
-    });
+            // Determine output path
+            let output_path = output.unwrap_or_else(|| {
+                let mut path = input.clone();
+                path.set_extension("spv");
+                path
+            });
 
-    // Write SPIR-V binary
-    let mut file = fs::File::create(&output_path)?;
-    let spirv_len = lowered.spirv.len();
-    for word in lowered.spirv {
-        file.write_all(&word.to_le_bytes())?;
-    }
+            // Write SPIR-V binary
+            let mut file = fs::File::create(&output_path)?;
+            let spirv_len = lowered.spirv.len();
+            for word in lowered.spirv {
+                file.write_all(&word.to_le_bytes())?;
+            }
 
-    if verbose {
-        info!("Successfully compiled to {}", output_path.display());
-        info!("Generated {} words of SPIR-V", spirv_len);
+            if verbose {
+                info!("Successfully compiled to {}", output_path.display());
+                info!("Generated {} words of SPIR-V", spirv_len);
+            }
+        }
+        Target::Glsl => {
+            let lowered = time("lower_glsl", verbose, || lifted.lower_glsl())?;
+
+            // Determine base output path
+            let base_path = output.unwrap_or_else(|| input.clone());
+
+            // Write vertex shader if present
+            if let Some(ref vert_src) = lowered.glsl.vertex {
+                let mut vert_path = base_path.clone();
+                vert_path.set_extension("vert.glsl");
+                fs::write(&vert_path, vert_src)?;
+                if verbose {
+                    info!("Wrote vertex shader to {}", vert_path.display());
+                }
+            }
+
+            // Write fragment shader if present
+            if let Some(ref frag_src) = lowered.glsl.fragment {
+                let mut frag_path = base_path.clone();
+                frag_path.set_extension("frag.glsl");
+                fs::write(&frag_path, frag_src)?;
+                if verbose {
+                    info!("Wrote fragment shader to {}", frag_path.display());
+                }
+            }
+
+            if verbose && lowered.glsl.vertex.is_none() && lowered.glsl.fragment.is_none() {
+                info!("No entry points found - no shaders generated");
+            }
+        }
+        Target::Shadertoy => {
+            let shader_src = time("lower_shadertoy", verbose, || lifted.lower_shadertoy())?;
+
+            // Determine output path
+            let output_path = output.unwrap_or_else(|| {
+                let mut path = input.clone();
+                path.set_extension("shadertoy.glsl");
+                path
+            });
+
+            fs::write(&output_path, &shader_src)?;
+            if verbose {
+                info!("Wrote Shadertoy shader to {}", output_path.display());
+            }
+        }
     }
 
     Ok(())

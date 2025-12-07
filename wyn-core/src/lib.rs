@@ -375,12 +375,29 @@ impl Lifted {
         let spirv = spirv::lower(&self.mir, debug_enabled)?;
         Ok(Lowered { mir: self.mir, spirv })
     }
+
+    /// Lower MIR to GLSL
+    pub fn lower_glsl(self) -> Result<LoweredGlsl> {
+        let glsl = glsl::lower(&self.mir)?;
+        Ok(LoweredGlsl { mir: self.mir, glsl })
+    }
+
+    /// Lower MIR to Shadertoy-compatible GLSL (fragment shader only)
+    pub fn lower_shadertoy(self) -> Result<String> {
+        glsl::lower_shadertoy(&self.mir)
+    }
 }
 
 /// Final stage - contains MIR and SPIR-V bytecode
 pub struct Lowered {
     pub mir: mir::Program,
     pub spirv: Vec<u32>,
+}
+
+/// Final stage for GLSL - contains MIR and GLSL source strings
+pub struct LoweredGlsl {
+    pub mir: mir::Program,
+    pub glsl: glsl::GlslOutput,
 }
 
 // =============================================================================

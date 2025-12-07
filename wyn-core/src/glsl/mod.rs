@@ -4,4 +4,4 @@
 
 pub mod lowering;
 
-pub use lowering::{GlslOutput, lower};
+pub use lowering::{GlslOutput, lower, lower_shadertoy};
