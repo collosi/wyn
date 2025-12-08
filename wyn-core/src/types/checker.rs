@@ -446,6 +446,8 @@ impl TypeChecker {
                 let applied = expected_type.apply(&self.context);
                 match &applied {
                     Type::Constructed(TypeName::Int(_), _) | Type::Constructed(TypeName::UInt(_), _) => {
+                        // Store the type in the type table
+                        self.type_table.insert(expr.h.id, TypeScheme::Monotype(expected_type.clone()));
                         Ok(expected_type.clone())
                     }
                     _ => {
@@ -467,7 +469,11 @@ impl TypeChecker {
             ExprKind::FloatLiteral(_) => {
                 let applied = expected_type.apply(&self.context);
                 match &applied {
-                    Type::Constructed(TypeName::Float(_), _) => Ok(expected_type.clone()),
+                    Type::Constructed(TypeName::Float(_), _) => {
+                        // Store the type in the type table
+                        self.type_table.insert(expr.h.id, TypeScheme::Monotype(expected_type.clone()));
+                        Ok(expected_type.clone())
+                    }
                     _ => {
                         let inferred = self.infer_expression(expr)?;
                         self.context.unify(&inferred, expected_type).map_err(|_| {
