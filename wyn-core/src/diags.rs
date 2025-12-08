@@ -215,6 +215,9 @@ impl AstFormatter {
             Declaration::Uniform(u) => {
                 self.write_line(&format!("uniform {}: {}", u.name, u.ty));
             }
+            Declaration::Storage(s) => {
+                self.write_line(&format!("storage {}: {}", s.name, s.ty));
+            }
             Declaration::Sig(v) => {
                 self.write_line(&format!("sig {}: {}", v.name, v.ty));
             }
@@ -698,6 +701,17 @@ impl Display for mir::Def {
                     format_type(ty)
                 )
             }
+            mir::Def::Storage {
+                name, ty, binding, ..
+            } => {
+                write!(
+                    f,
+                    "#[storage(binding={})] def {}: {}",
+                    binding,
+                    name,
+                    format_type(ty)
+                )
+            }
         }
     }
 }
@@ -724,6 +738,7 @@ impl Display for mir::Attribute {
                 )
             }
             mir::Attribute::Uniform => write!(f, "#[uniform]"),
+            mir::Attribute::Storage => write!(f, "#[storage]"),
         }
     }
 }

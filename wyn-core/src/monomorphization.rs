@@ -143,6 +143,7 @@ impl Monomorphizer {
                 Def::Function { name, .. } => name.clone(),
                 Def::Constant { name, .. } => name.clone(),
                 Def::Uniform { name, .. } => name.clone(),
+                Def::Storage { name, .. } => name.clone(),
             };
 
             // Check if this is an entry point
@@ -254,6 +255,10 @@ impl Monomorphizer {
             }
             Def::Uniform { .. } => {
                 // Uniforms have no body to process
+                Ok(def)
+            }
+            Def::Storage { .. } => {
+                // Storage buffers have no body to process
                 Ok(def)
             }
         }
@@ -401,6 +406,7 @@ impl Monomorphizer {
             Def::Function { params, .. } => params.iter().map(|p| &p.ty).collect::<Vec<_>>(),
             Def::Constant { .. } => return Ok(subst), // No parameters
             Def::Uniform { .. } => return Ok(subst),  // No parameters
+            Def::Storage { .. } => return Ok(subst),  // No parameters
         };
 
         // Match argument types against parameter types
@@ -520,6 +526,15 @@ impl Monomorphizer {
                 name: new_name.to_string(),
                 ty: apply_subst(&ty, subst),
                 binding,
+            }),
+            Def::Storage { id, ty, set, binding, layout, access, .. } => Ok(Def::Storage {
+                id,
+                name: new_name.to_string(),
+                ty: apply_subst(&ty, subst),
+                set,
+                binding,
+                layout,
+                access,
             }),
         }
     }

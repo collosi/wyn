@@ -90,6 +90,20 @@ pub trait MirFolder: Sized {
         walk_uniform(self, id, name, ty, binding, ctx)
     }
 
+    fn visit_storage(
+        &mut self,
+        id: NodeId,
+        name: String,
+        ty: Type<TypeName>,
+        set: u32,
+        binding: u32,
+        layout: crate::ast::StorageLayout,
+        access: crate::ast::StorageAccess,
+        ctx: &mut Self::Ctx,
+    ) -> Result<Def, Self::Error> {
+        walk_storage(self, id, name, ty, set, binding, layout, access, ctx)
+    }
+
     fn visit_param(&mut self, p: Param, ctx: &mut Self::Ctx) -> Result<Param, Self::Error> {
         walk_param(self, p, ctx)
     }
@@ -361,6 +375,15 @@ pub fn walk_def<V: MirFolder>(v: &mut V, d: Def, ctx: &mut V::Ctx) -> Result<Def
             ty,
             binding,
         } => v.visit_uniform(id, name, ty, binding, ctx),
+        Def::Storage {
+            id,
+            name,
+            ty,
+            set,
+            binding,
+            layout,
+            access,
+        } => v.visit_storage(id, name, ty, set, binding, layout, access, ctx),
     }
 }
 
@@ -450,6 +473,29 @@ pub fn walk_uniform<V: MirFolder>(
         name,
         ty,
         binding,
+    })
+}
+
+pub fn walk_storage<V: MirFolder>(
+    v: &mut V,
+    id: NodeId,
+    name: String,
+    ty: Type<TypeName>,
+    set: u32,
+    binding: u32,
+    layout: crate::ast::StorageLayout,
+    access: crate::ast::StorageAccess,
+    ctx: &mut V::Ctx,
+) -> Result<Def, V::Error> {
+    let ty = v.visit_type(ty, ctx)?;
+    Ok(Def::Storage {
+        id,
+        name,
+        ty,
+        set,
+        binding,
+        layout,
+        access,
     })
 }
 

@@ -1003,6 +1003,10 @@ impl TypeChecker {
                 debug!("Checking Uniform declaration: {}", uniform_decl.name);
                 self.check_uniform_decl(uniform_decl)
             }
+            Declaration::Storage(storage_decl) => {
+                debug!("Checking Storage declaration: {}", storage_decl.name);
+                self.check_storage_decl(storage_decl)
+            }
             Declaration::Sig(sig_decl) => {
                 debug!("Checking Sig declaration: {}", sig_decl.name);
                 self.check_sig_decl(sig_decl)
@@ -1046,6 +1050,14 @@ impl TypeChecker {
         let type_scheme = TypeScheme::Monotype(decl.ty.clone());
         self.scope_stack.insert(decl.name.clone(), type_scheme);
         debug!("Inserting uniform variable '{}' into scope", decl.name);
+        Ok(())
+    }
+
+    fn check_storage_decl(&mut self, decl: &StorageDecl) -> Result<()> {
+        // Add the storage buffer to scope with its declared type
+        let type_scheme = TypeScheme::Monotype(decl.ty.clone());
+        self.scope_stack.insert(decl.name.clone(), type_scheme);
+        debug!("Inserting storage variable '{}' into scope", decl.name);
         Ok(())
     }
 

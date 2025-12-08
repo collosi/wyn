@@ -88,7 +88,8 @@ impl Normalizer {
             }
             // Constants must remain compile-time literals, so don't normalize them
             Def::Constant { .. } => def,
-            Def::Uniform { .. } => def, // Uniforms have no body to normalize
+            Def::Uniform { .. } => def,  // Uniforms have no body to normalize
+            Def::Storage { .. } => def,  // Storage buffers have no body to normalize
         }
     }
 
@@ -467,6 +468,7 @@ pub fn find_max_binding_id(program: &Program) -> u64 {
                 max_id = max_id.max(find_max_binding_id_in_expr(body));
             }
             Def::Uniform { .. } => {}
+            Def::Storage { .. } => {}
         }
     }
     max_id

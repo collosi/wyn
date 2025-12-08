@@ -110,6 +110,7 @@ impl BindingLifter {
                 })
             }
             Def::Uniform { .. } => Ok(def),
+            Def::Storage { .. } => Ok(def),
         }
     }
 

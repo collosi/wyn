@@ -77,6 +77,23 @@ pub enum Def {
         /// Explicit binding number.
         binding: u32,
     },
+    /// A storage buffer declaration (read-write GPU memory).
+    Storage {
+        /// Unique node identifier.
+        id: NodeId,
+        /// Storage buffer name.
+        name: String,
+        /// The type of this storage buffer (usually runtime-sized array).
+        ty: Type<TypeName>,
+        /// Descriptor set number.
+        set: u32,
+        /// Binding number within the set.
+        binding: u32,
+        /// Memory layout (std430, std140).
+        layout: crate::ast::StorageLayout,
+        /// Access mode (read, write, readwrite).
+        access: crate::ast::StorageAccess,
+    },
 }
 
 /// A function parameter.
@@ -101,6 +118,7 @@ pub enum Attribute {
         local_size: (u32, u32, u32),
     },
     Uniform,
+    Storage,
 }
 
 /// The main expression type with source location and type.

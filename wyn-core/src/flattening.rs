@@ -523,6 +523,18 @@ impl Flattener {
                         binding: uniform_decl.binding,
                     });
                 }
+                ast::Declaration::Storage(storage_decl) => {
+                    // Storage buffers use the declared type directly
+                    defs.push(mir::Def::Storage {
+                        id: self.next_node_id(),
+                        name: storage_decl.name.clone(),
+                        ty: storage_decl.ty.clone(),
+                        set: storage_decl.set,
+                        binding: storage_decl.binding,
+                        layout: storage_decl.layout,
+                        access: storage_decl.access,
+                    });
+                }
                 ast::Declaration::Sig(_)
                 | ast::Declaration::TypeBind(_)
                 | ast::Declaration::ModuleBind(_)
@@ -558,6 +570,8 @@ impl Flattener {
             },
             // The binding is stored in Def::Uniform, not the Attribute
             ast::Attribute::Uniform { .. } => mir::Attribute::Uniform,
+            // The binding is stored in Def::Storage, not the Attribute
+            ast::Attribute::Storage { .. } => mir::Attribute::Storage,
         }
     }
 

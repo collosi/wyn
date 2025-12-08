@@ -42,6 +42,9 @@ pub fn reachable_functions_ordered(program: &Program) -> Vec<String> {
             Def::Uniform { .. } => {
                 // Uniforms have no body
             }
+            Def::Storage { .. } => {
+                // Storage buffers have no body
+            }
         }
     }
 
@@ -201,6 +204,7 @@ pub fn filter_reachable(program: Program) -> Program {
                 Def::Function { name, .. } => name.clone(),
                 Def::Constant { name, .. } => name.clone(),
                 Def::Uniform { name, .. } => name.clone(),
+                Def::Storage { name, .. } => name.clone(),
             };
             (name, def)
         })
@@ -210,17 +214,17 @@ pub fn filter_reachable(program: Program) -> Program {
     let mut filtered_defs: Vec<Def> =
         ordered.into_iter().filter_map(|name| def_map.remove(&name)).collect();
 
-    // Add all remaining uniforms (they're referenced but have no body to traverse)
+    // Add all remaining uniforms and storage buffers (they're referenced but have no body to traverse)
     // Collect them first to avoid iterator invalidation
-    let uniforms: Vec<_> = def_map
+    let uniforms_and_storage: Vec<_> = def_map
         .iter()
-        .filter(|(_, def)| matches!(def, Def::Uniform { .. }))
+        .filter(|(_, def)| matches!(def, Def::Uniform { .. } | Def::Storage { .. }))
         .map(|(name, _)| name.clone())
         .collect();
 
-    for name in uniforms {
+    for name in uniforms_and_storage {
         if let Some(def) = def_map.remove(&name) {
-            // Insert uniforms at the beginning so they're declared before use
+            // Insert uniforms/storage at the beginning so they're declared before use
             filtered_defs.insert(0, def);
         }
     }

@@ -728,6 +728,7 @@ impl<'a> LowerCtx<'a> {
                 }
                 Def::Constant { name, .. } => name.clone(),
                 Def::Uniform { name, .. } => name.clone(),
+                Def::Storage { name, .. } => name.clone(),
             };
             def_index.insert(name, i);
         }
@@ -840,6 +841,40 @@ impl<'a> LowerCtx<'a> {
                 // Store uniform variable ID and type for lookup
                 self.constructor.uniform_variables.insert(name.clone(), var_id);
                 self.constructor.uniform_types.insert(name.clone(), uniform_type);
+            }
+            Def::Storage {
+                name, ty, binding, ..
+            } => {
+                // Create a SPIR-V storage buffer variable
+                // TODO: Implement proper storage buffer lowering
+                // For now, just register it similarly to uniforms
+                let storage_type = self.constructor.ast_type_to_spirv(ty);
+                let ptr_type = self.constructor.get_or_create_ptr_type(
+                    spirv::StorageClass::StorageBuffer,
+                    storage_type,
+                );
+                let var_id = self.constructor.builder.variable(
+                    ptr_type,
+                    None,
+                    spirv::StorageClass::StorageBuffer,
+                    None,
+                );
+
+                // Decorate with descriptor set=2 and explicit binding
+                self.constructor.builder.decorate(
+                    var_id,
+                    spirv::Decoration::DescriptorSet,
+                    [Operand::LiteralBit32(2)],
+                );
+                self.constructor.builder.decorate(
+                    var_id,
+                    spirv::Decoration::Binding,
+                    [Operand::LiteralBit32(*binding)],
+                );
+
+                // Store storage buffer variable ID for lookup
+                self.constructor.uniform_variables.insert(name.clone(), var_id);
+                self.constructor.uniform_types.insert(name.clone(), storage_type);
             }
         }
         Ok(())

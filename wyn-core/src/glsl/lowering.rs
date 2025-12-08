@@ -67,6 +67,7 @@ impl<'a> LowerCtx<'a> {
                 Def::Function { name, .. } => name,
                 Def::Constant { name, .. } => name,
                 Def::Uniform { name, .. } => name,
+                Def::Storage { name, .. } => name,
             };
             def_index.insert(name.clone(), i);
         }
@@ -357,6 +358,7 @@ impl<'a> LowerCtx<'a> {
                     self.collect_expr_deps(body, deps, visited)?;
                 }
                 Def::Uniform { .. } => {}
+                Def::Storage { .. } => {}
             }
         }
 
@@ -509,6 +511,9 @@ impl<'a> LowerCtx<'a> {
                 writeln!(output, "{};", val).unwrap();
             }
             Def::Uniform { .. } => {
+                // Already emitted at top of shader
+            }
+            Def::Storage { .. } => {
                 // Already emitted at top of shader
             }
         }

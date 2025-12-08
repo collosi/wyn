@@ -247,6 +247,7 @@ pub enum Declaration {
     Decl(Decl),           // Unified let/def declarations
     Entry(EntryDecl),     // Entry point declarations (vertex/fragment shaders)
     Uniform(UniformDecl), // Uniform declarations (no initializer)
+    Storage(StorageDecl), // Storage buffer declarations
     Sig(SigDecl),
     TypeBind(TypeBind),             // Type declarations
     ModuleBind(ModuleBind),         // Module declarations
@@ -267,6 +268,12 @@ pub enum Attribute {
     },
     Uniform {
         binding: u32,
+    },
+    Storage {
+        set: u32,
+        binding: u32,
+        layout: StorageLayout,
+        access: StorageAccess,
     },
 }
 
@@ -350,6 +357,33 @@ pub struct UniformDecl {
     pub name: String,
     pub ty: Type,     // Uniforms always have an explicit type
     pub binding: u32, // Explicit binding number (required)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StorageDecl {
+    pub name: String,
+    pub ty: Type,              // Storage buffers have an explicit type (usually runtime-sized array)
+    pub set: u32,              // Descriptor set number
+    pub binding: u32,          // Binding number within the set
+    pub layout: StorageLayout, // Memory layout (std430, std140)
+    pub access: StorageAccess, // Access mode (read, write, readwrite)
+}
+
+/// Memory layout for storage buffers
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum StorageLayout {
+    #[default]
+    Std430, // Default for SSBOs, tightly packed
+    Std140, // More relaxed alignment, compatible with UBOs
+}
+
+/// Access mode for storage buffers
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum StorageAccess {
+    ReadOnly,
+    WriteOnly,
+    #[default]
+    ReadWrite,
 }
 
 // Module system types
