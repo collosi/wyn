@@ -185,6 +185,7 @@ impl ModuleManager {
         self.load_str(include_str!("../../../prelude/math.wyn"))?;
         self.load_str(include_str!("../../../prelude/graphics.wyn"))?;
         self.load_str(include_str!("../../../prelude/gdp.wyn"))?;
+        self.load_str(include_str!("../../../prelude/rand.wyn"))?;
         Ok(())
     }
 
