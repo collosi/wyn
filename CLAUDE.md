@@ -53,3 +53,42 @@ cargo run --bin wyn -- check test.wyn
 ```bash
 cd viz && cargo run vf ../complete_shader_example.spv --vertex vertex_main --fragment fragment_main
 ```
+- Compile a source file to SPIR-V or GLSL
+
+     Usage: wyn compile [OPTIONS] <FILE>
+
+     Arguments:
+       <FILE>
+               Input source file
+
+     Options:
+       -o, --output <FILE>
+               Output file (defaults to input name with .spv or .glsl extension)
+
+       -t, --target <TARGET>
+               Target output format
+
+               Possible values:
+               - spirv:     SPIR-V binary (default)
+               - glsl:      GLSL source code
+               - shadertoy: GLSL for Shadertoy (fragment shader only, mainImage entry point)
+
+               [default: spirv]
+
+           --output-init-mir <FILE>
+               Output initial MIR (right after flattening, before optimizations)
+
+           --output-final-mir <FILE>
+               Output final MIR (right before lowering)
+
+           --output-annotated <FILE>
+               Output annotated source code with block IDs and locations
+
+           --debug
+               Enable debug mode: include debug ring buffer for debug_i32/debug_f32/debug_str
+
+       -v, --verbose
+               Print verbose output
+
+       -h, --help
+               Print help (see a summary with '-h')

@@ -621,3 +621,125 @@ def test (x: i32): i32 =
         materialize_count, mir_str
     );
 }
+
+// =============================================================================
+// Currying and partial application tests
+// =============================================================================
+
+#[test]
+fn test_curried_function_definition() {
+    // Curried function with parenthesized typed parameters
+    let mir = flatten_program(
+        r#"
+def add (x: f32) (y: f32): f32 = x + y
+def test: f32 = add 1.0f32 2.0f32
+"#,
+    );
+    let mir_str = format!("{}", mir);
+    println!("MIR:\n{}", mir_str);
+    assert!(mir_str.contains("def add"));
+    assert!(mir_str.contains("def test"));
+}
+
+#[test]
+fn test_curried_function_application() {
+    // Curried function application with multiple arguments
+    let mir = flatten_program(
+        r#"
+def add (x: f32) (y: f32): f32 = x + y
+def test: f32 =
+    let a = 1.0f32 in
+    let b = 2.0f32 in
+    add a b
+"#,
+    );
+    let mir_str = format!("{}", mir);
+    println!("MIR:\n{}", mir_str);
+    assert!(mir_str.contains("add"));
+}
+
+#[test]
+fn test_curried_partial_application() {
+    // Partial application creating a closure
+    let mir = flatten_program(
+        r#"
+def add (x: f32) (y: f32): f32 = x + y
+def test: f32 =
+    let add5 = add 5.0f32 in
+    add5 3.0f32
+"#,
+    );
+    let mir_str = format!("{}", mir);
+    println!("MIR:\n{}", mir_str);
+    assert!(mir_str.contains("add"));
+}
+
+#[test]
+fn test_higher_order_function_parameter() {
+    // Function parameter with arrow type
+    let mir = flatten_program(
+        r#"
+def apply (f: f32 -> f32) (x: f32): f32 = f x
+def double (x: f32): f32 = x + x
+def test: f32 = apply double 3.0f32
+"#,
+    );
+    let mir_str = format!("{}", mir);
+    println!("MIR:\n{}", mir_str);
+    assert!(mir_str.contains("def apply"));
+    assert!(mir_str.contains("def double"));
+}
+
+#[test]
+fn test_binary_function_parameter() {
+    // Binary function parameter (f32 -> f32 -> f32)
+    let mir = flatten_program(
+        r#"
+def fold2 (op: f32 -> f32 -> f32) (x: f32) (y: f32): f32 = op x y
+def add (a: f32) (b: f32): f32 = a + b
+def test: f32 = fold2 add 1.0f32 2.0f32
+"#,
+    );
+    let mir_str = format!("{}", mir);
+    println!("MIR:\n{}", mir_str);
+    assert!(mir_str.contains("def fold2"));
+}
+
+#[test]
+fn test_reduce_pattern() {
+    // The reduce pattern with curried binary operator
+    let mir = flatten_program(
+        r#"
+def reduce_f32 (op: f32 -> f32 -> f32) (init: f32) (arr: [4]f32): f32 =
+    let x0 = op init arr[0] in
+    let x1 = op x0 arr[1] in
+    let x2 = op x1 arr[2] in
+    op x2 arr[3]
+
+def test: f32 =
+    let arr = [1.0f32, 2.0f32, 3.0f32, 4.0f32] in
+    reduce_f32 (\x y -> x + y) 0.0f32 arr
+"#,
+    );
+    let mir_str = format!("{}", mir);
+    println!("MIR:\n{}", mir_str);
+    assert!(mir_str.contains("def reduce_f32"));
+}
+
+#[test]
+fn test_partial_application_of_curried_function() {
+    // Partial application of a curried non-lambda function
+    // This should synthesize a lambda to capture the partial args
+    let mir = flatten_program(
+        r#"
+def vec3 (x: f32) (y: f32) (z: f32): vec3f32 = @[x, y, z]
+def test: vec3f32 =
+    let make_red = vec3 1.0f32 in
+    make_red 0.0f32 0.0f32
+"#,
+    );
+    let mir_str = format!("{}", mir);
+    println!("MIR:\n{}", mir_str);
+    // Should generate a synthetic lambda for the partial application
+    assert!(mir_str.contains("_w_lam"));
+}

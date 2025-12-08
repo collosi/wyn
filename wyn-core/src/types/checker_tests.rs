@@ -834,18 +834,8 @@ def test (mat:mat4f32) (verts:[3]vec3f32) : [3]vec4f32 =
 }
 
 #[test]
-#[ignore = "Currying feature not implemented: type checker doesn't properly handle curried function application"]
 fn test_higher_order_reduce() {
     // Test reduce function with higher-order operations using explicit parentheses
-    // FAILS: Type checker reports "Function argument type mismatch" even with explicit parens
-    // Issue: The type checker doesn't properly handle curried function application.
-    // Expression `(op init) arr[0]` should typecheck as:
-    //   op : f32 -> f32 -> f32
-    //   init : f32
-    //   (op init) : f32 -> f32
-    //   arr[0] : f32
-    //   (op init) arr[0] : f32
-    // But the type checker incorrectly expects arr[0] to be a function type.
     typecheck_program(
         r#"
 def reduce_f32 (op: f32 -> f32 -> f32) (init: f32) (arr: [4]f32): f32 =
@@ -860,12 +850,8 @@ def test: f32 = reduce_f32 (\x y -> x + y) 0.0f32 [1.0f32, 2.0f32, 3.0f32, 4.0f3
 }
 
 #[test]
-#[ignore = "Currying feature not implemented: type checker doesn't properly handle curried function application"]
 fn test_higher_order_reduce_no_parens() {
-    // Test the same but WITHOUT parentheses
-    // FAILS: Same error as above - type checker doesn't handle curried application properly
-    // Issue: Function application should be left-associative by default, so
-    // `op init arr[0]` should parse/typecheck as `((op init) arr[0])`
+    // Test reduce without parentheses - application is left-associative
     typecheck_program(
         r#"
 def reduce_f32 (op: f32 -> f32 -> f32) (init: f32) (arr: [4]f32): f32 =
@@ -880,12 +866,8 @@ def test: f32 = reduce_f32 (\x y -> x + y) 0.0f32 [1.0f32, 2.0f32, 3.0f32, 4.0f3
 }
 
 #[test]
-#[ignore = "Currying feature not implemented: type checker doesn't properly handle curried function application"]
 fn test_nested_map_with_reduce() {
     // Test the nested map pattern used in matrix multiplication
-    // FAILS: Same curried function application issue as test_higher_order_reduce
-    // This pattern is common in array-oriented programming and critical for
-    // implementing operations like matrix multiplication using higher-order functions.
     typecheck_program(
         r#"
 def reduce_f32 (op: f32 -> f32 -> f32) (init: f32) (arr: [4]f32): f32 =

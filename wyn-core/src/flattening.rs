@@ -836,7 +836,7 @@ impl Flattener {
             }
             ExprKind::LetIn(let_in) => self.flatten_let_in(let_in, span)?,
             ExprKind::Lambda(lambda) => self.flatten_lambda(lambda, span)?,
-            ExprKind::Application(func, args) => self.flatten_application(func, args, span)?,
+            ExprKind::Application(func, args) => self.flatten_application(func, args, &ty, span)?,
             ExprKind::Tuple(elems) => {
                 let elems: Result<Vec<_>> =
                     elems.iter().map(|e| self.flatten_expr(e).map(|(e, _)| e)).collect();
@@ -1394,12 +1394,154 @@ impl Flattener {
         }
     }
 
+    /// Check if a type is an Arrow type and return the (param, result) if so
+    fn as_arrow_type(ty: &Type) -> Option<(&Type, &Type)> {
+        types::as_arrow(ty)
+    }
+
+    /// Synthesize a lambda for partial application of a function.
+    /// Given `f x y` where f expects 4 args, creates `\a b -> f x y a b`
+    fn synthesize_partial_application(
+        &mut self,
+        func_name: String,
+        applied_args: Vec<Expr>,
+        result_type: &Type,
+        span: Span,
+    ) -> Result<(mir::ExprKind, StaticValue)> {
+        // Extract remaining parameter types from the Arrow type
+        let mut remaining_param_types = vec![];
+        let mut current_type = result_type.clone();
+        while let Some((param_ty, ret_ty)) = Self::as_arrow_type(&current_type) {
+            remaining_param_types.push(param_ty.clone());
+            current_type = ret_ty.clone();
+        }
+        let final_return_type = current_type;
+
+        // Generate unique lambda name
+        let id = self.fresh_id();
+        let enclosing = self.enclosing_decl_stack.last().map(|s| s.as_str()).unwrap_or("anon");
+        let lam_name = format!("_w_partial_{}_{}", enclosing, id);
+
+        // Register lambda
+        let arity = remaining_param_types.len();
+        self.add_lambda(lam_name.clone(), arity);
+
+        // Build closure tuple elements: capture all applied args
+        let string_type = Type::Constructed(TypeName::Str("string"), vec![]);
+        let mut tuple_elems = vec![];
+        let mut type_fields = vec![];
+
+        // Capture each applied arg as a closure field
+        for (i, arg) in applied_args.iter().enumerate() {
+            let field_name = format!("_w_cap_{}", i);
+            tuple_elems.push(arg.clone());
+            type_fields.push((field_name, arg.ty.clone()));
+        }
+
+        // Last element: lambda name
+        let lambda_name_expr = self.mk_expr(
+            string_type.clone(),
+            mir::ExprKind::Literal(mir::Literal::String(lam_name.clone())),
+            span,
+        );
+        tuple_elems.push(lambda_name_expr);
+        type_fields.push(("_w_lambda_name".to_string(), string_type));
+
+        let closure_type = types::record(type_fields.clone());
+
+        // Build parameters: closure first, then remaining params
+        let mut params = vec![mir::Param {
+            name: "_w_closure".to_string(),
+            ty: closure_type.clone(),
+            is_consumed: false,
+        }];
+
+        let mut remaining_param_names = vec![];
+        for (i, param_ty) in remaining_param_types.iter().enumerate() {
+            let param_name = format!("_w_arg_{}", i);
+            remaining_param_names.push(param_name.clone());
+            params.push(mir::Param {
+                name: param_name,
+                ty: param_ty.clone(),
+                is_consumed: false,
+            });
+        }
+
+        // Build the body: call original function with captured args + remaining args
+        // First, extract captured args from closure using tuple_access intrinsic
+        let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
+        let mut call_args = vec![];
+        for (i, (field_name, field_ty)) in type_fields.iter().enumerate() {
+            if field_name == "_w_lambda_name" {
+                break;
+            }
+            let closure_var = self.mk_expr(
+                closure_type.clone(),
+                mir::ExprKind::Var("_w_closure".to_string()),
+                span,
+            );
+            let idx_expr = self.mk_expr(
+                i32_type.clone(),
+                mir::ExprKind::Literal(mir::Literal::Int(i.to_string())),
+                span,
+            );
+            let field_access = self.mk_expr(
+                field_ty.clone(),
+                mir::ExprKind::Intrinsic {
+                    name: "tuple_access".to_string(),
+                    args: vec![closure_var, idx_expr],
+                },
+                span,
+            );
+            call_args.push(field_access);
+        }
+
+        // Then add remaining parameter references
+        for (i, param_ty) in remaining_param_types.iter().enumerate() {
+            let param_name = format!("_w_arg_{}", i);
+            call_args.push(self.mk_expr(param_ty.clone(), mir::ExprKind::Var(param_name), span));
+        }
+
+        // Create the call expression
+        let body = self.mk_expr(
+            final_return_type.clone(),
+            mir::ExprKind::Call {
+                func: func_name,
+                args: call_args,
+            },
+            span,
+        );
+
+        // Create the generated function
+        let func = mir::Def::Function {
+            id: self.next_node_id(),
+            name: lam_name.clone(),
+            params,
+            ret_type: final_return_type,
+            attributes: vec![],
+            param_attributes: vec![],
+            return_attributes: vec![],
+            body,
+            span,
+        };
+        self.generated_functions.push(func);
+
+        // Return the closure tuple
+        let sv = StaticValue::Closure {
+            lam_name,
+            binding_id: 0,
+        };
+
+        Ok((mir::ExprKind::Literal(mir::Literal::Tuple(tuple_elems)), sv))
+    }
+
     /// Flatten an application expression
     fn flatten_application(
         &mut self,
         func: &Expression,
         args: &[Expression],
-        _span: Span,
+        result_type: &Type,
+        span: Span,
     ) -> Result<(mir::ExprKind, StaticValue)> {
         let (func_flat, func_sv) = self.flatten_expr(func)?;
 
@@ -1427,27 +1569,40 @@ impl Flattener {
                     // Desugar overloaded functions based on argument types
                     let desugared_name = self.desugar_function_name(name, args)?;
 
-                    // Direct function call (not a closure)
-                    Ok((
-                        mir::ExprKind::Call {
-                            func: desugared_name,
-                            args: args_flat,
-                        },
-                        StaticValue::Dyn { binding_id: 0 },
-                    ))
+                    // Check if this is a partial application (result type is Arrow)
+                    if Self::as_arrow_type(result_type).is_some() {
+                        // Partial application: synthesize a lambda
+                        self.synthesize_partial_application(desugared_name, args_flat, result_type, span)
+                    } else {
+                        // Direct function call (not a closure)
+                        Ok((
+                            mir::ExprKind::Call {
+                                func: desugared_name,
+                                args: args_flat,
+                            },
+                            StaticValue::Dyn { binding_id: 0 },
+                        ))
+                    }
                 }
             }
             // Handle qualified names like f32.sum (these come from name resolution)
             ExprKind::QualifiedName(quals, name) => {
                 let full_name =
                     if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) };
-                Ok((
-                    mir::ExprKind::Call {
-                        func: full_name,
-                        args: args_flat,
-                    },
-                    StaticValue::Dyn { binding_id: 0 },
-                ))
+
+                // Check if this is a partial application (result type is Arrow)
+                if Self::as_arrow_type(result_type).is_some() {
+                    // Partial application: synthesize a lambda
+                    self.synthesize_partial_application(full_name, args_flat, result_type, span)
+                } else {
+                    Ok((
+                        mir::ExprKind::Call {
+                            func: full_name,
+                            args: args_flat,
+                        },
+                        StaticValue::Dyn { binding_id: 0 },
+                    ))
+                }
             }
             // FieldAccess in application position - must be a closure
             ExprKind::FieldAccess(_, _) => {
