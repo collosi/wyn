@@ -440,6 +440,48 @@ impl TypeChecker {
     /// Returns the actual type (which should unify with expected_type)
     fn check_expression(&mut self, expr: &Expression, expected_type: &Type) -> Result<Type> {
         match &expr.kind {
+            // Integer literals can be checked against any integer type
+            ExprKind::IntLiteral(_) => {
+                // Accept the expected type if it's an integer type
+                let applied = expected_type.apply(&self.context);
+                match &applied {
+                    Type::Constructed(TypeName::Int(_), _) | Type::Constructed(TypeName::UInt(_), _) => {
+                        Ok(expected_type.clone())
+                    }
+                    _ => {
+                        // Fall back to inference (will produce i32)
+                        let inferred = self.infer_expression(expr)?;
+                        self.context.unify(&inferred, expected_type).map_err(|_| {
+                            err_type_at!(
+                                expr.h.span,
+                                "Expected {}, got {}",
+                                self.format_type(expected_type),
+                                self.format_type(&inferred)
+                            )
+                        })?;
+                        Ok(inferred)
+                    }
+                }
+            }
+            // Float literals can be checked against any float type
+            ExprKind::FloatLiteral(_) => {
+                let applied = expected_type.apply(&self.context);
+                match &applied {
+                    Type::Constructed(TypeName::Float(_), _) => Ok(expected_type.clone()),
+                    _ => {
+                        let inferred = self.infer_expression(expr)?;
+                        self.context.unify(&inferred, expected_type).map_err(|_| {
+                            err_type_at!(
+                                expr.h.span,
+                                "Expected {}, got {}",
+                                self.format_type(expected_type),
+                                self.format_type(&inferred)
+                            )
+                        })?;
+                        Ok(inferred)
+                    }
+                }
+            }
             ExprKind::Lambda(lambda) => {
                 // Special handling for lambdas in check mode
                 // Extract parameter types from the expected function type
@@ -1891,11 +1933,9 @@ impl TypeChecker {
             }
 
             ExprKind::TypeAscription(expr, ascribed_ty) => {
-                // Type ascription: check the inner expression and unify with ascribed type
-                let expr_ty = self.infer_expression(expr)?;
-                self.context.unify(&expr_ty, ascribed_ty).map_err(|e| {
-                    err_type_at!(expr.h.span, "Type ascription failed: {:?}", e)
-                })?;
+                // Type ascription: check the inner expression against the ascribed type
+                // This allows integer literals to take on the ascribed type (e.g., 42u32)
+                self.check_expression(expr, ascribed_ty)?;
                 Ok(ascribed_ty.clone())
             }
 

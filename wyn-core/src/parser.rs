@@ -23,6 +23,25 @@ fn get_matrix_types() -> &'static std::collections::HashMap<String, Type> {
     MATRIX_TYPES.get_or_init(|| types::matrix_type_constructors())
 }
 
+/// Convert a type suffix string (e.g., "u32", "f64") to its Type representation
+fn suffix_to_type(suffix: &str) -> Type {
+    let type_name = match suffix {
+        "f16" => TypeName::Float(16),
+        "f32" => TypeName::Float(32),
+        "f64" => TypeName::Float(64),
+        "i8" => TypeName::Int(8),
+        "i16" => TypeName::Int(16),
+        "i32" => TypeName::Int(32),
+        "i64" => TypeName::Int(64),
+        "u8" => TypeName::UInt(8),
+        "u16" => TypeName::UInt(16),
+        "u32" => TypeName::UInt(32),
+        "u64" => TypeName::UInt(64),
+        _ => TypeName::Named(suffix.to_string()),
+    };
+    Type::Constructed(type_name, vec![])
+}
+
 pub struct Parser {
     tokens: Vec<LocatedToken>,
     current: usize,
@@ -148,8 +167,12 @@ impl Parser {
         trace!("parse_decl({}): next token = {:?}", keyword, self.peek());
 
         // Check for special attributes that require specific declaration types
-        let entry_type =
-            attributes.iter().find(|attr| matches!(attr, Attribute::Vertex | Attribute::Fragment));
+        let entry_type = attributes.iter().find(|attr| {
+            matches!(
+                attr,
+                Attribute::Vertex | Attribute::Fragment | Attribute::Compute { .. }
+            )
+        });
         let uniform_binding = attributes.iter().find_map(|attr| {
             if let Attribute::Uniform { binding } = attr { Some(*binding) } else { None }
         });
@@ -405,6 +428,20 @@ impl Parser {
                 self.expect(Token::RightBracket)?;
                 Ok(Attribute::Fragment)
             }
+            "compute" => {
+                // Require (x, y, z) local size parameters
+                self.expect(Token::LeftParen)?;
+                let x = self.expect_integer()? as u32;
+                self.expect(Token::Comma)?;
+                let y = self.expect_integer()? as u32;
+                self.expect(Token::Comma)?;
+                let z = self.expect_integer()? as u32;
+                self.expect(Token::RightParen)?;
+                self.expect(Token::RightBracket)?;
+                Ok(Attribute::Compute {
+                    local_size: (x, y, z),
+                })
+            }
             "uniform" => {
                 // Require (binding=N) parameter
                 self.expect(Token::LeftParen)?;
@@ -425,12 +462,19 @@ impl Parser {
                 self.expect(Token::RightBracket)?;
 
                 let builtin = match builtin_name.as_str() {
+                    // Vertex shader builtins
                     "position" => spirv::BuiltIn::Position,
                     "vertex_index" => spirv::BuiltIn::VertexIndex,
                     "instance_index" => spirv::BuiltIn::InstanceIndex,
+                    // Fragment shader builtins
                     "front_facing" => spirv::BuiltIn::FrontFacing,
                     "frag_coord" => spirv::BuiltIn::FragCoord,
                     "frag_depth" => spirv::BuiltIn::FragDepth,
+                    // Compute shader builtins
+                    "global_invocation_id" => spirv::BuiltIn::GlobalInvocationId,
+                    "local_invocation_id" => spirv::BuiltIn::LocalInvocationId,
+                    "workgroup_id" => spirv::BuiltIn::WorkgroupId,
+                    "num_workgroups" => spirv::BuiltIn::NumWorkgroups,
                     _ => {
                         bail_parse!("Unknown builtin: {}", builtin_name);
                     }
@@ -1125,6 +1169,7 @@ impl Parser {
         matches!(
             self.peek(),
             Some(Token::IntLiteral(_)) |
+            Some(Token::SuffixedLiteral(_, _)) |
             Some(Token::FloatLiteral(_)) |
             Some(Token::StringLiteral(_)) |
             Some(Token::True) |
@@ -1227,6 +1272,22 @@ impl Parser {
                 let span = self.current_span();
                 self.advance();
                 Ok(self.node_counter.mk_node(ExprKind::IntLiteral(n), span))
+            }
+            Some(Token::SuffixedLiteral(inner, suffix)) => {
+                let inner = inner.clone();
+                let suffix = suffix.clone();
+                let span = self.current_span();
+                self.advance();
+                // Convert suffixed literal to TypeAscription(literal, type)
+                let inner_expr = match *inner {
+                    Token::IntLiteral(n) => ExprKind::IntLiteral(n),
+                    Token::FloatLiteral(f) => ExprKind::FloatLiteral(f),
+                    _ => bail_parse!("Invalid suffixed literal"),
+                };
+                let inner_node = self.node_counter.mk_node(inner_expr, span.clone());
+                // Convert suffix string to Type
+                let ty = suffix_to_type(&suffix);
+                Ok(self.node_counter.mk_node(ExprKind::TypeAscription(Box::new(inner_node), ty), span))
             }
             Some(Token::FloatLiteral(f)) => {
                 let f = *f;

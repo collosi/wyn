@@ -116,6 +116,8 @@ pub enum Intrinsic {
     ArrayUpdate,
     /// Debug output: write i32 to debug ring buffer
     DebugI32,
+    /// Debug output: write u32 to debug ring buffer
+    DebugU32,
     /// Debug output: write f32 to debug ring buffer (6 decimal places)
     DebugF32,
     /// Debug output: write string literal to debug ring buffer
@@ -191,9 +193,19 @@ impl ImplSource {
             };
 
             if valid_field {
-                // Extract element type: vec2f32 -> f32, vec3i32 -> i32
-                let elem_type = type_name[4..].to_string();
-                return Some(Type::Constructed(TypeName::Named(elem_type), vec![]));
+                // Extract element type: vec2f32 -> f32, vec3i32 -> i32, vec4u32 -> u32
+                let elem_type_str = &type_name[4..];
+                let elem_type_name = match elem_type_str {
+                    "f32" => TypeName::Float(32),
+                    "f64" => TypeName::Float(64),
+                    "i32" => TypeName::Int(32),
+                    "i64" => TypeName::Int(64),
+                    "u32" => TypeName::UInt(32),
+                    "u64" => TypeName::UInt(64),
+                    "bool" => TypeName::Str("bool"),
+                    other => TypeName::Named(other.to_string()),
+                };
+                return Some(Type::Constructed(elem_type_name, vec![]));
             }
         }
 
@@ -615,6 +627,7 @@ impl ImplSource {
     /// These write to a ring buffer for shader debugging
     fn register_debug_intrinsics(&mut self) {
         self.register("debug_i32", BuiltinImpl::Intrinsic(Intrinsic::DebugI32));
+        self.register("debug_u32", BuiltinImpl::Intrinsic(Intrinsic::DebugU32));
         self.register("debug_f32", BuiltinImpl::Intrinsic(Intrinsic::DebugF32));
         self.register("debug_str", BuiltinImpl::Intrinsic(Intrinsic::DebugStr));
 

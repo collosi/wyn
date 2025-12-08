@@ -1262,3 +1262,9 @@ def test4 (v:vec3f32): vec3f32 = smoothstep 0.0 1.0 v
         "#,
     );
 }
+
+#[test]
+fn test_u32_literal() {
+    // Test that u32 suffix on literals produces u32 type
+    typecheck_program("let x: u32 = 42u32");
+}

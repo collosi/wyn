@@ -97,6 +97,9 @@ pub enum Attribute {
     Location(u32),
     Vertex,
     Fragment,
+    Compute {
+        local_size: (u32, u32, u32),
+    },
     Uniform,
 }
 

@@ -9,6 +9,9 @@ use polytype::Type as PolyType;
 pub enum ShaderStage {
     Vertex,
     Fragment,
+    Compute {
+        local_size: (u32, u32, u32),
+    },
 }
 
 /// An entry point extracted from MIR
@@ -38,6 +41,14 @@ pub fn find_entry_points(program: &mir::Program) -> Vec<EntryPoint> {
                             stage: ShaderStage::Fragment,
                         });
                     }
+                    Attribute::Compute { local_size } => {
+                        entry_points.push(EntryPoint {
+                            name: name.clone(),
+                            stage: ShaderStage::Compute {
+                                local_size: *local_size,
+                            },
+                        });
+                    }
                     _ => {}
                 }
             }
@@ -49,7 +60,12 @@ pub fn find_entry_points(program: &mir::Program) -> Vec<EntryPoint> {
 
 /// Check if a function has entry point attributes
 pub fn is_entry_point(attributes: &[Attribute]) -> bool {
-    attributes.iter().any(|a| matches!(a, Attribute::Vertex | Attribute::Fragment))
+    attributes.iter().any(|a| {
+        matches!(
+            a,
+            Attribute::Vertex | Attribute::Fragment | Attribute::Compute { .. }
+        )
+    })
 }
 
 /// Check if a type represents an empty closure (no captured variables)

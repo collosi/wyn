@@ -262,6 +262,9 @@ pub enum Attribute {
     Location(u32),
     Vertex,
     Fragment,
+    Compute {
+        local_size: (u32, u32, u32),
+    },
     Uniform {
         binding: u32,
     },
@@ -273,6 +276,9 @@ impl Attribute {
     }
     pub fn is_fragment(&self) -> bool {
         matches!(self, Attribute::Fragment)
+    }
+    pub fn is_compute(&self) -> bool {
+        matches!(self, Attribute::Compute { .. })
     }
 }
 

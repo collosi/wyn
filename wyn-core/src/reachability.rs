@@ -12,12 +12,15 @@ use std::collections::HashSet;
 /// Find all functions reachable from entry points, in topological order.
 /// Returns a Vec with callees before callers (post-order DFS).
 pub fn reachable_functions_ordered(program: &Program) -> Vec<String> {
-    // Find entry points (functions with #[vertex] or #[fragment] attributes)
+    // Find entry points (functions with #[vertex], #[fragment], or #[compute] attributes)
     let mut entry_points = Vec::new();
     for def in &program.defs {
         if let Def::Function { name, attributes, .. } = def {
             for attr in attributes {
-                if matches!(attr, Attribute::Vertex | Attribute::Fragment) {
+                if matches!(
+                    attr,
+                    Attribute::Vertex | Attribute::Fragment | Attribute::Compute { .. }
+                ) {
                     entry_points.push(name.clone());
                     break;
                 }

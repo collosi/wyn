@@ -64,12 +64,17 @@ fn parse_hexadecimal_int(input: &str) -> IResult<&str, Token> {
             alt((hex_with_underscores, hex_digit1)),
             opt(int_type_suffix),
         )),
-        |(_, digits, _suffix)| {
+        |(_, digits, suffix)| {
             let clean = strip_underscores(digits);
             let value = i32::from_str_radix(&clean, 16).unwrap_or_else(|e| {
                 panic!("BUG: Failed to parse hexadecimal integer '0x{}': {}. The lexer matched the pattern but conversion failed.", clean, e)
             });
-            Token::IntLiteral(value)
+            let base_token = Token::IntLiteral(value);
+            match suffix {
+                // i32 is the default integer type, no need to wrap
+                Some("i32") | None => base_token,
+                Some(s) => Token::SuffixedLiteral(Box::new(base_token), s.to_string()),
+            }
         },
     )(input)
 }
@@ -82,12 +87,17 @@ fn parse_binary_int(input: &str) -> IResult<&str, Token> {
             alt((binary_with_underscores, recognize(many1(one_of("01"))))),
             opt(int_type_suffix),
         )),
-        |(_, digits, _suffix)| {
+        |(_, digits, suffix)| {
             let clean = strip_underscores(digits);
             let value = i32::from_str_radix(&clean, 2).unwrap_or_else(|e| {
                 panic!("BUG: Failed to parse binary integer '0b{}': {}. The lexer matched the pattern but conversion failed.", clean, e)
             });
-            Token::IntLiteral(value)
+            let base_token = Token::IntLiteral(value);
+            match suffix {
+                // i32 is the default integer type, no need to wrap
+                Some("i32") | None => base_token,
+                Some(s) => Token::SuffixedLiteral(Box::new(base_token), s.to_string()),
+            }
         },
     )(input)
 }
@@ -100,7 +110,7 @@ fn parse_decimal_int(input: &str) -> IResult<&str, Token> {
             alt((decimal_with_underscores, digit1)),
             opt(int_type_suffix),
         )),
-        |(sign, digits, _suffix)| {
+        |(sign, digits, suffix)| {
             let mut clean = strip_underscores(digits);
             if sign.is_some() {
                 clean = format!("-{}", clean);
@@ -108,7 +118,12 @@ fn parse_decimal_int(input: &str) -> IResult<&str, Token> {
             let value = clean.parse().unwrap_or_else(|e| {
                 panic!("BUG: Failed to parse decimal integer '{}': {}. The lexer matched the pattern but conversion failed.", clean, e)
             });
-            Token::IntLiteral(value)
+            let base_token = Token::IntLiteral(value);
+            match suffix {
+                // i32 is the default integer type, no need to wrap
+                Some("i32") | None => base_token,
+                Some(s) => Token::SuffixedLiteral(Box::new(base_token), s.to_string()),
+            }
         },
     )(input)
 }
@@ -166,7 +181,7 @@ pub fn parse_float_literal(input: &str) -> IResult<&str, Token> {
             alt((hexadecimalfloat, exponentfloat, pointfloat)),
             opt(float_type_suffix),
         )),
-        |(sign, float_str, _suffix)| {
+        |(sign, float_str, suffix)| {
             let mut clean = strip_underscores(float_str);
             if sign.is_some() {
                 clean = format!("-{}", clean);
@@ -183,7 +198,12 @@ pub fn parse_float_literal(input: &str) -> IResult<&str, Token> {
                 let value = clean.parse().unwrap_or_else(|e| {
                     panic!("BUG: Failed to parse float literal '{}': {}. The lexer matched the pattern but conversion failed.", clean, e)
                 });
-                Token::FloatLiteral(value)
+                let base_token = Token::FloatLiteral(value);
+                match suffix {
+                    // f32 is the default float type, no need to wrap
+                    Some("f32") | None => base_token,
+                    Some(s) => Token::SuffixedLiteral(Box::new(base_token), s.to_string()),
+                }
             }
         },
     )(input)

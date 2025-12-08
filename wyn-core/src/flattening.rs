@@ -477,10 +477,13 @@ impl Flattener {
                     let body = self.wrap_param_backing_stores(body, param_bindings, span);
 
                     let ret_type = self.get_expr_type(&e.body);
-                    let attrs = vec![if e.entry_type.is_vertex() {
-                        mir::Attribute::Vertex
-                    } else {
-                        mir::Attribute::Fragment
+                    let attrs = vec![match &e.entry_type {
+                        ast::Attribute::Vertex => mir::Attribute::Vertex,
+                        ast::Attribute::Fragment => mir::Attribute::Fragment,
+                        ast::Attribute::Compute { local_size } => mir::Attribute::Compute {
+                            local_size: *local_size,
+                        },
+                        _ => panic!("Invalid entry type attribute: {:?}", e.entry_type),
                     }];
 
                     // Extract return attributes from EntryDecl
@@ -553,6 +556,9 @@ impl Flattener {
             ast::Attribute::Location(loc) => mir::Attribute::Location(*loc),
             ast::Attribute::Vertex => mir::Attribute::Vertex,
             ast::Attribute::Fragment => mir::Attribute::Fragment,
+            ast::Attribute::Compute { local_size } => mir::Attribute::Compute {
+                local_size: *local_size,
+            },
             // The binding is stored in Def::Uniform, not the Attribute
             ast::Attribute::Uniform { .. } => mir::Attribute::Uniform,
         }

@@ -57,6 +57,27 @@ enum Command {
         #[arg(short, long)]
         verbose: bool,
     },
+    /// Run a compute shader (headless)
+    #[command(name = "compute")]
+    Compute {
+        /// Path to the SPIR-V module containing the compute entry point
+        path: PathBuf,
+        /// Compute shader entry point name (auto-detected if omitted)
+        #[arg(long)]
+        entry: Option<String>,
+        /// Number of workgroups to dispatch (X dimension)
+        #[arg(long, default_value = "1")]
+        workgroups_x: u32,
+        /// Number of workgroups to dispatch (Y dimension)
+        #[arg(long, default_value = "1")]
+        workgroups_y: u32,
+        /// Number of workgroups to dispatch (Z dimension)
+        #[arg(long, default_value = "1")]
+        workgroups_z: u32,
+        /// Print verbose output
+        #[arg(short, long)]
+        verbose: bool,
+    },
     /// Show device and driver information
     #[command(name = "info")]
     Info,
@@ -198,6 +219,271 @@ fn auto_detect_entry_points(path: &Path) -> Result<(String, String)> {
             Err(anyhow!(msg))
         }
     }
+}
+
+/// Auto-detect a compute entry point from a SPIR-V file.
+/// Succeeds if exactly one GLCompute entry point exists.
+fn auto_detect_compute_entry_point(path: &Path) -> Result<String> {
+    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+
+    if bytes.len() % 4 != 0 {
+        return Err(anyhow!("SPIR-V file size is not aligned to 4-byte words"));
+    }
+
+    let spirv_words: Vec<u32> = bytes
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect();
+
+    let entry_points = detect_entry_points(&spirv_words)?;
+
+    let compute_entries: Vec<_> =
+        entry_points.iter().filter(|(_, m)| *m == ExecutionModel::GLCompute).collect();
+
+    match compute_entries.len() {
+        1 => {
+            let name = compute_entries[0].0.clone();
+            eprintln!("Auto-detected compute entry point: '{}'", name);
+            Ok(name)
+        }
+        0 => Err(anyhow!("No GLCompute entry point found in SPIR-V module")),
+        _ => {
+            let mut msg = String::from("Multiple compute entry points found:\n");
+            for (name, _) in &compute_entries {
+                msg.push_str(&format!("  - {}\n", name));
+            }
+            msg.push_str("Use --entry to specify which one to run.");
+            Err(anyhow!(msg))
+        }
+    }
+}
+
+/// Create a headless device (no window/surface required)
+async fn create_headless_device(verbose: bool) -> Result<(wgpu::Device, wgpu::Queue)> {
+    let instance = Instance::new(&InstanceDescriptor::default());
+
+    let adapter = instance
+        .request_adapter(&RequestAdapterOptions {
+            power_preference: PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        })
+        .await
+        .context("request_adapter failed")?;
+
+    let adapter_features = adapter.features();
+    let spirv_passthrough_supported =
+        adapter_features.contains(wgpu::Features::SPIRV_SHADER_PASSTHROUGH);
+
+    if verbose {
+        println!("SPIRV_SHADER_PASSTHROUGH supported: {}", spirv_passthrough_supported);
+    }
+
+    let mut required_features = wgpu::Features::empty();
+    if spirv_passthrough_supported {
+        required_features |= wgpu::Features::SPIRV_SHADER_PASSTHROUGH;
+    }
+
+    adapter
+        .request_device(&DeviceDescriptor {
+            label: None,
+            required_features,
+            required_limits: wgpu::Limits::default(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            trace: Trace::Off,
+        })
+        .await
+        .context("failed to create logical device")
+}
+
+/// Create debug buffer and staging buffer for compute shaders
+fn create_compute_debug_buffers(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::Buffer, wgpu::Buffer) {
+    let debug_buffer = device.create_buffer(&BufferDescriptor {
+        label: Some("debug_buffer"),
+        size: DEBUG_BUFFER_SIZE,
+        usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let mut init_data = vec![0u32; (DEBUG_BUFFER_SIZE / 4) as usize];
+    init_data[2] = DEFAULT_MAX_LOOPS;
+    queue.write_buffer(&debug_buffer, 0, bytemuck::cast_slice(&init_data));
+
+    let staging_buffer = device.create_buffer(&BufferDescriptor {
+        label: Some("debug_staging_buffer"),
+        size: DEBUG_BUFFER_SIZE,
+        usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    (debug_buffer, staging_buffer)
+}
+
+/// Print decoded GDP debug output from a mapped buffer
+fn print_debug_buffer(u32_data: &[u32], verbose: bool) {
+    let write_head_global = u32_data[0] as usize;
+    let max_loops = u32_data[2] as usize;
+    let data_start = 3;
+    let data_len = 4093;
+
+    if write_head_global == 0 {
+        println!("[DEBUG] No output");
+        return;
+    }
+
+    let loop_count = write_head_global / data_len;
+    let words_to_read = write_head_global.min(data_len);
+
+    println!(
+        "\n=== Debug Output ({} words written, loops={}/{}) ===",
+        write_head_global, loop_count, max_loops
+    );
+
+    if verbose {
+        println!("Raw buffer hex (first 100 u32s):");
+        for i in 0..100.min(u32_data.len()) {
+            if i % 16 == 0 {
+                print!("\n{:04x}: ", i);
+            }
+            print!("{:08x} ", u32_data[i]);
+        }
+        println!("\n");
+    }
+
+    let data_slice = &u32_data[data_start..data_start + data_len];
+    let mut pos = 0;
+    let mut count = 0;
+
+    while pos < words_to_read {
+        let header = data_slice[pos];
+        let type_tag = header & 0xFF;
+        let size = (header >> 8) as usize;
+
+        if size == 0 || pos + 1 + size > data_len {
+            break;
+        }
+
+        match type_tag {
+            0x00 => println!("U: {}", data_slice[pos + 1]),
+            0x01 => println!("I: {}", data_slice[pos + 1] as i32),
+            0x02 => {
+                let mut bytes = Vec::new();
+                for i in 0..size {
+                    let word = data_slice[pos + 1 + i];
+                    bytes.extend_from_slice(&word.to_le_bytes());
+                }
+                while bytes.last() == Some(&0) {
+                    bytes.pop();
+                }
+                println!("S: {}", String::from_utf8_lossy(&bytes));
+            }
+            0x03 => println!("F: {}", f32::from_bits(data_slice[pos + 1])),
+            _ => {
+                println!("Unknown type: 0x{:02x}", type_tag);
+                break;
+            }
+        }
+        pos += 1 + size;
+        count += 1;
+    }
+
+    println!("({} values decoded)", count);
+    println!("=================================\n");
+}
+
+/// Run a compute shader headlessly (no window)
+async fn run_compute_shader(
+    path: PathBuf,
+    entry: String,
+    workgroups: (u32, u32, u32),
+    verbose: bool,
+) -> Result<()> {
+    let (device, queue) = create_headless_device(verbose).await?;
+
+    let (debug_buffer, staging_buffer) = create_compute_debug_buffers(&device, &queue);
+
+    let debug_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some("debug_bind_group_layout"),
+        entries: &[BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::COMPUTE,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    });
+
+    let debug_bind_group = device.create_bind_group(&BindGroupDescriptor {
+        label: Some("debug_bind_group"),
+        layout: &debug_bind_group_layout,
+        entries: &[BindGroupEntry {
+            binding: 0,
+            resource: BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: &debug_buffer,
+                offset: 0,
+                size: None,
+            }),
+        }],
+    });
+
+    let module = load_spirv_module(&device, &path)?;
+
+    let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+        label: Some("compute_layout"),
+        bind_group_layouts: &[&debug_bind_group_layout],
+        push_constant_ranges: &[],
+    });
+
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("compute_pipeline"),
+        layout: Some(&layout),
+        module: &module,
+        entry_point: Some(&entry),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+
+    if verbose {
+        println!("Dispatching {} x {} x {} workgroups...", workgroups.0, workgroups.1, workgroups.2);
+    }
+
+    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+        label: Some("compute_encoder"),
+    });
+
+    {
+        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("compute_pass"),
+            timestamp_writes: None,
+        });
+        cpass.set_pipeline(&pipeline);
+        cpass.set_bind_group(0, &debug_bind_group, &[]);
+        cpass.dispatch_workgroups(workgroups.0, workgroups.1, workgroups.2);
+    }
+
+    encoder.copy_buffer_to_buffer(&debug_buffer, 0, &staging_buffer, 0, DEBUG_BUFFER_SIZE);
+    queue.submit(Some(encoder.finish()));
+    let _ = device.poll(wgpu::PollType::Wait);
+
+    // Read back debug buffer
+    let buffer_slice = staging_buffer.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+        tx.send(result).unwrap();
+    });
+    let _ = device.poll(wgpu::PollType::Wait);
+
+    if rx.recv().unwrap().is_ok() {
+        let data = buffer_slice.get_mapped_range();
+        print_debug_buffer(bytemuck::cast_slice(&data), verbose);
+        drop(data);
+        staging_buffer.unmap();
+    }
+
+    Ok(())
 }
 
 // --- App state ---------------------------------------------------------------
@@ -1096,6 +1382,28 @@ fn main() -> Result<()> {
             if let Err(e) = event_loop.run_app(&mut app) {
                 return Err(anyhow!(e)).context("winit event loop errored");
             }
+        }
+        Command::Compute {
+            path,
+            entry,
+            workgroups_x,
+            workgroups_y,
+            workgroups_z,
+            verbose,
+        } => {
+            let entry_name = entry.unwrap_or_else(|| {
+                auto_detect_compute_entry_point(&path).unwrap_or_else(|e| {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                })
+            });
+
+            pollster::block_on(run_compute_shader(
+                path,
+                entry_name,
+                (workgroups_x, workgroups_y, workgroups_z),
+                verbose,
+            ))?;
         }
     }
 

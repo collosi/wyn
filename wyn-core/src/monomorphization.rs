@@ -148,7 +148,10 @@ impl Monomorphizer {
             // Check if this is an entry point
             if let Def::Function { attributes, .. } = &def {
                 for attr in attributes {
-                    if matches!(attr, Attribute::Vertex | Attribute::Fragment) {
+                    if matches!(
+                        attr,
+                        Attribute::Vertex | Attribute::Fragment | Attribute::Compute { .. }
+                    ) {
                         entry_points.push(WorkItem {
                             name: name.clone(),
                             def: def.clone(),

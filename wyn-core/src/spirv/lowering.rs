@@ -26,6 +26,14 @@ enum LowerState {
     Done,
 }
 
+/// Entry point information for SPIR-V emission
+struct EntryPointInfo {
+    name: String,
+    model: spirv::ExecutionModel,
+    /// Local size for compute shaders (x, y, z)
+    local_size: Option<(u32, u32, u32)>,
+}
+
 /// Context for on-demand lowering of MIR to SPIR-V
 struct LowerCtx<'a> {
     /// The MIR program being lowered
@@ -36,8 +44,8 @@ struct LowerCtx<'a> {
     state: HashMap<String, LowerState>,
     /// The SPIR-V builder
     constructor: Constructor,
-    /// Entry points to emit (name, execution model)
-    entry_points: Vec<(String, spirv::ExecutionModel)>,
+    /// Entry points to emit
+    entry_points: Vec<EntryPointInfo>,
 }
 
 /// Constructor wraps rspirv::Builder with an ergonomic API that handles:
@@ -708,10 +716,25 @@ impl<'a> LowerCtx<'a> {
                     for attr in attributes {
                         match attr {
                             mir::Attribute::Vertex => {
-                                entry_points.push((name.clone(), spirv::ExecutionModel::Vertex))
+                                entry_points.push(EntryPointInfo {
+                                    name: name.clone(),
+                                    model: spirv::ExecutionModel::Vertex,
+                                    local_size: None,
+                                });
                             }
                             mir::Attribute::Fragment => {
-                                entry_points.push((name.clone(), spirv::ExecutionModel::Fragment))
+                                entry_points.push(EntryPointInfo {
+                                    name: name.clone(),
+                                    model: spirv::ExecutionModel::Fragment,
+                                    local_size: None,
+                                });
+                            }
+                            mir::Attribute::Compute { local_size } => {
+                                entry_points.push(EntryPointInfo {
+                                    name: name.clone(),
+                                    model: spirv::ExecutionModel::GLCompute,
+                                    local_size: Some(*local_size),
+                                });
                             }
                             _ => {}
                         }
@@ -775,9 +798,12 @@ impl<'a> LowerCtx<'a> {
                 self.ensure_deps_lowered(body)?;
 
                 // Check if this is an entry point
-                let is_entry = attributes
-                    .iter()
-                    .any(|a| matches!(a, mir::Attribute::Vertex | mir::Attribute::Fragment));
+                let is_entry = attributes.iter().any(|a| {
+                    matches!(
+                        a,
+                        mir::Attribute::Vertex | mir::Attribute::Fragment | mir::Attribute::Compute { .. }
+                    )
+                });
 
                 if is_entry {
                     lower_entry_point(
@@ -907,16 +933,16 @@ impl<'a> LowerCtx<'a> {
     /// Run the lowering, starting from entry points
     fn run(mut self) -> Result<Vec<u32>> {
         // Lower all entry points (and their dependencies, including uniforms)
-        let entry_names: Vec<String> = self.entry_points.iter().map(|(n, _)| n.clone()).collect();
+        let entry_names: Vec<String> = self.entry_points.iter().map(|ep| ep.name.clone()).collect();
         for name in entry_names {
             self.ensure_lowered(&name)?;
         }
 
         // Emit entry points with interface variables
-        for (name, model) in &self.entry_points {
-            if let Some(&func_id) = self.constructor.functions.get(name) {
+        for ep in &self.entry_points {
+            if let Some(&func_id) = self.constructor.functions.get(&ep.name) {
                 let mut interfaces =
-                    self.constructor.entry_point_interfaces.get(name).cloned().unwrap_or_default();
+                    self.constructor.entry_point_interfaces.get(&ep.name).cloned().unwrap_or_default();
                 // Global constants are now true OpConstants (not variables), so they don't need
                 // to be added to the interface list
                 // Add debug buffer to interface if present
@@ -929,15 +955,27 @@ impl<'a> LowerCtx<'a> {
                         interfaces.push(uniform_var);
                     }
                 }
-                self.constructor.builder.entry_point(*model, func_id, name, interfaces);
+                self.constructor.builder.entry_point(ep.model, func_id, &ep.name, interfaces);
 
-                // Add execution mode for fragment shaders
-                if *model == spirv::ExecutionModel::Fragment {
-                    self.constructor.builder.execution_mode(
-                        func_id,
-                        spirv::ExecutionMode::OriginUpperLeft,
-                        [],
-                    );
+                // Add execution modes
+                match ep.model {
+                    spirv::ExecutionModel::Fragment => {
+                        self.constructor.builder.execution_mode(
+                            func_id,
+                            spirv::ExecutionMode::OriginUpperLeft,
+                            [],
+                        );
+                    }
+                    spirv::ExecutionModel::GLCompute => {
+                        if let Some((x, y, z)) = ep.local_size {
+                            self.constructor.builder.execution_mode(
+                                func_id,
+                                spirv::ExecutionMode::LocalSize,
+                                [x, y, z],
+                            );
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1044,7 +1082,7 @@ fn lower_entry_point(
     // Create Output variables for return values
     // Get return type components (if tuple, each element gets its own output)
     let ret_type_id = constructor.ast_type_to_spirv(ret_type);
-    let is_void = matches!(ret_type, PolyType::Constructed(TypeName::Str(s), _) if *s == "void");
+    let is_void = matches!(ret_type, PolyType::Constructed(TypeName::Unit, _));
 
     if !is_void {
         // Check if return is a tuple (multiple outputs)
@@ -1898,8 +1936,8 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
 
                                         // Store array in a variable, update element, load back
                                         let arr_type = result_type;
-                                        let arr_var =
-                                            constructor.declare_variable("_w_array_update_tmp", arr_type)?;
+                                        let arr_var = constructor
+                                            .declare_variable("_w_array_update_tmp", arr_type)?;
                                         constructor.builder.store(arr_var, arr_id, None, [])?;
 
                                         // Get pointer to element and store new value
@@ -1938,6 +1976,24 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
 
                                             // Write two words: [header, bits]
                                             constructor.emit_gdp_write_two_words(header, bits)?;
+
+                                            Ok(constructor.const_i32(0)) // void return
+                                        } else {
+                                            // Debug not enabled, no-op
+                                            Ok(constructor.const_i32(0))
+                                        }
+                                    }
+                                    Intrinsic::DebugU32 => {
+                                        // Debug intrinsic: encode u32 to GDP format
+                                        // Header = 0x02 | 0x100 (type=u32, size=1)
+                                        if constructor.debug_buffer.is_some() {
+                                            let value_id = arg_ids[0];
+
+                                            // Header: 0x02 | 0x100 = 0x102
+                                            let header = constructor.const_u32(0x102);
+
+                                            // Write two words: [header, value]
+                                            constructor.emit_gdp_write_two_words(header, value_id)?;
 
                                             Ok(constructor.const_i32(0)) // void return
                                         } else {

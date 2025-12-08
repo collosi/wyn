@@ -222,7 +222,11 @@ impl<'a> LowerCtx<'a> {
             }
 
             // Shadertoy entry point signature - use _st_fragCoord to avoid collision
-            writeln!(output, "void mainImage(out vec4 fragColor, in vec2 _st_fragCoord) {{").unwrap();
+            writeln!(
+                output,
+                "void mainImage(out vec4 fragColor, in vec2 _st_fragCoord) {{"
+            )
+            .unwrap();
             self.indent += 1;
 
             // If the shader expects vec4 fragCoord, convert from vec2
@@ -1113,59 +1117,59 @@ impl<'a> LowerCtx<'a> {
 /// Map GLSLstd450 extended instruction opcodes to GLSL function names
 fn glsl_ext_to_name(id: u32) -> &'static str {
     match id {
-        1 => "round",         // Round
-        2 => "roundEven",     // RoundEven
-        3 => "trunc",         // Trunc
-        4 => "abs",           // FAbs
-        5 => "abs",           // SAbs
-        6 => "sign",          // FSign
-        7 => "sign",          // SSign
-        8 => "floor",         // Floor
-        9 => "ceil",          // Ceil
-        10 => "fract",        // Fract
-        11 => "radians",      // Radians
-        12 => "degrees",      // Degrees
-        13 => "sin",          // Sin
-        14 => "cos",          // Cos
-        15 => "tan",          // Tan
-        16 => "asin",         // Asin
-        17 => "acos",         // Acos
-        18 => "atan",         // Atan
-        19 => "sinh",         // Sinh
-        20 => "cosh",         // Cosh
-        21 => "tanh",         // Tanh
-        22 => "asinh",        // Asinh
-        23 => "acosh",        // Acosh
-        24 => "atanh",        // Atanh
-        25 => "atan",         // Atan2
-        26 => "pow",          // Pow
-        27 => "exp",          // Exp
-        28 => "log",          // Log
-        29 => "exp2",         // Exp2
-        30 => "log2",         // Log2
-        31 => "sqrt",         // Sqrt
-        32 => "inversesqrt",  // InverseSqrt
-        33 => "determinant",  // Determinant
-        34 => "inverse",      // MatrixInverse
-        37 => "min",          // FMin
-        38 => "min",          // UMin
-        39 => "min",          // SMin
-        40 => "max",          // FMax
-        41 => "max",          // UMax
-        42 => "max",          // SMax
-        43 => "clamp",        // FClamp
-        44 => "clamp",        // UClamp
-        45 => "clamp",        // SClamp
-        46 => "mix",          // FMix
-        48 => "step",         // Step
-        49 => "smoothstep",   // SmoothStep
-        66 => "length",       // Length
-        67 => "distance",     // Distance
-        68 => "cross",        // Cross
-        69 => "normalize",    // Normalize
-        70 => "faceforward",  // FaceForward
-        71 => "reflect",      // Reflect
-        72 => "refract",      // Refract
+        1 => "round",        // Round
+        2 => "roundEven",    // RoundEven
+        3 => "trunc",        // Trunc
+        4 => "abs",          // FAbs
+        5 => "abs",          // SAbs
+        6 => "sign",         // FSign
+        7 => "sign",         // SSign
+        8 => "floor",        // Floor
+        9 => "ceil",         // Ceil
+        10 => "fract",       // Fract
+        11 => "radians",     // Radians
+        12 => "degrees",     // Degrees
+        13 => "sin",         // Sin
+        14 => "cos",         // Cos
+        15 => "tan",         // Tan
+        16 => "asin",        // Asin
+        17 => "acos",        // Acos
+        18 => "atan",        // Atan
+        19 => "sinh",        // Sinh
+        20 => "cosh",        // Cosh
+        21 => "tanh",        // Tanh
+        22 => "asinh",       // Asinh
+        23 => "acosh",       // Acosh
+        24 => "atanh",       // Atanh
+        25 => "atan",        // Atan2
+        26 => "pow",         // Pow
+        27 => "exp",         // Exp
+        28 => "log",         // Log
+        29 => "exp2",        // Exp2
+        30 => "log2",        // Log2
+        31 => "sqrt",        // Sqrt
+        32 => "inversesqrt", // InverseSqrt
+        33 => "determinant", // Determinant
+        34 => "inverse",     // MatrixInverse
+        37 => "min",         // FMin
+        38 => "min",         // UMin
+        39 => "min",         // SMin
+        40 => "max",         // FMax
+        41 => "max",         // UMax
+        42 => "max",         // SMax
+        43 => "clamp",       // FClamp
+        44 => "clamp",       // UClamp
+        45 => "clamp",       // SClamp
+        46 => "mix",         // FMix
+        48 => "step",        // Step
+        49 => "smoothstep",  // SmoothStep
+        66 => "length",      // Length
+        67 => "distance",    // Distance
+        68 => "cross",       // Cross
+        69 => "normalize",   // Normalize
+        70 => "faceforward", // FaceForward
+        71 => "reflect",     // Reflect
+        72 => "refract",     // Refract
         _ => "/* unknown_glsl_ext */",
     }
 }

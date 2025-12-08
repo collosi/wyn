@@ -63,6 +63,7 @@ pub enum Token {
     // Identifiers and literals
     Identifier(String),
     IntLiteral(i32),
+    SuffixedLiteral(Box<Token>, String), // literal token with type suffix (e.g., "u32", "i64", "f64")
     FloatLiteral(f32),
     CharLiteral(char),
     StringLiteral(String),
