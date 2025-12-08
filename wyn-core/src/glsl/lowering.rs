@@ -562,10 +562,19 @@ impl<'a> LowerCtx<'a> {
                 }
             }
 
-            // Emit output declarations
-            // For now, handle single output
+            // Get element types if return is a tuple
+            let ret_elem_types: Vec<&PolyType<TypeName>> =
+                if let PolyType::Constructed(TypeName::Tuple(_), args) = ret_type {
+                    args.iter().collect()
+                } else {
+                    vec![ret_type]
+                };
+
+            // Emit output declarations - handle tuple returns properly
+            let mut location_outputs: Vec<(usize, u32)> = Vec::new(); // (tuple_index, location)
             if !return_attributes.is_empty() {
                 for (i, attrs) in return_attributes.iter().enumerate() {
+                    let elem_type = ret_elem_types.get(i).unwrap_or(&ret_type);
                     for attr in attrs {
                         match attr {
                             Attribute::Location(loc) => {
@@ -573,10 +582,11 @@ impl<'a> LowerCtx<'a> {
                                     output,
                                     "layout(location = {}) out {} _out{};",
                                     loc,
-                                    self.type_to_glsl(ret_type), // TODO: handle tuple returns
+                                    self.type_to_glsl(elem_type),
                                     i
                                 )
                                 .unwrap();
+                                location_outputs.push((i, *loc));
                             }
                             _ => {}
                         }
@@ -596,18 +606,35 @@ impl<'a> LowerCtx<'a> {
 
             let result = self.lower_expr(body, output)?;
 
-            // Assign to outputs
-            if !return_attributes.is_empty() {
-                writeln!(output, "{}_out0 = {};", self.indent_str(), result).unwrap();
+            // Assign to outputs - handle tuple returns by extracting components
+            let is_tuple_return = ret_elem_types.len() > 1;
+            for (tuple_idx, _loc) in &location_outputs {
+                if is_tuple_return {
+                    writeln!(
+                        output,
+                        "{}_out{} = {}._{};",
+                        self.indent_str(),
+                        tuple_idx,
+                        result,
+                        tuple_idx
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(output, "{}_out0 = {};", self.indent_str(), result).unwrap();
+                }
             }
 
-            // Handle gl_Position for vertex shaders
+            // Handle gl_Position for vertex shaders - extract from tuple if needed
             if stage == ShaderStage::Vertex {
-                // Check if we need to write gl_Position
-                for attrs in return_attributes {
+                for (i, attrs) in return_attributes.iter().enumerate() {
                     for attr in attrs {
                         if let Attribute::BuiltIn(spirv::BuiltIn::Position) = attr {
-                            writeln!(output, "{}gl_Position = {};", self.indent_str(), result).unwrap();
+                            if is_tuple_return {
+                                writeln!(output, "{}gl_Position = {}._{};", self.indent_str(), result, i)
+                                    .unwrap();
+                            } else {
+                                writeln!(output, "{}gl_Position = {};", self.indent_str(), result).unwrap();
+                            }
                         }
                     }
                 }
@@ -785,6 +812,23 @@ impl<'a> LowerCtx<'a> {
                 Ok(format!("{}[]({})", self.type_to_glsl(ty), parts.join(", ")))
             }
             Literal::Tuple(elems) => {
+                // Check if this is a closure tuple: (_w_lambda_name, captures)
+                // TODO: This heuristic can produce false positives. Consider using a
+                // dedicated Closure variant in MIR for more robust detection.
+                let is_closure = elems.len() == 2
+                    && matches!(&elems[0].kind, ExprKind::Literal(Literal::String(_)))
+                    && matches!(&elems[1].kind, ExprKind::Literal(Literal::Tuple(_)));
+
+                // For closures, only lower the captures tuple (element 1)
+                if is_closure {
+                    return self.lower_expr(&elems[1], output);
+                }
+
+                // Empty tuples - return dummy value
+                if elems.is_empty() {
+                    return Ok("0".to_string());
+                }
+
                 // Emit tuple as struct constructor
                 let mut parts = Vec::new();
                 for e in elems {
@@ -1098,6 +1142,15 @@ impl<'a> LowerCtx<'a> {
                 // Array: args[0] is Size(n), args[1] is element type
                 TypeName::Array if args.len() >= 2 => {
                     format!("{}[]", self.type_to_glsl(&args[1]))
+                }
+                // Record types (closures) should be eliminated before GLSL lowering
+                TypeName::Record(fields) => {
+                    panic!(
+                        "BUG: Record type reached GLSL lowering. \
+                         This should have been eliminated during defunctionalization. \
+                         Fields: {:?}",
+                        fields
+                    );
                 }
                 _ => "/* unknown */".to_string(),
             },

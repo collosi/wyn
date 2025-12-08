@@ -62,8 +62,6 @@ pub struct Flattener {
     static_values: ScopeStack<StaticValue>,
     /// Set of builtin names to exclude from free variable capture
     builtins: HashSet<String>,
-    /// Stack of closure types (for nested lambdas)
-    closure_type_stack: Vec<Type>,
     /// Set of binding IDs that need backing stores (materialization)
     needs_backing_store: HashSet<u64>,
 }
@@ -80,7 +78,6 @@ impl Flattener {
             type_table,
             static_values: ScopeStack::new(),
             builtins,
-            closure_type_stack: Vec::new(),
             needs_backing_store: HashSet::new(),
         }
     }
@@ -732,18 +729,24 @@ impl Flattener {
                     );
                 };
 
-                // Build the closure tuple with _w_lambda_name at the end (no free variables)
+                // Build the closure tuple in format: (_w_lambda_name, (captures...))
+                // For operator sections, there are no captures (empty tuple)
                 let string_type = Type::Constructed(TypeName::Str("string".into()), vec![]);
-                let tuple_elems = vec![self.mk_expr(
+                let captures_type = types::tuple(vec![]);
+                let captures_expr = self.mk_expr(
+                    captures_type.clone(),
+                    mir::ExprKind::Literal(mir::Literal::Tuple(vec![])),
+                    span,
+                );
+                let lambda_name_expr = self.mk_expr(
                     string_type.clone(),
                     mir::ExprKind::Literal(mir::Literal::String(func_name.clone())),
                     span,
-                )];
+                );
+                let tuple_elems = vec![lambda_name_expr, captures_expr];
 
-                // Build the closure type (still a record type for field name lookup during lowering)
-                // _w_lambda_name goes last so capture indices match SPIR-V struct indices
-                let type_fields = vec![("_w_lambda_name".to_string(), string_type)];
-                let closure_type = types::record(type_fields);
+                // The closure type is the captures tuple (empty in this case)
+                let closure_type = captures_type;
 
                 // Build parameters: closure, x, y
                 let params = vec![
@@ -951,50 +954,6 @@ impl Flattener {
                 )
             }
             ExprKind::FieldAccess(obj_expr, field) => {
-                // Check for special cases when obj is an identifier
-                if let ExprKind::Identifier(name) = &obj_expr.kind {
-                    // Special case: _w_closure field access (from lambda free var rewriting)
-                    if name == "_w_closure" {
-                        // Use the current closure type from the stack (most recent lambda)
-                        let closure_type = self.closure_type_stack.last().cloned().ok_or_else(|| {
-                            err_flatten!("Internal error: _w_closure accessed outside of lambda body")
-                        })?;
-
-                        // Resolve field name to index from closure type
-                        let idx = match &closure_type {
-                            Type::Constructed(TypeName::Record(fields), _) => fields
-                                .get_index(field)
-                                .ok_or_else(|| err_flatten!("Unknown closure field: {}", field))?,
-                            _ => {
-                                bail_flatten!("Closure type is not a record");
-                            }
-                        };
-
-                        let obj =
-                            self.mk_expr(closure_type, mir::ExprKind::Var("_w_closure".to_string()), span);
-                        let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
-                        let idx_expr = self.mk_expr(
-                            i32_type,
-                            mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
-                            span,
-                        );
-                        // Pass value directly to tuple_access - no Materialize needed
-                        return Ok((
-                            self.mk_expr(
-                                ty,
-                                mir::ExprKind::Intrinsic {
-                                    name: "tuple_access".to_string(),
-                                    args: vec![obj, idx_expr],
-                                },
-                                span,
-                            ),
-                            StaticValue::Dyn { binding_id: 0 },
-                        ));
-                    }
-
-                    // FieldAccess on identifier - this is a real record field access
-                }
-
                 let (obj, _obj_sv) = self.flatten_expr(obj_expr)?;
 
                 // Resolve field name to index using type information
@@ -1274,13 +1233,13 @@ impl Flattener {
         let arity = lambda.params.len();
         self.add_lambda(func_name.clone(), arity);
 
-        // Build the closure tuple elements (and record field info for type)
-        // Layout: [free_var_1, free_var_2, ..., _w_lambda_name] (free vars sorted alphabetically)
-        // _w_lambda_name goes LAST so that capture indices (0, 1, 2...) match SPIR-V struct indices
+        // Build the closure tuple in format: (_w_lambda_name, (captures...))
+        // - Element 0: lambda name string for dispatch
+        // - Element 1: captures tuple (may be empty)
         let string_type = Type::Constructed(TypeName::Str("string"), vec![]);
 
-        let mut tuple_elems = vec![];
-        let mut type_fields = vec![];
+        let mut capture_elems = vec![];
+        let mut capture_fields = vec![];
 
         let mut sorted_vars: Vec<_> = free_vars.iter().collect();
         sorted_vars.sort();
@@ -1291,21 +1250,28 @@ impl Flattener {
                 .unwrap_or_else(|| {
                     panic!("BUG: Free variable '{}' in lambda has no type. Type checking should ensure all variables have types.", var)
                 });
-            tuple_elems.push(self.mk_expr(var_type.clone(), mir::ExprKind::Var((*var).clone()), span));
-            type_fields.push(((*var).clone(), var_type));
+            capture_elems.push(self.mk_expr(var_type.clone(), mir::ExprKind::Var((*var).clone()), span));
+            capture_fields.push(((*var).clone(), var_type));
         }
 
-        // Last element: lambda name (phantom field, not lowered to SPIR-V)
+        // Build the captures tuple type
+        let captures_type = types::tuple(capture_fields.iter().map(|(_, ty)| ty.clone()).collect());
+
+        // Build the closure tuple: (_w_lambda_name, captures)
         let lambda_name_expr = self.mk_expr(
             string_type.clone(),
             mir::ExprKind::Literal(mir::Literal::String(func_name.clone())),
             span,
         );
-        tuple_elems.push(lambda_name_expr);
-        type_fields.push(("_w_lambda_name".to_string(), string_type));
+        let captures_expr = self.mk_expr(
+            captures_type.clone(),
+            mir::ExprKind::Literal(mir::Literal::Tuple(capture_elems)),
+            span,
+        );
+        let tuple_elems = vec![lambda_name_expr, captures_expr];
 
-        // Build the record type (keeps field names for index lookup during _w_closure access)
-        let closure_type = types::record(type_fields);
+        // The closure type is the captures tuple (what the generated function receives)
+        let closure_type = captures_type;
 
         // Build parameters: closure first, then lambda params
         let mut params = vec![mir::Param {
@@ -1327,13 +1293,10 @@ impl Flattener {
             });
         }
 
-        // Rewrite body to access free variables from closure
-        let rewritten_body = self.rewrite_free_vars(&lambda.body, &free_vars)?;
-
-        // Push closure type onto stack before flattening body (for nested lambdas)
-        self.closure_type_stack.push(closure_type.clone());
-        let (body, _) = self.flatten_expr(&rewritten_body)?;
-        self.closure_type_stack.pop();
+        // Flatten the body, then wrap with let bindings to extract free vars from closure
+        let (flattened_body, _) = self.flatten_expr(&lambda.body)?;
+        let body =
+            self.wrap_body_with_closure_bindings(flattened_body, &capture_fields, &closure_type, span);
 
         let ret_type = body.ty.clone();
 
@@ -1399,6 +1362,55 @@ impl Flattener {
         types::as_arrow(ty)
     }
 
+    /// Wrap a MIR body with let bindings to extract free vars from captures tuple
+    /// The _w_closure parameter IS the captures tuple directly (element 1 of the closure)
+    /// Produces: let x = @tuple_access(_w_closure, 0) in ... body ...
+    fn wrap_body_with_closure_bindings(
+        &mut self,
+        body: Expr,
+        capture_fields: &[(String, Type)],
+        captures_type: &Type,
+        span: Span,
+    ) -> Expr {
+        let mut wrapped = body;
+        let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
+
+        // Iterate in reverse so innermost let is first free var
+        for (idx, (var_name, var_type)) in capture_fields.iter().enumerate().rev() {
+            let closure_var = self.mk_expr(
+                captures_type.clone(),
+                mir::ExprKind::Var("_w_closure".to_string()),
+                span,
+            );
+            let idx_expr = self.mk_expr(
+                i32_type.clone(),
+                mir::ExprKind::Literal(mir::Literal::Int(idx.to_string())),
+                span,
+            );
+            let tuple_access = self.mk_expr(
+                var_type.clone(),
+                mir::ExprKind::Intrinsic {
+                    name: "tuple_access".to_string(),
+                    args: vec![closure_var, idx_expr],
+                },
+                span,
+            );
+
+            let binding_id = self.fresh_binding_id();
+            wrapped = self.mk_expr(
+                wrapped.ty.clone(),
+                mir::ExprKind::Let {
+                    name: var_name.clone(),
+                    binding_id,
+                    value: Box::new(tuple_access),
+                    body: Box::new(wrapped),
+                },
+                span,
+            );
+        }
+        wrapped
+    }
+
     /// Synthesize a lambda for partial application of a function.
     /// Given `f x y` where f expects 4 args, creates `\a b -> f x y a b`
     fn synthesize_partial_application(
@@ -1426,28 +1438,36 @@ impl Flattener {
         let arity = remaining_param_types.len();
         self.add_lambda(lam_name.clone(), arity);
 
-        // Build closure tuple elements: capture all applied args
+        // Build closure tuple in format: (_w_lambda_name, (captures...))
         let string_type = Type::Constructed(TypeName::Str("string"), vec![]);
-        let mut tuple_elems = vec![];
-        let mut type_fields = vec![];
+        let mut capture_elems = vec![];
+        let mut capture_fields = vec![];
 
-        // Capture each applied arg as a closure field
+        // Capture each applied arg
         for (i, arg) in applied_args.iter().enumerate() {
             let field_name = format!("_w_cap_{}", i);
-            tuple_elems.push(arg.clone());
-            type_fields.push((field_name, arg.ty.clone()));
+            capture_elems.push(arg.clone());
+            capture_fields.push((field_name, arg.ty.clone()));
         }
 
-        // Last element: lambda name
+        // Build captures tuple type and expression
+        let captures_type = types::tuple(capture_fields.iter().map(|(_, ty)| ty.clone()).collect());
+        let captures_expr = self.mk_expr(
+            captures_type.clone(),
+            mir::ExprKind::Literal(mir::Literal::Tuple(capture_elems)),
+            span,
+        );
+
+        // Build the closure tuple: (_w_lambda_name, captures)
         let lambda_name_expr = self.mk_expr(
             string_type.clone(),
             mir::ExprKind::Literal(mir::Literal::String(lam_name.clone())),
             span,
         );
-        tuple_elems.push(lambda_name_expr);
-        type_fields.push(("_w_lambda_name".to_string(), string_type));
+        let tuple_elems = vec![lambda_name_expr, captures_expr];
 
-        let closure_type = types::record(type_fields.clone());
+        // The closure type is the captures tuple (what the generated function receives)
+        let closure_type = captures_type;
 
         // Build parameters: closure first, then remaining params
         let mut params = vec![mir::Param {
@@ -1471,10 +1491,7 @@ impl Flattener {
         // First, extract captured args from closure using tuple_access intrinsic
         let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
         let mut call_args = vec![];
-        for (i, (field_name, field_ty)) in type_fields.iter().enumerate() {
-            if field_name == "_w_lambda_name" {
-                break;
-            }
+        for (i, (_, field_ty)) in capture_fields.iter().enumerate() {
             let closure_var = self.mk_expr(
                 closure_type.clone(),
                 mir::ExprKind::Var("_w_closure".to_string()),
@@ -1946,106 +1963,5 @@ impl Flattener {
                 }
             }
         }
-    }
-
-    /// Rewrite free variable references to access from closure
-    fn rewrite_free_vars(&self, expr: &Expression, free_vars: &HashSet<String>) -> Result<Expression> {
-        let _span = expr.h.span;
-        let kind = match &expr.kind {
-            ExprKind::Identifier(name) if free_vars.contains(name) => {
-                // Rewrite to _w_closure.name
-                ExprKind::FieldAccess(
-                    Box::new(Expression {
-                        h: expr.h.clone(),
-                        kind: ExprKind::Identifier("_w_closure".to_string()),
-                    }),
-                    name.clone(),
-                )
-            }
-            ExprKind::Identifier(_)
-            | ExprKind::IntLiteral(_)
-            | ExprKind::FloatLiteral(_)
-            | ExprKind::BoolLiteral(_)
-            | ExprKind::StringLiteral(_)
-            | ExprKind::Unit
-            | ExprKind::OperatorSection(_)
-            | ExprKind::TypeHole
-            | ExprKind::QualifiedName(_, _) => {
-                return Ok(expr.clone());
-            }
-            ExprKind::BinaryOp(op, lhs, rhs) => {
-                let lhs = self.rewrite_free_vars(lhs, free_vars)?;
-                let rhs = self.rewrite_free_vars(rhs, free_vars)?;
-                ExprKind::BinaryOp(op.clone(), Box::new(lhs), Box::new(rhs))
-            }
-            ExprKind::UnaryOp(op, operand) => {
-                let operand = self.rewrite_free_vars(operand, free_vars)?;
-                ExprKind::UnaryOp(op.clone(), Box::new(operand))
-            }
-            ExprKind::If(if_expr) => {
-                let condition = self.rewrite_free_vars(&if_expr.condition, free_vars)?;
-                let then_branch = self.rewrite_free_vars(&if_expr.then_branch, free_vars)?;
-                let else_branch = self.rewrite_free_vars(&if_expr.else_branch, free_vars)?;
-                ExprKind::If(ast::IfExpr {
-                    condition: Box::new(condition),
-                    then_branch: Box::new(then_branch),
-                    else_branch: Box::new(else_branch),
-                })
-            }
-            ExprKind::LetIn(let_in) => {
-                let value = self.rewrite_free_vars(&let_in.value, free_vars)?;
-                // Remove bound names from free_vars for body
-                let mut body_free = free_vars.clone();
-                for name in pattern::bound_names(&let_in.pattern) {
-                    body_free.remove(&name);
-                }
-                let body = self.rewrite_free_vars(&let_in.body, &body_free)?;
-                ExprKind::LetIn(ast::LetInExpr {
-                    pattern: let_in.pattern.clone(),
-                    ty: let_in.ty.clone(),
-                    value: Box::new(value),
-                    body: Box::new(body),
-                })
-            }
-            ExprKind::Application(func, args) => {
-                let func = self.rewrite_free_vars(func, free_vars)?;
-                let args: Result<Vec<_>> =
-                    args.iter().map(|a| self.rewrite_free_vars(a, free_vars)).collect();
-                ExprKind::Application(Box::new(func), args?)
-            }
-            ExprKind::Tuple(elems) => {
-                let elems: Result<Vec<_>> =
-                    elems.iter().map(|e| self.rewrite_free_vars(e, free_vars)).collect();
-                ExprKind::Tuple(elems?)
-            }
-            ExprKind::ArrayLiteral(elems) => {
-                let elems: Result<Vec<_>> =
-                    elems.iter().map(|e| self.rewrite_free_vars(e, free_vars)).collect();
-                ExprKind::ArrayLiteral(elems?)
-            }
-            ExprKind::RecordLiteral(fields) => {
-                let fields: Result<Vec<_>> = fields
-                    .iter()
-                    .map(|(n, e)| Ok((n.clone(), self.rewrite_free_vars(e, free_vars)?)))
-                    .collect();
-                ExprKind::RecordLiteral(fields?)
-            }
-            ExprKind::ArrayIndex(arr, idx) => {
-                let arr = self.rewrite_free_vars(arr, free_vars)?;
-                let idx = self.rewrite_free_vars(idx, free_vars)?;
-                ExprKind::ArrayIndex(Box::new(arr), Box::new(idx))
-            }
-            ExprKind::FieldAccess(obj, field) => {
-                let obj = self.rewrite_free_vars(obj, free_vars)?;
-                ExprKind::FieldAccess(Box::new(obj), field.clone())
-            }
-            // For other cases, just clone (they'll be handled if needed)
-            _ => return Ok(expr.clone()),
-        };
-
-        Ok(Expression {
-            h: expr.h.clone(),
-            kind,
-        })
     }
 }

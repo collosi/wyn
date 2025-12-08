@@ -330,22 +330,7 @@ impl Constructor {
                         self.builder.type_matrix(col_vec_type, cols)
                     }
                     TypeName::Record(fields) => {
-                        // Record becomes a struct, filtering out phantom fields like _w_lambda_name
-                        // Field names are in RecordFields, field types are in args
-                        let field_types: Vec<spirv::Word> = fields
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, name)| name.as_str() != "_w_lambda_name")
-                            .map(|(i, _)| self.ast_type_to_spirv(&args[i]))
-                            .collect();
-                        // Empty records should not reach lowering (same as empty tuples)
-                        if field_types.is_empty() {
-                            panic!(
-                                "BUG: Empty record type (closure with no captures) reached lowering. \
-                                Empty closures should be handled at call sites."
-                            );
-                        }
-                        self.get_or_create_struct_type(field_types)
+                        panic!("should never get here")
                     }
                     TypeName::Pointer => {
                         // Pointer type: args[0] is pointee type
@@ -1636,38 +1621,50 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             // Special case for map - extract lambda name from closure before lowering
             if func == "map" {
                 // map closure array -> array
-                // args[0] is closure tuple (captures..., _w_lambda_name)
+                // args[0] is closure tuple (_w_lambda_name, captures)
                 // args[1] is input array
                 if args.len() != 2 {
                     bail_spirv!("map requires 2 args (closure, array), got {}", args.len());
                 }
 
-                // Extract lambda name and check if closure is empty
-                let (lambda_name, is_empty_closure) = match &args[0].kind {
-                    ExprKind::Literal(mir::Literal::Tuple(elems)) if !elems.is_empty() => {
-                        // Lambda name is at the last index
-                        let name =
-                            match &elems.last().expect("BUG: elems is non-empty but last() failed").kind {
-                                ExprKind::Literal(mir::Literal::String(s)) => s.clone(),
-                                _ => {
-                                    bail_spirv!("Closure tuple last element must be lambda name string");
-                                }
-                            };
-                        // Empty closure: only has lambda name (len == 1)
-                        let is_empty = elems.len() == 1;
-                        (name, is_empty)
+                // Extract lambda name and captures from closure tuple
+                let (lambda_name, captures_elems) = match &args[0].kind {
+                    ExprKind::Literal(mir::Literal::Tuple(elems)) if elems.len() == 2 => {
+                        // Element 0: lambda name string
+                        let name = match &elems[0].kind {
+                            ExprKind::Literal(mir::Literal::String(s)) => s.clone(),
+                            _ => {
+                                bail_spirv!("Closure tuple first element must be lambda name string");
+                            }
+                        };
+                        // Element 1: captures tuple
+                        let captures = match &elems[1].kind {
+                            ExprKind::Literal(mir::Literal::Tuple(caps)) => caps,
+                            _ => {
+                                bail_spirv!("Closure tuple second element must be captures tuple");
+                            }
+                        };
+                        (name, captures)
                     }
                     _ => {
-                        bail_spirv!("map closure argument must be a tuple literal");
+                        bail_spirv!("map closure argument must be a 2-tuple (_w_lambda_name, captures)");
                     }
                 };
+                let is_empty_closure = captures_elems.is_empty();
 
                 // For empty closures, use dummy i32(0) instead of lowering the tuple
                 // This avoids creating empty SPIR-V structs
+                // For non-empty closures, lower the captures tuple (element 1 of closure)
                 let closure_val = if is_empty_closure {
                     constructor.const_i32(0)
                 } else {
-                    lower_expr(constructor, &args[0])?
+                    // Lower just the captures tuple, not the whole closure
+                    match &args[0].kind {
+                        ExprKind::Literal(mir::Literal::Tuple(elems)) => {
+                            lower_expr(constructor, &elems[1])?
+                        }
+                        _ => unreachable!("already verified closure format above"),
+                    }
                 };
                 let array_val = lower_expr(constructor, &args[1])?;
 
@@ -2407,30 +2404,27 @@ fn lower_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::
             Ok(constructor.builder.composite_construct(array_type, None, word_ids)?)
         }
         Literal::Tuple(elems) => {
-            // Check if this is a closure tuple (has _w_lambda_name at last index)
-            // Closures have a string literal at the end which can't be lowered to SPIR-V
-            let is_closure = elems.last().map_or(false, |e| {
-                matches!(&e.kind, ExprKind::Literal(mir::Literal::String(_)))
-            });
+            // Check if this is a closure tuple: (_w_lambda_name, captures)
+            // Closures have format: first element is string, second is tuple
+            let is_closure = elems.len() == 2
+                && matches!(&elems[0].kind, ExprKind::Literal(mir::Literal::String(_)))
+                && matches!(&elems[1].kind, ExprKind::Literal(mir::Literal::Tuple(_)));
 
-            // For closures, skip the last element (the _w_lambda_name string)
-            let real_elems: Vec<_> = if is_closure {
-                elems.iter().take(elems.len() - 1).collect()
-            } else {
-                elems.iter().collect()
-            };
+            // For closures, only lower the captures tuple (element 1)
+            // The lambda name string can't be lowered to SPIR-V
+            if is_closure {
+                return lower_expr(constructor, &elems[1]);
+            }
 
             // Lower all elements
             let elem_ids: Vec<spirv::Word> =
-                real_elems.iter().map(|e| lower_expr(constructor, *e)).collect::<Result<Vec<_>>>()?;
+                elems.iter().map(|e| lower_expr(constructor, e)).collect::<Result<Vec<_>>>()?;
 
             // Create struct type for tuple from element types
             let elem_types: Vec<spirv::Word> =
-                real_elems.iter().map(|e| constructor.ast_type_to_spirv(&e.ty)).collect();
+                elems.iter().map(|e| constructor.ast_type_to_spirv(&e.ty)).collect();
 
-            // Empty tuples (closures with no captures) are represented as dummy i32 constants.
-            // They should be handled specially at call sites (map), but if they reach here,
-            // return a dummy value since the closure environment is never accessed.
+            // Empty tuples are represented as dummy i32 constants.
             if elem_types.is_empty() {
                 return Ok(constructor.const_i32(0));
             }

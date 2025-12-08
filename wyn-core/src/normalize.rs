@@ -429,11 +429,16 @@ pub fn is_atomic(expr: &Expr) -> bool {
     }
 }
 
-/// Check if tuple elements represent a closure (last element is _w_lambda_name string).
+/// Check if tuple elements represent a closure: (_w_lambda_name, captures).
+/// First element is the lambda name string, second is the captures tuple.
+///
+/// TODO: This heuristic can produce false positives for any 2-tuple where the
+/// first element is a string and the second is a tuple. Consider using a more
+/// robust marker (e.g., a dedicated Closure variant in MIR).
 fn is_closure_tuple(elems: &[Expr]) -> bool {
-    elems.last().map_or(false, |e| {
-        matches!(&e.kind, ExprKind::Literal(Literal::String(_)))
-    })
+    elems.len() == 2
+        && matches!(&elems[0].kind, ExprKind::Literal(Literal::String(_)))
+        && matches!(&elems[1].kind, ExprKind::Literal(Literal::Tuple(_)))
 }
 
 /// Check if a literal is a scalar (not a container).

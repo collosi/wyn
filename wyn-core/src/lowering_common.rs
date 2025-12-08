@@ -69,13 +69,11 @@ pub fn is_entry_point(attributes: &[Attribute]) -> bool {
 }
 
 /// Check if a type represents an empty closure (no captured variables)
+/// With the new closure format (_w_lambda_name, captures), the captures tuple
+/// is what gets passed to the lambda function. Empty captures = empty tuple.
 pub fn is_empty_closure_type(ty: &PolyType<TypeName>) -> bool {
     match ty {
         PolyType::Constructed(TypeName::Tuple(_), args) => args.is_empty(),
-        PolyType::Constructed(TypeName::Record(fields), _) => {
-            // Empty if only field is _w_lambda_name
-            fields.iter().all(|name| name == "_w_lambda_name")
-        }
         _ => false,
     }
 }

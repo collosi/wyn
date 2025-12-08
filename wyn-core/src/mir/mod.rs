@@ -267,13 +267,18 @@ pub enum LoopKind {
 }
 
 /// Extract lambda function name from a closure tuple if present.
-/// Closure tuples have the lambda name at the last index as a string literal
-/// that identifies which lambda function the closure calls.
+/// Closure tuples have format: (_w_lambda_name, captures)
+/// - Element 0: lambda name string for dispatch
+/// - Element 1: captures tuple (possibly empty)
 pub fn extract_lambda_name(expr: &Expr) -> Option<&str> {
     match &expr.kind {
-        ExprKind::Literal(Literal::Tuple(elems)) if !elems.is_empty() => {
-            if let ExprKind::Literal(Literal::String(lambda_name)) = &elems.last()?.kind {
-                return Some(lambda_name.as_str());
+        ExprKind::Literal(Literal::Tuple(elems)) if elems.len() == 2 => {
+            // First element is the lambda name string
+            if let ExprKind::Literal(Literal::String(lambda_name)) = &elems[0].kind {
+                // Second element should be the captures tuple
+                if matches!(&elems[1].kind, ExprKind::Literal(Literal::Tuple(_))) {
+                    return Some(lambda_name.as_str());
+                }
             }
             None
         }
