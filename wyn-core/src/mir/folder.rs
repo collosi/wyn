@@ -230,6 +230,16 @@ pub trait MirFolder: Sized {
         walk_expr_materialize(self, inner, expr, ctx)
     }
 
+    fn visit_expr_closure(
+        &mut self,
+        lambda_name: String,
+        captures: Vec<Expr>,
+        expr: Expr,
+        ctx: &mut Self::Ctx,
+    ) -> Result<Expr, Self::Error> {
+        walk_expr_closure(self, lambda_name, captures, expr, ctx)
+    }
+
     // --- Literals ---
 
     fn visit_literal_int(&mut self, value: String, _ctx: &mut Self::Ctx) -> Result<Literal, Self::Error> {
@@ -595,6 +605,18 @@ pub fn walk_expr<V: MirFolder>(v: &mut V, e: Expr, ctx: &mut V::Ctx) -> Result<E
             };
             v.visit_expr_materialize(*inner, expr, ctx)
         }
+        ExprKind::Closure {
+            lambda_name,
+            captures,
+        } => {
+            let expr = Expr {
+                id,
+                ty,
+                kind: ExprKind::Var(String::new()),
+                span,
+            };
+            v.visit_expr_closure(lambda_name, captures, expr, ctx)
+        }
     }
 }
 
@@ -767,6 +789,26 @@ pub fn walk_expr_materialize<V: MirFolder>(
     let inner = v.visit_expr(inner, ctx)?;
     Ok(Expr {
         kind: ExprKind::Materialize(Box::new(inner)),
+        ..expr
+    })
+}
+
+pub fn walk_expr_closure<V: MirFolder>(
+    v: &mut V,
+    lambda_name: String,
+    captures: Vec<Expr>,
+    expr: Expr,
+    ctx: &mut V::Ctx,
+) -> Result<Expr, V::Error> {
+    let captures = captures
+        .into_iter()
+        .map(|e| v.visit_expr(e, ctx))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Expr {
+        kind: ExprKind::Closure {
+            lambda_name,
+            captures,
+        },
         ..expr
     })
 }

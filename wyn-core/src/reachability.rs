@@ -140,12 +140,7 @@ impl MirFolder for CalleeCollector {
         expr: Expr,
         ctx: &mut Self::Ctx,
     ) -> Result<Expr, Self::Error> {
-        // Check for closure records with _w_lambda_name field
-        if let Some(lambda_name) = crate::mir::extract_lambda_name(&expr) {
-            self.callees.insert(lambda_name.to_string());
-        }
-
-        // Continue traversal into tuple subexpressions (closures are tuples now)
+        // Continue traversal into tuple subexpressions
         if let Literal::Tuple(ref elems) = lit {
             for elem in elems {
                 self.visit_expr(elem.clone(), ctx).ok();
@@ -154,6 +149,30 @@ impl MirFolder for CalleeCollector {
 
         Ok(Expr {
             kind: ExprKind::Literal(lit),
+            ..expr
+        })
+    }
+
+    fn visit_expr_closure(
+        &mut self,
+        lambda_name: String,
+        captures: Vec<Expr>,
+        expr: Expr,
+        ctx: &mut Self::Ctx,
+    ) -> Result<Expr, Self::Error> {
+        // Collect the lambda function name as a callee
+        self.callees.insert(lambda_name.clone());
+
+        // Continue traversal into captures
+        for cap in &captures {
+            self.visit_expr(cap.clone(), ctx).ok();
+        }
+
+        Ok(Expr {
+            kind: ExprKind::Closure {
+                lambda_name,
+                captures,
+            },
             ..expr
         })
     }

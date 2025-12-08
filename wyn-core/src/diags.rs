@@ -816,6 +816,19 @@ impl Display for mir::ExprKind {
             mir::ExprKind::Materialize(inner) => {
                 write!(f, "@materialize({})", inner)
             }
+            mir::ExprKind::Closure {
+                lambda_name,
+                captures,
+            } => {
+                write!(f, "@closure({}, [", lambda_name)?;
+                for (i, cap) in captures.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", cap)?;
+                }
+                write!(f, "])")
+            }
         }
     }
 }

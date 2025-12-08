@@ -897,15 +897,22 @@ impl<'a> LowerCtx<'a> {
                 self.ensure_deps_lowered(inner)?;
             }
             ExprKind::Literal(lit) => {
-                // Check for closure tuples with _w_lambda_name at index 0
-                if let Some(lambda_name) = crate::mir::extract_lambda_name(expr) {
-                    self.ensure_lowered(lambda_name)?;
-                }
-                // Recurse into tuple element values (for closure captures)
+                // Recurse into tuple element values
                 if let crate::mir::Literal::Tuple(elems) = lit {
                     for elem in elems {
                         self.ensure_deps_lowered(elem)?;
                     }
+                }
+            }
+            ExprKind::Closure {
+                lambda_name,
+                captures,
+            } => {
+                // Ensure the lambda function is lowered
+                self.ensure_lowered(lambda_name)?;
+                // Recurse into captures
+                for cap in captures {
+                    self.ensure_deps_lowered(cap)?;
                 }
             }
             ExprKind::Unit => {
@@ -1628,43 +1635,25 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                 }
 
                 // Extract lambda name and captures from closure tuple
-                let (lambda_name, captures_elems) = match &args[0].kind {
-                    ExprKind::Literal(mir::Literal::Tuple(elems)) if elems.len() == 2 => {
-                        // Element 0: lambda name string
-                        let name = match &elems[0].kind {
-                            ExprKind::Literal(mir::Literal::String(s)) => s.clone(),
-                            _ => {
-                                bail_spirv!("Closure tuple first element must be lambda name string");
-                            }
-                        };
-                        // Element 1: captures tuple
-                        let captures = match &elems[1].kind {
-                            ExprKind::Literal(mir::Literal::Tuple(caps)) => caps,
-                            _ => {
-                                bail_spirv!("Closure tuple second element must be captures tuple");
-                            }
-                        };
-                        (name, captures)
-                    }
+                // Extract lambda name and captures from Closure expression
+                let (lambda_name, captures) = match &args[0].kind {
+                    ExprKind::Closure {
+                        lambda_name,
+                        captures,
+                    } => (lambda_name.clone(), captures),
                     _ => {
-                        bail_spirv!("map closure argument must be a 2-tuple (_w_lambda_name, captures)");
+                        bail_spirv!("map closure argument must be a Closure expression");
                     }
                 };
-                let is_empty_closure = captures_elems.is_empty();
+                let is_empty_closure = captures.is_empty();
 
-                // For empty closures, use dummy i32(0) instead of lowering the tuple
+                // For empty closures, use dummy i32(0) instead of lowering
                 // This avoids creating empty SPIR-V structs
-                // For non-empty closures, lower the captures tuple (element 1 of closure)
                 let closure_val = if is_empty_closure {
                     constructor.const_i32(0)
                 } else {
-                    // Lower just the captures tuple, not the whole closure
-                    match &args[0].kind {
-                        ExprKind::Literal(mir::Literal::Tuple(elems)) => {
-                            lower_expr(constructor, &elems[1])?
-                        }
-                        _ => unreachable!("already verified closure format above"),
-                    }
+                    // Lower the closure directly
+                    lower_expr(constructor, &args[0])?
                 };
                 let array_val = lower_expr(constructor, &args[1])?;
 
@@ -2276,6 +2265,30 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             // Return the variable pointer (for use with OpAccessChain)
             Ok(var_id)
         }
+
+        ExprKind::Closure { captures, .. } => {
+            // Lower closure as a struct of captures
+            // Empty closures are represented as dummy i32 constants
+            if captures.is_empty() {
+                return Ok(constructor.const_i32(0));
+            }
+
+            // Lower all capture expressions
+            let elem_ids: Vec<spirv::Word> = captures
+                .iter()
+                .map(|e| lower_expr(constructor, e))
+                .collect::<Result<Vec<_>>>()?;
+
+            // Create struct type for captures
+            let elem_types: Vec<spirv::Word> = captures
+                .iter()
+                .map(|e| constructor.ast_type_to_spirv(&e.ty))
+                .collect();
+            let tuple_type = constructor.builder.type_struct(elem_types);
+
+            // Construct the composite
+            Ok(constructor.builder.composite_construct(tuple_type, None, elem_ids)?)
+        }
     }
 }
 
@@ -2404,18 +2417,6 @@ fn lower_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::
             Ok(constructor.builder.composite_construct(array_type, None, word_ids)?)
         }
         Literal::Tuple(elems) => {
-            // Check if this is a closure tuple: (_w_lambda_name, captures)
-            // Closures have format: first element is string, second is tuple
-            let is_closure = elems.len() == 2
-                && matches!(&elems[0].kind, ExprKind::Literal(mir::Literal::String(_)))
-                && matches!(&elems[1].kind, ExprKind::Literal(mir::Literal::Tuple(_)));
-
-            // For closures, only lower the captures tuple (element 1)
-            // The lambda name string can't be lowered to SPIR-V
-            if is_closure {
-                return lower_expr(constructor, &elems[1]);
-            }
-
             // Lower all elements
             let elem_ids: Vec<spirv::Word> =
                 elems.iter().map(|e| lower_expr(constructor, e)).collect::<Result<Vec<_>>>()?;

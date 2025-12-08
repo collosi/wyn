@@ -64,11 +64,11 @@ fn test_lambda_defunctionalization() {
     // Should generate a lambda function
     assert!(mir.defs.len() >= 2); // Original + lambda
 
-    // Check that closure tuple is created with format: (_w_lambda_name, captures)
+    // Check that closure is created
     let mir_str = format!("{}", mir);
     assert!(mir_str.contains("_w_lam_f_"));
-    // Closure is now a 2-tuple: (lambda_name_string, captures_tuple)
-    assert!(mir_str.contains("(\"_w_lam_f_"));
+    // Closure is now an explicit @closure expression
+    assert!(mir_str.contains("@closure(_w_lam_f_"));
 }
 
 #[test]
@@ -255,8 +255,8 @@ def test_map (arr:[4]i32) : [4]i32 =
 
     // Should have generated lambda function
     assert!(mir_str.contains("_w_lam_test_map_"));
-    // Closure is now a 2-tuple: (lambda_name_string, captures_tuple)
-    assert!(mir_str.contains("(\"_w_lam_test_map_"));
+    // Closure is now an explicit @closure expression
+    assert!(mir_str.contains("@closure(_w_lam_test_map_"));
     // Lambda registry should have the lambda function
     assert_eq!(mir.lambda_registry.len(), 1);
     assert_eq!(mir.lambda_registry[0].0, "_w_lam_test_map_0");

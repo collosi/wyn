@@ -729,24 +729,9 @@ impl Flattener {
                     );
                 };
 
-                // Build the closure tuple in format: (_w_lambda_name, (captures...))
-                // For operator sections, there are no captures (empty tuple)
-                let string_type = Type::Constructed(TypeName::Str("string".into()), vec![]);
-                let captures_type = types::tuple(vec![]);
-                let captures_expr = self.mk_expr(
-                    captures_type.clone(),
-                    mir::ExprKind::Literal(mir::Literal::Tuple(vec![])),
-                    span,
-                );
-                let lambda_name_expr = self.mk_expr(
-                    string_type.clone(),
-                    mir::ExprKind::Literal(mir::Literal::String(func_name.clone())),
-                    span,
-                );
-                let tuple_elems = vec![lambda_name_expr, captures_expr];
-
-                // The closure type is the captures tuple (empty in this case)
-                let closure_type = captures_type;
+                // Build the closure with no captures (empty)
+                // The closure type is an empty tuple (no captures)
+                let closure_type = types::tuple(vec![]);
 
                 // Build parameters: closure, x, y
                 let params = vec![
@@ -794,13 +779,19 @@ impl Flattener {
                 };
                 self.generated_functions.push(func);
 
-                // Return the closure tuple with static value indicating it's a known closure
+                // Return the closure with static value indicating it's a known closure
                 let sv = StaticValue::Closure {
-                    lam_name: func_name,
+                    lam_name: func_name.clone(),
                     binding_id: 0,
                 };
 
-                (mir::ExprKind::Literal(mir::Literal::Tuple(tuple_elems)), sv)
+                (
+                    mir::ExprKind::Closure {
+                        lambda_name: func_name,
+                        captures: vec![],
+                    },
+                    sv,
+                )
             }
             ExprKind::BinaryOp(op, lhs, rhs) => {
                 let (lhs, _) = self.flatten_expr(lhs)?;
@@ -1233,11 +1224,7 @@ impl Flattener {
         let arity = lambda.params.len();
         self.add_lambda(func_name.clone(), arity);
 
-        // Build the closure tuple in format: (_w_lambda_name, (captures...))
-        // - Element 0: lambda name string for dispatch
-        // - Element 1: captures tuple (may be empty)
-        let string_type = Type::Constructed(TypeName::Str("string"), vec![]);
-
+        // Build closure captures
         let mut capture_elems = vec![];
         let mut capture_fields = vec![];
 
@@ -1254,24 +1241,8 @@ impl Flattener {
             capture_fields.push(((*var).clone(), var_type));
         }
 
-        // Build the captures tuple type
-        let captures_type = types::tuple(capture_fields.iter().map(|(_, ty)| ty.clone()).collect());
-
-        // Build the closure tuple: (_w_lambda_name, captures)
-        let lambda_name_expr = self.mk_expr(
-            string_type.clone(),
-            mir::ExprKind::Literal(mir::Literal::String(func_name.clone())),
-            span,
-        );
-        let captures_expr = self.mk_expr(
-            captures_type.clone(),
-            mir::ExprKind::Literal(mir::Literal::Tuple(capture_elems)),
-            span,
-        );
-        let tuple_elems = vec![lambda_name_expr, captures_expr];
-
         // The closure type is the captures tuple (what the generated function receives)
-        let closure_type = captures_type;
+        let closure_type = types::tuple(capture_fields.iter().map(|(_, ty)| ty.clone()).collect());
 
         // Build parameters: closure first, then lambda params
         let mut params = vec![mir::Param {
@@ -1314,13 +1285,19 @@ impl Flattener {
         };
         self.generated_functions.push(func);
 
-        // Return the closure tuple along with the static value indicating it's a known closure
+        // Return the closure along with the static value indicating it's a known closure
         let sv = StaticValue::Closure {
-            lam_name: func_name,
+            lam_name: func_name.clone(),
             binding_id: 0,
         };
 
-        Ok((mir::ExprKind::Literal(mir::Literal::Tuple(tuple_elems)), sv))
+        Ok((
+            mir::ExprKind::Closure {
+                lambda_name: func_name,
+                captures: capture_elems,
+            },
+            sv,
+        ))
     }
 
     /// Find the type of a variable by searching for its use in an expression
@@ -1438,8 +1415,7 @@ impl Flattener {
         let arity = remaining_param_types.len();
         self.add_lambda(lam_name.clone(), arity);
 
-        // Build closure tuple in format: (_w_lambda_name, (captures...))
-        let string_type = Type::Constructed(TypeName::Str("string"), vec![]);
+        // Build closure captures
         let mut capture_elems = vec![];
         let mut capture_fields = vec![];
 
@@ -1450,24 +1426,8 @@ impl Flattener {
             capture_fields.push((field_name, arg.ty.clone()));
         }
 
-        // Build captures tuple type and expression
-        let captures_type = types::tuple(capture_fields.iter().map(|(_, ty)| ty.clone()).collect());
-        let captures_expr = self.mk_expr(
-            captures_type.clone(),
-            mir::ExprKind::Literal(mir::Literal::Tuple(capture_elems)),
-            span,
-        );
-
-        // Build the closure tuple: (_w_lambda_name, captures)
-        let lambda_name_expr = self.mk_expr(
-            string_type.clone(),
-            mir::ExprKind::Literal(mir::Literal::String(lam_name.clone())),
-            span,
-        );
-        let tuple_elems = vec![lambda_name_expr, captures_expr];
-
         // The closure type is the captures tuple (what the generated function receives)
-        let closure_type = captures_type;
+        let closure_type = types::tuple(capture_fields.iter().map(|(_, ty)| ty.clone()).collect());
 
         // Build parameters: closure first, then remaining params
         let mut params = vec![mir::Param {
@@ -1543,13 +1503,19 @@ impl Flattener {
         };
         self.generated_functions.push(func);
 
-        // Return the closure tuple
+        // Return the closure
         let sv = StaticValue::Closure {
-            lam_name,
+            lam_name: lam_name.clone(),
             binding_id: 0,
         };
 
-        Ok((mir::ExprKind::Literal(mir::Literal::Tuple(tuple_elems)), sv))
+        Ok((
+            mir::ExprKind::Closure {
+                lambda_name: lam_name,
+                captures: capture_elems,
+            },
+            sv,
+        ))
     }
 
     /// Flatten an application expression

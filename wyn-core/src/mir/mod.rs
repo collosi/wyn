@@ -216,6 +216,15 @@ pub enum ExprKind {
     /// This is used when a value needs to be stored before being indexed/accessed.
     /// In SPIR-V, this becomes: declare OpVariable, OpStore, return pointer.
     Materialize(Box<Expr>),
+
+    /// A closure value (defunctionalized lambda).
+    /// Represents a lambda that has been lifted to a top-level function with captured values.
+    Closure {
+        /// Name of the generated lambda function to call.
+        lambda_name: String,
+        /// Captured variables (may be empty for lambdas with no free variables).
+        captures: Vec<Expr>,
+    },
 }
 
 /// Literal values, categorized by type class.
@@ -266,22 +275,3 @@ pub enum LoopKind {
     },
 }
 
-/// Extract lambda function name from a closure tuple if present.
-/// Closure tuples have format: (_w_lambda_name, captures)
-/// - Element 0: lambda name string for dispatch
-/// - Element 1: captures tuple (possibly empty)
-pub fn extract_lambda_name(expr: &Expr) -> Option<&str> {
-    match &expr.kind {
-        ExprKind::Literal(Literal::Tuple(elems)) if elems.len() == 2 => {
-            // First element is the lambda name string
-            if let ExprKind::Literal(Literal::String(lambda_name)) = &elems[0].kind {
-                // Second element should be the captures tuple
-                if matches!(&elems[1].kind, ExprKind::Literal(Literal::Tuple(_))) {
-                    return Some(lambda_name.as_str());
-                }
-            }
-            None
-        }
-        _ => None,
-    }
-}

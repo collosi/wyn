@@ -165,11 +165,7 @@ impl Normalizer {
                 Expr::new(id, ty, ExprKind::Intrinsic { name, args }, span)
             }
 
-            // Tuple literal - check if it's a closure (ends with String for _w_lambda_name)
-            ExprKind::Literal(Literal::Tuple(ref elems)) if is_closure_tuple(elems) => {
-                // Closure tuples are atomic - map lowering expects them as literals
-                expr
-            }
+            // Tuple literal - handle empty and non-empty cases
             ExprKind::Literal(Literal::Tuple(ref elems)) if elems.is_empty() => {
                 // Empty tuples are atomic
                 expr
@@ -379,6 +375,29 @@ impl Normalizer {
                     span,
                 )
             }
+
+            // Closure - normalize and atomize captures
+            ExprKind::Closure {
+                lambda_name,
+                captures,
+            } => {
+                let captures = captures
+                    .into_iter()
+                    .map(|c| {
+                        let c = self.normalize_expr(c, bindings);
+                        self.atomize(c, bindings)
+                    })
+                    .collect();
+                Expr::new(
+                    id,
+                    ty,
+                    ExprKind::Closure {
+                        lambda_name,
+                        captures,
+                    },
+                    span,
+                )
+            }
         }
     }
 
@@ -423,22 +442,11 @@ impl Normalizer {
 pub fn is_atomic(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Var(_) | ExprKind::Unit => true,
-        ExprKind::Literal(Literal::Tuple(elems)) => elems.is_empty() || is_closure_tuple(elems),
+        ExprKind::Closure { .. } => true, // Closures are atomic values
+        ExprKind::Literal(Literal::Tuple(elems)) => elems.is_empty(),
         ExprKind::Literal(lit) => is_scalar_literal(lit),
         _ => false,
     }
-}
-
-/// Check if tuple elements represent a closure: (_w_lambda_name, captures).
-/// First element is the lambda name string, second is the captures tuple.
-///
-/// TODO: This heuristic can produce false positives for any 2-tuple where the
-/// first element is a string and the second is a tuple. Consider using a more
-/// robust marker (e.g., a dedicated Closure variant in MIR).
-fn is_closure_tuple(elems: &[Expr]) -> bool {
-    elems.len() == 2
-        && matches!(&elems[0].kind, ExprKind::Literal(Literal::String(_)))
-        && matches!(&elems[1].kind, ExprKind::Literal(Literal::Tuple(_)))
 }
 
 /// Check if a literal is a scalar (not a container).
@@ -519,6 +527,9 @@ fn find_max_binding_id_in_expr(expr: &Expr) -> u64 {
         },
         ExprKind::Materialize(inner) => find_max_binding_id_in_expr(inner),
         ExprKind::Attributed { expr, .. } => find_max_binding_id_in_expr(expr),
+        ExprKind::Closure { captures, .. } => {
+            captures.iter().map(find_max_binding_id_in_expr).max().unwrap_or(0)
+        }
         ExprKind::Var(_) | ExprKind::Unit => 0,
     }
 }

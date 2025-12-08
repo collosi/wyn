@@ -228,6 +228,23 @@ impl BindingLifter {
                 Ok(Expr::new(id, ty, ExprKind::Literal(lit), span))
             }
 
+            ExprKind::Closure {
+                lambda_name,
+                captures,
+            } => {
+                let captures =
+                    captures.into_iter().map(|c| self.lift_expr(c)).collect::<Result<Vec<_>>>()?;
+                Ok(Expr::new(
+                    id,
+                    ty,
+                    ExprKind::Closure {
+                        lambda_name,
+                        captures,
+                    },
+                    span,
+                ))
+            }
+
             // Leaf nodes - no children to process
             ExprKind::Var(_) | ExprKind::Unit => Ok(Expr::new(id, ty, expr.kind, span)),
         }
@@ -542,6 +559,12 @@ fn collect_free_vars_inner(expr: &Expr, bound: &HashSet<String>, free: &mut Hash
 
         ExprKind::Materialize(inner) => {
             collect_free_vars_inner(inner, bound, free);
+        }
+
+        ExprKind::Closure { captures, .. } => {
+            for cap in captures {
+                collect_free_vars_inner(cap, bound, free);
+            }
         }
 
         ExprKind::Unit => {}

@@ -418,6 +418,17 @@ impl<'a> LowerCtx<'a> {
             ExprKind::Literal(lit) => {
                 self.collect_literal_deps(lit, deps, visited)?;
             }
+            ExprKind::Closure {
+                lambda_name,
+                captures,
+            } => {
+                // Collect the lambda function as a dependency
+                self.collect_deps_recursive(lambda_name, deps, visited)?;
+                // Collect dependencies from captures
+                for cap in captures {
+                    self.collect_expr_deps(cap, deps, visited)?;
+                }
+            }
             ExprKind::Var(name) => {
                 // Check if this references a constant
                 if let Some(&idx) = self.def_index.get(name) {
@@ -763,6 +774,21 @@ impl<'a> LowerCtx<'a> {
             ExprKind::Attributed { expr, .. } => self.lower_expr(expr, output),
 
             ExprKind::Materialize(inner) => self.lower_expr(inner, output),
+
+            ExprKind::Closure { captures, .. } => {
+                // Lower closure as its captures tuple
+                // Empty captures become 0 (dummy value)
+                if captures.is_empty() {
+                    return Ok("0".to_string());
+                }
+                // Non-empty captures become a struct constructor
+                let mut parts = Vec::new();
+                for cap in captures {
+                    parts.push(self.lower_expr(cap, output)?);
+                }
+                let struct_name = self.type_to_glsl(&expr.ty);
+                Ok(format!("{}({})", struct_name, parts.join(", ")))
+            }
         }
     }
 
@@ -812,18 +838,6 @@ impl<'a> LowerCtx<'a> {
                 Ok(format!("{}[]({})", self.type_to_glsl(ty), parts.join(", ")))
             }
             Literal::Tuple(elems) => {
-                // Check if this is a closure tuple: (_w_lambda_name, captures)
-                // TODO: This heuristic can produce false positives. Consider using a
-                // dedicated Closure variant in MIR for more robust detection.
-                let is_closure = elems.len() == 2
-                    && matches!(&elems[0].kind, ExprKind::Literal(Literal::String(_)))
-                    && matches!(&elems[1].kind, ExprKind::Literal(Literal::Tuple(_)));
-
-                // For closures, only lower the captures tuple (element 1)
-                if is_closure {
-                    return self.lower_expr(&elems[1], output);
-                }
-
                 // Empty tuples - return dummy value
                 if elems.is_empty() {
                     return Ok("0".to_string());
