@@ -1,5 +1,5 @@
 use crate::Compiler;
-use crate::alias_checker::{AliasCheckResult, AliasChecker};
+use crate::alias_checker::{AliasCheckResult, AliasChecker, InPlaceMapInfo, analyze_map_inplace};
 
 fn check_alias(source: &str) -> AliasCheckResult {
     let parsed = Compiler::parse(source).expect("parse failed");
@@ -234,5 +234,110 @@ def main(t: ([4]i32, [4]i32, [4]i32)): i32 =
     assert!(
         result_z.has_errors(),
         "Expected error: z shares backing store with consumed x"
+    );
+}
+
+// =============================================================================
+// MIR In-Place Map Optimization Tests
+// =============================================================================
+
+/// Helper to analyze in-place map opportunities in a source file
+fn analyze_inplace_map(source: &str) -> InPlaceMapInfo {
+    let parsed = Compiler::parse(source).expect("parse failed");
+    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
+    let elaborated = parsed.elaborate(module_manager).expect("elaborate failed");
+    let resolved = elaborated.resolve().expect("resolve failed");
+    let type_checked = resolved.type_check().expect("type_check failed");
+    let alias_checked = type_checked.alias_check().expect("alias check failed");
+    let flattened = alias_checked.flatten().expect("flatten failed");
+
+    analyze_map_inplace(&flattened.mir)
+}
+
+#[test]
+fn test_inplace_map_simple_dead_after() {
+    // arr is not used after the map call - should be eligible for in-place
+    let source = r#"
+def double(x: i32): i32 = x * 2
+
+def main(arr: [4]i32): [4]i32 =
+    map double arr
+"#;
+    let info = analyze_inplace_map(source);
+    assert!(
+        !info.can_reuse_input.is_empty(),
+        "Expected map call to be eligible for in-place optimization"
+    );
+}
+
+#[test]
+fn test_inplace_map_used_after() {
+    // arr is used after the map call - should NOT be eligible for in-place
+    let source = r#"
+def double(x: i32): i32 = x * 2
+
+def main(arr: [4]i32): (i32, [4]i32) =
+    let result = map double arr in
+    (arr[0], result)
+"#;
+    let info = analyze_inplace_map(source);
+    assert!(
+        info.can_reuse_input.is_empty(),
+        "Expected no in-place optimization: arr is used after map"
+    );
+}
+
+#[test]
+fn test_inplace_map_alias_used_after() {
+    // arr2 aliases arr, and arr2 is used after the map call
+    // Should NOT be eligible for in-place
+    let source = r#"
+def double(x: i32): i32 = x * 2
+
+def main(arr: [4]i32): (i32, [4]i32) =
+    let arr2 = arr in
+    let result = map double arr in
+    (arr2[0], result)
+"#;
+    let info = analyze_inplace_map(source);
+    assert!(
+        info.can_reuse_input.is_empty(),
+        "Expected no in-place optimization: alias arr2 is used after map"
+    );
+}
+
+#[test]
+fn test_inplace_map_nested() {
+    // Nested maps - inner map result is used by outer map
+    // The inner map on arr is dead after (only used by outer map)
+    let source = r#"
+def double(x: i32): i32 = x * 2
+
+def main(arr: [4]i32): [4]i32 =
+    map double (map double arr)
+"#;
+    let info = analyze_inplace_map(source);
+    // At least one of the maps should be eligible
+    // (Outer map can be in-place since inner result is dead after)
+    assert!(
+        !info.can_reuse_input.is_empty(),
+        "Expected at least one map to be eligible for in-place"
+    );
+}
+
+#[test]
+fn test_inplace_map_in_let() {
+    // Map result bound to name, original array dead
+    let source = r#"
+def double(x: i32): i32 = x * 2
+
+def main(arr: [4]i32): [4]i32 =
+    let result = map double arr in
+    result
+"#;
+    let info = analyze_inplace_map(source);
+    assert!(
+        !info.can_reuse_input.is_empty(),
+        "Expected map to be eligible for in-place when arr is dead after"
     );
 }

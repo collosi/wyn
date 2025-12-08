@@ -4,6 +4,7 @@
 //! It uses a Constructor wrapper that handles variable hoisting automatically.
 //! Dependencies are lowered on-demand using ensure_lowered pattern.
 
+use crate::alias_checker::InPlaceMapInfo;
 use crate::ast::TypeName;
 use crate::error::Result;
 use crate::impl_source::{BuiltinImpl, ImplSource, PrimOp};
@@ -16,7 +17,7 @@ use rspirv::binary::Assemble;
 use rspirv::dr::Operand;
 use rspirv::dr::{Builder, InsertPoint};
 use rspirv::spirv::{self, AddressingModel, Capability, MemoryModel, StorageClass};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Tracks the lowering state of each definition
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -109,6 +110,9 @@ struct Constructor {
     // Debug mode: when Some, contains buffer_var_id for the @gdp_buffer global
     // The buffer is a StorageBuffer with layout: [write_head, read_head, max_loops, data[4093]]
     debug_buffer: Option<spirv::Word>,
+
+    // In-place optimization: NodeIds of map calls where input array can be reused
+    inplace_map_nodes: HashSet<crate::ast::NodeId>,
 }
 
 impl Constructor {
@@ -157,6 +161,7 @@ impl Constructor {
             lambda_registry: Vec::new(),
             impl_source: ImplSource::default(),
             debug_buffer: None,
+            inplace_map_nodes: HashSet::new(),
         }
     }
 
@@ -683,9 +688,10 @@ impl Constructor {
 }
 
 impl<'a> LowerCtx<'a> {
-    fn new(program: &'a Program, debug_enabled: bool) -> Self {
+    fn new(program: &'a Program, debug_enabled: bool, inplace_info: &InPlaceMapInfo) -> Self {
         let mut constructor = Constructor::new();
         constructor.lambda_registry = program.lambda_registry.clone();
+        constructor.inplace_map_nodes = inplace_info.can_reuse_input.clone();
         if debug_enabled {
             constructor.setup_debug_buffer();
         }
@@ -1012,18 +1018,19 @@ impl<'a> LowerCtx<'a> {
 }
 
 /// Lower a MIR program to SPIR-V
-pub fn lower(program: &mir::Program, debug_enabled: bool) -> Result<Vec<u32>> {
+pub fn lower(program: &mir::Program, debug_enabled: bool, inplace_info: &InPlaceMapInfo) -> Result<Vec<u32>> {
     // Use a thread with larger stack size to handle deeply nested expressions
     // Default Rust stack is 2MB on macOS which is too small for complex shaders
     const STACK_SIZE: usize = 16 * 1024 * 1024; // 16MB
 
-    // Clone program since we need 'static lifetime for thread
+    // Clone program and inplace info since we need 'static lifetime for thread
     let program_clone = program.clone();
+    let inplace_info_clone = inplace_info.clone();
 
     let handle = std::thread::Builder::new()
         .stack_size(STACK_SIZE)
         .spawn(move || {
-            let ctx = LowerCtx::new(&program_clone, debug_enabled);
+            let ctx = LowerCtx::new(&program_clone, debug_enabled, &inplace_info_clone);
             ctx.run()
         })
         .expect("Failed to spawn lowering thread");
@@ -1720,23 +1727,46 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                     .get(&lambda_name)
                     .ok_or_else(|| err_spirv!("Lambda function not found: {}", lambda_name))?;
 
-                // Build result array by calling lambda for each element
-                let mut result_elements = Vec::new();
-                for i in 0..array_size {
-                    // Extract element from input array (using input element type)
-                    let input_elem =
-                        constructor.builder.composite_extract(input_elem_type, None, array_val, [i])?;
+                // Check if we can do in-place update:
+                // 1. This map call was marked as having a dead-after input array
+                // 2. Element types match (f : T -> T)
+                let can_inplace = constructor.inplace_map_nodes.contains(&expr.id)
+                    && input_elem_type == output_elem_type;
 
-                    // Call lambda: for empty closures, only pass element; otherwise pass both
-                    let args =
-                        if is_empty_closure { vec![input_elem] } else { vec![closure_val, input_elem] };
-                    let result_elem =
-                        constructor.builder.function_call(output_elem_type, None, lambda_func_id, args)?;
-                    result_elements.push(result_elem);
+                if can_inplace {
+                    // In-place optimization: use OpCompositeInsert to update array in place
+                    // This allows the SPIR-V optimizer to reuse the input array memory
+                    let mut result = array_val;
+                    for i in 0..array_size {
+                        let input_elem =
+                            constructor.builder.composite_extract(input_elem_type, None, array_val, [i])?;
+                        let call_args =
+                            if is_empty_closure { vec![input_elem] } else { vec![closure_val, input_elem] };
+                        let result_elem =
+                            constructor.builder.function_call(output_elem_type, None, lambda_func_id, call_args)?;
+                        // Insert the new element into the result array
+                        result = constructor.builder.composite_insert(result_type, None, result_elem, result, [i])?;
+                    }
+                    return Ok(result);
+                } else {
+                    // Build result array by calling lambda for each element
+                    let mut result_elements = Vec::new();
+                    for i in 0..array_size {
+                        // Extract element from input array (using input element type)
+                        let input_elem =
+                            constructor.builder.composite_extract(input_elem_type, None, array_val, [i])?;
+
+                        // Call lambda: for empty closures, only pass element; otherwise pass both
+                        let call_args =
+                            if is_empty_closure { vec![input_elem] } else { vec![closure_val, input_elem] };
+                        let result_elem =
+                            constructor.builder.function_call(output_elem_type, None, lambda_func_id, call_args)?;
+                        result_elements.push(result_elem);
+                    }
+
+                    // Construct result array
+                    return Ok(constructor.builder.composite_construct(result_type, None, result_elements)?);
                 }
-
-                // Construct result array
-                return Ok(constructor.builder.composite_construct(result_type, None, result_elements)?);
             }
 
             // For all other calls, lower arguments normally
@@ -2561,7 +2591,8 @@ mod tests {
             .expect("Flattening failed")
             .mir;
 
-        lower(&mir, false)
+        let inplace_info = crate::alias_checker::analyze_map_inplace(&mir);
+        lower(&mir, false, &inplace_info)
     }
 
     #[test]

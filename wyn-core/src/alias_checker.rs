@@ -580,3 +580,373 @@ impl AliasCheckResult {
         }
     }
 }
+
+// =============================================================================
+// MIR-level In-Place Optimization Analysis
+// =============================================================================
+
+use crate::mir;
+
+/// Result of in-place map analysis
+#[derive(Debug, Default, Clone)]
+pub struct InPlaceMapInfo {
+    /// NodeIds of map calls where input array can be reused
+    pub can_reuse_input: HashSet<NodeId>,
+}
+
+/// Analyze MIR to find map calls that can reuse their input array.
+///
+/// A map call `map f arr` can reuse `arr` if:
+/// 1. `arr` is not used after the map call (nor any alias of arr)
+/// 2. Element types match (f : T -> T) - checked at lowering time
+pub fn analyze_map_inplace(mir: &mir::Program) -> InPlaceMapInfo {
+    let mut result = InPlaceMapInfo::default();
+
+    for def in &mir.defs {
+        if let mir::Def::Function { body, .. } = def {
+            analyze_function_body(body, &mut result);
+        }
+    }
+
+    result
+}
+
+fn analyze_function_body(body: &mir::Expr, result: &mut InPlaceMapInfo) {
+    // Build alias map and uses-after map
+    let mut aliases: HashMap<String, HashSet<String>> = HashMap::new();
+    let uses_after = compute_uses_after(body, &HashSet::new(), &mut aliases);
+
+    // Find eligible map calls
+    find_inplace_map_calls(body, &uses_after, &aliases, result);
+}
+
+/// Collect all variable uses in an expression (bottom-up)
+fn collect_uses(expr: &mir::Expr) -> HashSet<String> {
+    use mir::ExprKind::*;
+
+    let mut uses = HashSet::new();
+
+    match &expr.kind {
+        Var(name) => {
+            uses.insert(name.clone());
+        }
+        Literal(lit) => {
+            collect_uses_in_literal(lit, &mut uses);
+        }
+        Unit => {}
+        BinOp { lhs, rhs, .. } => {
+            uses.extend(collect_uses(lhs));
+            uses.extend(collect_uses(rhs));
+        }
+        UnaryOp { operand, .. } => {
+            uses.extend(collect_uses(operand));
+        }
+        If { cond, then_branch, else_branch } => {
+            uses.extend(collect_uses(cond));
+            uses.extend(collect_uses(then_branch));
+            uses.extend(collect_uses(else_branch));
+        }
+        Let { name, value, body, .. } => {
+            uses.extend(collect_uses(value));
+            let mut body_uses = collect_uses(body);
+            body_uses.remove(name); // Remove bound variable
+            uses.extend(body_uses);
+        }
+        Loop { init, init_bindings, kind, body, loop_var } => {
+            uses.extend(collect_uses(init));
+            for (_, binding_expr) in init_bindings {
+                uses.extend(collect_uses(binding_expr));
+            }
+            match kind {
+                mir::LoopKind::For { iter, .. } => uses.extend(collect_uses(iter)),
+                mir::LoopKind::ForRange { bound, .. } => uses.extend(collect_uses(bound)),
+                mir::LoopKind::While { cond } => uses.extend(collect_uses(cond)),
+            }
+            let mut body_uses = collect_uses(body);
+            body_uses.remove(loop_var);
+            // Remove bound variables from init_bindings
+            for (binding_name, _) in init_bindings {
+                body_uses.remove(binding_name);
+            }
+            if let mir::LoopKind::For { var, .. } | mir::LoopKind::ForRange { var, .. } = kind {
+                body_uses.remove(var);
+            }
+            uses.extend(body_uses);
+        }
+        Call { args, .. } => {
+            for arg in args {
+                uses.extend(collect_uses(arg));
+            }
+        }
+        Intrinsic { args, .. } => {
+            for arg in args {
+                uses.extend(collect_uses(arg));
+            }
+        }
+        Attributed { expr, .. } => {
+            uses.extend(collect_uses(expr));
+        }
+        Materialize(inner) => {
+            uses.extend(collect_uses(inner));
+        }
+        Closure { captures, .. } => {
+            for capture in captures {
+                uses.extend(collect_uses(capture));
+            }
+        }
+    }
+
+    uses
+}
+
+fn collect_uses_in_literal(lit: &mir::Literal, uses: &mut HashSet<String>) {
+    match lit {
+        mir::Literal::Int(_) | mir::Literal::Float(_) | mir::Literal::Bool(_) | mir::Literal::String(_) => {}
+        mir::Literal::Tuple(elems) | mir::Literal::Array(elems) | mir::Literal::Vector(elems) => {
+            for elem in elems {
+                uses.extend(collect_uses(elem));
+            }
+        }
+        mir::Literal::Matrix(rows) => {
+            for row in rows {
+                for elem in row {
+                    uses.extend(collect_uses(elem));
+                }
+            }
+        }
+    }
+}
+
+/// Compute uses-after for each expression (top-down).
+/// Returns a map from NodeId to the set of variables used STRICTLY AFTER that expression.
+/// Also populates the aliases map: var -> set of variables it aliases.
+fn compute_uses_after(
+    expr: &mir::Expr,
+    after: &HashSet<String>,
+    aliases: &mut HashMap<String, HashSet<String>>,
+) -> HashMap<NodeId, HashSet<String>> {
+    use mir::ExprKind::*;
+
+    let mut result = HashMap::new();
+    result.insert(expr.id, after.clone());
+
+    match &expr.kind {
+        Var(_) | Literal(_) | Unit => {}
+
+        BinOp { lhs, rhs, .. } => {
+            // After lhs: uses in rhs + after
+            let rhs_uses = collect_uses(rhs);
+            let after_lhs: HashSet<_> = rhs_uses.union(after).cloned().collect();
+            result.extend(compute_uses_after(lhs, &after_lhs, aliases));
+
+            // After rhs: just after
+            result.extend(compute_uses_after(rhs, after, aliases));
+        }
+
+        UnaryOp { operand, .. } => {
+            result.extend(compute_uses_after(operand, after, aliases));
+        }
+
+        If { cond, then_branch, else_branch } => {
+            // After cond: uses from both branches + after
+            let then_uses = collect_uses(then_branch);
+            let else_uses = collect_uses(else_branch);
+            let after_cond: HashSet<_> = then_uses.union(&else_uses).chain(after.iter()).cloned().collect();
+            result.extend(compute_uses_after(cond, &after_cond, aliases));
+
+            // After each branch: just after
+            result.extend(compute_uses_after(then_branch, after, aliases));
+            result.extend(compute_uses_after(else_branch, after, aliases));
+        }
+
+        Let { name, value, body, .. } => {
+            // Track aliases: if value is Var(x), then name aliases x
+            if let Var(source_var) = &value.kind {
+                let mut alias_set = HashSet::new();
+                alias_set.insert(source_var.clone());
+                // Transitively include aliases of source
+                if let Some(source_aliases) = aliases.get(source_var) {
+                    alias_set.extend(source_aliases.iter().cloned());
+                }
+                aliases.insert(name.clone(), alias_set);
+            }
+
+            // After value: uses in body + after (minus name since it's being bound)
+            let mut body_uses = collect_uses(body);
+            body_uses.remove(name);
+            let after_value: HashSet<_> = body_uses.union(after).cloned().collect();
+            result.extend(compute_uses_after(value, &after_value, aliases));
+
+            // After body: just after
+            result.extend(compute_uses_after(body, after, aliases));
+        }
+
+        Loop { init, init_bindings, kind, body, .. } => {
+            // Simplified: treat loop as atomic for now
+            result.extend(compute_uses_after(init, after, aliases));
+            for (_, binding_expr) in init_bindings {
+                result.extend(compute_uses_after(binding_expr, after, aliases));
+            }
+            match kind {
+                mir::LoopKind::For { iter, .. } => {
+                    result.extend(compute_uses_after(iter, after, aliases));
+                }
+                mir::LoopKind::ForRange { bound, .. } => {
+                    result.extend(compute_uses_after(bound, after, aliases));
+                }
+                mir::LoopKind::While { cond } => {
+                    result.extend(compute_uses_after(cond, after, aliases));
+                }
+            }
+            result.extend(compute_uses_after(body, after, aliases));
+        }
+
+        Call { args, .. } => {
+            // Process args right to left
+            let mut current_after = after.clone();
+            for arg in args.iter().rev() {
+                result.extend(compute_uses_after(arg, &current_after, aliases));
+                current_after.extend(collect_uses(arg));
+            }
+        }
+
+        Intrinsic { args, .. } => {
+            let mut current_after = after.clone();
+            for arg in args.iter().rev() {
+                result.extend(compute_uses_after(arg, &current_after, aliases));
+                current_after.extend(collect_uses(arg));
+            }
+        }
+
+        Attributed { expr: inner, .. } => {
+            result.extend(compute_uses_after(inner, after, aliases));
+        }
+
+        Materialize(inner) => {
+            result.extend(compute_uses_after(inner, after, aliases));
+        }
+
+        Closure { captures, .. } => {
+            let mut current_after = after.clone();
+            for capture in captures.iter().rev() {
+                result.extend(compute_uses_after(capture, &current_after, aliases));
+                current_after.extend(collect_uses(capture));
+            }
+        }
+    }
+
+    result
+}
+
+/// Find map calls where the input array can be reused.
+fn find_inplace_map_calls(
+    expr: &mir::Expr,
+    uses_after: &HashMap<NodeId, HashSet<String>>,
+    aliases: &HashMap<String, HashSet<String>>,
+    result: &mut InPlaceMapInfo,
+) {
+    use mir::ExprKind::*;
+
+    match &expr.kind {
+        Call { func, args } if func == "map" && args.len() == 2 => {
+            // args[0] is closure, args[1] is array
+            if let Var(arr_name) = &args[1].kind {
+                // Get all variables that alias arr_name
+                let mut all_aliases: HashSet<_> = std::iter::once(arr_name.clone()).collect();
+
+                // Add variables that arr_name aliases
+                if let Some(arr_aliases) = aliases.get(arr_name) {
+                    all_aliases.extend(arr_aliases.iter().cloned());
+                }
+
+                // Add variables that alias arr_name (reverse lookup)
+                for (var, var_aliases) in aliases {
+                    if var_aliases.contains(arr_name) {
+                        all_aliases.insert(var.clone());
+                    }
+                }
+
+                // Check if any alias is used after this call
+                if let Some(after_set) = uses_after.get(&expr.id) {
+                    let any_alias_used = all_aliases.iter().any(|alias| after_set.contains(alias));
+                    if !any_alias_used {
+                        result.can_reuse_input.insert(expr.id);
+                    }
+                }
+            }
+
+            // Recurse into arguments
+            for arg in args {
+                find_inplace_map_calls(arg, uses_after, aliases, result);
+            }
+        }
+
+        // Recurse into all subexpressions
+        Var(_) | Literal(_) | Unit => {}
+
+        BinOp { lhs, rhs, .. } => {
+            find_inplace_map_calls(lhs, uses_after, aliases, result);
+            find_inplace_map_calls(rhs, uses_after, aliases, result);
+        }
+
+        UnaryOp { operand, .. } => {
+            find_inplace_map_calls(operand, uses_after, aliases, result);
+        }
+
+        If { cond, then_branch, else_branch } => {
+            find_inplace_map_calls(cond, uses_after, aliases, result);
+            find_inplace_map_calls(then_branch, uses_after, aliases, result);
+            find_inplace_map_calls(else_branch, uses_after, aliases, result);
+        }
+
+        Let { value, body, .. } => {
+            find_inplace_map_calls(value, uses_after, aliases, result);
+            find_inplace_map_calls(body, uses_after, aliases, result);
+        }
+
+        Loop { init, init_bindings, kind, body, .. } => {
+            find_inplace_map_calls(init, uses_after, aliases, result);
+            for (_, binding_expr) in init_bindings {
+                find_inplace_map_calls(binding_expr, uses_after, aliases, result);
+            }
+            match kind {
+                mir::LoopKind::For { iter, .. } => {
+                    find_inplace_map_calls(iter, uses_after, aliases, result);
+                }
+                mir::LoopKind::ForRange { bound, .. } => {
+                    find_inplace_map_calls(bound, uses_after, aliases, result);
+                }
+                mir::LoopKind::While { cond } => {
+                    find_inplace_map_calls(cond, uses_after, aliases, result);
+                }
+            }
+            find_inplace_map_calls(body, uses_after, aliases, result);
+        }
+
+        Call { args, .. } => {
+            for arg in args {
+                find_inplace_map_calls(arg, uses_after, aliases, result);
+            }
+        }
+
+        Intrinsic { args, .. } => {
+            for arg in args {
+                find_inplace_map_calls(arg, uses_after, aliases, result);
+            }
+        }
+
+        Attributed { expr: inner, .. } => {
+            find_inplace_map_calls(inner, uses_after, aliases, result);
+        }
+
+        Materialize(inner) => {
+            find_inplace_map_calls(inner, uses_after, aliases, result);
+        }
+
+        Closure { captures, .. } => {
+            for capture in captures {
+                find_inplace_map_calls(capture, uses_after, aliases, result);
+            }
+        }
+    }
+}

@@ -372,7 +372,9 @@ impl Lifted {
 
     /// Lower MIR to SPIR-V with debug mode option
     pub fn lower_with_options(self, debug_enabled: bool) -> Result<Lowered> {
-        let spirv = spirv::lower(&self.mir, debug_enabled)?;
+        // Analyze for in-place map optimization opportunities
+        let inplace_info = alias_checker::analyze_map_inplace(&self.mir);
+        let spirv = spirv::lower(&self.mir, debug_enabled, &inplace_info)?;
         Ok(Lowered { mir: self.mir, spirv })
     }
 
