@@ -356,7 +356,7 @@ impl Monomorphizer {
                 expr.kind
             }
             ExprKind::Literal(ref lit) => {
-                // Check for closure records with __lambda_name field
+                // Check for closure records with _w_lambda_name field
                 if let Some(lambda_name) = crate::mir::extract_lambda_name(&expr) {
                     if let Some(def) = self.poly_functions.get(lambda_name).cloned() {
                         self.ensure_in_worklist(lambda_name, def);

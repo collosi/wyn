@@ -119,7 +119,7 @@ fn test_normalize_binop_with_atomic_operands() {
 #[test]
 fn test_normalize_nested_binop() {
     // (a + b) + c should become:
-    // let __norm_0 = a + b in __norm_0 + c
+    // let _w_norm_0 = a + b in _w_norm_0 + c
     let inner = binop("+", var("a"), var("b"));
     let expr = binop("+", inner, var("c"));
     let mut bindings = Vec::new();
@@ -128,11 +128,11 @@ fn test_normalize_nested_binop() {
 
     // Should have one binding for the inner binop
     assert_eq!(bindings.len(), 1);
-    assert_eq!(bindings[0].0, "__norm_0");
+    assert_eq!(bindings[0].0, "_w_norm_0");
 
-    // Result should be __norm_0 + c
+    // Result should be _w_norm_0 + c
     if let ExprKind::BinOp { lhs, rhs, .. } = &result.kind {
-        assert!(matches!(lhs.kind, ExprKind::Var(ref n) if n == "__norm_0"));
+        assert!(matches!(lhs.kind, ExprKind::Var(ref n) if n == "_w_norm_0"));
         assert!(matches!(rhs.kind, ExprKind::Var(ref n) if n == "c"));
     } else {
         panic!("Expected BinOp");
@@ -142,7 +142,7 @@ fn test_normalize_nested_binop() {
 #[test]
 fn test_normalize_call_with_binop_arg() {
     // foo(a + b) should become:
-    // let __norm_0 = a + b in foo(__norm_0)
+    // let _w_norm_0 = a + b in foo(_w_norm_0)
     let arg = binop("+", var("a"), var("b"));
     let expr = call("foo", vec![arg]);
     let mut bindings = Vec::new();
@@ -152,10 +152,10 @@ fn test_normalize_call_with_binop_arg() {
     // Should have one binding for the binop
     assert_eq!(bindings.len(), 1);
 
-    // Result should be foo(__norm_0)
+    // Result should be foo(_w_norm_0)
     if let ExprKind::Call { args, .. } = &result.kind {
         assert_eq!(args.len(), 1);
-        assert!(matches!(args[0].kind, ExprKind::Var(ref n) if n == "__norm_0"));
+        assert!(matches!(args[0].kind, ExprKind::Var(ref n) if n == "_w_norm_0"));
     } else {
         panic!("Expected Call");
     }

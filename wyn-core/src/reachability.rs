@@ -137,7 +137,7 @@ impl MirFolder for CalleeCollector {
         expr: Expr,
         ctx: &mut Self::Ctx,
     ) -> Result<Expr, Self::Error> {
-        // Check for closure records with __lambda_name field
+        // Check for closure records with _w_lambda_name field
         if let Some(lambda_name) = crate::mir::extract_lambda_name(&expr) {
             self.callees.insert(lambda_name.to_string());
         }

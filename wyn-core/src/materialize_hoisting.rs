@@ -121,7 +121,7 @@ fn hoist_in_expr(expr: Expr) -> Expr {
 
                 for (inner_expr, mat_ty) in common {
                     let binding_id = fresh_binding_id();
-                    let var_name = format!("__mat_{}", binding_id);
+                    let var_name = format!("_w_mat_{}", binding_id);
 
                     // Replace occurrences in both branches
                     result_then = replace_materialize(&result_then, &inner_expr, &var_name, &mat_ty);

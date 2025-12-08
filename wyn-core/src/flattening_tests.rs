@@ -66,8 +66,8 @@ fn test_lambda_defunctionalization() {
 
     // Check that closure record is created
     let mir_str = format!("{}", mir);
-    assert!(mir_str.contains("__lam_f_"));
-    assert!(mir_str.contains("__lambda_name"));
+    assert!(mir_str.contains("_w_lam_f_"));
+    assert!(mir_str.contains("_w_lambda_name"));
 }
 
 #[test]
@@ -76,9 +76,9 @@ fn test_lambda_with_capture() {
     let mir_str = format!("{}", mir);
 
     // Lambda should capture y
-    assert!(mir_str.contains("__closure"));
+    assert!(mir_str.contains("_w_closure"));
     // Should reference y from closure
-    assert!(mir_str.contains("record_access") || mir_str.contains("__closure"));
+    assert!(mir_str.contains("record_access") || mir_str.contains("_w_closure"));
 }
 
 #[test]
@@ -208,7 +208,7 @@ def test : [4]i32 =
 #[test]
 fn test_lambda_captures_typed_variable() {
     // This test reproduces an issue where a lambda captures a typed variable (like an array),
-    // and the free variable rewriting creates __closure.mat, which then fails when trying
+    // and the free variable rewriting creates _w_closure.mat, which then fails when trying
     // to resolve 'mat' as a field access on the closure.
     let mir = flatten_program(
         r#"
@@ -219,7 +219,7 @@ def test_capture (arr:[4]i32) : i32 =
     );
     let mir_str = format!("{}", mir);
     // Lambda should capture arr and access it via closure
-    assert!(mir_str.contains("__closure") || mir_str.contains("record_access"));
+    assert!(mir_str.contains("_w_closure") || mir_str.contains("record_access"));
 }
 
 #[test]
@@ -253,12 +253,12 @@ def test_map (arr:[4]i32) : [4]i32 =
     println!("Lambda registry: {:?}", mir.lambda_registry);
 
     // Should have generated lambda function
-    assert!(mir_str.contains("__lam_test_map_"));
-    // Should have closure record with __lambda_name
-    assert!(mir_str.contains("__lambda_name"));
+    assert!(mir_str.contains("_w_lam_test_map_"));
+    // Should have closure record with _w_lambda_name
+    assert!(mir_str.contains("_w_lambda_name"));
     // Lambda registry should have the lambda function
     assert_eq!(mir.lambda_registry.len(), 1);
-    assert_eq!(mir.lambda_registry[0].0, "__lam_test_map_0");
+    assert_eq!(mir.lambda_registry[0].0, "_w_lam_test_map_0");
     assert_eq!(mir.lambda_registry[0].1, 1); // arity 1
 }
 
@@ -276,8 +276,8 @@ def test_apply (x:i32) : i32 =
     println!("MIR output:\n{}", mir_str);
     println!("Lambda registry: {:?}", mir.lambda_registry);
 
-    // Should generate a direct call to __lam_test_apply_0 with the closure as first argument
-    assert!(mir_str.contains("__lam_test_apply_0 f 10"));
+    // Should generate a direct call to _w_lam_test_apply_0 with the closure as first argument
+    assert!(mir_str.contains("_w_lam_test_apply_0 f 10"));
     // Should NOT generate apply1 intrinsic
     assert!(!mir_str.contains("apply1"));
 }
@@ -421,7 +421,7 @@ def test_conversions (x: i32): f32 =
     );
     let mir_str = format!("{}", mir);
     // Should contain the conversion calls
-    assert!(mir_str.contains("f32.i32") || mir_str.contains("__builtin_f32_from"));
+    assert!(mir_str.contains("f32.i32") || mir_str.contains("_w_builtin_f32_from"));
 }
 
 #[test]

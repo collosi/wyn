@@ -109,7 +109,7 @@ impl Flattener {
 
     /// Get the backing store variable name for a binding ID
     fn backing_store_name(binding_id: u64) -> String {
-        format!("__ptr_{}", binding_id)
+        format!("_w_ptr_{}", binding_id)
     }
 
     /// Register a lambda function.
@@ -289,7 +289,7 @@ impl Flattener {
 
     /// Generate a unique variable name
     fn fresh_name(&mut self, prefix: &str) -> String {
-        format!("__{}{}", prefix, self.fresh_id())
+        format!("_w_{}{}", prefix, self.fresh_id())
     }
 
     /// Hoist inner Let expressions out of a Let's value.
@@ -697,7 +697,7 @@ impl Flattener {
                 // Generate function name
                 let id = self.fresh_id();
                 let enclosing = self.enclosing_decl_stack.last().map(|s| s.as_str()).unwrap_or("anon");
-                let func_name = format!("__op_{}_{}", enclosing, id);
+                let func_name = format!("_w_op_{}_{}", enclosing, id);
 
                 // Register lambda with arity 2 (binary operators)
                 let arity = 2;
@@ -726,7 +726,7 @@ impl Flattener {
                     );
                 };
 
-                // Build the closure tuple with __lambda_name at the end (no free variables)
+                // Build the closure tuple with _w_lambda_name at the end (no free variables)
                 let string_type = Type::Constructed(TypeName::Str("string".into()), vec![]);
                 let tuple_elems = vec![self.mk_expr(
                     string_type.clone(),
@@ -735,14 +735,14 @@ impl Flattener {
                 )];
 
                 // Build the closure type (still a record type for field name lookup during lowering)
-                // __lambda_name goes last so capture indices match SPIR-V struct indices
-                let type_fields = vec![("__lambda_name".to_string(), string_type)];
+                // _w_lambda_name goes last so capture indices match SPIR-V struct indices
+                let type_fields = vec![("_w_lambda_name".to_string(), string_type)];
                 let closure_type = types::record(type_fields);
 
                 // Build parameters: closure, x, y
                 let params = vec![
                     mir::Param {
-                        name: "__closure".to_string(),
+                        name: "_w_closure".to_string(),
                         ty: closure_type.clone(),
                         is_consumed: false,
                     },
@@ -947,11 +947,11 @@ impl Flattener {
             ExprKind::FieldAccess(obj_expr, field) => {
                 // Check for special cases when obj is an identifier
                 if let ExprKind::Identifier(name) = &obj_expr.kind {
-                    // Special case: __closure field access (from lambda free var rewriting)
-                    if name == "__closure" {
+                    // Special case: _w_closure field access (from lambda free var rewriting)
+                    if name == "_w_closure" {
                         // Use the current closure type from the stack (most recent lambda)
                         let closure_type = self.closure_type_stack.last().cloned().ok_or_else(|| {
-                            err_flatten!("Internal error: __closure accessed outside of lambda body")
+                            err_flatten!("Internal error: _w_closure accessed outside of lambda body")
                         })?;
 
                         // Resolve field name to index from closure type
@@ -965,7 +965,7 @@ impl Flattener {
                         };
 
                         let obj =
-                            self.mk_expr(closure_type, mir::ExprKind::Var("__closure".to_string()), span);
+                            self.mk_expr(closure_type, mir::ExprKind::Var("_w_closure".to_string()), span);
                         let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
                         let idx_expr = self.mk_expr(
                             i32_type,
@@ -1093,7 +1093,7 @@ impl Flattener {
                 // Check if this binding needs a backing store
                 let body = if self.needs_backing_store.contains(&binding_id) {
                     // Wrap body with backing store materialization:
-                    // let __ptr_{id} = materialize(name) in body
+                    // let _w_ptr_{id} = materialize(name) in body
                     let ptr_name = Self::backing_store_name(binding_id);
                     let ptr_binding_id = self.fresh_binding_id();
                     // Build inner expressions first to avoid nested mutable borrow
@@ -1262,15 +1262,15 @@ impl Flattener {
         // Generate function name
         let id = self.fresh_id();
         let enclosing = self.enclosing_decl_stack.last().map(|s| s.as_str()).unwrap_or("anon");
-        let func_name = format!("__lam_{}_{}", enclosing, id);
+        let func_name = format!("_w_lam_{}_{}", enclosing, id);
 
         // Register lambda
         let arity = lambda.params.len();
         self.add_lambda(func_name.clone(), arity);
 
         // Build the closure tuple elements (and record field info for type)
-        // Layout: [free_var_1, free_var_2, ..., __lambda_name] (free vars sorted alphabetically)
-        // __lambda_name goes LAST so that capture indices (0, 1, 2...) match SPIR-V struct indices
+        // Layout: [free_var_1, free_var_2, ..., _w_lambda_name] (free vars sorted alphabetically)
+        // _w_lambda_name goes LAST so that capture indices (0, 1, 2...) match SPIR-V struct indices
         let string_type = Type::Constructed(TypeName::Str("string"), vec![]);
 
         let mut tuple_elems = vec![];
@@ -1296,14 +1296,14 @@ impl Flattener {
             span,
         );
         tuple_elems.push(lambda_name_expr);
-        type_fields.push(("__lambda_name".to_string(), string_type));
+        type_fields.push(("_w_lambda_name".to_string(), string_type));
 
-        // Build the record type (keeps field names for index lookup during __closure access)
+        // Build the record type (keeps field names for index lookup during _w_closure access)
         let closure_type = types::record(type_fields);
 
         // Build parameters: closure first, then lambda params
         let mut params = vec![mir::Param {
-            name: "__closure".to_string(),
+            name: "_w_closure".to_string(),
             ty: closure_type.clone(),
             is_consumed: false,
         }];
@@ -1552,7 +1552,7 @@ impl Flattener {
 
         let (init_flat, _) = self.flatten_expr(init_expr)?;
         let init_ty = init_flat.ty.clone();
-        let loop_var = self.fresh_name("__loop_var");
+        let loop_var = self.fresh_name("loop_var");
 
         let bindings = match &pattern.kind {
             PatternKind::Name(name) => {
@@ -1792,11 +1792,11 @@ impl Flattener {
         let _span = expr.h.span;
         let kind = match &expr.kind {
             ExprKind::Identifier(name) if free_vars.contains(name) => {
-                // Rewrite to __closure.name
+                // Rewrite to _w_closure.name
                 ExprKind::FieldAccess(
                     Box::new(Expression {
                         h: expr.h.clone(),
-                        kind: ExprKind::Identifier("__closure".to_string()),
+                        kind: ExprKind::Identifier("_w_closure".to_string()),
                     }),
                     name.clone(),
                 )

@@ -57,8 +57,8 @@ pub fn is_empty_closure_type(ty: &PolyType<TypeName>) -> bool {
     match ty {
         PolyType::Constructed(TypeName::Tuple(_), args) => args.is_empty(),
         PolyType::Constructed(TypeName::Record(fields), _) => {
-            // Empty if only field is __lambda_name
-            fields.iter().all(|name| name == "__lambda_name")
+            // Empty if only field is _w_lambda_name
+            fields.iter().all(|name| name == "_w_lambda_name")
         }
         _ => false,
     }

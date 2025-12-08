@@ -122,16 +122,16 @@ pub enum Intrinsic {
     DebugStr,
     // GDP (GPU Debug Protocol) intrinsics for ring buffer access
     /// Atomic add on GDP buffer at index, returns old value
-    /// __gdp_atomic_add : u32 -> u32 -> u32 (index, delta -> old_value)
+    /// _w_gdp_atomic_add : u32 -> u32 -> u32 (index, delta -> old_value)
     GdpAtomicAdd,
     /// Load u32 from GDP buffer at index
-    /// __gdp_load : u32 -> u32 (index -> value)
+    /// _w_gdp_load : u32 -> u32 (index -> value)
     GdpLoad,
     /// Store u32 to GDP buffer at index
-    /// __gdp_store : u32 -> u32 -> () (index, value -> ())
+    /// _w_gdp_store : u32 -> u32 -> () (index, value -> ())
     GdpStore,
     /// Bitcast i32 to u32 (reinterpret bits)
-    /// __bitcast_i32_to_u32 : i32 -> u32
+    /// _w_bitcast_i32_to_u32 : i32 -> u32
     BitcastI32ToU32,
 }
 
@@ -234,8 +234,8 @@ impl ImplSource {
         let name = format!("{}.{}", ty_name, op);
         self.register(&name, impl_.clone());
 
-        // Also register as __intrinsic_OP_TYPE for use in prelude modules
-        let intrinsic_name = format!("__intrinsic_{}_{}", op, ty_name);
+        // Also register as _w_intrinsic_OP_TYPE for use in prelude modules
+        let intrinsic_name = format!("_w_intrinsic_{}_{}", op, ty_name);
         self.register(&intrinsic_name, impl_);
     }
 
@@ -244,8 +244,8 @@ impl ImplSource {
         let name = format!("{}.{}", ty_name, op);
         self.register(&name, impl_.clone());
 
-        // Also register as __intrinsic_OP_TYPE for use in prelude modules
-        let intrinsic_name = format!("__intrinsic_{}_{}", op, ty_name);
+        // Also register as _w_intrinsic_OP_TYPE for use in prelude modules
+        let intrinsic_name = format!("_w_intrinsic_{}_{}", op, ty_name);
         self.register(&intrinsic_name, impl_);
     }
 
@@ -254,8 +254,8 @@ impl ImplSource {
         let name = format!("{}.{}", ty_name, op);
         self.register(&name, impl_.clone());
 
-        // Also register as __intrinsic_OP_TYPE for use in prelude modules
-        let intrinsic_name = format!("__intrinsic_{}_{}", op, ty_name);
+        // Also register as _w_intrinsic_OP_TYPE for use in prelude modules
+        let intrinsic_name = format!("_w_intrinsic_{}_{}", op, ty_name);
         self.register(&intrinsic_name, impl_);
     }
 
@@ -454,8 +454,8 @@ impl ImplSource {
         let name = format!("{}.{}", ty_name, op);
         self.register(&name, impl_.clone());
 
-        // Also register as __intrinsic_OP_TYPE for use in prelude modules
-        let intrinsic_name = format!("__intrinsic_{}_{}", op, ty_name);
+        // Also register as _w_intrinsic_OP_TYPE for use in prelude modules
+        let intrinsic_name = format!("_w_intrinsic_{}_{}", op, ty_name);
         self.register(&intrinsic_name, impl_);
     }
 
@@ -464,8 +464,8 @@ impl ImplSource {
         let name = format!("{}.{}", ty_name, op);
         self.register(&name, impl_.clone());
 
-        // Also register as __intrinsic_OP_TYPE for use in prelude modules
-        let intrinsic_name = format!("__intrinsic_{}_{}", op, ty_name);
+        // Also register as _w_intrinsic_OP_TYPE for use in prelude modules
+        let intrinsic_name = format!("_w_intrinsic_{}_{}", op, ty_name);
         self.register(&intrinsic_name, impl_);
     }
 
@@ -533,34 +533,34 @@ impl ImplSource {
         self.register("f32.u64", BuiltinImpl::PrimOp(PrimOp::UIToFP));
 
         // Conversions from signed integers to f32 (internal builtins)
-        self.register("__builtin_f32_from_i8", BuiltinImpl::PrimOp(PrimOp::SIToFP));
-        self.register("__builtin_f32_from_i16", BuiltinImpl::PrimOp(PrimOp::SIToFP));
-        self.register("__builtin_f32_from_i32", BuiltinImpl::PrimOp(PrimOp::SIToFP));
-        self.register("__builtin_f32_from_i64", BuiltinImpl::PrimOp(PrimOp::SIToFP));
+        self.register("_w_builtin_f32_from_i8", BuiltinImpl::PrimOp(PrimOp::SIToFP));
+        self.register("_w_builtin_f32_from_i16", BuiltinImpl::PrimOp(PrimOp::SIToFP));
+        self.register("_w_builtin_f32_from_i32", BuiltinImpl::PrimOp(PrimOp::SIToFP));
+        self.register("_w_builtin_f32_from_i64", BuiltinImpl::PrimOp(PrimOp::SIToFP));
 
         // Conversions from unsigned integers to f32
-        self.register("__builtin_f32_from_u8", BuiltinImpl::PrimOp(PrimOp::UIToFP));
-        self.register("__builtin_f32_from_u16", BuiltinImpl::PrimOp(PrimOp::UIToFP));
-        self.register("__builtin_f32_from_u32", BuiltinImpl::PrimOp(PrimOp::UIToFP));
-        self.register("__builtin_f32_from_u64", BuiltinImpl::PrimOp(PrimOp::UIToFP));
+        self.register("_w_builtin_f32_from_u8", BuiltinImpl::PrimOp(PrimOp::UIToFP));
+        self.register("_w_builtin_f32_from_u16", BuiltinImpl::PrimOp(PrimOp::UIToFP));
+        self.register("_w_builtin_f32_from_u32", BuiltinImpl::PrimOp(PrimOp::UIToFP));
+        self.register("_w_builtin_f32_from_u64", BuiltinImpl::PrimOp(PrimOp::UIToFP));
 
         // Conversions from other floats to f32
-        self.register("__builtin_f32_from_f16", BuiltinImpl::PrimOp(PrimOp::FPConvert));
-        self.register("__builtin_f32_from_f64", BuiltinImpl::PrimOp(PrimOp::FPConvert));
+        self.register("_w_builtin_f32_from_f16", BuiltinImpl::PrimOp(PrimOp::FPConvert));
+        self.register("_w_builtin_f32_from_f64", BuiltinImpl::PrimOp(PrimOp::FPConvert));
 
         // Conversions from f32 to integers
-        self.register("__builtin_f32_to_i8", BuiltinImpl::PrimOp(PrimOp::FPToSI));
-        self.register("__builtin_f32_to_i16", BuiltinImpl::PrimOp(PrimOp::FPToSI));
-        self.register("__builtin_f32_to_i32", BuiltinImpl::PrimOp(PrimOp::FPToSI));
-        self.register("__builtin_f32_to_i64", BuiltinImpl::PrimOp(PrimOp::FPToSI));
-        self.register("__builtin_f32_to_u8", BuiltinImpl::PrimOp(PrimOp::FPToUI));
-        self.register("__builtin_f32_to_u16", BuiltinImpl::PrimOp(PrimOp::FPToUI));
-        self.register("__builtin_f32_to_u32", BuiltinImpl::PrimOp(PrimOp::FPToUI));
-        self.register("__builtin_f32_to_u64", BuiltinImpl::PrimOp(PrimOp::FPToUI));
+        self.register("_w_builtin_f32_to_i8", BuiltinImpl::PrimOp(PrimOp::FPToSI));
+        self.register("_w_builtin_f32_to_i16", BuiltinImpl::PrimOp(PrimOp::FPToSI));
+        self.register("_w_builtin_f32_to_i32", BuiltinImpl::PrimOp(PrimOp::FPToSI));
+        self.register("_w_builtin_f32_to_i64", BuiltinImpl::PrimOp(PrimOp::FPToSI));
+        self.register("_w_builtin_f32_to_u8", BuiltinImpl::PrimOp(PrimOp::FPToUI));
+        self.register("_w_builtin_f32_to_u16", BuiltinImpl::PrimOp(PrimOp::FPToUI));
+        self.register("_w_builtin_f32_to_u32", BuiltinImpl::PrimOp(PrimOp::FPToUI));
+        self.register("_w_builtin_f32_to_u64", BuiltinImpl::PrimOp(PrimOp::FPToUI));
 
         // Bit manipulation: reinterpret bits without conversion
-        self.register("__builtin_f32_from_bits", BuiltinImpl::PrimOp(PrimOp::Bitcast));
-        self.register("__builtin_f32_to_bits", BuiltinImpl::PrimOp(PrimOp::Bitcast));
+        self.register("_w_builtin_f32_from_bits", BuiltinImpl::PrimOp(PrimOp::Bitcast));
+        self.register("_w_builtin_f32_to_bits", BuiltinImpl::PrimOp(PrimOp::Bitcast));
     }
 
     /// Register vector operations (length, normalize, dot, cross, etc.)
@@ -568,10 +568,10 @@ impl ImplSource {
     fn register_vector_operations(&mut self) {
         self.register("magnitude", BuiltinImpl::PrimOp(PrimOp::GlslExt(66)));
         self.register("length", BuiltinImpl::Intrinsic(Intrinsic::Placeholder));
-        self.register("__uninit", BuiltinImpl::Intrinsic(Intrinsic::Uninit));
+        self.register("_w_uninit", BuiltinImpl::Intrinsic(Intrinsic::Uninit));
         self.register("replicate", BuiltinImpl::Intrinsic(Intrinsic::Replicate));
 
-        self.register("__array_update", BuiltinImpl::Intrinsic(Intrinsic::ArrayUpdate));
+        self.register("_w_array_update", BuiltinImpl::Intrinsic(Intrinsic::ArrayUpdate));
         self.register("normalize", BuiltinImpl::PrimOp(PrimOp::GlslExt(69)));
         self.register("dot", BuiltinImpl::PrimOp(PrimOp::Dot));
         self.register("cross", BuiltinImpl::PrimOp(PrimOp::GlslExt(68)));
@@ -621,13 +621,13 @@ impl ImplSource {
         // GDP (GPU Debug Protocol) intrinsics for ring buffer access
         // These are low-level primitives used by the GDP Wyn module
         self.register(
-            "__gdp_atomic_add",
+            "_w_gdp_atomic_add",
             BuiltinImpl::Intrinsic(Intrinsic::GdpAtomicAdd),
         );
-        self.register("__gdp_load", BuiltinImpl::Intrinsic(Intrinsic::GdpLoad));
-        self.register("__gdp_store", BuiltinImpl::Intrinsic(Intrinsic::GdpStore));
+        self.register("_w_gdp_load", BuiltinImpl::Intrinsic(Intrinsic::GdpLoad));
+        self.register("_w_gdp_store", BuiltinImpl::Intrinsic(Intrinsic::GdpStore));
         self.register(
-            "__bitcast_i32_to_u32",
+            "_w_bitcast_i32_to_u32",
             BuiltinImpl::Intrinsic(Intrinsic::BitcastI32ToU32),
         );
     }

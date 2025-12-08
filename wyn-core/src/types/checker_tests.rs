@@ -65,11 +65,11 @@ fn test_two_length_and_replicate_calls() {
 def test : f32 =
     let v4s : [2]vec4f32 = [@[1.0f32, 2.0f32, 3.0f32, 4.0f32], @[5.0f32, 6.0f32, 7.0f32, 8.0f32]] in
     let len1 = length v4s in
-    let out1 = replicate len1 (__uninit()) in
+    let out1 = replicate len1 (_w_uninit()) in
 
     let indices : [2]i32 = [0, 1] in
     let len2 = length indices in
-    let out2 = replicate len2 (__uninit()) in
+    let out2 = replicate len2 (_w_uninit()) in
 
     42.0f32
         "#,

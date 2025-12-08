@@ -371,17 +371,17 @@ impl PolyBuiltins {
         let array_a = Type::Constructed(TypeName::Array, vec![n.clone(), a.clone()]);
         self.register_poly("replicate", vec![n, a], array_a);
 
-        // __uninit : ∀a. () -> a
+        // _w_uninit : ∀a. () -> a
         let a = ctx.new_variable();
         let unit_ty = Type::Constructed(TypeName::Unit, vec![]);
-        self.register_poly("__uninit", vec![unit_ty], a);
+        self.register_poly("_w_uninit", vec![unit_ty], a);
 
-        // __array_update : ∀a n. [n]a -> i32 -> a -> [n]a
+        // _w_array_update : ∀a n. [n]a -> i32 -> a -> [n]a
         let a = ctx.new_variable();
         let n = ctx.new_variable();
         let array_a = Type::Constructed(TypeName::Array, vec![n, a.clone()]);
         let i32_ty = Type::Constructed(TypeName::Int(32), vec![]);
-        self.register_poly("__array_update", vec![array_a.clone(), i32_ty, a], array_a);
+        self.register_poly("_w_array_update", vec![array_a.clone(), i32_ty, a], array_a);
 
         // TODO: zip, reduce, etc.
 
@@ -397,22 +397,22 @@ impl PolyBuiltins {
         let unit_ty = Type::Constructed(TypeName::Unit, vec![]);
         let string_ty = Type::Constructed(TypeName::Str("string"), vec![]);
 
-        // __gdp_atomic_add : u32 -> u32 -> u32 (index, delta -> old_value)
+        // _w_gdp_atomic_add : u32 -> u32 -> u32 (index, delta -> old_value)
         self.register_poly(
-            "__gdp_atomic_add",
+            "_w_gdp_atomic_add",
             vec![u32_ty.clone(), u32_ty.clone()],
             u32_ty.clone(),
         );
 
-        // __gdp_load : u32 -> u32 (index -> value)
-        self.register_poly("__gdp_load", vec![u32_ty.clone()], u32_ty.clone());
+        // _w_gdp_load : u32 -> u32 (index -> value)
+        self.register_poly("_w_gdp_load", vec![u32_ty.clone()], u32_ty.clone());
 
-        // __gdp_store : u32 -> u32 -> () (index, value -> ())
-        self.register_poly("__gdp_store", vec![u32_ty.clone(), u32_ty], unit_ty.clone());
+        // _w_gdp_store : u32 -> u32 -> () (index, value -> ())
+        self.register_poly("_w_gdp_store", vec![u32_ty.clone(), u32_ty], unit_ty.clone());
 
-        // __bitcast_i32_to_u32 : i32 -> u32
+        // _w_bitcast_i32_to_u32 : i32 -> u32
         self.register_poly(
-            "__bitcast_i32_to_u32",
+            "_w_bitcast_i32_to_u32",
             vec![i32_ty.clone()],
             Type::Constructed(TypeName::UInt(32), vec![]),
         );

@@ -45,7 +45,7 @@ impl Normalizer {
     fn fresh_temp_name(&mut self) -> String {
         let id = self.next_temp_id;
         self.next_temp_id += 1;
-        format!("__norm_{}", id)
+        format!("_w_norm_{}", id)
     }
 
     /// Normalize an entire program.
@@ -165,7 +165,7 @@ impl Normalizer {
                 Expr::new(id, ty, ExprKind::Intrinsic { name, args }, span)
             }
 
-            // Tuple literal - check if it's a closure (ends with String for __lambda_name)
+            // Tuple literal - check if it's a closure (ends with String for _w_lambda_name)
             ExprKind::Literal(Literal::Tuple(ref elems)) if is_closure_tuple(elems) => {
                 // Closure tuples are atomic - map lowering expects them as literals
                 expr
@@ -429,7 +429,7 @@ pub fn is_atomic(expr: &Expr) -> bool {
     }
 }
 
-/// Check if tuple elements represent a closure (last element is __lambda_name string).
+/// Check if tuple elements represent a closure (last element is _w_lambda_name string).
 fn is_closure_tuple(elems: &[Expr]) -> bool {
     elems.last().map_or(false, |e| {
         matches!(&e.kind, ExprKind::Literal(Literal::String(_)))

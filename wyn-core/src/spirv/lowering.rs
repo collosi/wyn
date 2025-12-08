@@ -322,12 +322,12 @@ impl Constructor {
                         self.builder.type_matrix(col_vec_type, cols)
                     }
                     TypeName::Record(fields) => {
-                        // Record becomes a struct, filtering out phantom fields like __lambda_name
+                        // Record becomes a struct, filtering out phantom fields like _w_lambda_name
                         // Field names are in RecordFields, field types are in args
                         let field_types: Vec<spirv::Word> = fields
                             .iter()
                             .enumerate()
-                            .filter(|(_, name)| name.as_str() != "__lambda_name")
+                            .filter(|(_, name)| name.as_str() != "_w_lambda_name")
                             .map(|(i, _)| self.ast_type_to_spirv(&args[i]))
                             .collect();
                         // Empty records should not reach lowering (same as empty tuples)
@@ -886,7 +886,7 @@ impl<'a> LowerCtx<'a> {
                 self.ensure_deps_lowered(inner)?;
             }
             ExprKind::Literal(lit) => {
-                // Check for closure tuples with __lambda_name at index 0
+                // Check for closure tuples with _w_lambda_name at index 0
                 if let Some(lambda_name) = crate::mir::extract_lambda_name(expr) {
                     self.ensure_lowered(lambda_name)?;
                 }
@@ -1598,7 +1598,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             // Special case for map - extract lambda name from closure before lowering
             if func == "map" {
                 // map closure array -> array
-                // args[0] is closure tuple (captures..., __lambda_name)
+                // args[0] is closure tuple (captures..., _w_lambda_name)
                 // args[1] is input array
                 if args.len() != 2 {
                     bail_spirv!("map requires 2 args (closure, array), got {}", args.len());
@@ -1899,7 +1899,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                         // Store array in a variable, update element, load back
                                         let arr_type = result_type;
                                         let arr_var =
-                                            constructor.declare_variable("__array_update_tmp", arr_type)?;
+                                            constructor.declare_variable("_w_array_update_tmp", arr_type)?;
                                         constructor.builder.store(arr_var, arr_id, None, [])?;
 
                                         // Get pointer to element and store new value
@@ -1988,7 +1988,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                         }
                                     }
                                     Intrinsic::GdpAtomicAdd => {
-                                        // __gdp_atomic_add(index, delta) -> old_value
+                                        // _w_gdp_atomic_add(index, delta) -> old_value
                                         // Performs atomic add on GDP buffer at index
                                         if let Some(buffer_var) = constructor.debug_buffer {
                                             let index_id = arg_ids[0];
@@ -2024,7 +2024,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                         }
                                     }
                                     Intrinsic::GdpLoad => {
-                                        // __gdp_load(index) -> value
+                                        // _w_gdp_load(index) -> value
                                         // Load u32 from GDP buffer at index
                                         if let Some(buffer_var) = constructor.debug_buffer {
                                             let index_id = arg_ids[0];
@@ -2059,7 +2059,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                         }
                                     }
                                     Intrinsic::GdpStore => {
-                                        // __gdp_store(index, value) -> ()
+                                        // _w_gdp_store(index, value) -> ()
                                         // Store u32 to GDP buffer at index
                                         if let Some(buffer_var) = constructor.debug_buffer {
                                             let index_id = arg_ids[0];
@@ -2091,7 +2091,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                         }
                                     }
                                     Intrinsic::BitcastI32ToU32 => {
-                                        // __bitcast_i32_to_u32(i) -> u32
+                                        // _w_bitcast_i32_to_u32(i) -> u32
                                         // Reinterpret i32 bits as u32
                                         let value_id = arg_ids[0];
                                         Ok(constructor.builder.bitcast(
@@ -2178,7 +2178,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                         // Need to store the value in a variable to get a pointer
                         let array_val = lower_expr(constructor, &args[0])?;
                         let array_type = constructor.ast_type_to_spirv(&args[0].ty);
-                        let array_var = constructor.declare_variable("__index_tmp", array_type)?;
+                        let array_var = constructor.declare_variable("_w_index_tmp", array_type)?;
                         constructor.builder.store(array_var, array_val, None, [])?;
                         array_var
                     };
@@ -2351,13 +2351,13 @@ fn lower_literal(constructor: &mut Constructor, lit: &Literal) -> Result<spirv::
             Ok(constructor.builder.composite_construct(array_type, None, word_ids)?)
         }
         Literal::Tuple(elems) => {
-            // Check if this is a closure tuple (has __lambda_name at last index)
+            // Check if this is a closure tuple (has _w_lambda_name at last index)
             // Closures have a string literal at the end which can't be lowered to SPIR-V
             let is_closure = elems.last().map_or(false, |e| {
                 matches!(&e.kind, ExprKind::Literal(mir::Literal::String(_)))
             });
 
-            // For closures, skip the last element (the __lambda_name string)
+            // For closures, skip the last element (the _w_lambda_name string)
             let real_elems: Vec<_> = if is_closure {
                 elems.iter().take(elems.len() - 1).collect()
             } else {
