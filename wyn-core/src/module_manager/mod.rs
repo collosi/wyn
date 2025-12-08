@@ -96,6 +96,8 @@ pub enum ElaboratedItem {
     Spec(Spec),
     /// A declaration (def/let) from module body with substitutions and resolved names
     Decl(Decl),
+    /// A type alias from module body (e.g., `type state = f32`)
+    TypeAlias(String, Type),
 }
 
 /// Represents a fully elaborated module with all includes expanded, type substitutions applied,
@@ -116,6 +118,8 @@ pub struct PreElaboratedPrelude {
     pub elaborated_modules: HashMap<String, ElaboratedModule>,
     /// Set of known module names (for name resolution)
     pub known_modules: HashSet<String>,
+    /// Type aliases from modules: "module.typename" -> underlying Type
+    pub type_aliases: HashMap<String, Type>,
 }
 
 /// Manages lazy loading of module files
@@ -128,6 +132,8 @@ pub struct ModuleManager {
     known_modules: HashSet<String>,
     /// Shared node counter for unique NodeIds across all modules
     node_counter: NodeCounter,
+    /// Type aliases from modules: "module.typename" -> underlying Type
+    type_aliases: HashMap<String, Type>,
 }
 
 impl ModuleManager {
@@ -176,6 +182,7 @@ impl ModuleManager {
             elaborated_modules: HashMap::new(),
             known_modules,
             node_counter,
+            type_aliases: HashMap::new(),
         }
     }
 
@@ -198,6 +205,7 @@ impl ModuleManager {
             module_type_registry: manager.module_type_registry,
             elaborated_modules: manager.elaborated_modules,
             known_modules: manager.known_modules,
+            type_aliases: manager.type_aliases,
         })
     }
 
@@ -208,12 +216,51 @@ impl ModuleManager {
             elaborated_modules: prelude.elaborated_modules.clone(),
             known_modules: prelude.known_modules.clone(),
             node_counter,
+            type_aliases: prelude.type_aliases.clone(),
         }
     }
 
     /// Check if a name is a known module
     pub fn is_known_module(&self, name: &str) -> bool {
         self.known_modules.contains(name)
+    }
+
+    /// Resolve a qualified type alias (e.g., "rand.state" -> underlying type)
+    pub fn resolve_type_alias(&self, qualified_name: &str) -> Option<&Type> {
+        self.type_aliases.get(qualified_name)
+    }
+
+    /// Resolve type aliases in a type, given the module context
+    /// For unqualified type names like "state", looks them up as "module_name.state"
+    fn resolve_type_aliases_in_module(&self, ty: &Type, module_name: &str) -> Type {
+        match ty {
+            Type::Constructed(TypeName::Named(name), args) => {
+                // Try to resolve as a module-local type alias
+                let qualified_name = if name.contains('.') {
+                    name.clone() // Already qualified
+                } else {
+                    format!("{}.{}", module_name, name) // Make qualified
+                };
+                if let Some(underlying) = self.type_aliases.get(&qualified_name) {
+                    // Recursively resolve in case of nested aliases
+                    self.resolve_type_aliases_in_module(underlying, module_name)
+                } else {
+                    // Not a known alias, keep as-is but resolve args
+                    let resolved_args: Vec<Type> = args.iter()
+                        .map(|a| self.resolve_type_aliases_in_module(a, module_name))
+                        .collect();
+                    Type::Constructed(TypeName::Named(name.clone()), resolved_args)
+                }
+            }
+            Type::Constructed(name, args) => {
+                // Resolve aliases in type arguments
+                let resolved_args: Vec<Type> = args.iter()
+                    .map(|a| self.resolve_type_aliases_in_module(a, module_name))
+                    .collect();
+                Type::Constructed(name.clone(), resolved_args)
+            }
+            Type::Variable(id) => Type::Variable(*id),
+        }
     }
 
     /// Load and elaborate modules from a source string
@@ -267,7 +314,17 @@ impl ModuleManager {
                     items,
                 };
 
+                // Register type aliases from this module
+                for item in &elaborated.items {
+                    if let ElaboratedItem::TypeAlias(type_name, underlying_type) = item {
+                        let qualified_name = format!("{}.{}", mb.name, type_name);
+                        self.type_aliases.insert(qualified_name, underlying_type.clone());
+                    }
+                }
+
                 self.elaborated_modules.insert(mb.name.clone(), elaborated);
+                // Also register as a known module for name resolution
+                self.known_modules.insert(mb.name.clone());
             }
         }
         Ok(())
@@ -520,7 +577,7 @@ impl ModuleManager {
                 ElaboratedItem::Decl(decl) if decl.name == function_name => {
                     // Build the full function type from parameters and return type
                     // For def min (x: f32) (y: f32): f32, we need to construct f32 -> f32 -> f32
-                    return self.build_function_type_from_decl(decl, context);
+                    return self.build_function_type_from_decl(decl, module_name, context);
                 }
                 _ => {}
             }
@@ -537,20 +594,24 @@ impl ModuleManager {
     fn build_function_type_from_decl(
         &self,
         decl: &Decl,
+        module_name: &str,
         context: &mut Context<TypeName>,
     ) -> Result<TypeScheme<TypeName>> {
-        // Extract parameter types
+        // Extract parameter types and resolve any type aliases within the module
         let mut param_types = Vec::new();
         for param in &decl.params {
             if let Some(param_ty) = self.extract_type_from_pattern(param) {
-                param_types.push(param_ty);
+                // Resolve type aliases (e.g., "state" -> "f32" within the rand module)
+                let resolved_ty = self.resolve_type_aliases_in_module(&param_ty, module_name);
+                param_types.push(resolved_ty);
             } else {
                 bail_module!("Function parameter in '{}' lacks type annotation", decl.name);
             }
         }
 
-        // Get return type (default to unit if not specified)
+        // Get return type (default to unit if not specified) and resolve aliases
         let return_type = decl.ty.clone().unwrap_or_else(|| Type::Constructed(TypeName::Unit, vec![]));
+        let return_type = self.resolve_type_aliases_in_module(&return_type, module_name);
 
         // Build function type by folding right-to-left
         // f32 -> f32 -> f32 is represented as f32 -> (f32 -> f32)
@@ -660,6 +721,11 @@ impl ModuleManager {
                         }
                         Declaration::Open(_) => {
                             // TODO: Handle open declarations for name resolution
+                        }
+                        Declaration::TypeBind(type_bind) => {
+                            // Record type aliases (e.g., `type state = f32`)
+                            let substituted_ty = self.substitute_in_type(&type_bind.definition, substitutions);
+                            items.push(ElaboratedItem::TypeAlias(type_bind.name.clone(), substituted_ty));
                         }
                         _ => {
                             // Skip other declaration types (ModuleTypeBind, etc.)

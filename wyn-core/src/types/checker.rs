@@ -165,6 +165,34 @@ impl TypeChecker {
         }
     }
 
+    /// Resolve type aliases in a type (e.g., "rand.state" -> "f32")
+    /// This expands qualified type names like "module.typename" to their underlying types.
+    fn resolve_type_aliases(&self, ty: &Type) -> Type {
+        match ty {
+            Type::Constructed(TypeName::Named(name), args) if name.contains('.') => {
+                // Qualified type name - check if it's a type alias
+                if let Some(underlying) = self.module_manager.resolve_type_alias(name) {
+                    // Recursively resolve in case of nested aliases
+                    self.resolve_type_aliases(underlying)
+                } else {
+                    // Not a known alias, keep as-is but resolve args
+                    let resolved_args: Vec<Type> = args.iter()
+                        .map(|a| self.resolve_type_aliases(a))
+                        .collect();
+                    Type::Constructed(TypeName::Named(name.clone()), resolved_args)
+                }
+            }
+            Type::Constructed(name, args) => {
+                // Resolve aliases in type arguments
+                let resolved_args: Vec<Type> = args.iter()
+                    .map(|a| self.resolve_type_aliases(a))
+                    .collect();
+                Type::Constructed(name.clone(), resolved_args)
+            }
+            Type::Variable(id) => Type::Variable(*id),
+        }
+    }
+
     /// Look up a variable in the scope stack (for testing)
     pub fn lookup(&self, name: &str) -> Option<TypeScheme> {
         self.scope_stack.lookup(name).cloned()
@@ -276,8 +304,11 @@ impl TypeChecker {
                 tuple(elem_types)
             }
             PatternKind::Typed(_, annotated_type) => {
-                // Pattern has explicit type, use it
-                annotated_type.clone()
+                // Pattern has explicit type, resolve any module type aliases
+                eprintln!("DEBUG fresh_type_for_pattern: resolving {:?}", annotated_type);
+                let resolved = self.resolve_type_aliases(annotated_type);
+                eprintln!("DEBUG fresh_type_for_pattern: resolved to {:?}", resolved);
+                resolved
             }
             PatternKind::Attributed(_, inner_pattern) => {
                 // Ignore attributes, recurse on inner pattern
@@ -352,19 +383,21 @@ impl TypeChecker {
                 }
             }
             PatternKind::Typed(inner_pattern, annotated_type) => {
+                // Resolve module type aliases in the annotation (e.g., rand.state -> f32)
+                let resolved_annotation = self.resolve_type_aliases(annotated_type);
                 // Pattern has a type annotation - unify with expected type
-                self.context.unify(annotated_type, expected_type).map_err(|_| {
+                self.context.unify(&resolved_annotation, expected_type).map_err(|_| {
                     err_type_at!(
                         pattern.h.span,
                         "Pattern type annotation {} doesn't match expected type {}",
-                        self.format_type(annotated_type),
+                        self.format_type(&resolved_annotation),
                         self.format_type(expected_type)
                     )
                 })?;
-                // Bind the inner pattern with the annotated type
-                let result = self.bind_pattern(inner_pattern, annotated_type, generalize)?;
+                // Bind the inner pattern with the resolved type
+                let result = self.bind_pattern(inner_pattern, &resolved_annotation, generalize)?;
                 // Also store type for the outer Typed pattern
-                let resolved = annotated_type.apply(&self.context);
+                let resolved = resolved_annotation.apply(&self.context);
                 self.type_table.insert(pattern.h.id, TypeScheme::Monotype(resolved));
                 Ok(result)
             }
@@ -913,8 +946,10 @@ impl TypeChecker {
             .iter()
             .map(|p| {
                 let ty = p.pattern_type().cloned().unwrap_or_else(|| self.context.new_variable());
+                // Resolve module type aliases (e.g., rand.state -> f32)
+                let resolved = self.resolve_type_aliases(&ty);
                 // Substitute UserVars with bound type variables
-                Self::substitute_type_params_static(&ty, type_param_bindings)
+                Self::substitute_type_params_static(&resolved, type_param_bindings)
             })
             .collect();
 
@@ -1153,9 +1188,11 @@ impl TypeChecker {
 
             // Check against declared type if provided
             if let Some(declared_type) = &decl.ty {
+                // Resolve type aliases in the declared return type (e.g., rand.state -> f32)
+                let resolved_return_type = self.resolve_type_aliases(declared_type);
                 // Substitute UserVars in the declared return type
                 let substituted_return_type =
-                    Self::substitute_type_params_static(declared_type, &type_param_bindings);
+                    Self::substitute_type_params_static(&resolved_return_type, &type_param_bindings);
 
                 // When a function has parameters, decl.ty is just the return type annotation
                 // Unify the body type with the declared return type

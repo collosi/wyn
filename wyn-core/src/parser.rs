@@ -176,6 +176,13 @@ impl Parser {
         let uniform_binding = attributes.iter().find_map(|attr| {
             if let Attribute::Uniform { binding } = attr { Some(*binding) } else { None }
         });
+        let storage_attr = attributes.iter().find_map(|attr| {
+            if let Attribute::Storage { set, binding, layout, access } = attr {
+                Some((*set, *binding, *layout, *access))
+            } else {
+                None
+            }
+        });
 
         if let Some(binding) = uniform_binding {
             // Uniform declaration - delegate to helper
@@ -183,6 +190,12 @@ impl Parser {
                 bail_parse!("Uniform declarations must use 'def', not 'let'");
             }
             return self.parse_uniform_decl(binding);
+        } else if let Some((set, binding, layout, access)) = storage_attr {
+            // Storage buffer declaration - delegate to helper
+            if keyword != "def" {
+                bail_parse!("Storage declarations must use 'def', not 'let'");
+            }
+            return self.parse_storage_decl(set, binding, layout, access);
         } else if let Some(entry_attr) = entry_type {
             // Entry point: must be 'def', not 'let'
             if keyword != "def" {
@@ -415,6 +428,24 @@ impl Parser {
         Ok(Declaration::Uniform(UniformDecl { name, ty, binding }))
     }
 
+    fn parse_storage_decl(&mut self, set: u32, binding: u32, layout: StorageLayout, access: StorageAccess) -> Result<Declaration> {
+        // Consume 'def' keyword
+        self.expect(Token::Def)?;
+
+        let name = self.expect_identifier()?;
+
+        // Storage buffers must have an explicit type annotation
+        self.expect(Token::Colon)?;
+        let ty = self.parse_type()?;
+
+        // Storage buffers must NOT have initializers
+        if self.check(&Token::Assign) {
+            bail_parse!("Storage buffer declarations cannot have initializer values");
+        }
+
+        Ok(Declaration::Storage(StorageDecl { name, ty, set, binding, layout, access }))
+    }
+
     fn parse_attribute(&mut self) -> Result<Attribute> {
         trace!("parse_attribute: next token = {:?}", self.peek());
         let attr_name = self.expect_identifier()?;
@@ -491,6 +522,62 @@ impl Parser {
                 self.expect(Token::RightParen)?;
                 self.expect(Token::RightBracket)?;
                 Ok(Attribute::Location(location))
+            }
+            "storage" => {
+                // Parse storage attribute: #[storage(binding=N)] or #[storage(set=M, binding=N)]
+                // Optional: layout=std430|std140, access=read|write|readwrite
+                self.expect(Token::LeftParen)?;
+
+                let mut set: u32 = 0;
+                let mut binding: Option<u32> = None;
+                let mut layout = StorageLayout::default();
+                let mut access = StorageAccess::default();
+
+                loop {
+                    let param_name = self.expect_identifier()?;
+                    self.expect(Token::Assign)?;
+
+                    match param_name.as_str() {
+                        "set" => {
+                            set = self.expect_integer()? as u32;
+                        }
+                        "binding" => {
+                            binding = Some(self.expect_integer()? as u32);
+                        }
+                        "layout" => {
+                            let layout_name = self.expect_identifier()?;
+                            layout = match layout_name.as_str() {
+                                "std430" => StorageLayout::Std430,
+                                "std140" => StorageLayout::Std140,
+                                _ => bail_parse!("Unknown storage layout: {}", layout_name),
+                            };
+                        }
+                        "access" => {
+                            let access_name = self.expect_identifier()?;
+                            access = match access_name.as_str() {
+                                "read" => StorageAccess::ReadOnly,
+                                "write" => StorageAccess::WriteOnly,
+                                "readwrite" => StorageAccess::ReadWrite,
+                                _ => bail_parse!("Unknown storage access: {}", access_name),
+                            };
+                        }
+                        _ => bail_parse!("Unknown storage parameter: {}", param_name),
+                    }
+
+                    // Check for comma or end
+                    if self.check(&Token::Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+
+                self.expect(Token::RightParen)?;
+                self.expect(Token::RightBracket)?;
+
+                let binding = binding.ok_or_else(|| err_parse!("storage attribute requires 'binding' parameter"))?;
+
+                Ok(Attribute::Storage { set, binding, layout, access })
             }
             _ => Err(err_parse!("Unknown attribute: {}", attr_name)),
         }
@@ -778,6 +865,14 @@ impl Parser {
             Some(Token::Identifier(name)) if name.chars().next().unwrap().is_lowercase() => {
                 let type_name = name.clone();
                 self.advance();
+
+                // Check for qualified type name (module.typename)
+                if self.check(&Token::Dot) {
+                    self.advance(); // consume '.'
+                    let inner_name = self.expect_identifier()?;
+                    let qualified = format!("{}.{}", type_name, inner_name);
+                    return Ok(Type::Constructed(TypeName::Named(qualified), vec![]));
+                }
 
                 // Check if this is a builtin primitive type
                 let type_name_variant = match type_name.as_str() {
