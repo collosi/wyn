@@ -1946,10 +1946,10 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                             bail_spirv!("replicate: result type is not an array")
                                         }
                                     }
-                                    Intrinsic::ArrayUpdate => {
-                                        // array_update arr idx val: functional update, returns new array
+                                    Intrinsic::ArrayWith => {
+                                        // array_with arr idx val: functional update, returns new array
                                         if arg_ids.len() != 3 {
-                                            bail_spirv!("array_update expects exactly 3 arguments");
+                                            bail_spirv!("array_with expects exactly 3 arguments");
                                         }
                                         let arr_id = arg_ids[0];
                                         let idx_id = arg_ids[1];
@@ -1958,7 +1958,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                         // Store array in a variable, update element, load back
                                         let arr_type = result_type;
                                         let arr_var = constructor
-                                            .declare_variable("_w_array_update_tmp", arr_type)?;
+                                            .declare_variable("_w_array_with_tmp", arr_type)?;
                                         constructor.builder.store(arr_var, arr_id, None, [])?;
 
                                         // Get pointer to element and store new value

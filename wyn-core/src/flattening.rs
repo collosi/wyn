@@ -958,6 +958,23 @@ impl Flattener {
                     StaticValue::Dyn { binding_id: 0 },
                 )
             }
+            ExprKind::ArrayWith { array, index, value } => {
+                // Flatten array with syntax to a call to _w_array_with intrinsic
+                // _w_array_with : [n]a -> i32 -> a -> [n]a
+                let (arr, _) = self.flatten_expr(array)?;
+                let (idx, _) = self.flatten_expr(index)?;
+                let (val, _) = self.flatten_expr(value)?;
+
+                // Generate a call to _w_array_with(arr, idx, val)
+                let func_name = "_w_array_with".to_string();
+                (
+                    mir::ExprKind::Call {
+                        func: func_name,
+                        args: vec![arr, idx, val],
+                    },
+                    StaticValue::Dyn { binding_id: 0 },
+                )
+            }
             ExprKind::FieldAccess(obj_expr, field) => {
                 let (obj, _obj_sv) = self.flatten_expr(obj_expr)?;
 
@@ -1339,6 +1356,10 @@ impl Flattener {
             ExprKind::ArrayIndex(arr, idx) => self
                 .find_var_type_in_expr(arr, var_name)
                 .or_else(|| self.find_var_type_in_expr(idx, var_name)),
+            ExprKind::ArrayWith { array, index, value } => self
+                .find_var_type_in_expr(array, var_name)
+                .or_else(|| self.find_var_type_in_expr(index, var_name))
+                .or_else(|| self.find_var_type_in_expr(value, var_name)),
             ExprKind::FieldAccess(obj, _) => self.find_var_type_in_expr(obj, var_name),
             ExprKind::RecordLiteral(fields) => {
                 fields.iter().find_map(|(_, e)| self.find_var_type_in_expr(e, var_name))
@@ -1885,6 +1906,11 @@ impl Flattener {
             ExprKind::ArrayIndex(arr, idx) => {
                 self.collect_free_vars(arr, bound, free);
                 self.collect_free_vars(idx, bound, free);
+            }
+            ExprKind::ArrayWith { array, index, value } => {
+                self.collect_free_vars(array, bound, free);
+                self.collect_free_vars(index, bound, free);
+                self.collect_free_vars(value, bound, free);
             }
             ExprKind::FieldAccess(obj, _) => {
                 self.collect_free_vars(obj, bound, free);

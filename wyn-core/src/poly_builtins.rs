@@ -376,12 +376,12 @@ impl PolyBuiltins {
         let unit_ty = Type::Constructed(TypeName::Unit, vec![]);
         self.register_poly("_w_uninit", vec![unit_ty], a);
 
-        // _w_array_update : ∀a n. [n]a -> i32 -> a -> [n]a
+        // _w_array_with : ∀a n. [n]a -> i32 -> a -> [n]a
         let a = ctx.new_variable();
         let n = ctx.new_variable();
         let array_a = Type::Constructed(TypeName::Array, vec![n, a.clone()]);
         let i32_ty = Type::Constructed(TypeName::Int(32), vec![]);
-        self.register_poly("_w_array_update", vec![array_a.clone(), i32_ty, a], array_a);
+        self.register_poly("_w_array_with", vec![array_a.clone(), i32_ty, a], array_a);
 
         // TODO: zip, reduce, etc.
 

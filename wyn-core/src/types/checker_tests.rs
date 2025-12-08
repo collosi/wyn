@@ -1250,3 +1250,146 @@ fn test_u32_literal() {
     // Test that u32 suffix on literals produces u32 type
     typecheck_program("let x: u32 = 42u32");
 }
+
+// ============================================================
+// ArrayWith (a with [i] = v) tests
+// ============================================================
+
+#[test]
+fn test_array_with_basic() {
+    // Basic array with syntax: update element at index
+    typecheck_program(
+        r#"
+def test : [3]i32 =
+    let arr = [1, 2, 3] in
+    arr with [1] = 42
+        "#,
+    );
+}
+
+#[test]
+fn test_array_with_variable_index() {
+    // Array with using a variable as index
+    typecheck_program(
+        r#"
+def test (i: i32) : [4]f32 =
+    let arr = [1.0f32, 2.0f32, 3.0f32, 4.0f32] in
+    arr with [i] = 0.0f32
+        "#,
+    );
+}
+
+#[test]
+fn test_array_with_preserves_size() {
+    // Result type preserves array size
+    typecheck_program(
+        r#"
+def test : [5]i32 =
+    let arr : [5]i32 = [1, 2, 3, 4, 5] in
+    arr with [0] = 100
+        "#,
+    );
+}
+
+#[test]
+fn test_array_with_chained() {
+    // Chained array with operations
+    typecheck_program(
+        r#"
+def test : [3]i32 =
+    let arr = [1, 2, 3] in
+    arr with [0] = 10 with [1] = 20 with [2] = 30
+        "#,
+    );
+}
+
+#[test]
+fn test_array_with_in_let() {
+    // Array with in let binding
+    typecheck_program(
+        r#"
+def test : i32 =
+    let arr = [1, 2, 3] in
+    let arr2 = arr with [1] = 42 in
+    arr2[1]
+        "#,
+    );
+}
+
+#[test]
+fn test_array_with_nested_array() {
+    // Array with on nested arrays
+    typecheck_program(
+        r#"
+def test : [2][3]i32 =
+    let arr : [2][3]i32 = [[1, 2, 3], [4, 5, 6]] in
+    arr with [0] = [10, 20, 30]
+        "#,
+    );
+}
+
+#[test]
+fn test_array_with_wrong_value_type() {
+    // Error: value type doesn't match element type
+    let result = try_typecheck_program(
+        r#"
+def test : [3]i32 =
+    let arr = [1, 2, 3] in
+    arr with [1] = 3.14f32
+        "#,
+    );
+    assert!(result.is_err(), "Should error: f32 value for i32 array");
+}
+
+#[test]
+fn test_array_with_wrong_index_type() {
+    // Error: index must be integer type
+    let result = try_typecheck_program(
+        r#"
+def test : [3]i32 =
+    let arr = [1, 2, 3] in
+    arr with [1.5f32] = 42
+        "#,
+    );
+    assert!(result.is_err(), "Should error: f32 index");
+}
+
+#[test]
+fn test_array_with_non_array() {
+    // Error: cannot use with on non-array type
+    let result = try_typecheck_program(
+        r#"
+def test : i32 =
+    let x = 42 in
+    x with [0] = 10
+        "#,
+    );
+    assert!(result.is_err(), "Should error: with on non-array");
+}
+
+#[test]
+fn test_array_with_in_function() {
+    // Array with as function parameter and return
+    typecheck_program(
+        r#"
+def update_at (arr: [4]i32) (i: i32) (v: i32) : [4]i32 =
+    arr with [i] = v
+
+def test : [4]i32 =
+    update_at [1, 2, 3, 4] 2 99
+        "#,
+    );
+}
+
+#[test]
+fn test_array_with_in_loop() {
+    // Array with inside a loop
+    typecheck_program(
+        r#"
+def test : [5]i32 =
+    let init = [0, 0, 0, 0, 0] in
+    loop arr = init for i < 5 do
+        arr with [i] = i
+        "#,
+    );
+}

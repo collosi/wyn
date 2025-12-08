@@ -351,6 +351,11 @@ pub fn walk_expression<V: Visitor>(v: &mut V, e: &Expression) -> ControlFlow<V::
         ExprKind::Identifier(name) => v.visit_expr_identifier(id, name),
         ExprKind::ArrayLiteral(elements) => v.visit_expr_array_literal(id, elements),
         ExprKind::ArrayIndex(array, index) => v.visit_expr_array_index(id, array, index),
+        ExprKind::ArrayWith { array, index, value } => {
+            v.visit_expression(array)?;
+            v.visit_expression(index)?;
+            v.visit_expression(value)
+        }
         ExprKind::BinaryOp(op, left, right) => v.visit_expr_binary_op(id, op, left, right),
         ExprKind::Tuple(elements) => v.visit_expr_tuple(id, elements),
         ExprKind::Lambda(lambda) => v.visit_expr_lambda(id, lambda),

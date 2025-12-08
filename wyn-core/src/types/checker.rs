@@ -1389,6 +1389,49 @@ impl TypeChecker {
                 // Return the element type, resolved through the context
                 Ok(elem_var.apply(&self.context))
             }
+            ExprKind::ArrayWith { array, index, value } => {
+                // Type check: array must be [n]T, index must be i32, value must be T
+                // Result type is [n]T
+                let array_type = self.infer_expression(array)?;
+                let index_type = self.infer_expression(index)?;
+                let value_type = self.infer_expression(value)?;
+
+                // Unify index type with i32
+                self.context.unify(&index_type, &i32()).map_err(|_| {
+                    err_type_at!(
+                        index.h.span,
+                        "Array index must be an integer type, got {}",
+                        self.format_type(&index_type.apply(&self.context))
+                    )
+                })?;
+
+                // Constrain array type to be Array(n, a)
+                let array_type_stripped = strip_unique(&array_type);
+                let size_var = self.context.new_variable();
+                let elem_var = self.context.new_variable();
+                let want_array = Type::Constructed(TypeName::Array, vec![size_var.clone(), elem_var.clone()]);
+
+                self.context.unify(&array_type_stripped, &want_array).map_err(|_| {
+                    err_type_at!(
+                        array.h.span,
+                        "Cannot update non-array type: got {}",
+                        self.format_type(&array_type.apply(&self.context))
+                    )
+                })?;
+
+                // Unify value type with element type
+                self.context.unify(&value_type, &elem_var).map_err(|_| {
+                    err_type_at!(
+                        value.h.span,
+                        "Array element type mismatch: expected {}, got {}",
+                        self.format_type(&elem_var.apply(&self.context)),
+                        self.format_type(&value_type.apply(&self.context))
+                    )
+                })?;
+
+                // Return the array type (same type as input)
+                Ok(array_type.apply(&self.context))
+            }
             ExprKind::BinaryOp(op, left, right) => {
                 let left_type = self.infer_expression(left)?;
                 let right_type = self.infer_expression(right)?;

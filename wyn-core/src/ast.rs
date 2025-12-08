@@ -477,6 +477,12 @@ pub enum ExprKind {
     ArrayLiteral(Vec<Expression>),
     VecMatLiteral(Vec<Expression>), // @[...] - vector or matrix literal (type inferred from context)
     ArrayIndex(Box<Expression>, Box<Expression>),
+    /// In-place array update: `a with [i] = v` produces a copy of `a` with element `i` set to `v`
+    ArrayWith {
+        array: Box<Expression>,
+        index: Box<Expression>,
+        value: Box<Expression>,
+    },
     BinaryOp(BinaryOp, Box<Expression>, Box<Expression>),
     UnaryOp(UnaryOp, Box<Expression>), // Unary operations: -, !
     Tuple(Vec<Expression>),

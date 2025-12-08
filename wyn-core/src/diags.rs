@@ -371,6 +371,12 @@ impl AstFormatter {
                 let idx_str = self.format_simple_expr(idx);
                 self.write_line(&format!("{}[{}]", arr_str, idx_str));
             }
+            ExprKind::ArrayWith { array, index, value } => {
+                let arr_str = self.format_simple_expr(array);
+                let idx_str = self.format_simple_expr(index);
+                let val_str = self.format_simple_expr(value);
+                self.write_line(&format!("{} with [{}] = {}", arr_str, idx_str, val_str));
+            }
             ExprKind::BinaryOp(op, lhs, rhs) => {
                 let lhs_str = self.format_simple_expr(lhs);
                 let rhs_str = self.format_simple_expr(rhs);
@@ -569,6 +575,14 @@ impl AstFormatter {
                     "{}[{}]",
                     self.format_simple_expr(arr),
                     self.format_simple_expr(idx)
+                )
+            }
+            ExprKind::ArrayWith { array, index, value } => {
+                format!(
+                    "{} with [{}] = {}",
+                    self.format_simple_expr(array),
+                    self.format_simple_expr(index),
+                    self.format_simple_expr(value)
                 )
             }
             ExprKind::FieldAccess(obj, field) => {

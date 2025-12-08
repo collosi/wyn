@@ -1070,6 +1070,39 @@ impl Parser {
         let mut left = self.parse_unary_expression()?;
 
         loop {
+            // Handle 'with' as a special left-associative operator
+            // with has precedence 8 (higher than all binary operators)
+            // arr with [i] = v with [j] = w parses as ((arr with [i] = v) with [j] = w)
+            if self.check(&Token::With) && min_precedence <= 8 {
+                let start_span = left.h.span;
+                self.advance(); // consume 'with'
+
+                // Accept either LeftBracket or LeftBracketSpaced after 'with'
+                if self.check(&Token::LeftBracket) || self.check(&Token::LeftBracketSpaced) {
+                    self.advance();
+                } else {
+                    bail_parse!("Expected '[' after 'with'");
+                }
+                let index = self.parse_expression()?;
+                self.expect(Token::RightBracket)?;
+                self.expect(Token::Assign)?;
+
+                // Parse value at precedence 9 (higher than with) for left-associativity
+                let value = self.parse_binary_expression_with_precedence(9)?;
+                let end_span = self.previous_span();
+                let span = start_span.merge(&end_span);
+
+                left = self.node_counter.mk_node(
+                    ExprKind::ArrayWith {
+                        array: Box::new(left),
+                        index: Box::new(index),
+                        value: Box::new(value),
+                    },
+                    span,
+                );
+                continue;
+            }
+
             // Check if we have a binary operator or pipe operator
             let op_string = match self.peek() {
                 Some(Token::BinOp(op)) => op.clone(),

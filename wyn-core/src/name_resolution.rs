@@ -117,6 +117,11 @@ impl NameResolver {
                 self.resolve_expr(arr)?;
                 self.resolve_expr(idx)?;
             }
+            ExprKind::ArrayWith { array, index, value } => {
+                self.resolve_expr(array)?;
+                self.resolve_expr(index)?;
+                self.resolve_expr(value)?;
+            }
             ExprKind::RecordLiteral(fields) => {
                 for (_, e) in fields {
                     self.resolve_expr(e)?;

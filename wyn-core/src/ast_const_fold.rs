@@ -132,6 +132,12 @@ impl AstConstFolder {
                 self.fold_expr(idx);
             }
 
+            ExprKind::ArrayWith { array, index, value } => {
+                self.fold_expr(array);
+                self.fold_expr(index);
+                self.fold_expr(value);
+            }
+
             ExprKind::Tuple(elements) => {
                 for elem in elements {
                     self.fold_expr(elem);

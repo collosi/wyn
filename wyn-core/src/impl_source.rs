@@ -113,7 +113,7 @@ pub enum Intrinsic {
     Replicate,
     /// Functional array update: immutable copy-with-update
     /// TODO: Move to prelude as normal function
-    ArrayUpdate,
+    ArrayWith,
     /// Debug output: write i32 to debug ring buffer
     DebugI32,
     /// Debug output: write u32 to debug ring buffer
@@ -583,7 +583,7 @@ impl ImplSource {
         self.register("_w_uninit", BuiltinImpl::Intrinsic(Intrinsic::Uninit));
         self.register("replicate", BuiltinImpl::Intrinsic(Intrinsic::Replicate));
 
-        self.register("_w_array_update", BuiltinImpl::Intrinsic(Intrinsic::ArrayUpdate));
+        self.register("_w_array_with", BuiltinImpl::Intrinsic(Intrinsic::ArrayWith));
         self.register("normalize", BuiltinImpl::PrimOp(PrimOp::GlslExt(69)));
         self.register("dot", BuiltinImpl::PrimOp(PrimOp::Dot));
         self.register("cross", BuiltinImpl::PrimOp(PrimOp::GlslExt(68)));

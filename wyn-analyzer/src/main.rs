@@ -310,6 +310,11 @@ fn find_in_expr(expr: &ast::Expression, line: usize, col: usize, best: &mut Opti
             find_in_expr(arr, line, col, best);
             find_in_expr(idx, line, col, best);
         }
+        ArrayWith { array, index, value } => {
+            find_in_expr(array, line, col, best);
+            find_in_expr(index, line, col, best);
+            find_in_expr(value, line, col, best);
+        }
         FieldAccess(base, _) => {
             find_in_expr(base, line, col, best);
         }
