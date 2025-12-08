@@ -268,6 +268,8 @@ impl ModuleManager {
                 };
 
                 self.elaborated_modules.insert(mb.name.clone(), elaborated);
+                // Also register as a known module for name resolution
+                self.known_modules.insert(mb.name.clone());
             }
         }
         Ok(())
