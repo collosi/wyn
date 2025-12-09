@@ -699,22 +699,24 @@ impl Display for mir::Def {
                 write!(f, "  {}", body)
             }
             mir::Def::Uniform {
-                name, ty, binding, ..
+                name, ty, set, binding, ..
             } => {
                 write!(
                     f,
-                    "#[uniform(binding={})] def {}: {}",
+                    "#[uniform(set={}, binding={})] def {}: {}",
+                    set,
                     binding,
                     name,
                     format_type(ty)
                 )
             }
             mir::Def::Storage {
-                name, ty, binding, ..
+                name, ty, set, binding, ..
             } => {
                 write!(
                     f,
-                    "#[storage(binding={})] def {}: {}",
+                    "#[storage(set={}, binding={})] def {}: {}",
+                    set,
                     binding,
                     name,
                     format_type(ty)

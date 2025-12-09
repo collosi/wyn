@@ -575,10 +575,11 @@ impl Monomorphizer {
                 body: apply_subst_expr(body, subst),
                 span,
             }),
-            Def::Uniform { id, ty, binding, .. } => Ok(Def::Uniform {
+            Def::Uniform { id, ty, set, binding, .. } => Ok(Def::Uniform {
                 id,
                 name: new_name.to_string(),
                 ty: apply_subst(&ty, subst),
+                set,
                 binding,
             }),
             Def::Storage { id, ty, set, binding, layout, access, .. } => Ok(Def::Storage {

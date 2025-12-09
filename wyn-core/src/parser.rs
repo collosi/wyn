@@ -165,8 +165,8 @@ impl Parser {
                 Attribute::Vertex | Attribute::Fragment | Attribute::Compute { .. }
             )
         });
-        let uniform_binding = attributes.iter().find_map(|attr| {
-            if let Attribute::Uniform { binding } = attr { Some(*binding) } else { None }
+        let uniform_attr = attributes.iter().find_map(|attr| {
+            if let Attribute::Uniform { set, binding } = attr { Some((*set, *binding)) } else { None }
         });
         let storage_attr = attributes.iter().find_map(|attr| {
             if let Attribute::Storage { set, binding, layout, access } = attr {
@@ -176,12 +176,12 @@ impl Parser {
             }
         });
 
-        if let Some(binding) = uniform_binding {
+        if let Some((set, binding)) = uniform_attr {
             // Uniform declaration - delegate to helper
             if keyword != "def" {
                 bail_parse!("Uniform declarations must use 'def', not 'let'");
             }
-            return self.parse_uniform_decl(binding);
+            return self.parse_uniform_decl(set, binding);
         } else if let Some((set, binding, layout, access)) = storage_attr {
             // Storage buffer declaration - delegate to helper
             if keyword != "def" {
@@ -402,7 +402,7 @@ impl Parser {
         }
     }
 
-    fn parse_uniform_decl(&mut self, binding: u32) -> Result<Declaration> {
+    fn parse_uniform_decl(&mut self, set: u32, binding: u32) -> Result<Declaration> {
         // Consume 'def' keyword
         self.expect(Token::Def)?;
 
@@ -417,7 +417,7 @@ impl Parser {
             bail_parse!("Uniform declarations cannot have initializer values");
         }
 
-        Ok(Declaration::Uniform(UniformDecl { name, ty, binding }))
+        Ok(Declaration::Uniform(UniformDecl { name, ty, set, binding }))
     }
 
     fn parse_storage_decl(&mut self, set: u32, binding: u32, layout: StorageLayout, access: StorageAccess) -> Result<Declaration> {
@@ -466,17 +466,40 @@ impl Parser {
                 })
             }
             "uniform" => {
-                // Require (binding=N) parameter
+                // Parse uniform attribute: #[uniform(binding=N)] or #[uniform(set=M, binding=N)]
                 self.expect(Token::LeftParen)?;
-                let param_name = self.expect_identifier()?;
-                if param_name != "binding" {
-                    bail_parse!("Unknown uniform parameter: {}, expected 'binding'", param_name);
+
+                let mut set: u32 = 0;
+                let mut binding: Option<u32> = None;
+
+                loop {
+                    let param_name = self.expect_identifier()?;
+                    self.expect(Token::Assign)?;
+
+                    match param_name.as_str() {
+                        "set" => {
+                            set = self.expect_integer()? as u32;
+                        }
+                        "binding" => {
+                            binding = Some(self.expect_integer()? as u32);
+                        }
+                        _ => bail_parse!("Unknown uniform parameter: {}", param_name),
+                    }
+
+                    // Check for comma or end
+                    if self.check(&Token::Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
                 }
-                self.expect(Token::Assign)?;
-                let binding = self.expect_integer()? as u32;
+
                 self.expect(Token::RightParen)?;
                 self.expect(Token::RightBracket)?;
-                Ok(Attribute::Uniform { binding })
+
+                let binding = binding.ok_or_else(|| err_parse!("uniform attribute requires 'binding' parameter"))?;
+
+                Ok(Attribute::Uniform { set, binding })
             }
             "builtin" => {
                 self.expect(Token::LeftParen)?;

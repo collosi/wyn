@@ -278,12 +278,13 @@ impl<'a> LowerCtx<'a> {
         // Emit uniforms
         for def in &self.program.defs {
             if let Def::Uniform {
-                name, ty, binding, ..
+                name, ty, set, binding, ..
             } = def
             {
                 writeln!(
                     code,
-                    "layout(binding = {}) uniform {} {};",
+                    "layout(set = {}, binding = {}) uniform {} {};",
+                    set,
                     binding,
                     self.type_to_glsl(ty),
                     name

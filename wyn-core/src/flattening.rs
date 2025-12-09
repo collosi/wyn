@@ -605,6 +605,7 @@ impl Flattener {
                         id: self.next_node_id(),
                         name: uniform_decl.name.clone(),
                         ty: uniform_decl.ty.clone(),
+                        set: uniform_decl.set,
                         binding: uniform_decl.binding,
                     });
                 }

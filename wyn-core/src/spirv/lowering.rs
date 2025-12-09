@@ -815,7 +815,7 @@ impl<'a> LowerCtx<'a> {
                 self.constructor.global_constants.insert(name.clone(), const_id);
             }
             Def::Uniform {
-                name, ty, binding, ..
+                name, ty, set, binding, ..
             } => {
                 // Create a SPIR-V uniform variable
                 let uniform_type = self.constructor.ast_type_to_spirv(ty);
@@ -824,11 +824,11 @@ impl<'a> LowerCtx<'a> {
                 let var_id =
                     self.constructor.builder.variable(ptr_type, None, spirv::StorageClass::Uniform, None);
 
-                // Decorate with descriptor set=1 and explicit binding
+                // Decorate with descriptor set and binding
                 self.constructor.builder.decorate(
                     var_id,
                     spirv::Decoration::DescriptorSet,
-                    [Operand::LiteralBit32(1)],
+                    [Operand::LiteralBit32(*set)],
                 );
                 self.constructor.builder.decorate(
                     var_id,
@@ -841,7 +841,7 @@ impl<'a> LowerCtx<'a> {
                 self.constructor.uniform_types.insert(name.clone(), uniform_type);
             }
             Def::Storage {
-                name, ty, binding, ..
+                name, ty, set, binding, ..
             } => {
                 // Create a SPIR-V storage buffer variable
                 // TODO: Implement proper storage buffer lowering
@@ -858,11 +858,11 @@ impl<'a> LowerCtx<'a> {
                     None,
                 );
 
-                // Decorate with descriptor set=2 and explicit binding
+                // Decorate with descriptor set and binding
                 self.constructor.builder.decorate(
                     var_id,
                     spirv::Decoration::DescriptorSet,
-                    [Operand::LiteralBit32(2)],
+                    [Operand::LiteralBit32(*set)],
                 );
                 self.constructor.builder.decorate(
                     var_id,

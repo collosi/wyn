@@ -1,0 +1,170 @@
+-- "Holofoil Dice" by Jaenam
+-- Wyn port of the Shadertoy shader
+-- License: Creative Commons (CC BY-NC-SA 4.0)
+-- Original: https://www.shadertoy.com/view/XXBfzW
+
+------------------------------------------------------------
+-- Uniforms
+------------------------------------------------------------
+#[uniform(set=1, binding=0)] def iResolution: vec2f32
+#[uniform(set=1, binding=1)] def iTime: f32
+#[uniform(set=1, binding=5)] def iMouse: vec4f32
+
+------------------------------------------------------------
+-- Vertex shader: full-screen triangle
+------------------------------------------------------------
+def verts: [3]vec4f32 =
+  [@[-1.0, -1.0, 0.0, 1.0],
+   @[3.0, -1.0, 0.0, 1.0],
+   @[-1.0, 3.0, 0.0, 1.0]]
+
+#[vertex]
+def vertex_main (#[builtin(vertex_index)] vertex_id: i32) : #[builtin(position)] vec4f32 = verts[vertex_id]
+
+------------------------------------------------------------
+-- Rotation matrix from angle (mat2(cos(angle + vec4(0, 33, 11, 0))))
+------------------------------------------------------------
+
+def rotMat (angle: f32) : mat2f32 =
+  let c0 = f32.cos angle in
+  let c1 = f32.cos (angle + 33.0) in
+  let c2 = f32.cos (angle + 11.0) in
+  @[[c0, c2], [c1, c0]]
+
+------------------------------------------------------------
+-- Channel ray march (direct port of macro A(C, Z))
+------------------------------------------------------------
+
+def traceSimple (fragCoord: vec2f32) (mx: f32) (my: f32) (z_offset: f32) (use_mouse: f32) : f32 =
+  let r = iResolution in
+  let Rx = rotMat mx in
+  let Ry = rotMat my in
+  let (_, _, accum) = loop (i, d, accum) = (0, 0.0, 0.0) while i < 80 do
+    let fi = f32.i32 i in
+
+    let p_x = (fragCoord.x + fragCoord.x - r.x) / r.y * d in
+    let p_y = (fragCoord.y + fragCoord.y - r.y) / r.y * d in
+    let p_z = d - 8.0 in
+
+    if f32.abs p_x > 5.0 then (80, d, accum)
+    else
+      -- Apply rotation Rx to xz
+      let p_xz = mul @[p_x, p_z] Rx in
+      let p2_x = p_xz.x in
+      let p2_z = p_xz.y in
+
+      -- Apply rotation Ry based on mouse
+      let (p3_x, p3_y, p3_z) = if use_mouse > 0.5 then
+        let p_yz = mul @[p_y, p2_z] Ry in
+        (p2_x, p_yz.x, p_yz.y)
+      else
+        let p_xy = mul @[p2_x, p_y] Ry in
+        (p_xy.x, p_xy.y, p2_z)
+      in
+
+      let g = @[floor (p3_x * 6.0), floor (p3_y * 6.0), floor (p3_z * 6.0)] in
+      let f = @[fract (p3_x * 6.0) - 0.5, fract (p3_y * 6.0) - 0.5, fract (p3_z * 6.0) - 0.5] in
+
+      -- Dot pattern hash
+      let hash1 = fract (f32.sin (dot g @[127.1, 311.7, 74.7]) * 43758.5) in
+      let h = if magnitude f < hash1 * 0.3 + 0.1 then 1.0 else 0.0 in
+
+      -- Angle for sparkle
+      let a = fract (f32.sin (dot g @[43.7, 78.2, 123.4]) * 127.1) * 6.28 in
+
+      -- Menger fractal
+      let (_, e_final, _) = loop (k, e, sc) = (0, 1.0, 2.0) while k < 3 do
+        let gk = @[f32.abs (fract (p3_x * sc) * 2.0 - 1.0),
+                   f32.abs (fract (p3_y * sc) * 2.0 - 1.0),
+                   f32.abs (fract (p3_z * sc) * 2.0 - 1.0)] in
+        let e2 = f32.min e (f32.min (f32.max gk.x gk.y) (f32.min (f32.max gk.y gk.z) (f32.max gk.x gk.z)) / sc) in
+        (k + 1, e2, sc * 0.6)
+      in
+
+      let c = f32.max (f32.max (f32.max (f32.abs p3_x) (f32.abs p3_y)) (f32.abs p3_z))
+                      (dot @[f32.abs p3_x, f32.abs p3_y, f32.abs p3_z] @[0.577, 0.577, 0.577] * 0.9) - 3.0 in
+
+      let s = 0.01 + 0.15 * f32.abs (f32.max (f32.max c (e_final - 0.1)) (f32.abs (f32.sin c) - 0.3) + z_offset * 0.02 - fi / 130.0) in
+      let sf = smoothstep 0.02 0.01 s in
+
+      let contrib = 1.6 / s * (0.5 + 0.5 * f32.sin (fi * 0.3 + z_offset * 5.0) + sf * 4.0 * h * f32.sin (a + fi * 0.4 + z_offset * 5.0)) in
+
+      (i + 1, d + s, accum + contrib)
+  in accum
+
+------------------------------------------------------------
+-- Fragment shader
+------------------------------------------------------------
+
+#[fragment]
+def fragment_main (#[builtin(position)] fragCoord: vec4f32) : #[location(0)] vec4f32 =
+  -- Flip Y for Vulkan
+  let coord = @[fragCoord.x, iResolution.y - fragCoord.y] in
+
+  -- Mouse or time-based rotation
+  let use_mouse = if iMouse.z > 0.0 then 1.0 else 0.0 in
+  let m = if use_mouse > 0.5 then
+    @[(iMouse.x / iResolution.x - 0.5) * 6.28, (iMouse.y / iResolution.y - 0.5) * 6.28]
+  else
+    @[iTime / 2.0, iTime / 2.0]
+  in
+
+  -- Trace each color channel with chromatic aberration offset
+  let r_val = traceSimple coord m.x m.y (0.0 - 1.0) use_mouse in
+  let g_val = traceSimple coord m.x m.y 0.0 use_mouse in
+  let b_val = traceSimple coord m.x m.y 1.0 use_mouse in
+
+  -- Apply tanh tonemapping: tanh(O * O / 1e7)
+  let scale = 1.0 / 10000000.0 in
+  let r_out = tanh (r_val * r_val * scale) in
+  let g_out = tanh (g_val * g_val * scale) in
+  let b_out = tanh (b_val * b_val * scale) in
+
+  @[r_out, g_out, b_out, 1.0]
+
+------------------------------------------------------------
+-- Original GLSL
+------------------------------------------------------------
+
+-- /*================================
+-- =         Holofoil Dice          =
+-- =         Author: Jaenam         =
+-- ================================*/
+-- // Date:    2025-12-07
+-- // License: Creative Commons (CC BY-NC-SA 4.0)
+--
+-- //Twigl version: https://x.com/Jaenam97/status/1997653539078693351?s=20
+--
+-- #define A(C, Z) \
+-- for (float d, i, c, e, sc, h, a, s, sf; i++ < 80.;) { \
+--     vec3 p = vec3((I + I - r.xy) / r.y*d, d - 8.),g,f,k; \
+--     if (abs(p.x) > 5.) break; \
+--     p.xz *= Rx; \
+--     iMouse.z > 0. ? p.yz *= Ry : p.xy *= Ry; \
+--     g = floor(p * 6.); \
+--     f = fract(p * 6.) - .5; \
+--     h = step(length(f), fract(sin(dot(g, vec3(127.1, 311.7, 74.7))) * 43758.5) * .3 + .1); \
+--     a = fract(sin(dot(g, vec3(43.7, 78.2, 123.4))) * 127.1) * 6.28; \
+--     e = 1., sc = 2.; \
+--     for (int j = 0; j < 3; j++) { \
+--         g = abs(mod(p * sc, 2.) - 1.); \
+--         e = min(e, min(max(g.x, g.y), min(max(g.y, g.z), max(g.x, g.z))) / sc); \
+--         sc *= .6; \
+--     } \
+--     c = max(max(max(abs(p.x), abs(p.y)), abs(p.z)), dot(abs(p), vec3(.577)) * .9) - 3.; \
+--     d += s = .01 + .15 * abs(max(max(c, e - .1),length(sin(c))-.3) + Z * .02 - i / 130.); \
+--     sf = smoothstep(.02, .01, s); \
+--     O.C += 1.6 / s * (.5 + .5 * sin(i * .3 + Z * 5.) + sf * 4. * h * sin(a + i * .4 + Z * 5.));\
+-- }
+-- 
+-- void mainImage(out vec4 O, vec2 I)
+-- {   
+--     vec3 r = iResolution;
+--     vec2 m = iMouse.z > 0. ? (iMouse.xy / r.xy - .5) * 6.28 : vec2(iTime / 2.);
+--     mat2 Rx = mat2(cos(m.x + vec4(0, 33, 11, 0)));
+--     mat2 Ry = mat2(cos(m.y + vec4(0, 33, 11, 0)));
+--     O *= 0.;
+--     
+--     A(r, -1.)A(g, 0.)A(b, 1.)
+--     O = tanh(O * O / 1e7);
+-- }

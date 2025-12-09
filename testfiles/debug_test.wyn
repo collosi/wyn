@@ -1,7 +1,7 @@
 -- Test file for GDP debug output
 -- Exercises debug_i32, debug_f32, and debug_str intrinsics
 
-#[uniform(binding=0)] def iResolution: vec2f32
+#[uniform(set=1, binding=0)] def iResolution: vec2f32
 
 #[fragment] def fragment_main(#[location(0)] fragCoord: vec2f32): #[location(0)] vec4f32 =
   let _ = debug_str "hello" in

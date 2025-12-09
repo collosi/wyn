@@ -5,8 +5,8 @@
 ------------------------------------------------------------
 -- Uniforms
 ------------------------------------------------------------
-#[uniform(binding=0)] def iResolution: vec2f32
-#[uniform(binding=1)] def iTime: f32
+#[uniform(set=1, binding=0)] def iResolution: vec2f32
+#[uniform(set=1, binding=1)] def iTime: f32
 -- TODO: Add texture sampler uniforms when supported
 -- #[uniform] def iChannel0: sampler2D
 -- #[uniform] def iChannel1: samplerCube

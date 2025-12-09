@@ -84,10 +84,11 @@ pub trait MirFolder: Sized {
         id: NodeId,
         name: String,
         ty: Type<TypeName>,
+        set: u32,
         binding: u32,
         ctx: &mut Self::Ctx,
     ) -> Result<Def, Self::Error> {
-        walk_uniform(self, id, name, ty, binding, ctx)
+        walk_uniform(self, id, name, ty, set, binding, ctx)
     }
 
     fn visit_storage(
@@ -387,8 +388,9 @@ pub fn walk_def<V: MirFolder>(v: &mut V, d: Def, ctx: &mut V::Ctx) -> Result<Def
             id,
             name,
             ty,
+            set,
             binding,
-        } => v.visit_uniform(id, name, ty, binding, ctx),
+        } => v.visit_uniform(id, name, ty, set, binding, ctx),
         Def::Storage {
             id,
             name,
@@ -487,6 +489,7 @@ pub fn walk_uniform<V: MirFolder>(
     id: NodeId,
     name: String,
     ty: Type<TypeName>,
+    set: u32,
     binding: u32,
     ctx: &mut V::Ctx,
 ) -> Result<Def, V::Error> {
@@ -495,6 +498,7 @@ pub fn walk_uniform<V: MirFolder>(
         id,
         name,
         ty,
+        set,
         binding,
     })
 }

@@ -262,6 +262,7 @@ pub enum Attribute {
         local_size: (u32, u32, u32),
     },
     Uniform {
+        set: u32,
         binding: u32,
     },
     Storage {
@@ -351,6 +352,7 @@ pub struct SigDecl {
 pub struct UniformDecl {
     pub name: String,
     pub ty: Type,     // Uniforms always have an explicit type
+    pub set: u32,     // Descriptor set number (default 0)
     pub binding: u32, // Explicit binding number (required)
 }
 
