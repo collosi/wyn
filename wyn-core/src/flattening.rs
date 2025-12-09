@@ -11,7 +11,7 @@ use crate::mir::{self, Expr};
 use crate::pattern;
 use crate::scope::ScopeStack;
 use crate::types;
-use crate::{bail_flatten, bail_type_at, err_flatten, err_type};
+use crate::{bail_flatten, err_flatten, err_type};
 use polytype::TypeScheme;
 use std::collections::{HashMap, HashSet};
 

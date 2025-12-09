@@ -959,7 +959,7 @@ impl<'a> LowerCtx<'a> {
         init_bindings: &[(String, Expr)],
         kind: &LoopKind,
         body: &Expr,
-        ret_ty: &PolyType<TypeName>,
+        _ret_ty: &PolyType<TypeName>,
         output: &mut String,
     ) -> Result<String> {
         // Emit init

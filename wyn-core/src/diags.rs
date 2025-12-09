@@ -199,11 +199,6 @@ impl AstFormatter {
         let _ = writeln!(self.output, "{}{}", indent, content);
     }
 
-    fn write_line_no_newline(&mut self, content: &str) {
-        let indent = "  ".repeat(self.indent);
-        let _ = write!(self.output, "{}{}", indent, content);
-    }
-
     fn newline(&mut self) {
         let _ = writeln!(self.output);
     }
