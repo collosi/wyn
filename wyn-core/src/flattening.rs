@@ -544,9 +544,9 @@ impl Flattener {
                         })
                         .collect();
 
-                    // Convert return type + return_attrs to EntryOutput with IoDecoration
+                    // Convert AST EntryOutput to MIR EntryOutput with IoDecoration
                     let ret_type = self.get_expr_type(&e.body);
-                    let outputs: Vec<mir::EntryOutput> = if e.return_attributes.is_empty() {
+                    let outputs: Vec<mir::EntryOutput> = if e.outputs.iter().all(|o| o.attribute.is_none()) && e.outputs.len() == 1 {
                         // Single output without explicit decoration
                         if !matches!(ret_type, polytype::Type::Constructed(ast::TypeName::Unit, _)) {
                             vec![mir::EntryOutput {
@@ -561,12 +561,13 @@ impl Flattener {
                         if let polytype::Type::Constructed(ast::TypeName::Tuple(_), component_types) =
                             &ret_type
                         {
-                            e.return_attributes
+                            e.outputs
                                 .iter()
                                 .zip(component_types.iter())
-                                .map(|(opt_attr, ty)| mir::EntryOutput {
+                                .map(|(output, ty)| mir::EntryOutput {
                                     ty: ty.clone(),
-                                    decoration: opt_attr
+                                    decoration: output
+                                        .attribute
                                         .as_ref()
                                         .and_then(|a| self.convert_to_io_decoration(a)),
                                 })
@@ -576,9 +577,9 @@ impl Flattener {
                             vec![mir::EntryOutput {
                                 ty: ret_type,
                                 decoration: e
-                                    .return_attributes
+                                    .outputs
                                     .first()
-                                    .and_then(|opt| opt.as_ref())
+                                    .and_then(|o| o.attribute.as_ref())
                                     .and_then(|a| self.convert_to_io_decoration(a)),
                             }]
                         }

@@ -171,12 +171,11 @@ fn test_parse_entry_point_decl() {
     assert_typed_param!(&entry.params[0], "x", crate::types::i32());
     assert_typed_param!(&entry.params[1], "y", crate::types::f32());
 
-    assert_eq!(entry.return_types.len(), 1);
+    assert_eq!(entry.outputs.len(), 1);
     assert_eq!(
-        entry.return_types[0],
+        entry.outputs[0].ty,
         crate::types::sized_array(4, crate::types::f32())
     );
-    // return_attributes removed - only on EntryDecl now
 }
 
 #[test]
@@ -267,14 +266,14 @@ fn test_parse_builtin_attribute_on_return_type() {
     let entry = single_entry("#[vertex] def main(): #[builtin(position)] [4]f32 = result");
 
     assert_eq!(entry.entry_type, Attribute::Vertex);
-    assert_eq!(entry.return_types.len(), 1);
-    assert_eq!(entry.return_attributes.len(), 1);
+    assert_eq!(entry.outputs.len(), 1);
+    assert_eq!(entry.outputs.len(), 1);
     assert_eq!(
-        entry.return_attributes[0],
+        entry.outputs[0].attribute,
         Some(Attribute::BuiltIn(spirv::BuiltIn::Position))
     );
     assert_eq!(
-        entry.return_types[0],
+        entry.outputs[0].ty,
         crate::types::sized_array(4, crate::types::f32())
     );
 }
@@ -286,14 +285,14 @@ fn test_parse_single_attributed_return_type() {
     );
 
     assert_eq!(entry.entry_type, Attribute::Vertex);
-    assert_eq!(entry.return_types.len(), 1);
-    assert_eq!(entry.return_attributes.len(), 1);
+    assert_eq!(entry.outputs.len(), 1);
+    assert_eq!(entry.outputs.len(), 1);
     assert_eq!(
-        entry.return_attributes[0],
+        entry.outputs[0].attribute,
         Some(Attribute::BuiltIn(spirv::BuiltIn::Position))
     );
     assert_matches!(
-        &entry.return_types[0],
+        &entry.outputs[0].ty,
         Type::Constructed(TypeName::Named(name), _) if name == "vec4"
     );
 }
@@ -304,17 +303,17 @@ fn test_parse_tuple_attributed_return_type() {
         "#[vertex] def vertex_main(): (#[builtin(position)] vec4, #[location(0)] vec3) = result",
     );
 
-    assert_eq!(entry.return_types.len(), 2);
-    assert_eq!(entry.return_attributes.len(), 2);
+    assert_eq!(entry.outputs.len(), 2);
+    assert_eq!(entry.outputs.len(), 2);
 
     // Check first element: [builtin(position)] vec4
     assert_eq!(
-        entry.return_attributes[0],
+        entry.outputs[0].attribute,
         Some(Attribute::BuiltIn(spirv::BuiltIn::Position))
     );
 
     // Check second element: [location(0)] vec3
-    assert_eq!(entry.return_attributes[1], Some(Attribute::Location(0)));
+    assert_eq!(entry.outputs[1].attribute, Some(Attribute::Location(0)));
 }
 
 #[test]
@@ -333,11 +332,11 @@ fn test_parse_location_attribute_on_return_type() {
     let entry = single_entry("#[fragment] def frag(): #[location(0)] [4]f32 = result");
 
     assert_eq!(entry.entry_type, Attribute::Fragment);
-    assert_eq!(entry.return_types.len(), 1);
-    assert_eq!(entry.return_attributes.len(), 1);
-    assert_eq!(entry.return_attributes[0], Some(Attribute::Location(0)));
+    assert_eq!(entry.outputs.len(), 1);
+    assert_eq!(entry.outputs.len(), 1);
+    assert_eq!(entry.outputs[0].attribute, Some(Attribute::Location(0)));
     assert_eq!(
-        entry.return_types[0],
+        entry.outputs[0].ty,
         crate::types::sized_array(4, crate::types::f32())
     );
 }
@@ -393,10 +392,10 @@ fn test_parse_multiple_builtin_types() {
     );
 
     // Return type
-    assert_eq!(entry.return_types.len(), 1);
-    assert_eq!(entry.return_attributes.len(), 1);
+    assert_eq!(entry.outputs.len(), 1);
+    assert_eq!(entry.outputs.len(), 1);
     assert_eq!(
-        entry.return_attributes[0],
+        entry.outputs[0].attribute,
         Some(Attribute::BuiltIn(spirv::BuiltIn::Position))
     );
 }
@@ -818,14 +817,14 @@ fn test_parse_multiple_shader_outputs() {
     assert_eq!(entry.name, "fragment_main");
     assert_eq!(entry.entry_type, Attribute::Fragment);
 
-    assert_eq!(entry.return_types.len(), 2);
-    assert_eq!(entry.return_attributes.len(), 2);
+    assert_eq!(entry.outputs.len(), 2);
+    assert_eq!(entry.outputs.len(), 2);
 
     // Check first output: [location(0)] vec4
-    assert_eq!(entry.return_attributes[0], Some(Attribute::Location(0)));
+    assert_eq!(entry.outputs[0].attribute, Some(Attribute::Location(0)));
 
     // Check second output: [location(1)] vec3
-    assert_eq!(entry.return_attributes[1], Some(Attribute::Location(1)));
+    assert_eq!(entry.outputs[1].attribute, Some(Attribute::Location(1)));
 }
 
 #[test]
@@ -907,8 +906,8 @@ fn test_parse_attributed_return_simple() {
     println!("entry: {:?}", entry);
     assert_eq!(entry.params.len(), 1);
     assert!(matches!(entry.params[0].kind, PatternKind::Unit));
-    assert_eq!(entry.return_types.len(), 1);
-    assert_eq!(entry.return_attributes.len(), 1);
+    assert_eq!(entry.outputs.len(), 1);
+    assert_eq!(entry.outputs.len(), 1);
 }
 
 #[test]
@@ -945,8 +944,8 @@ def test_vertex : #[builtin(position)] vec4 =
     );
 
     assert_eq!(entry.name, "test_vertex");
-    assert_eq!(entry.return_types.len(), 1);
-    assert_eq!(entry.return_attributes.len(), 1);
+    assert_eq!(entry.outputs.len(), 1);
+    assert_eq!(entry.outputs.len(), 1);
 }
 
 #[test]

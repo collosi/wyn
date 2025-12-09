@@ -221,6 +221,13 @@ impl Parser {
                     (vec![ty], vec![None])
                 };
 
+            // Combine into EntryOutput structs
+            let outputs: Vec<EntryOutput> = return_types
+                .into_iter()
+                .zip(return_attributes.into_iter())
+                .map(|(ty, attribute)| EntryOutput { ty, attribute })
+                .collect();
+
             self.expect(Token::Assign)?;
             let body = self.parse_expression()?;
 
@@ -228,8 +235,7 @@ impl Parser {
                 entry_type: entry_attr.clone(),
                 name,
                 params,
-                return_types,
-                return_attributes,
+                outputs,
                 body,
             }))
         } else {

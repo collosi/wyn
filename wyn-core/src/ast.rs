@@ -321,14 +321,20 @@ pub struct Decl {
     pub body: Expression,         // The value/expression for let/def declarations
 }
 
+/// Output field for entry point declarations
+#[derive(Debug, Clone, PartialEq)]
+pub struct EntryOutput {
+    pub ty: Type,
+    pub attribute: Option<Attribute>,
+}
+
 /// Entry point declaration (vertex/fragment shader)
 #[derive(Debug, Clone, PartialEq)]
 pub struct EntryDecl {
     pub entry_type: Attribute, // Attribute::Vertex or Attribute::Fragment
     pub name: String,
-    pub params: Vec<Pattern>,                      // Input parameters as patterns
-    pub return_types: Vec<Type>,                   // Return tuple field types (parallel array)
-    pub return_attributes: Vec<Option<Attribute>>, // Attributes per return field (parallel array)
+    pub params: Vec<Pattern>,      // Input parameters as patterns
+    pub outputs: Vec<EntryOutput>, // Output fields with optional attributes
     pub body: Expression,
 }
 

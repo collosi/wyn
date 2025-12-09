@@ -259,9 +259,9 @@ pub fn walk_entry_decl<V: Visitor>(v: &mut V, e: &EntryDecl) -> ControlFlow<V::B
         v.visit_pattern(param)?;
     }
 
-    // Visit return types
-    for ty in &e.return_types {
-        v.visit_type(ty)?;
+    // Visit output types
+    for output in &e.outputs {
+        v.visit_type(&output.ty)?;
     }
 
     // Visit body
