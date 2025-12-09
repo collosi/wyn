@@ -341,3 +341,49 @@ def main(arr: [4]i32): [4]i32 =
         "Expected map to be eligible for in-place when arr is dead after"
     );
 }
+
+// =============================================================================
+// Pipeline Integration Tests
+// =============================================================================
+
+/// Test that has_alias_errors() returns true when alias errors exist
+#[test]
+fn test_pipeline_has_alias_errors_true() {
+    let source = r#"
+def consume(arr: *[4]i32): i32 = arr[0]
+
+def main(arr: [4]i32): i32 =
+    let _ = consume(arr) in
+    arr[0]
+"#;
+    let parsed = Compiler::parse(source).expect("parse failed");
+    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
+    let elaborated = parsed.elaborate(module_manager).expect("elaborate failed");
+    let resolved = elaborated.resolve().expect("resolve failed");
+    let type_checked = resolved.type_check().expect("type_check failed");
+    let alias_checked = type_checked.alias_check().expect("alias_check failed");
+
+    assert!(
+        alias_checked.has_alias_errors(),
+        "Expected has_alias_errors() to return true for use-after-move"
+    );
+}
+
+/// Test that has_alias_errors() returns false when no alias errors exist
+#[test]
+fn test_pipeline_has_alias_errors_false() {
+    let source = r#"
+def main(x: i32): i32 = x + 1
+"#;
+    let parsed = Compiler::parse(source).expect("parse failed");
+    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
+    let elaborated = parsed.elaborate(module_manager).expect("elaborate failed");
+    let resolved = elaborated.resolve().expect("resolve failed");
+    let type_checked = resolved.type_check().expect("type_check failed");
+    let alias_checked = type_checked.alias_check().expect("alias_check failed");
+
+    assert!(
+        !alias_checked.has_alias_errors(),
+        "Expected has_alias_errors() to return false for valid code"
+    );
+}

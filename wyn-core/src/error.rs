@@ -12,6 +12,9 @@ pub enum CompilerError {
     #[error("Undefined variable '{0}'")]
     UndefinedVariable(String, Option<Span>),
 
+    #[error("Alias error: {0}")]
+    AliasError(String, Option<Span>),
+
     #[error("SPIR-V generation error: {0}")]
     SpirvError(String, Option<Span>),
 
@@ -37,6 +40,7 @@ impl CompilerError {
             Self::ParseError(_, span) => *span,
             Self::TypeError(_, span) => *span,
             Self::UndefinedVariable(_, span) => *span,
+            Self::AliasError(_, span) => *span,
             Self::SpirvError(_, span) => *span,
             Self::GlslError(_, span) => *span,
             Self::ModuleError(_, span) => *span,
@@ -99,6 +103,13 @@ macro_rules! err_flatten {
     };
 }
 
+#[macro_export]
+macro_rules! err_alias {
+    ($($arg:tt)*) => {
+        $crate::error::CompilerError::AliasError(format!($($arg)*), None)
+    };
+}
+
 // Error creation macros with span
 
 #[macro_export]
@@ -140,6 +151,13 @@ macro_rules! err_module_at {
 macro_rules! err_flatten_at {
     ($span:expr, $($arg:tt)*) => {
         $crate::error::CompilerError::FlatteningError(format!($($arg)*), Some($span))
+    };
+}
+
+#[macro_export]
+macro_rules! err_alias_at {
+    ($span:expr, $($arg:tt)*) => {
+        $crate::error::CompilerError::AliasError(format!($($arg)*), Some($span))
     };
 }
 
@@ -194,6 +212,13 @@ macro_rules! bail_flatten {
     };
 }
 
+#[macro_export]
+macro_rules! bail_alias {
+    ($($arg:tt)*) => {
+        return Err($crate::err_alias!($($arg)*))
+    };
+}
+
 // Bail macros with span (delegate to err_x_at)
 
 #[macro_export]
@@ -235,5 +260,12 @@ macro_rules! bail_module_at {
 macro_rules! bail_flatten_at {
     ($span:expr, $($arg:tt)*) => {
         return Err($crate::err_flatten_at!($span, $($arg)*))
+    };
+}
+
+#[macro_export]
+macro_rules! bail_alias_at {
+    ($span:expr, $($arg:tt)*) => {
+        return Err($crate::err_alias_at!($span, $($arg)*))
     };
 }

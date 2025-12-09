@@ -172,6 +172,7 @@ fn compile_file(
     let alias_checked = time("alias_check", verbose, || type_checked.alias_check())?;
     if alias_checked.has_alias_errors() {
         alias_checked.print_alias_errors();
+        return Err(wyn_core::err_alias!("alias checking failed").into());
     }
 
     let ast_folded = time("fold_ast_constants", verbose, || {
@@ -290,6 +291,7 @@ fn check_file(input: PathBuf, output_annotated: Option<PathBuf>, verbose: bool) 
     let alias_checked = type_checked.alias_check()?;
     if alias_checked.has_alias_errors() {
         alias_checked.print_alias_errors();
+        return Err(wyn_core::err_alias!("alias checking failed").into());
     }
 
     if verbose {
