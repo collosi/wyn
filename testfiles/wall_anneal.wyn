@@ -172,10 +172,10 @@ def run_chain (seed: f32) : (i32, [8]i32, [8]i32, [8]i32) =
   let cost0 = cost_for_layout xs0 oris0 in
 
   -- Temperature schedule
-  let T0 = 100.0f32 in
-  let Tend = 0.1f32 in
+  let t0 = 100.0f32 in
+  let tend = 0.1f32 in
   let steps_f = f32.i32 NUM_STEPS in
-  let log_ratio = f32.log (Tend / T0) in
+  let log_ratio = f32.log (tend / t0) in
 
   -- Run annealing loop, tracking best solution
   let (_, _, _, _, best_xs, best_oris, best_cost) =
@@ -184,9 +184,9 @@ def run_chain (seed: f32) : (i32, [8]i32, [8]i32, [8]i32) =
     for step < NUM_STEPS do
       let step_f = f32.i32 step in
       let t_frac = step_f / steps_f in
-      let T = T0 * f32.exp (t_frac * log_ratio) in
+      let t_temp = t0 * f32.exp (t_frac * log_ratio) in
 
-      let (rng2, xs2, oris2, cost2) = anneal_step rng xs oris cost T in
+      let (rng2, xs2, oris2, cost2) = anneal_step rng xs oris cost t_temp in
 
       let (best_xs2, best_oris2, best_cost2) =
         if cost2 < best_cost then (xs2, oris2, cost2)

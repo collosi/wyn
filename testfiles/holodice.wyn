@@ -37,8 +37,8 @@ def rotMat (angle: f32) : mat2f32 =
 
 def traceSimple (fragCoord: vec2f32) (mx: f32) (my: f32) (z_offset: f32) (use_mouse: f32) : f32 =
   let r = iResolution in
-  let Rx = rotMat mx in
-  let Ry = rotMat my in
+  let rx = rotMat mx in
+  let ry = rotMat my in
   let (_, _, accum) = loop (i, d, accum) = (0, 0.0, 0.0) while i < 80 do
     let fi = f32.i32 i in
 
@@ -48,17 +48,17 @@ def traceSimple (fragCoord: vec2f32) (mx: f32) (my: f32) (z_offset: f32) (use_mo
 
     if f32.abs p_x > 5.0 then (80, d, accum)
     else
-      -- Apply rotation Rx to xz
-      let p_xz = mul @[p_x, p_z] Rx in
+      -- Apply rotation rx to xz
+      let p_xz = mul @[p_x, p_z] rx in
       let p2_x = p_xz.x in
       let p2_z = p_xz.y in
 
-      -- Apply rotation Ry based on mouse
+      -- Apply rotation ry based on mouse
       let (p3_x, p3_y, p3_z) = if use_mouse > 0.5 then
-        let p_yz = mul @[p_y, p2_z] Ry in
+        let p_yz = mul @[p_y, p2_z] ry in
         (p2_x, p_yz.x, p_yz.y)
       else
-        let p_xy = mul @[p2_x, p_y] Ry in
+        let p_xy = mul @[p2_x, p_y] ry in
         (p_xy.x, p_xy.y, p2_z)
       in
 
