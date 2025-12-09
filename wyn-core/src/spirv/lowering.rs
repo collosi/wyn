@@ -1596,6 +1596,15 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             let loop_var_phi_id = constructor.builder.id();
             constructor.env.insert(loop_var.clone(), loop_var_phi_id);
 
+            // For ForRange loops, also create a phi for the iteration variable
+            let iter_var_phi = if let LoopKind::ForRange { var, .. } = kind {
+                let iter_phi_id = constructor.builder.id();
+                constructor.env.insert(var.clone(), iter_phi_id);
+                Some((var.clone(), iter_phi_id))
+            } else {
+                None
+            };
+
             // Evaluate init_bindings to bind user variables from loop_var
             // These extractions reference loop_var which is now bound to the phi
             for (name, binding_expr) in init_bindings.iter() {
@@ -1635,6 +1644,17 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
 
             // Continue block - body_result is the new value for loop_var
             constructor.begin_block(continue_block_id)?;
+
+            // For ForRange loops, increment the iteration variable
+            let iter_next_val = if let Some((ref var_name, _)) = iter_var_phi {
+                let var_id = *constructor.env.get(var_name).unwrap();
+                let one = constructor.const_i32(1);
+                let next_val = constructor.builder.i_add(constructor.i32_type, None, var_id, one)?;
+                Some(next_val)
+            } else {
+                None
+            };
+
             constructor.builder.branch(header_block_id)?;
 
             // Now go back and insert phi node at the beginning of header block
@@ -1647,6 +1667,19 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                 incoming,
             )?;
 
+            // Insert phi for iteration variable if ForRange
+            if let Some((_, iter_phi_id)) = iter_var_phi {
+                let zero = constructor.const_i32(0);
+                let iter_next = iter_next_val.unwrap();
+                let iter_incoming = vec![(zero, pre_header_block), (iter_next, continue_block_id)];
+                constructor.builder.insert_phi(
+                    InsertPoint::Begin,
+                    constructor.i32_type,
+                    Some(iter_phi_id),
+                    iter_incoming,
+                )?;
+            }
+
             // Deselect block before continuing
             constructor.builder.select_block(None)?;
 
@@ -1657,6 +1690,9 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             constructor.env.remove(loop_var.as_str());
             for (name, _) in init_bindings.iter() {
                 constructor.env.remove(name.as_str());
+            }
+            if let Some((ref var_name, _)) = iter_var_phi {
+                constructor.env.remove(var_name.as_str());
             }
 
             // Return the loop_var phi value as loop result
