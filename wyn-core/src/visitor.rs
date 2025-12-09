@@ -66,7 +66,7 @@ pub trait Visitor: Sized {
         ControlFlow::Continue(())
     }
 
-    fn visit_expr_identifier(&mut self, _id: NodeId, _name: &str) -> ControlFlow<Self::Break> {
+    fn visit_expr_identifier(&mut self, _id: NodeId, _quals: &[String], _name: &str) -> ControlFlow<Self::Break> {
         ControlFlow::Continue(())
     }
 
@@ -345,7 +345,7 @@ pub fn walk_expression<V: Visitor>(v: &mut V, e: &Expression) -> ControlFlow<V::
         ExprKind::BoolLiteral(b) => v.visit_expr_bool_literal(id, *b),
         ExprKind::StringLiteral(_) => ControlFlow::Continue(()),
         ExprKind::Unit => ControlFlow::Continue(()),
-        ExprKind::Identifier(name) => v.visit_expr_identifier(id, name),
+        ExprKind::Identifier(quals, name) => v.visit_expr_identifier(id, quals, name),
         ExprKind::ArrayLiteral(elements) => v.visit_expr_array_literal(id, elements),
         ExprKind::ArrayIndex(array, index) => v.visit_expr_array_index(id, array, index),
         ExprKind::ArrayWith { array, index, value } => {
@@ -362,8 +362,6 @@ pub fn walk_expression<V: Visitor>(v: &mut V, e: &Expression) -> ControlFlow<V::
         ExprKind::If(if_expr) => v.visit_expr_if(id, if_expr),
 
         ExprKind::TypeHole => ControlFlow::Continue(()),
-        ExprKind::OperatorSection(_) => ControlFlow::Continue(()),
-        ExprKind::QualifiedName(_, _) => ControlFlow::Continue(()), // Just a name reference
         ExprKind::UnaryOp(_, operand) => v.visit_expression(operand),
         ExprKind::Loop(loop_expr) => {
             // Visit the loop condition/iterator
@@ -389,10 +387,6 @@ pub fn walk_expression<V: Visitor>(v: &mut V, e: &Expression) -> ControlFlow<V::
         ExprKind::Range(range_expr) => {
             v.visit_expression(&range_expr.start)?;
             v.visit_expression(&range_expr.end)
-        }
-        ExprKind::Pipe(left, right) => {
-            v.visit_expression(left)?;
-            v.visit_expression(right)
         }
         ExprKind::TypeAscription(expr, _) => v.visit_expression(expr),
         ExprKind::TypeCoercion(expr, _) => v.visit_expression(expr),

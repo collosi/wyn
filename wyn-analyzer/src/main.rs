@@ -272,7 +272,7 @@ fn find_in_expr(expr: &ast::Expression, line: usize, col: usize, best: &mut Opti
     use ast::ExprKind::*;
     match &expr.kind {
         IntLiteral(_) | FloatLiteral(_) | BoolLiteral(_) | StringLiteral(_) | Unit => {}
-        Identifier(_) | QualifiedName(_, _) | OperatorSection(_) | TypeHole => {}
+        Identifier(_, _) | TypeHole => {}
         Application(func, args) => {
             find_in_expr(func, line, col, best);
             for arg in args {
@@ -345,10 +345,6 @@ fn find_in_expr(expr: &ast::Expression, line: usize, col: usize, best: &mut Opti
                 find_in_expr(step, line, col, best);
             }
             find_in_expr(&range_expr.end, line, col, best);
-        }
-        Pipe(lhs, rhs) => {
-            find_in_expr(lhs, line, col, best);
-            find_in_expr(rhs, line, col, best);
         }
     }
 }

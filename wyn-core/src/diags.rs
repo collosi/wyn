@@ -317,13 +317,7 @@ impl AstFormatter {
             ExprKind::Unit => {
                 self.write_line("()");
             }
-            ExprKind::Identifier(name) => {
-                self.write_line(name);
-            }
-            ExprKind::OperatorSection(op) => {
-                self.write_line(&format!("({})", op));
-            }
-            ExprKind::QualifiedName(quals, name) => {
+            ExprKind::Identifier(quals, name) => {
                 let qn =
                     if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) };
                 self.write_line(&qn);
@@ -487,11 +481,6 @@ impl AstFormatter {
                     self.write_line(&format!("{}{}{}", start, op, end));
                 }
             }
-            ExprKind::Pipe(lhs, rhs) => {
-                self.write_expression(lhs);
-                self.write_line_no_newline("|> ");
-                self.write_expression(rhs);
-            }
             ExprKind::TypeAscription(inner, ty) => {
                 let inner_str = self.format_simple_expr(inner);
                 self.write_line(&format!("{} : {}", inner_str, ty));
@@ -521,8 +510,7 @@ impl AstFormatter {
                 | ExprKind::BoolLiteral(_)
                 | ExprKind::StringLiteral(_)
                 | ExprKind::Unit
-                | ExprKind::Identifier(_)
-                | ExprKind::QualifiedName(_, _)
+                | ExprKind::Identifier(_, _)
                 | ExprKind::TypeHole
         )
     }
@@ -534,9 +522,7 @@ impl AstFormatter {
             ExprKind::BoolLiteral(b) => b.to_string(),
             ExprKind::StringLiteral(s) => format!("{:?}", s),
             ExprKind::Unit => "()".to_string(),
-            ExprKind::Identifier(name) => name.clone(),
-            ExprKind::OperatorSection(op) => format!("({})", op),
-            ExprKind::QualifiedName(quals, name) => {
+            ExprKind::Identifier(quals, name) => {
                 if quals.is_empty() {
                     name.clone()
                 } else {

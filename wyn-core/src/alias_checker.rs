@@ -276,7 +276,7 @@ impl<'a> Visitor for AliasChecker<'a> {
         ControlFlow::Continue(())
     }
 
-    fn visit_expr_identifier(&mut self, id: NodeId, name: &str) -> ControlFlow<Self::Break> {
+    fn visit_expr_identifier(&mut self, id: NodeId, _quals: &[String], name: &str) -> ControlFlow<Self::Break> {
         if self.node_is_copy_type(id) {
             self.set_result(id, AliasInfo::copy());
         } else if let Some(stores) = self.lookup_variable(name) {
@@ -434,8 +434,8 @@ impl<'a> Visitor for AliasChecker<'a> {
             if param_is_consuming {
                 // Consume the argument's backing stores
                 if !arg_info.stores.is_empty() {
-                    let var_name = if let ExprKind::Identifier(name) = &arg.kind {
-                        name.clone()
+                    let var_name = if let ExprKind::Identifier(quals, name) = &arg.kind {
+                        if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) }
                     } else {
                         format!("<expr>")
                     };

@@ -83,16 +83,16 @@ impl AstConstFolder {
             | ExprKind::BoolLiteral(_)
             | ExprKind::StringLiteral(_)
             | ExprKind::Unit
-            | ExprKind::QualifiedName(_, _)
-            | ExprKind::OperatorSection(_)
             | ExprKind::TypeHole => {
                 // Leaf nodes, nothing to fold
             }
 
-            ExprKind::Identifier(name) => {
-                // Inline known constants
-                if let Some(&val) = self.constants.get(name) {
-                    expr.kind = ExprKind::IntLiteral(val as i32);
+            ExprKind::Identifier(quals, name) => {
+                // Inline known constants (only for unqualified names)
+                if quals.is_empty() {
+                    if let Some(&val) = self.constants.get(name) {
+                        expr.kind = ExprKind::IntLiteral(val as i32);
+                    }
                 }
             }
 
@@ -177,11 +177,6 @@ impl AstConstFolder {
                 self.fold_range(range);
             }
 
-            ExprKind::Pipe(lhs, rhs) => {
-                self.fold_expr(lhs);
-                self.fold_expr(rhs);
-            }
-
             ExprKind::TypeAscription(inner, _) | ExprKind::TypeCoercion(inner, _) => {
                 self.fold_expr(inner);
             }
@@ -264,7 +259,7 @@ impl AstConstFolder {
     fn try_eval_const(&self, expr: &Expression) -> Option<i64> {
         match &expr.kind {
             ExprKind::IntLiteral(n) => Some(*n as i64),
-            ExprKind::Identifier(name) => self.constants.get(name).copied(),
+            ExprKind::Identifier(quals, name) if quals.is_empty() => self.constants.get(name).copied(),
             ExprKind::BinaryOp(op, lhs, rhs) => {
                 let l = self.try_eval_const(lhs)?;
                 let r = self.try_eval_const(rhs)?;
@@ -337,7 +332,7 @@ mod tests {
     fn make_ident(name: &str) -> Expression {
         Expression {
             h: test_header(),
-            kind: ExprKind::Identifier(name.to_string()),
+            kind: ExprKind::Identifier(vec![], name.to_string()),
         }
     }
 

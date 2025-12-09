@@ -873,19 +873,19 @@ impl ModuleManager {
         use crate::ast::ExprKind;
 
         match &mut expr.kind {
-            ExprKind::Identifier(name) => {
+            ExprKind::Identifier(quals, name) => {
                 // Check if this is an intra-module function reference (not shadowed by local binding)
-                if !local_bindings.contains(name) && module_functions.contains(name) {
-                    // Convert to qualified name: next -> rand.next
-                    expr.kind = ExprKind::QualifiedName(vec![module_name.to_string()], name.clone());
+                if quals.is_empty() && !local_bindings.contains(name) && module_functions.contains(name) {
+                    // Convert to qualified identifier: next -> rand.next
+                    *quals = vec![module_name.to_string()];
                 }
             }
             ExprKind::FieldAccess(obj, field) => {
                 // Check if this is module.name pattern
-                if let ExprKind::Identifier(name) = &obj.kind {
-                    if self.known_modules.contains(name) {
-                        // Convert to QualifiedName
-                        expr.kind = ExprKind::QualifiedName(vec![name.clone()], field.clone());
+                if let ExprKind::Identifier(quals, name) = &obj.kind {
+                    if quals.is_empty() && self.known_modules.contains(name) {
+                        // Convert to qualified Identifier
+                        expr.kind = ExprKind::Identifier(vec![name.clone()], field.clone());
                         return;
                     }
                 }
@@ -978,10 +978,6 @@ impl ModuleManager {
                 self.resolve_names_in_expr(&mut range_expr.start, module_name, module_functions, local_bindings);
                 self.resolve_names_in_expr(&mut range_expr.end, module_name, module_functions, local_bindings);
             }
-            ExprKind::Pipe(lhs, rhs) => {
-                self.resolve_names_in_expr(lhs, module_name, module_functions, local_bindings);
-                self.resolve_names_in_expr(rhs, module_name, module_functions, local_bindings);
-            }
             ExprKind::TypeAscription(inner, _) | ExprKind::TypeCoercion(inner, _) => {
                 self.resolve_names_in_expr(inner, module_name, module_functions, local_bindings);
             }
@@ -990,13 +986,11 @@ impl ModuleManager {
                 self.resolve_names_in_expr(body, module_name, module_functions, local_bindings);
             }
             // Leaf expressions - nothing to resolve
-            ExprKind::QualifiedName(_, _)
-            | ExprKind::IntLiteral(_)
+            ExprKind::IntLiteral(_)
             | ExprKind::FloatLiteral(_)
             | ExprKind::BoolLiteral(_)
             | ExprKind::StringLiteral(_)
             | ExprKind::Unit
-            | ExprKind::OperatorSection(_)
             | ExprKind::TypeHole => {}
         }
     }

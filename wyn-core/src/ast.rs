@@ -474,9 +474,7 @@ pub enum ExprKind {
     BoolLiteral(bool),
     StringLiteral(String),
     Unit,
-    Identifier(String),
-    QualifiedName(Vec<String>, String), // quals, name - e.g., f32.sin is (["f32"], "sin")
-    OperatorSection(String),            // e.g., (+), (-), (*) - operator as a value
+    Identifier(Vec<String>, String), // (qualifiers, name) - e.g., ([], "x") or (["f32"], "sin")
     ArrayLiteral(Vec<Expression>),
     VecMatLiteral(Vec<Expression>), // @[...] - vector or matrix literal (type inferred from context)
     ArrayIndex(Box<Expression>, Box<Expression>),
@@ -498,7 +496,6 @@ pub enum ExprKind {
     Loop(LoopExpr),                           // loop expression
     Match(MatchExpr),                         // match expression
     Range(RangeExpr),                         // range expressions: a..b, a..<b, a..>b, a...b
-    Pipe(Box<Expression>, Box<Expression>),   // |> pipe operator
     TypeAscription(Box<Expression>, Type),    // exp : type
     TypeCoercion(Box<Expression>, Type),      // exp :> type
     Assert(Box<Expression>, Box<Expression>), // assert cond exp

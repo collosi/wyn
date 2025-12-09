@@ -184,7 +184,7 @@ fn test_parse_array_index() {
     assert!(matches!(
         &decl.body.kind,
         ExprKind::ArrayIndex(arr, idx)
-            if matches!(arr.kind, ExprKind::Identifier(ref name) if name == "arr")
+            if matches!(arr.kind, ExprKind::Identifier(_, ref name) if name == "arr")
             && matches!(idx.kind, ExprKind::IntLiteral(0))
     ));
 }
@@ -228,7 +228,7 @@ fn test_operator_precedence_and_associativity() {
         &decl.body.kind,
         ExprKind::BinaryOp(outer_op, outer_left, outer_right)
             if outer_op.op == "+"
-            && matches!(outer_right.kind, ExprKind::Identifier(ref f) if f == "f")
+            && matches!(outer_right.kind, ExprKind::Identifier(_, ref f) if f == "f")
             // Left: (a + (b * c)) - (d / e)
             && matches!(
                 &outer_left.kind,
@@ -239,22 +239,22 @@ fn test_operator_precedence_and_associativity() {
                         &sub_right.kind,
                         ExprKind::BinaryOp(div_op, div_left, div_right)
                             if div_op.op == "/"
-                            && matches!(div_left.kind, ExprKind::Identifier(ref d) if d == "d")
-                            && matches!(div_right.kind, ExprKind::Identifier(ref e) if e == "e")
+                            && matches!(div_left.kind, ExprKind::Identifier(_, ref d) if d == "d")
+                            && matches!(div_right.kind, ExprKind::Identifier(_, ref e) if e == "e")
                     )
                     // Left of sub: a + (b * c)
                     && matches!(
                         &sub_left.kind,
                         ExprKind::BinaryOp(add_op, add_left, add_right)
                             if add_op.op == "+"
-                            && matches!(add_left.kind, ExprKind::Identifier(ref a) if a == "a")
+                            && matches!(add_left.kind, ExprKind::Identifier(_, ref a) if a == "a")
                             // Right: b * c
                             && matches!(
                                 &add_right.kind,
                                 ExprKind::BinaryOp(mul_op, mul_left, mul_right)
                                     if mul_op.op == "*"
-                                    && matches!(mul_left.kind, ExprKind::Identifier(ref b) if b == "b")
-                                    && matches!(mul_right.kind, ExprKind::Identifier(ref c) if c == "c")
+                                    && matches!(mul_left.kind, ExprKind::Identifier(_, ref b) if b == "b")
+                                    && matches!(mul_right.kind, ExprKind::Identifier(_, ref c) if c == "c")
                             )
                     )
             )
@@ -412,7 +412,7 @@ fn test_parse_simple_lambda() {
             && lambda.params[0].simple_name() == Some("x")
             && lambda.params[0].pattern_type().is_none()
             && lambda.return_type.is_none()
-            && matches!(lambda.body.kind, ExprKind::Identifier(ref name) if name == "x")
+            && matches!(lambda.body.kind, ExprKind::Identifier(_, ref name) if name == "x")
     ));
 }
 
@@ -481,7 +481,7 @@ fn test_parse_lambda_with_type_annotation() {
             && lambda.params[0].simple_name() == Some("x")
             && lambda.params[0].pattern_type().is_none()
             && lambda.return_type.is_none()
-            && matches!(lambda.body.kind, ExprKind::Identifier(ref name) if name == "x")
+            && matches!(lambda.body.kind, ExprKind::Identifier(_, ref name) if name == "x")
     ));
 }
 
@@ -498,7 +498,7 @@ fn test_parse_lambda_with_multiple_params() {
             && lambda.params[1].simple_name() == Some("y")
             && lambda.params[1].pattern_type().is_none()
             && lambda.return_type.is_none()
-            && matches!(lambda.body.kind, ExprKind::Identifier(ref name) if name == "x")
+            && matches!(lambda.body.kind, ExprKind::Identifier(_, ref name) if name == "x")
     ));
 }
 
@@ -522,7 +522,7 @@ fn test_parse_lambda_with_return_type() {
         // Check body: should be x + 7i32
         assert!(matches!(lambda.body.kind, ExprKind::BinaryOp(_, _, _)));
         if let ExprKind::BinaryOp(_op, left, right) = &lambda.body.kind {
-            assert!(matches!(left.kind, ExprKind::Identifier(ref name) if name == "x"));
+            assert!(matches!(left.kind, ExprKind::Identifier(_, ref name) if name == "x"));
             assert!(matches!(right.kind, ExprKind::IntLiteral(7)));
         }
     } else {
@@ -553,7 +553,7 @@ fn test_parse_lambda_with_typed_parameter() {
         // Check body: should be x + 7i32
         assert!(matches!(lambda.body.kind, ExprKind::BinaryOp(_, _, _)));
         if let ExprKind::BinaryOp(_op, left, right) = &lambda.body.kind {
-            assert!(matches!(left.kind, ExprKind::Identifier(ref name) if name == "x"));
+            assert!(matches!(left.kind, ExprKind::Identifier(_, ref name) if name == "x"));
             assert!(matches!(right.kind, ExprKind::IntLiteral(7)));
         }
     } else {
@@ -688,7 +688,7 @@ fn test_field_access_parsing() {
     assert!(matches!(
         &decl.body.kind,
         ExprKind::FieldAccess(expr, field)
-            if field == "x" && matches!(expr.kind, ExprKind::Identifier(ref name) if name == "v")
+            if field == "x" && matches!(expr.kind, ExprKind::Identifier(_, ref name) if name == "v")
     ));
 }
 
@@ -697,7 +697,7 @@ fn test_simple_identifier_parsing() {
     let decl = single_decl("def x: f32 = y");
 
     assert_eq!(decl.name, "x");
-    assert!(matches!(&decl.body.kind, ExprKind::Identifier(name) if name == "y"));
+    assert!(matches!(&decl.body.kind, ExprKind::Identifier(_, name) if name == "y"));
 }
 
 #[test]
@@ -712,7 +712,7 @@ fn test_vector_field_access_file() {
     };
     assert_eq!(decl1.name, "v");
     assert!(
-        matches!(&decl1.body.kind, ExprKind::Application(func, args) if matches!(&func.kind, ExprKind::Identifier(name) if name == "vec3") && args.len() == 3)
+        matches!(&decl1.body.kind, ExprKind::Application(func, args) if matches!(&func.kind, ExprKind::Identifier(_, name) if name == "vec3") && args.len() == 3)
     );
 
     // Check second declaration: def x: f32 = v.x
@@ -722,7 +722,7 @@ fn test_vector_field_access_file() {
     };
     assert_eq!(decl2.name, "x");
     assert!(
-        matches!(&decl2.body.kind, ExprKind::FieldAccess(expr, field) if field == "x" && matches!(expr.kind, ExprKind::Identifier(ref name) if name == "v"))
+        matches!(&decl2.body.kind, ExprKind::FieldAccess(expr, field) if field == "x" && matches!(expr.kind, ExprKind::Identifier(_, ref name) if name == "v"))
     );
 }
 
@@ -879,7 +879,7 @@ fn test_if_then_else_parsing() {
         ExprKind::If(if_expr)
             if matches!(&if_expr.condition.kind, ExprKind::BinaryOp(op, left, right)
                 if op.op == "=="
-                && matches!(left.kind, ExprKind::Identifier(ref name) if name == "x")
+                && matches!(left.kind, ExprKind::Identifier(_, ref name) if name == "x")
                 && matches!(right.kind, ExprKind::IntLiteral(0))
             )
             && matches!(if_expr.then_branch.kind, ExprKind::IntLiteral(1))
@@ -991,7 +991,7 @@ fn test_parse_function_application_with_array_literal() {
     assert!(matches!(
         &decl.body.kind,
         ExprKind::Application(func, args)
-            if matches!(&func.kind, ExprKind::Identifier(name) if name == "to_vec4")
+            if matches!(&func.kind, ExprKind::Identifier(_, name) if name == "to_vec4")
             && args.len() == 1
             && matches!(&args[0].kind, ExprKind::ArrayLiteral(elements) if elements.len() == 4)
     ));
@@ -1528,7 +1528,7 @@ fn test_parse_simple_field_access() {
 
     match &decl.body.kind {
         ExprKind::FieldAccess(base, field) => {
-            assert!(matches!(&base.kind, ExprKind::Identifier(name) if name == "f32"));
+            assert!(matches!(&base.kind, ExprKind::Identifier(_, name) if name == "f32"));
             assert_eq!(field, "cos");
         }
         _ => panic!("Expected FieldAccess, got {:?}", decl.body.kind),
@@ -1545,7 +1545,7 @@ fn test_parse_qualified_name() {
         ExprKind::Application(func, args) => {
             match &func.kind {
                 ExprKind::FieldAccess(base, field) => {
-                    assert!(matches!(&base.kind, ExprKind::Identifier(name) if name == "f32"));
+                    assert!(matches!(&base.kind, ExprKind::Identifier(_, name) if name == "f32"));
                     assert_eq!(field, "cos");
                 }
                 _ => panic!("Expected FieldAccess, got {:?}", func.kind),
@@ -1569,7 +1569,7 @@ fn test_parse_nested_qualified_name() {
                     // base should be M.N
                     match &base.kind {
                         ExprKind::FieldAccess(inner_base, inner_field) => {
-                            assert!(matches!(&inner_base.kind, ExprKind::Identifier(name) if name == "M"));
+                            assert!(matches!(&inner_base.kind, ExprKind::Identifier(_, name) if name == "M"));
                             assert_eq!(inner_field, "N");
                         }
                         _ => panic!("Expected nested FieldAccess"),
@@ -1653,7 +1653,7 @@ fn test_ambiguity_field_access_parses_as_field() {
     let decl = single_decl("def test(): i32 = x.y");
 
     assert!(matches!(&decl.body.kind, ExprKind::FieldAccess(base, field)
-        if matches!(&base.kind, ExprKind::Identifier(name) if name == "x") && field == "y"));
+        if matches!(&base.kind, ExprKind::Identifier(_, name) if name == "x") && field == "y"));
 }
 
 #[test]
@@ -1662,7 +1662,7 @@ fn test_ambiguity_array_index_with_space_is_function_call() {
     let decl = single_decl("def test(): i32 = f [1, 2, 3]");
 
     assert!(matches!(&decl.body.kind, ExprKind::Application(func, args)
-        if matches!(&func.kind, ExprKind::Identifier(name) if name == "f") && args.len() == 1 && matches!(&args[0].kind, ExprKind::ArrayLiteral(_))));
+        if matches!(&func.kind, ExprKind::Identifier(_, name) if name == "f") && args.len() == 1 && matches!(&args[0].kind, ExprKind::ArrayLiteral(_))));
 }
 
 #[test]
@@ -1671,7 +1671,7 @@ fn test_ambiguity_array_index_without_space_is_indexing() {
     let decl = single_decl("def test(): i32 = f[0]");
 
     assert!(matches!(&decl.body.kind, ExprKind::ArrayIndex(array, _)
-        if matches!(&array.kind, ExprKind::Identifier(name) if name == "f")));
+        if matches!(&array.kind, ExprKind::Identifier(_, name) if name == "f")));
 }
 
 #[test]
@@ -1680,7 +1680,7 @@ fn test_ambiguity_negative_in_parens() {
     let decl = single_decl("def test(): i32 = (-x)");
 
     assert!(matches!(&decl.body.kind, ExprKind::UnaryOp(op, operand)
-        if op.op == "-" && matches!(&operand.kind, ExprKind::Identifier(name) if name == "x")));
+        if op.op == "-" && matches!(&operand.kind, ExprKind::Identifier(_, name) if name == "x")));
 }
 
 #[test]
@@ -1725,18 +1725,20 @@ fn test_ambiguity_type_ascription() {
     let decl = single_decl("def test(): i32 = x : i32");
 
     assert!(matches!(&decl.body.kind, ExprKind::TypeAscription(inner, ty)
-        if matches!(&inner.kind, ExprKind::Identifier(name) if name == "x")
+        if matches!(&inner.kind, ExprKind::Identifier(_, name) if name == "x")
         && matches!(ty, Type::Constructed(TypeName::Int(32), _))));
 }
 
 #[test]
 fn test_ambiguity_pipe_operator() {
-    // x |> f should parse as pipe operation
+    // x |> f should desugar to f(x) at parse time
     let decl = single_decl("def test(): i32 = x |> f");
 
-    assert!(matches!(&decl.body.kind, ExprKind::Pipe(left, right)
-        if matches!(&left.kind, ExprKind::Identifier(l) if l == "x")
-        && matches!(&right.kind, ExprKind::Identifier(r) if r == "f")));
+    // Pipe is desugared: x |> f => f(x) = Application(f, [x])
+    assert!(matches!(&decl.body.kind, ExprKind::Application(func, args)
+        if matches!(&func.kind, ExprKind::Identifier(_, f) if f == "f")
+        && args.len() == 1
+        && matches!(&args[0].kind, ExprKind::Identifier(_, x) if x == "x")));
 }
 
 #[test]
@@ -1766,8 +1768,8 @@ fn test_function_call_with_and_without_parens() {
             match (&d1.body.kind, &d2.body.kind) {
                 (ExprKind::Application(func1, args1), ExprKind::Application(func2, args2)) => {
                     // Both should call vec3 with 3 arguments
-                    assert!(matches!(&func1.kind, ExprKind::Identifier(name) if name == "vec3"));
-                    assert!(matches!(&func2.kind, ExprKind::Identifier(name) if name == "vec3"));
+                    assert!(matches!(&func1.kind, ExprKind::Identifier(_, name) if name == "vec3"));
+                    assert!(matches!(&func2.kind, ExprKind::Identifier(_, name) if name == "vec3"));
                     assert_eq!(args1.len(), 3);
                     assert_eq!(args2.len(), 3);
                 }
@@ -1834,7 +1836,7 @@ def main : i32 =
         assert_eq!(main_decl.name, "main");
 
         // The identifier should be on line 6
-        if let ExprKind::Identifier(name) = &main_decl.body.kind {
+        if let ExprKind::Identifier(_, name) = &main_decl.body.kind {
             assert_eq!(name, "sum");
             assert_eq!(
                 main_decl.body.h.span.start_line, 6,
@@ -1971,14 +1973,14 @@ def test : f32 = myfunc arg1 arg2 (x + y)
     // The body should be a function call
     match &decl.body.kind {
         ExprKind::Application(func, args) => {
-            assert!(matches!(&func.kind, ExprKind::Identifier(name) if name == "myfunc"));
+            assert!(matches!(&func.kind, ExprKind::Identifier(_, name) if name == "myfunc"));
             assert_eq!(args.len(), 3, "Expected 3 arguments to myfunc");
 
             // First arg: arg1 (identifier)
-            assert!(matches!(args[0].kind, ExprKind::Identifier(ref name) if name == "arg1"));
+            assert!(matches!(args[0].kind, ExprKind::Identifier(_, ref name) if name == "arg1"));
 
             // Second arg: arg2 (identifier)
-            assert!(matches!(args[1].kind, ExprKind::Identifier(ref name) if name == "arg2"));
+            assert!(matches!(args[1].kind, ExprKind::Identifier(_, ref name) if name == "arg2"));
 
             // Third arg: (x + y) (binary operation)
             assert!(matches!(args[2].kind, ExprKind::BinaryOp(_, _, _)));
@@ -2008,7 +2010,7 @@ def test (t:f32) : vec3f32 = mix3v a b (t*2.0f32 - 1.0f32)
     // The body should be: mix3v a b (t*2.0f32 - 1.0f32)
     match &test_decl.body.kind {
         ExprKind::Application(func, args) => {
-            assert!(matches!(&func.kind, ExprKind::Identifier(name) if name == "mix3v"));
+            assert!(matches!(&func.kind, ExprKind::Identifier(_, name) if name == "mix3v"));
             assert_eq!(args.len(), 3, "Expected 3 arguments to mix3v");
 
             // Third argument should be a binary op expression
@@ -2045,7 +2047,7 @@ def test : [12]i32 =
             // The body of the let should be: map (\e -> e[0]) edges
             match &let_in.body.kind {
                 ExprKind::Application(func, args) => {
-                    assert!(matches!(&func.kind, ExprKind::Identifier(name) if name == "map"));
+                    assert!(matches!(&func.kind, ExprKind::Identifier(_, name) if name == "map"));
                     assert_eq!(args.len(), 2, "map should have 2 arguments");
 
                     // First argument should be a lambda
@@ -2059,7 +2061,7 @@ def test : [12]i32 =
                                 ExprKind::ArrayIndex(arr, idx) => {
                                     // arr should be identifier 'e'
                                     match &arr.kind {
-                                        ExprKind::Identifier(name) => assert_eq!(name, "e"),
+                                        ExprKind::Identifier(_, name) => assert_eq!(name, "e"),
                                         other => panic!("Expected Identifier, got {:?}", other),
                                     }
                                     // idx should be int literal 0
@@ -2076,7 +2078,7 @@ def test : [12]i32 =
 
                     // Second argument should be identifier 'edges'
                     match &args[1].kind {
-                        ExprKind::Identifier(name) => assert_eq!(name, "edges"),
+                        ExprKind::Identifier(_, name) => assert_eq!(name, "edges"),
                         other => panic!("Expected Identifier as second argument, got {:?}", other),
                     }
                 }
@@ -2107,23 +2109,16 @@ def test : i32 =
         _ => panic!("Expected Decl"),
     };
 
-    // Body should be a loop with pipe in its body (not pipe outside loop)
+    // Body should be a loop with desugared pipe (Application) in its body
+    // Pipe is desugared: tuple |> lambda => lambda(tuple) = Application(lambda, [tuple])
     // This is correct per SPECIFICATION.md line 559
     match &decl.body.kind {
         ExprKind::Loop(loop_expr) => {
-            // Loop body should be a pipe expression
+            // Loop body should be an Application (desugared from pipe)
             match &loop_expr.body.kind {
-                ExprKind::Pipe(left, right) => {
-                    // Left side should be the tuple
-                    match &left.kind {
-                        ExprKind::Tuple(elements) => {
-                            assert_eq!(elements.len(), 2);
-                        }
-                        other => panic!("Expected Tuple on left side of pipe, got {:?}", other),
-                    }
-
-                    // Right side should be the lambda
-                    match &right.kind {
+                ExprKind::Application(func, args) => {
+                    // func should be the lambda
+                    match &func.kind {
                         ExprKind::Lambda(lambda) => {
                             // Lambda should have tuple pattern parameter
                             assert_eq!(lambda.params.len(), 1);
@@ -2144,10 +2139,19 @@ def test : i32 =
                                 other => panic!("Expected Tuple pattern, got {:?}", other),
                             }
                         }
-                        other => panic!("Expected Lambda on right side of pipe, got {:?}", other),
+                        other => panic!("Expected Lambda as func in Application, got {:?}", other),
+                    }
+
+                    // args[0] should be the tuple
+                    assert_eq!(args.len(), 1);
+                    match &args[0].kind {
+                        ExprKind::Tuple(elements) => {
+                            assert_eq!(elements.len(), 2);
+                        }
+                        other => panic!("Expected Tuple as arg in Application, got {:?}", other),
                     }
                 }
-                other => panic!("Expected Pipe in loop body, got {:?}", other),
+                other => panic!("Expected Application (desugared pipe) in loop body, got {:?}", other),
             }
         }
         other => panic!("Expected Loop, got {:?}", other),
@@ -2239,7 +2243,7 @@ fn test_parse_mul_mat_vec_application() {
     match &decl.body.kind {
         ExprKind::Application(func, args) => {
             // func should be "mul"
-            if let ExprKind::Identifier(name) = &func.kind {
+            if let ExprKind::Identifier(_, name) = &func.kind {
                 assert_eq!(name, "mul", "Expected function to be 'mul'");
             } else {
                 panic!("Expected Identifier, got {:?}", func.kind);
@@ -2249,7 +2253,7 @@ fn test_parse_mul_mat_vec_application() {
             assert_eq!(args.len(), 2, "Expected 2 arguments to mul");
 
             // First arg should be identifier "mat"
-            if let ExprKind::Identifier(name) = &args[0].kind {
+            if let ExprKind::Identifier(_, name) = &args[0].kind {
                 assert_eq!(name, "mat", "First arg should be 'mat'");
             } else {
                 panic!(
@@ -2260,7 +2264,7 @@ fn test_parse_mul_mat_vec_application() {
 
             // Second arg should be an Application of vec4 to 4 args
             if let ExprKind::Application(vec_func, vec_args) = &args[1].kind {
-                if let ExprKind::Identifier(vec_name) = &vec_func.kind {
+                if let ExprKind::Identifier(_, vec_name) = &vec_func.kind {
                     assert_eq!(vec_name, "vec4", "Expected vec4 constructor");
                     assert_eq!(vec_args.len(), 4, "vec4 should have 4 arguments");
                 } else {
@@ -2282,23 +2286,31 @@ fn test_operator_section_in_expression() {
     let input = "def test = map (+) [1, 2, 3]";
     let decl = single_decl(input);
 
-    // Should parse successfully - map applied to operator section (+) and array
+    // Should parse successfully - map applied to desugared operator section (lambda) and array
+    // (+) desugars to \x y -> x + y
     match &decl.body.kind {
         ExprKind::Application(func, args) => {
             // func should be "map"
-            if let ExprKind::Identifier(name) = &func.kind {
+            if let ExprKind::Identifier(_, name) = &func.kind {
                 assert_eq!(name, "map");
             } else {
                 panic!("Expected map identifier, got {:?}", func.kind);
             }
 
-            // First arg should be the operator section (+)
+            // First arg should be the desugared operator section (lambda)
             assert_eq!(args.len(), 2, "map should have 2 arguments");
             match &args[0].kind {
-                ExprKind::OperatorSection(op) => {
-                    assert_eq!(op, "+", "Expected + operator");
+                ExprKind::Lambda(lambda) => {
+                    assert_eq!(lambda.params.len(), 2, "Lambda should have 2 params");
+                    // Body should be x + y
+                    match &lambda.body.kind {
+                        ExprKind::BinaryOp(op, _, _) => {
+                            assert_eq!(op.op, "+", "Expected + operator in lambda body");
+                        }
+                        other => panic!("Expected BinaryOp in lambda body, got {:?}", other),
+                    }
                 }
-                other => panic!("Expected operator section, got {:?}", other),
+                other => panic!("Expected lambda (desugared operator section), got {:?}", other),
             }
         }
         other => panic!("Expected application, got {:?}", other),
@@ -2310,23 +2322,30 @@ fn test_operator_section_direct_application() {
     let input = "def test (x: i32) (y: i32) = (+) x y";
     let decl = single_decl(input);
 
-    // Should parse successfully - operator section directly applied to arguments
+    // Should parse successfully - desugared operator section (lambda) directly applied to arguments
+    // (+) desugars to \x y -> x + y, then applied to x and y
     match &decl.body.kind {
         ExprKind::Application(func, _args) => {
-            // func should be an application of operator section to x
-            if let ExprKind::Application(op_section, first_args) = &func.kind {
+            // func should be an application of lambda to x
+            if let ExprKind::Application(lambda_expr, first_args) = &func.kind {
                 assert_eq!(first_args.len(), 1, "Expected 1 argument in first application");
-                match &op_section.kind {
-                    ExprKind::OperatorSection(op) => {
-                        assert_eq!(op, "+", "Expected + operator");
+                match &lambda_expr.kind {
+                    ExprKind::Lambda(lambda) => {
+                        assert_eq!(lambda.params.len(), 2, "Lambda should have 2 params");
+                        match &lambda.body.kind {
+                            ExprKind::BinaryOp(op, _, _) => {
+                                assert_eq!(op.op, "+", "Expected + operator");
+                            }
+                            other => panic!("Expected BinaryOp in lambda body, got {:?}", other),
+                        }
                     }
-                    other => panic!("Expected operator section, got {:?}", other),
+                    other => panic!("Expected lambda, got {:?}", other),
                 }
-            } else if let ExprKind::OperatorSection(op) = &func.kind {
-                // Alternative: if parser creates Application(OperatorSection, [x, y])
-                assert_eq!(op, "+", "Expected + operator");
+            } else if let ExprKind::Lambda(lambda) = &func.kind {
+                // Alternative: if parser creates Application(Lambda, [x, y])
+                assert_eq!(lambda.params.len(), 2, "Lambda should have 2 params");
             } else {
-                panic!("Expected application or operator section, got {:?}", func.kind);
+                panic!("Expected application or lambda, got {:?}", func.kind);
             }
         }
         other => panic!("Expected application, got {:?}", other),
@@ -2356,7 +2375,7 @@ fn test_negation_of_array_index() {
             match &operand.kind {
                 ExprKind::ArrayIndex(array, index) => {
                     assert!(
-                        matches!(&array.kind, ExprKind::Identifier(name) if name == "s"),
+                        matches!(&array.kind, ExprKind::Identifier(_, name) if name == "s"),
                         "Expected array 's', got {:?}",
                         array.kind
                     );
@@ -2427,7 +2446,7 @@ fn test_ambiguity_field_access_vs_qualified_name() {
     match &decl.body.kind {
         ExprKind::FieldAccess(base, field) => {
             assert!(
-                matches!(&base.kind, ExprKind::Identifier(name) if name == "r"),
+                matches!(&base.kind, ExprKind::Identifier(_, name) if name == "r"),
                 "Base should be identifier 'r', got {:?}",
                 base.kind
             );
@@ -2467,7 +2486,7 @@ fn test_ambiguity_chained_field_access() {
                 ExprKind::FieldAccess(base, field_b) => {
                     assert_eq!(field_b, "b");
                     assert!(
-                        matches!(&base.kind, ExprKind::Identifier(name) if name == "a"),
+                        matches!(&base.kind, ExprKind::Identifier(_, name) if name == "a"),
                         "Base should be 'a', got {:?}",
                         base.kind
                     );

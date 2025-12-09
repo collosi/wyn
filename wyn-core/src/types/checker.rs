@@ -245,7 +245,7 @@ impl TypeChecker {
         // Walk up the FieldAccess chain collecting qualifiers
         loop {
             match &current.kind {
-                ExprKind::Identifier(name) => {
+                ExprKind::Identifier(quals, name) if quals.is_empty() => {
                     // Base case: found the root identifier
                     qualifiers.push(name.clone());
                     qualifiers.reverse();
@@ -1341,38 +1341,58 @@ impl TypeChecker {
             ExprKind::BoolLiteral(_) => Ok(bool_type()),
             ExprKind::StringLiteral(_) => Ok(string()),
             ExprKind::Unit => Ok(unit()),
-            ExprKind::OperatorSection(_op) => {
-                // Operator sections like (+), (-), etc. are functions
-                // Their specific type depends on context and will be resolved via unification
-                // For now, return a polymorphic function type: 'a -> 'a -> 'a
-                let a = self.context.new_variable();
-                let func_type = Type::arrow(a.clone(), Type::arrow(a.clone(), a));
-                Ok(func_type)
-            }
-            ExprKind::Identifier(name) => {
-                debug!("Looking up identifier '{}'", name);
+            ExprKind::Identifier(quals, name) => {
+                let full_name = if quals.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}.{}", quals.join("."), name)
+                };
+
+                debug!("Looking up identifier '{}'", full_name);
                 debug!("Current scope depth: {}", self.scope_stack.depth());
 
-                // First check scope stack for variables
-                if let Some(type_scheme) = self.scope_stack.lookup(name) {
-                    debug!("Found '{}' in scope stack with type: {:?}", name, type_scheme);
+                // For qualified names, check builtins with full name first
+                if !quals.is_empty() {
+                    if let Some(lookup) = self.poly_builtins.get(&full_name) {
+                        use crate::poly_builtins::BuiltinLookup;
+                        let ty = match lookup {
+                            BuiltinLookup::Single(entry) => entry.scheme.instantiate(&mut self.context),
+                            BuiltinLookup::Overloaded(overloads) => overloads.fresh_type(&mut self.context),
+                        };
+                        self.type_table.insert(expr.h.id, polytype::TypeScheme::Monotype(ty.clone()));
+                        return Ok(ty);
+                    }
+
+                    // Try to query from elaborated modules
+                    let module_name = &quals[0];
+                    if let Ok(type_scheme) = self.module_manager.get_module_function_type(module_name, name, &mut self.context) {
+                        debug!("Found '{}' in elaborated module '{}' with type: {:?}", name, module_name, type_scheme);
+                        let ty = type_scheme.instantiate(&mut self.context);
+                        self.type_table.insert(expr.h.id, type_scheme);
+                        return Ok(ty);
+                    }
+                }
+
+                // Check scope stack for variables (use full_name for qualified lookups)
+                if let Some(type_scheme) = self.scope_stack.lookup(&full_name) {
+                    debug!("Found '{}' in scope stack with type: {:?}", full_name, type_scheme);
                     // Instantiate the type scheme to get a concrete type
                     Ok(type_scheme.instantiate(&mut self.context))
-                } else if let Some(lookup) = self.poly_builtins.get(name) {
+                } else if let Some(lookup) = self.poly_builtins.get(&full_name) {
                     // Check polymorphic builtins for polymorphic function types
                     use crate::poly_builtins::BuiltinLookup;
-                    debug!("'{}' is a polymorphic builtin", name);
+                    debug!("'{}' is a polymorphic builtin", full_name);
                     let func_type = match lookup {
                         BuiltinLookup::Single(entry) => entry.scheme.instantiate(&mut self.context),
                         BuiltinLookup::Overloaded(overloads) => overloads.fresh_type(&mut self.context),
                     };
-                    debug!("Built function type for builtin '{}': {:?}", name, func_type);
+                    debug!("Built function type for builtin '{}': {:?}", full_name, func_type);
                     Ok(func_type)
                 } else {
                     // Not found anywhere
-                    debug!("Variable lookup failed for '{}' - not in scope or builtins", name);
+                    debug!("Variable lookup failed for '{}' - not in scope or builtins", full_name);
                     debug!("Scope stack contents: {:?}", self.scope_stack);
-                    Err(err_undef_at!(expr.h.span, "{}", name))
+                    Err(err_undef_at!(expr.h.span, "{}", full_name))
                 }
             }
             ExprKind::ArrayLiteral(elements) => {
@@ -1666,10 +1686,15 @@ impl TypeChecker {
             ExprKind::Application(func, args) => {
                 // Check if the function is an overloaded builtin identifier
                 // If so, perform overload resolution based on argument types
-                if let ExprKind::Identifier(name) = &func.kind {
+                if let ExprKind::Identifier(quals, name) = &func.kind {
+                    let full_name = if quals.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}.{}", quals.join("."), name)
+                    };
                     use crate::poly_builtins::BuiltinLookup;
                     // Clone entries to release the borrow on self.poly_builtins
-                    let overload_entries = match self.poly_builtins.get(name) {
+                    let overload_entries = match self.poly_builtins.get(&full_name) {
                         Some(BuiltinLookup::Overloaded(overload_set)) => {
                             Some(overload_set.entries().to_vec())
                         }
@@ -1956,48 +1981,6 @@ impl TypeChecker {
                 Ok(then_ty)
             }
 
-            ExprKind::QualifiedName(quals, name) => {
-                // Qualified name like f32.sum (module function) or f32.sqrt (builtin)
-                let full_name = if quals.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{}.{}", quals.join("."), name)
-                };
-
-                debug!("Looking up qualified name '{}'", full_name);
-
-                // Check if it's a polymorphic builtin first
-                if let Some(lookup) = self.poly_builtins.get(&full_name) {
-                    use crate::poly_builtins::BuiltinLookup;
-                    let ty = match lookup {
-                        BuiltinLookup::Single(entry) => entry.scheme.instantiate(&mut self.context),
-                        BuiltinLookup::Overloaded(overloads) => overloads.fresh_type(&mut self.context),
-                    };
-                    self.type_table.insert(expr.h.id, polytype::TypeScheme::Monotype(ty.clone()));
-                    return Ok(ty);
-                }
-
-                // Try to query from elaborated modules
-                if !quals.is_empty() {
-                    let module_name = &quals[0];
-                    if let Ok(type_scheme) = self.module_manager.get_module_function_type(module_name, name, &mut self.context) {
-                        debug!("Found '{}' in elaborated module '{}' with type: {:?}", name, module_name, type_scheme);
-                        let ty = type_scheme.instantiate(&mut self.context);
-                        self.type_table.insert(expr.h.id, type_scheme);
-                        return Ok(ty);
-                    }
-                }
-
-                // Look up in scope stack (for module functions like f32.sum)
-                if let Some(type_scheme) = self.scope_stack.lookup(&full_name) {
-                    debug!("Found '{}' in scope stack with type: {:?}", full_name, type_scheme);
-                    Ok(type_scheme.instantiate(&mut self.context))
-                } else {
-                    debug!("Qualified name '{}' not found in scope or builtins", full_name);
-                    Err(err_undef_at!(expr.h.span, "{}", full_name))
-                }
-            }
-
             ExprKind::UnaryOp(op, operand) => {
                 let operand_type = self.infer_expression(operand)?;
                 let bool_ty = Type::Constructed(TypeName::Str("bool"), vec![]);
@@ -2095,26 +2078,6 @@ impl TypeChecker {
 
             ExprKind::Range(_) => {
                 todo!("Range not yet implemented in type checker")
-            }
-
-            ExprKind::Pipe(left, right) => {
-                // a |> f desugars to f(a)
-                // Type check left to get argument type
-                let arg_type = self.infer_expression(left)?;
-
-                // Type check right (the function)
-                let func_type = self.infer_expression(right)?;
-
-                // Create a fresh result type variable
-                let result_type = self.context.new_variable();
-
-                // Unify func_type with (arg_type -> result_type)
-                let expected_func_type = function(arg_type, result_type.clone());
-                self.context.unify(&func_type, &expected_func_type).map_err(|e| {
-                    err_type_at!(expr.h.span, "Pipe operator type error: {:?}", e)
-                })?;
-
-                Ok(result_type)
             }
 
             ExprKind::TypeAscription(expr, ascribed_ty) => {

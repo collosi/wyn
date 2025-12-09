@@ -1253,8 +1253,8 @@ impl Parser {
             // Build the appropriate operation with span from left to right
             let span = left.h.span.merge(&right.h.span);
             left = if op_string == "|>" {
-                // Pipe operator creates a Pipe node
-                self.node_counter.mk_node(ExprKind::Pipe(Box::new(left), Box::new(right)), span)
+                // Desugar pipe: a |> f  =>  f(a)
+                self.node_counter.mk_node(ExprKind::Application(Box::new(right), vec![left]), span)
             } else {
                 // Regular binary operation
                 self.node_counter.mk_node(
@@ -1464,7 +1464,7 @@ impl Parser {
                 let name = name.clone();
                 let span = self.current_span();
                 self.advance();
-                Ok(self.node_counter.mk_node(ExprKind::Identifier(name), span))
+                Ok(self.node_counter.mk_node(ExprKind::Identifier(vec![], name), span))
             }
             Some(Token::LeftBracket) | Some(Token::LeftBracketSpaced) => self.parse_array_literal(),
             Some(Token::AtBracket) => self.parse_vec_mat_literal(),
@@ -1482,13 +1482,36 @@ impl Parser {
 
                 // Check for operator section: (+), (-), (*), etc.
                 // Use peek2 to check if we have (BinOp, RightParen) pattern
+                // Desugar to lambda: (+) => \x y -> x + y
                 if let Some((Token::BinOp(op), Token::RightParen)) = self.peek2() {
                     let op = op.clone();
                     self.advance(); // consume operator
                     self.advance(); // consume )
                     let end_span = self.previous_span();
                     let span = start_span.merge(&end_span);
-                    return Ok(self.node_counter.mk_node(ExprKind::OperatorSection(op), span));
+
+                    // Create patterns for parameters: x, y
+                    let x_pattern = self.node_counter.mk_node(PatternKind::Name("x".to_string()), span);
+                    let y_pattern = self.node_counter.mk_node(PatternKind::Name("y".to_string()), span);
+
+                    // Create identifier expressions for body: x, y
+                    let x_expr = self.node_counter.mk_node(ExprKind::Identifier(vec![], "x".to_string()), span);
+                    let y_expr = self.node_counter.mk_node(ExprKind::Identifier(vec![], "y".to_string()), span);
+
+                    // Create body: x op y
+                    let body = self.node_counter.mk_node(
+                        ExprKind::BinaryOp(BinaryOp { op }, Box::new(x_expr), Box::new(y_expr)),
+                        span
+                    );
+
+                    // Create lambda: \x y -> x op y
+                    let lambda = LambdaExpr {
+                        params: vec![x_pattern, y_pattern],
+                        return_type: None,
+                        body: Box::new(body),
+                    };
+
+                    return Ok(self.node_counter.mk_node(ExprKind::Lambda(lambda), span));
                 }
 
                 // Parse first expression

@@ -786,112 +786,13 @@ impl Flattener {
                 StaticValue::Dyn { binding_id: 0 },
             ),
             ExprKind::Unit => (mir::ExprKind::Unit, StaticValue::Dyn { binding_id: 0 }),
-            ExprKind::Identifier(name) => {
-                // Look up static value for this variable
-                let sv =
-                    self.static_values.lookup(name).cloned().unwrap_or(StaticValue::Dyn { binding_id: 0 });
-                (mir::ExprKind::Var(name.clone()), sv)
-            }
-            ExprKind::QualifiedName(quals, name) => {
+            ExprKind::Identifier(quals, name) => {
                 let full_name =
                     if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) };
-                (mir::ExprKind::Var(full_name), StaticValue::Dyn { binding_id: 0 })
-            }
-            ExprKind::OperatorSection(op) => {
-                // Convert operator section to a lambda: (+) becomes \x y -> x + y
-                // Generate function name
-                let id = self.fresh_id();
-                let enclosing = self.enclosing_decl_stack.last().map(|s| s.as_str()).unwrap_or("anon");
-                let func_name = format!("_w_op_{}_{}", enclosing, id);
-
-                // Register lambda with arity 2 (binary operators)
-                let arity = 2;
-                self.add_lambda(func_name.clone(), arity);
-
-                // Get the type of the operator section to determine parameter types
-                let op_type = self.get_expr_type(expr);
-
-                // Extract parameter types from the function type 'a -> 'a -> 'b
-                let (param_type, ret_type) = if let Some((param1, rest)) = types::as_arrow(&op_type) {
-                    if let Some((_param2, ret)) = types::as_arrow(rest) {
-                        // Binary operator: a -> a -> b
-                        (param1.clone(), ret.clone())
-                    } else {
-                        bail_type_at!(
-                            span,
-                            "Operator section has unexpected type structure: expected a -> a -> b, got {:?}",
-                            op_type
-                        );
-                    }
-                } else {
-                    bail_type_at!(
-                        span,
-                        "Operator section must have function type, got {:?}",
-                        op_type
-                    );
-                };
-
-                // Build the closure with no captures (empty)
-                // The closure type is an empty tuple (no captures)
-                let closure_type = types::tuple(vec![]);
-
-                // Build parameters: closure, x, y
-                let params = vec![
-                    mir::Param {
-                        name: "_w_closure".to_string(),
-                        ty: closure_type.clone(),
-                        is_consumed: false,
-                    },
-                    mir::Param {
-                        name: "x".to_string(),
-                        ty: param_type.clone(),
-                        is_consumed: false,
-                    },
-                    mir::Param {
-                        name: "y".to_string(),
-                        ty: param_type.clone(),
-                        is_consumed: false,
-                    },
-                ];
-
-                // Build the body: x <op> y
-                let x_var = self.mk_expr(param_type.clone(), mir::ExprKind::Var("x".to_string()), span);
-                let y_var = self.mk_expr(param_type.clone(), mir::ExprKind::Var("y".to_string()), span);
-                let body = self.mk_expr(
-                    ret_type.clone(),
-                    mir::ExprKind::BinOp {
-                        op: op.clone(),
-                        lhs: Box::new(x_var),
-                        rhs: Box::new(y_var),
-                    },
-                    span,
-                );
-
-                // Create the generated function
-                let func = mir::Def::Function {
-                    id: self.next_node_id(),
-                    name: func_name.clone(),
-                    params,
-                    ret_type,
-                    attributes: vec![],
-                    body,
-                    span,
-                };
-                self.generated_functions.push(func);
-
-                // Return the closure with static value indicating it's a known closure
-                let sv = StaticValue::Closure {
-                    lam_name: func_name.clone(),
-                    binding_id: 0,
-                };
-
-                (
-                    mir::ExprKind::Closure {
-                        lambda_name: func_name,
-                        captures: vec![],
-                    },
-                    sv,
-                )
+                // Look up static value for this variable
+                let sv =
+                    self.static_values.lookup(&full_name).cloned().unwrap_or(StaticValue::Dyn { binding_id: 0 });
+                (mir::ExprKind::Var(full_name), sv)
             }
             ExprKind::BinaryOp(op, lhs, rhs) => {
                 let (lhs, _) = self.flatten_expr(lhs)?;
@@ -1086,26 +987,6 @@ impl Flattener {
                 )
             }
             ExprKind::Loop(loop_expr) => self.flatten_loop(loop_expr, span)?,
-            ExprKind::Pipe(lhs, rhs) => {
-                // a |> f  =>  f(a)
-                let (lhs_flat, _) = self.flatten_expr(lhs)?;
-                // Treat rhs as a function to apply to lhs
-                match &rhs.kind {
-                    ExprKind::Identifier(name) => (
-                        mir::ExprKind::Call {
-                            func: name.clone(),
-                            args: vec![lhs_flat],
-                        },
-                        StaticValue::Dyn { binding_id: 0 },
-                    ),
-                    _ => {
-                        // General case: application
-                        let (_rhs_flat, _) = self.flatten_expr(rhs)?;
-                        // This would need closure calling, simplified for now
-                        bail_flatten!("Complex pipe expressions not yet supported");
-                    }
-                }
-            }
             ExprKind::TypeAscription(inner, _) | ExprKind::TypeCoercion(inner, _) => {
                 // Type annotations don't affect runtime, just flatten inner
                 return self.flatten_expr(inner);
@@ -1418,8 +1299,7 @@ impl Flattener {
     /// Find the type of a variable by searching for its use in an expression
     fn find_var_type_in_expr(&self, expr: &Expression, var_name: &str) -> Option<Type> {
         match &expr.kind {
-            ExprKind::Identifier(name) if name == var_name => Some(self.get_expr_type(expr)),
-            ExprKind::OperatorSection(_) => None,
+            ExprKind::Identifier(quals, name) if quals.is_empty() && name == var_name => Some(self.get_expr_type(expr)),
             ExprKind::BinaryOp(_, lhs, rhs) => self
                 .find_var_type_in_expr(lhs, var_name)
                 .or_else(|| self.find_var_type_in_expr(rhs, var_name)),
@@ -1652,7 +1532,7 @@ impl Flattener {
 
         // Check if this is applying a known function name
         match &func.kind {
-            ExprKind::Identifier(name) => {
+            ExprKind::Identifier(quals, name) => {
                 // Check if the identifier is bound to a known closure
                 if let StaticValue::Closure { lam_name, .. } = func_sv {
                     // Direct call to the lambda function with closure as first argument
@@ -1666,8 +1546,11 @@ impl Flattener {
                         StaticValue::Dyn { binding_id: 0 },
                     ))
                 } else {
+                    let full_name =
+                        if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) };
+
                     // Desugar overloaded functions based on argument types
-                    let desugared_name = self.desugar_function_name(name, args)?;
+                    let desugared_name = self.desugar_function_name(&full_name, args)?;
 
                     // Check if this is a partial application (result type is Arrow)
                     if Self::as_arrow_type(result_type).is_some() {
@@ -1683,25 +1566,6 @@ impl Flattener {
                             StaticValue::Dyn { binding_id: 0 },
                         ))
                     }
-                }
-            }
-            // Handle qualified names like f32.sum (these come from name resolution)
-            ExprKind::QualifiedName(quals, name) => {
-                let full_name =
-                    if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) };
-
-                // Check if this is a partial application (result type is Arrow)
-                if Self::as_arrow_type(result_type).is_some() {
-                    // Partial application: synthesize a lambda
-                    self.synthesize_partial_application(full_name, args_flat, result_type, span)
-                } else {
-                    Ok((
-                        mir::ExprKind::Call {
-                            func: full_name,
-                            args: args_flat,
-                        },
-                        StaticValue::Dyn { binding_id: 0 },
-                    ))
                 }
             }
             // FieldAccess in application position - must be a closure
@@ -1927,8 +1791,9 @@ impl Flattener {
 
     fn collect_free_vars(&self, expr: &Expression, bound: &HashSet<String>, free: &mut HashSet<String>) {
         match &expr.kind {
-            ExprKind::Identifier(name) => {
-                if !bound.contains(name) && !self.builtins.contains(name) {
+            ExprKind::Identifier(quals, name) => {
+                // Only unqualified names can be free variables
+                if quals.is_empty() && !bound.contains(name) && !self.builtins.contains(name) {
                     free.insert(name.clone());
                 }
             }
@@ -1937,9 +1802,7 @@ impl Flattener {
             | ExprKind::BoolLiteral(_)
             | ExprKind::StringLiteral(_)
             | ExprKind::Unit
-            | ExprKind::OperatorSection(_)
             | ExprKind::TypeHole => {}
-            ExprKind::QualifiedName(_, _) => {}
             ExprKind::BinaryOp(_, lhs, rhs) => {
                 self.collect_free_vars(lhs, bound, free);
                 self.collect_free_vars(rhs, bound, free);
@@ -2021,10 +1884,6 @@ impl Flattener {
                     }
                 }
                 self.collect_free_vars(&loop_expr.body, &extended, free);
-            }
-            ExprKind::Pipe(lhs, rhs) => {
-                self.collect_free_vars(lhs, bound, free);
-                self.collect_free_vars(rhs, bound, free);
             }
             ExprKind::TypeAscription(inner, _) | ExprKind::TypeCoercion(inner, _) => {
                 self.collect_free_vars(inner, bound, free);

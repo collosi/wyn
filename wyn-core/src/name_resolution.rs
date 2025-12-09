@@ -69,14 +69,14 @@ impl NameResolver {
         match &mut expr.kind {
             ExprKind::FieldAccess(obj, field) => {
                 // Check if this is module.name pattern
-                if let ExprKind::Identifier(name) = &obj.kind {
-                    if self.module_manager.is_known_module(name) {
+                if let ExprKind::Identifier(quals, name) = &obj.kind {
+                    if quals.is_empty() && self.module_manager.is_known_module(name) {
                         // Build the qualified name
                         let module = name.clone();
                         let func_name = field.clone();
 
-                        // Rewrite to QualifiedName
-                        expr.kind = ExprKind::QualifiedName(vec![module.clone()], func_name);
+                        // Rewrite to qualified Identifier
+                        expr.kind = ExprKind::Identifier(vec![module.clone()], func_name);
                         return Ok(());
                     }
                 }
@@ -150,10 +150,6 @@ impl NameResolver {
                     self.resolve_expr(&mut case.body)?;
                 }
             }
-            ExprKind::Pipe(lhs, rhs) => {
-                self.resolve_expr(lhs)?;
-                self.resolve_expr(rhs)?;
-            }
             ExprKind::TypeAscription(e, _) | ExprKind::TypeCoercion(e, _) => {
                 self.resolve_expr(e)?;
             }
@@ -174,9 +170,7 @@ impl NameResolver {
             | ExprKind::BoolLiteral(_)
             | ExprKind::StringLiteral(_)
             | ExprKind::Unit
-            | ExprKind::Identifier(_)
-            | ExprKind::OperatorSection(_)
-            | ExprKind::QualifiedName(_, _)
+            | ExprKind::Identifier(_, _)
             | ExprKind::TypeHole => {}
         }
         Ok(())
