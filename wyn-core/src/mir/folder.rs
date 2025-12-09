@@ -328,6 +328,7 @@ pub fn walk_program<V: MirFolder>(v: &mut V, p: Program, ctx: &mut V::Ctx) -> Re
     let Program {
         defs,
         lambda_registry,
+        local_tables,
     } = p;
 
     let defs = defs.into_iter().map(|d| v.visit_def(d, ctx)).collect::<Result<Vec<_>, _>>()?;
@@ -335,6 +336,7 @@ pub fn walk_program<V: MirFolder>(v: &mut V, p: Program, ctx: &mut V::Ctx) -> Re
     Ok(Program {
         defs,
         lambda_registry,
+        local_tables,
     })
 }
 

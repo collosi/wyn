@@ -225,8 +225,10 @@ pub fn filter_reachable(program: Program) -> Program {
         }
     }
 
+    // TODO: Remap DefIds in local_tables when defs are filtered
     Program {
         defs: filtered_defs,
         lambda_registry: program.lambda_registry,
+        local_tables: program.local_tables,
     }
 }

@@ -9,6 +9,134 @@
 
 use crate::ast::{NodeId, Span, TypeName};
 use polytype::Type;
+use std::fmt;
+
+// =============================================================================
+// Symbol IDs - typed identifiers for MIR entities
+// =============================================================================
+
+/// ID for a local variable or parameter within a function.
+/// These are assigned during flattening and remain stable through transformations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LocalId(pub u32);
+
+impl fmt::Display for LocalId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "_{}", self.0)
+    }
+}
+
+/// ID for a top-level definition (function, constant, uniform, etc.).
+/// This is the index into Program.defs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DefId(pub u32);
+
+impl fmt::Display for DefId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "def{}", self.0)
+    }
+}
+
+/// Enumeration of MIR-level intrinsic operations.
+/// These are structural operations that don't correspond to user-defined functions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IntrinsicId {
+    /// Access tuple element by index: tuple_access(tuple, index)
+    TupleAccess,
+    /// Array indexing: index(array, index)
+    Index,
+    /// Array length: length(array)
+    Length,
+    /// Assertion: assert(condition, message)
+    Assert,
+    /// Record field access: record_access(record, field_name)
+    RecordAccess,
+    /// Record field update: record_update(record, field_name, value)
+    RecordUpdate,
+}
+
+impl IntrinsicId {
+    /// Parse an intrinsic name string into an IntrinsicId.
+    /// Returns None if the name is not a recognized intrinsic.
+    pub fn from_str(name: &str) -> Option<Self> {
+        match name {
+            "tuple_access" => Some(IntrinsicId::TupleAccess),
+            "index" => Some(IntrinsicId::Index),
+            "length" => Some(IntrinsicId::Length),
+            "assert" => Some(IntrinsicId::Assert),
+            "record_access" => Some(IntrinsicId::RecordAccess),
+            "record_update" => Some(IntrinsicId::RecordUpdate),
+            _ => None,
+        }
+    }
+
+    /// Convert an IntrinsicId back to its canonical string name.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            IntrinsicId::TupleAccess => "tuple_access",
+            IntrinsicId::Index => "index",
+            IntrinsicId::Length => "length",
+            IntrinsicId::Assert => "assert",
+            IntrinsicId::RecordAccess => "record_access",
+            IntrinsicId::RecordUpdate => "record_update",
+        }
+    }
+}
+
+impl fmt::Display for IntrinsicId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+// =============================================================================
+// Symbol Tables - metadata for locals and definitions
+// =============================================================================
+
+/// Information about a local variable within a function.
+#[derive(Debug, Clone)]
+pub struct LocalInfo {
+    /// Debug name for error messages and pretty-printing.
+    pub debug_name: String,
+    /// Type of this local.
+    pub ty: Type<TypeName>,
+    /// Source span where this local was defined.
+    pub span: Option<Span>,
+}
+
+/// Symbol table for locals within a single function.
+/// LocalId.0 is used as an index into this table.
+#[derive(Debug, Clone, Default)]
+pub struct LocalTable {
+    /// Information for each local, indexed by LocalId.0.
+    pub locals: Vec<LocalInfo>,
+}
+
+impl LocalTable {
+    /// Create a new empty local table.
+    pub fn new() -> Self {
+        LocalTable { locals: Vec::new() }
+    }
+
+    /// Allocate a new local and return its ID.
+    pub fn alloc(&mut self, debug_name: String, ty: Type<TypeName>, span: Option<Span>) -> LocalId {
+        let id = LocalId(self.locals.len() as u32);
+        self.locals.push(LocalInfo { debug_name, ty, span });
+        id
+    }
+
+    /// Look up info for a local by ID.
+    pub fn get(&self, id: LocalId) -> Option<&LocalInfo> {
+        self.locals.get(id.0 as usize)
+    }
+
+    /// Get the debug name for a local.
+    pub fn name(&self, id: LocalId) -> &str {
+        self.locals.get(id.0 as usize)
+            .map(|info| info.debug_name.as_str())
+            .unwrap_or("<unknown>")
+    }
+}
 
 #[cfg(test)]
 mod tests;
@@ -24,6 +152,32 @@ pub struct Program {
     /// Used for closure dispatch in higher-order builtins like map.
     /// Tags are assigned in order during flattening.
     pub lambda_registry: Vec<(String, usize)>,
+    /// Local symbol tables for each function, keyed by DefId.
+    /// Only populated for Function and EntryPoint defs.
+    pub local_tables: std::collections::HashMap<DefId, LocalTable>,
+}
+
+impl Program {
+    /// Look up a definition by name.
+    pub fn def_by_name(&self, name: &str) -> Option<(DefId, &Def)> {
+        self.defs.iter().enumerate().find_map(|(i, def)| {
+            if def.name() == name {
+                Some((DefId(i as u32), def))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get the name of a definition by DefId.
+    pub fn def_name(&self, id: DefId) -> Option<&str> {
+        self.defs.get(id.0 as usize).map(|d| d.name())
+    }
+
+    /// Get the local table for a function.
+    pub fn local_table(&self, id: DefId) -> Option<&LocalTable> {
+        self.local_tables.get(&id)
+    }
 }
 
 /// A top-level definition (function or constant).
@@ -109,6 +263,30 @@ pub enum Def {
         /// Source location.
         span: Span,
     },
+}
+
+impl Def {
+    /// Get the name of this definition.
+    pub fn name(&self) -> &str {
+        match self {
+            Def::Function { name, .. } => name,
+            Def::Constant { name, .. } => name,
+            Def::Uniform { name, .. } => name,
+            Def::Storage { name, .. } => name,
+            Def::EntryPoint { name, .. } => name,
+        }
+    }
+
+    /// Get the NodeId of this definition.
+    pub fn node_id(&self) -> NodeId {
+        match self {
+            Def::Function { id, .. } => *id,
+            Def::Constant { id, .. } => *id,
+            Def::Uniform { id, .. } => *id,
+            Def::Storage { id, .. } => *id,
+            Def::EntryPoint { id, .. } => *id,
+        }
+    }
 }
 
 /// A function parameter.

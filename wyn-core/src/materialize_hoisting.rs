@@ -31,6 +31,7 @@ pub fn hoist_materializations(program: Program) -> Program {
     Program {
         defs: program.defs.into_iter().map(hoist_in_def).collect(),
         lambda_registry: program.lambda_registry,
+        local_tables: program.local_tables,
     }
 }
 

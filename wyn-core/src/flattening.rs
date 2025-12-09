@@ -630,6 +630,7 @@ impl Flattener {
         Ok(mir::Program {
             defs,
             lambda_registry: self.lambda_registry.clone(),
+            local_tables: std::collections::HashMap::new(),
         })
     }
 

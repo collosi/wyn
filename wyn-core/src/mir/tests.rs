@@ -64,6 +64,7 @@ fn test_simple_function() {
     let program = Program {
         defs: vec![add_fn],
         lambda_registry: vec![],
+        local_tables: std::collections::HashMap::new(),
     };
 
     assert_eq!(program.defs.len(), 1);

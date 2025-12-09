@@ -186,6 +186,8 @@ impl Monomorphizer {
         Ok(Program {
             defs: self.mono_functions,
             lambda_registry: self.lambda_registry,
+            // TODO: Rebuild local_tables for monomorphized functions
+            local_tables: std::collections::HashMap::new(),
         })
     }
 

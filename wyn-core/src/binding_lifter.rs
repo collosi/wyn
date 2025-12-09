@@ -61,6 +61,7 @@ impl BindingLifter {
         Ok(Program {
             defs,
             lambda_registry: program.lambda_registry,
+            local_tables: program.local_tables,
         })
     }
 
