@@ -404,7 +404,6 @@ impl Flattener {
         } else {
             // Function
             let params = self.flatten_params(&d.params)?;
-            let param_attrs = self.extract_param_attributes(&d.params);
             let span = d.body.h.span;
 
             // Register params with binding IDs before flattening body
@@ -422,8 +421,6 @@ impl Flattener {
                 params,
                 ret_type,
                 attributes: self.convert_attributes(&d.attributes),
-                param_attributes: param_attrs,
-                return_attributes: vec![],
                 body,
                 span,
             }
@@ -460,7 +457,6 @@ impl Flattener {
         } else {
             // Function
             let params = self.flatten_params(&d.params)?;
-            let param_attrs = self.extract_param_attributes(&d.params);
             let span = d.body.h.span;
 
             // Register params with binding IDs before flattening body
@@ -478,8 +474,6 @@ impl Flattener {
                 params,
                 ret_type,
                 attributes: self.convert_attributes(&d.attributes),
-                param_attributes: param_attrs,
-                return_attributes: vec![],
                 body,
                 span,
             }
@@ -688,25 +682,6 @@ impl Flattener {
         }
     }
 
-    /// Extract attributes from each parameter pattern
-    fn extract_param_attributes(&self, params: &[ast::Pattern]) -> Vec<Vec<mir::Attribute>> {
-        params.iter().map(|p| self.extract_pattern_attributes(p)).collect()
-    }
-
-    /// Extract attributes from a pattern (handling Attributed and Typed wrappers)
-    fn extract_pattern_attributes(&self, pattern: &ast::Pattern) -> Vec<mir::Attribute> {
-        match &pattern.kind {
-            PatternKind::Attributed(attrs, inner) => {
-                let mut result: Vec<mir::Attribute> =
-                    attrs.iter().map(|a| self.convert_attribute(a)).collect();
-                result.extend(self.extract_pattern_attributes(inner));
-                result
-            }
-            PatternKind::Typed(inner, _) => self.extract_pattern_attributes(inner),
-            _ => vec![],
-        }
-    }
-
     /// Flatten function parameters
     fn flatten_params(&self, params: &[ast::Pattern]) -> Result<Vec<mir::Param>> {
         let mut result = Vec::new();
@@ -899,8 +874,6 @@ impl Flattener {
                     params,
                     ret_type,
                     attributes: vec![],
-                    param_attributes: vec![],
-                    return_attributes: vec![],
                     body,
                     span,
                 };
@@ -1422,8 +1395,6 @@ impl Flattener {
             params,
             ret_type,
             attributes: vec![],
-            param_attributes: vec![],
-            return_attributes: vec![],
             body,
             span,
         };
@@ -1644,8 +1615,6 @@ impl Flattener {
             params,
             ret_type: final_return_type,
             attributes: vec![],
-            param_attributes: vec![],
-            return_attributes: vec![],
             body,
             span,
         };

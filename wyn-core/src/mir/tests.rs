@@ -38,8 +38,6 @@ fn test_simple_function() {
         ],
         ret_type: i32_type(),
         attributes: vec![],
-        param_attributes: vec![],
-        return_attributes: vec![],
         body: Expr::new(
             nc.next(),
             i32_type(),

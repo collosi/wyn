@@ -66,8 +66,6 @@ impl Normalizer {
                 params,
                 ret_type,
                 attributes,
-                param_attributes,
-                return_attributes,
                 body,
                 span,
             } => {
@@ -80,8 +78,6 @@ impl Normalizer {
                     params,
                     ret_type,
                     attributes,
-                    param_attributes,
-                    return_attributes,
                     body,
                     span,
                 }

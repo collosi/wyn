@@ -8,7 +8,7 @@ use crate::bail_glsl;
 use crate::error::Result;
 use crate::impl_source::{BuiltinImpl, ImplSource, PrimOp};
 use crate::lowering_common::ShaderStage;
-use crate::mir::{Attribute, Def, ExecutionModel, Expr, ExprKind, Literal, LoopKind, Program};
+use crate::mir::{Def, ExecutionModel, Expr, ExprKind, Literal, LoopKind, Program};
 use polytype::Type as PolyType;
 use rspirv::spirv;
 use std::collections::{HashMap, HashSet};
@@ -209,23 +209,14 @@ impl<'a> LowerCtx<'a> {
     }
 
     fn lower_shadertoy_entry_point(&mut self, def: &Def, output: &mut String) -> Result<()> {
-        if let Def::Function {
-            params,
-            body,
-            param_attributes,
-            ..
-        } = def
-        {
+        if let Def::EntryPoint { inputs, body, .. } = def {
             self.declared_vars.clear();
 
             // Find the fragCoord parameter (builtin position in fragment shader)
             let mut frag_coord_name = None;
-            for (i, param) in params.iter().enumerate() {
-                let attrs = param_attributes.get(i).map(|v| v.as_slice()).unwrap_or(&[]);
-                for attr in attrs {
-                    if let Attribute::BuiltIn(spirv::BuiltIn::Position) = attr {
-                        frag_coord_name = Some(param.name.clone());
-                    }
+            for input in inputs {
+                if let Some(crate::mir::IoDecoration::BuiltIn(spirv::BuiltIn::Position)) = &input.decoration {
+                    frag_coord_name = Some(input.name.clone());
                 }
             }
 
@@ -532,12 +523,10 @@ impl<'a> LowerCtx<'a> {
     }
 
     fn lower_entry_point(&mut self, def: &Def, stage: ShaderStage, output: &mut String) -> Result<()> {
-        if let Def::Function {
-            params,
-            ret_type,
+        if let Def::EntryPoint {
+            inputs,
+            outputs,
             body,
-            param_attributes,
-            return_attributes,
             ..
         } = def
         {
@@ -546,78 +535,60 @@ impl<'a> LowerCtx<'a> {
 
             // Collect input declarations and builtin mappings
             let mut builtin_assignments = Vec::new();
-            for (i, param) in params.iter().enumerate() {
-                let attrs = param_attributes.get(i).map(|v| v.as_slice()).unwrap_or(&[]);
-                for attr in attrs {
-                    match attr {
-                        Attribute::Location(loc) => {
-                            writeln!(
-                                output,
-                                "layout(location = {}) in {} {};",
-                                loc,
-                                self.type_to_glsl(&param.ty),
-                                param.name
-                            )
-                            .unwrap();
-                        }
-                        Attribute::BuiltIn(builtin) => {
-                            // Map builtin to GLSL gl_* variable
-                            let gl_var = match builtin {
-                                spirv::BuiltIn::Position => {
-                                    if stage == ShaderStage::Fragment {
-                                        "gl_FragCoord"
-                                    } else {
-                                        "gl_Position"
-                                    }
-                                }
-                                spirv::BuiltIn::VertexIndex => "gl_VertexID",
-                                spirv::BuiltIn::InstanceIndex => "gl_InstanceID",
-                                spirv::BuiltIn::FragCoord => "gl_FragCoord",
-                                spirv::BuiltIn::FrontFacing => "gl_FrontFacing",
-                                spirv::BuiltIn::PointSize => "gl_PointSize",
-                                spirv::BuiltIn::FragDepth => "gl_FragDepth",
-                                _ => continue,
-                            };
-                            builtin_assignments.push((
-                                param.name.clone(),
-                                self.type_to_glsl(&param.ty),
-                                gl_var.to_string(),
-                            ));
-                        }
-                        _ => {}
+            for input in inputs {
+                match &input.decoration {
+                    Some(crate::mir::IoDecoration::Location(loc)) => {
+                        writeln!(
+                            output,
+                            "layout(location = {}) in {} {};",
+                            loc,
+                            self.type_to_glsl(&input.ty),
+                            input.name
+                        )
+                        .unwrap();
                     }
+                    Some(crate::mir::IoDecoration::BuiltIn(builtin)) => {
+                        // Map builtin to GLSL gl_* variable
+                        let gl_var = match builtin {
+                            spirv::BuiltIn::Position => {
+                                if stage == ShaderStage::Fragment {
+                                    "gl_FragCoord"
+                                } else {
+                                    "gl_Position"
+                                }
+                            }
+                            spirv::BuiltIn::VertexIndex => "gl_VertexID",
+                            spirv::BuiltIn::InstanceIndex => "gl_InstanceID",
+                            spirv::BuiltIn::FragCoord => "gl_FragCoord",
+                            spirv::BuiltIn::FrontFacing => "gl_FrontFacing",
+                            spirv::BuiltIn::PointSize => "gl_PointSize",
+                            spirv::BuiltIn::FragDepth => "gl_FragDepth",
+                            _ => continue,
+                        };
+                        builtin_assignments.push((
+                            input.name.clone(),
+                            self.type_to_glsl(&input.ty),
+                            gl_var.to_string(),
+                        ));
+                    }
+                    None => {}
                 }
             }
 
-            // Get element types if return is a tuple
-            let ret_elem_types: Vec<&PolyType<TypeName>> =
-                if let PolyType::Constructed(TypeName::Tuple(_), args) = ret_type {
-                    args.iter().collect()
-                } else {
-                    vec![ret_type]
-                };
-
-            // Emit output declarations - handle tuple returns properly
-            let mut location_outputs: Vec<(usize, u32)> = Vec::new(); // (tuple_index, location)
-            if !return_attributes.is_empty() {
-                for (i, attrs) in return_attributes.iter().enumerate() {
-                    let elem_type = ret_elem_types.get(i).unwrap_or(&ret_type);
-                    for attr in attrs {
-                        match attr {
-                            Attribute::Location(loc) => {
-                                writeln!(
-                                    output,
-                                    "layout(location = {}) out {} _out{};",
-                                    loc,
-                                    self.type_to_glsl(elem_type),
-                                    i
-                                )
-                                .unwrap();
-                                location_outputs.push((i, *loc));
-                            }
-                            _ => {}
-                        }
-                    }
+            // Emit output declarations
+            let mut location_outputs: Vec<(usize, u32)> = Vec::new(); // (output_index, location)
+            let is_tuple_return = outputs.len() > 1;
+            for (i, out) in outputs.iter().enumerate() {
+                if let Some(crate::mir::IoDecoration::Location(loc)) = &out.decoration {
+                    writeln!(
+                        output,
+                        "layout(location = {}) out {} _out{};",
+                        loc,
+                        self.type_to_glsl(&out.ty),
+                        i
+                    )
+                    .unwrap();
+                    location_outputs.push((i, *loc));
                 }
             }
 
@@ -634,7 +605,6 @@ impl<'a> LowerCtx<'a> {
             let result = self.lower_expr(body, output)?;
 
             // Assign to outputs - handle tuple returns by extracting components
-            let is_tuple_return = ret_elem_types.len() > 1;
             for (tuple_idx, _loc) in &location_outputs {
                 if is_tuple_return {
                     writeln!(
@@ -653,15 +623,13 @@ impl<'a> LowerCtx<'a> {
 
             // Handle gl_Position for vertex shaders - extract from tuple if needed
             if stage == ShaderStage::Vertex {
-                for (i, attrs) in return_attributes.iter().enumerate() {
-                    for attr in attrs {
-                        if let Attribute::BuiltIn(spirv::BuiltIn::Position) = attr {
-                            if is_tuple_return {
-                                writeln!(output, "{}gl_Position = {}._{};", self.indent_str(), result, i)
-                                    .unwrap();
-                            } else {
-                                writeln!(output, "{}gl_Position = {};", self.indent_str(), result).unwrap();
-                            }
+                for (i, out) in outputs.iter().enumerate() {
+                    if let Some(crate::mir::IoDecoration::BuiltIn(spirv::BuiltIn::Position)) = &out.decoration {
+                        if is_tuple_return {
+                            writeln!(output, "{}gl_Position = {}._{};", self.indent_str(), result, i)
+                                .unwrap();
+                        } else {
+                            writeln!(output, "{}gl_Position = {};", self.indent_str(), result).unwrap();
                         }
                     }
                 }

@@ -39,13 +39,8 @@ pub enum Def {
         params: Vec<Param>,
         /// Return type.
         ret_type: Type<TypeName>,
-        /// Attributes attached to this function (e.g., "entry", "inline", "noinline").
+        /// Attributes attached to this function (e.g., "inline", "noinline").
         attributes: Vec<Attribute>,
-        /// Attributes for each parameter (for shader I/O decorations).
-        param_attributes: Vec<Vec<Attribute>>,
-        /// Return value attributes (for shader I/O decorations).
-        /// For multiple outputs, each element corresponds to one output.
-        return_attributes: Vec<Vec<Attribute>>,
         /// The function body expression.
         body: Expr,
         /// Source location.

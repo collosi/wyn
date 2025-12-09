@@ -211,8 +211,6 @@ impl Monomorphizer {
                 params,
                 ret_type,
                 attributes,
-                param_attributes,
-                return_attributes,
                 body,
                 span,
             } => {
@@ -223,8 +221,6 @@ impl Monomorphizer {
                     params,
                     ret_type,
                     attributes,
-                    param_attributes,
-                    return_attributes,
                     body,
                     span,
                 })
@@ -495,8 +491,6 @@ impl Monomorphizer {
                 params,
                 ret_type,
                 attributes,
-                param_attributes,
-                return_attributes,
                 body,
                 span,
                 ..
@@ -518,8 +512,6 @@ impl Monomorphizer {
                     params,
                     ret_type,
                     attributes,
-                    param_attributes,
-                    return_attributes,
                     body,
                     span,
                 })

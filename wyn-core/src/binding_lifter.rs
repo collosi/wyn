@@ -73,8 +73,6 @@ impl BindingLifter {
                 params,
                 ret_type,
                 attributes,
-                param_attributes,
-                return_attributes,
                 body,
                 span,
             } => {
@@ -85,8 +83,6 @@ impl BindingLifter {
                     params,
                     ret_type,
                     attributes,
-                    param_attributes,
-                    return_attributes,
                     body,
                     span,
                 })

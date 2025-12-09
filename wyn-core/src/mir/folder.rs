@@ -45,25 +45,11 @@ pub trait MirFolder: Sized {
         params: Vec<Param>,
         ret_type: Type<TypeName>,
         attributes: Vec<Attribute>,
-        param_attributes: Vec<Vec<Attribute>>,
-        return_attributes: Vec<Vec<Attribute>>,
         body: Expr,
         span: Span,
         ctx: &mut Self::Ctx,
     ) -> Result<Def, Self::Error> {
-        walk_function(
-            self,
-            id,
-            name,
-            params,
-            ret_type,
-            attributes,
-            param_attributes,
-            return_attributes,
-            body,
-            span,
-            ctx,
-        )
+        walk_function(self, id, name, params, ret_type, attributes, body, span, ctx)
     }
 
     fn visit_constant(
@@ -360,22 +346,9 @@ pub fn walk_def<V: MirFolder>(v: &mut V, d: Def, ctx: &mut V::Ctx) -> Result<Def
             params,
             ret_type,
             attributes,
-            param_attributes,
-            return_attributes,
             body,
             span,
-        } => v.visit_function(
-            id,
-            name,
-            params,
-            ret_type,
-            attributes,
-            param_attributes,
-            return_attributes,
-            body,
-            span,
-            ctx,
-        ),
+        } => v.visit_function(id, name, params, ret_type, attributes, body, span, ctx),
         Def::Constant {
             id,
             name,
@@ -419,29 +392,14 @@ pub fn walk_function<V: MirFolder>(
     params: Vec<Param>,
     ret_type: Type<TypeName>,
     attributes: Vec<Attribute>,
-    param_attributes: Vec<Vec<Attribute>>,
-    return_attributes: Vec<Vec<Attribute>>,
     body: Expr,
     span: Span,
     ctx: &mut V::Ctx,
 ) -> Result<Def, V::Error> {
     let params = params.into_iter().map(|p| v.visit_param(p, ctx)).collect::<Result<Vec<_>, _>>()?;
-
     let ret_type = v.visit_type(ret_type, ctx)?;
-
     let attributes =
         attributes.into_iter().map(|a| v.visit_attribute(a, ctx)).collect::<Result<Vec<_>, _>>()?;
-
-    let param_attributes = param_attributes
-        .into_iter()
-        .map(|attrs| attrs.into_iter().map(|a| v.visit_attribute(a, ctx)).collect::<Result<Vec<_>, _>>())
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let return_attributes = return_attributes
-        .into_iter()
-        .map(|attrs| attrs.into_iter().map(|a| v.visit_attribute(a, ctx)).collect::<Result<Vec<_>, _>>())
-        .collect::<Result<Vec<_>, _>>()?;
-
     let body = v.visit_expr(body, ctx)?;
 
     Ok(Def::Function {
@@ -450,8 +408,6 @@ pub fn walk_function<V: MirFolder>(
         params,
         ret_type,
         attributes,
-        param_attributes,
-        return_attributes,
         body,
         span,
     })

@@ -42,8 +42,6 @@ fn hoist_in_def(def: Def) -> Def {
             params,
             ret_type,
             attributes,
-            param_attributes,
-            return_attributes,
             body,
             span,
         } => {
@@ -54,8 +52,6 @@ fn hoist_in_def(def: Def) -> Def {
                 params,
                 ret_type,
                 attributes,
-                param_attributes,
-                return_attributes,
                 body,
                 span,
             }
@@ -74,6 +70,26 @@ fn hoist_in_def(def: Def) -> Def {
                 name,
                 ty,
                 attributes,
+                body,
+                span,
+            }
+        }
+        Def::EntryPoint {
+            id,
+            name,
+            execution_model,
+            inputs,
+            outputs,
+            body,
+            span,
+        } => {
+            let body = hoist_in_expr(body);
+            Def::EntryPoint {
+                id,
+                name,
+                execution_model,
+                inputs,
+                outputs,
                 body,
                 span,
             }
