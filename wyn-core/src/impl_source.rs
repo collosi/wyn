@@ -436,6 +436,20 @@ impl ImplSource {
         self.register_integral_ops("u16");
         self.register_integral_ops("u32");
         self.register_integral_ops("u64");
+
+        // Float-to-integer conversions (e.g., i32.f32 converts f32 to i32)
+        for int_ty in &["i8", "i16", "i32", "i64"] {
+            for float_ty in &["f16", "f32", "f64"] {
+                let name = format!("{}.{}", int_ty, float_ty);
+                self.register(&name, BuiltinImpl::PrimOp(PrimOp::FPToSI));
+            }
+        }
+        for int_ty in &["u8", "u16", "u32", "u64"] {
+            for float_ty in &["f16", "f32", "f64"] {
+                let name = format!("{}.{}", int_ty, float_ty);
+                self.register(&name, BuiltinImpl::PrimOp(PrimOp::FPToUI));
+            }
+        }
     }
 
     fn register_integral_ops(&mut self, ty_name: &'static str) {

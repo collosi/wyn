@@ -306,7 +306,7 @@ impl ModuleManager {
                 }
 
                 // Elaborate the module body
-                let body_items = self.elaborate_module_body(&mb.body, &substitutions)?;
+                let body_items = self.elaborate_module_body(&mb.body, &mb.name, &substitutions)?;
                 items.extend(body_items);
 
                 let elaborated = ElaboratedModule {
@@ -672,6 +672,40 @@ impl ModuleManager {
         }
     }
 
+    /// Builtin/intrinsic modules that shouldn't be type-checked
+    /// (their implementations use internal __builtin_* or __gdp_* functions)
+    const BUILTIN_MODULES: &'static [&'static str] = &[
+        "f32", "f64", "f16",
+        "i8", "i16", "i32", "i64",
+        "u8", "u16", "u32", "u64",
+        "bool",
+        "gdp", "graphics32", "graphics64",
+    ];
+
+    /// Check if a module is a builtin primitive module
+    fn is_builtin_module(name: &str) -> bool {
+        Self::BUILTIN_MODULES.contains(&name)
+    }
+
+    /// Get all module function declarations for type-checking
+    /// Returns (module_name, decl) pairs for user-defined modules only
+    /// (excludes builtin primitive modules like f32, i32, etc.)
+    pub fn get_module_function_declarations(&self) -> Vec<(&str, &Decl)> {
+        self.elaborated_modules
+            .iter()
+            .filter(|(name, _)| !Self::is_builtin_module(name))
+            .flat_map(|(module_name, elaborated)| {
+                elaborated.items.iter().filter_map(move |item| {
+                    if let ElaboratedItem::Decl(decl) = item {
+                        Some((module_name.as_str(), decl))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
     /// Check if a name is a qualified module reference (e.g., "f32.sum")
     pub fn is_qualified_name(name: &str) -> bool {
         name.contains('.')
@@ -689,17 +723,33 @@ impl ModuleManager {
     fn elaborate_module_body(
         &self,
         module_expr: &ModuleExpression,
+        module_name: &str,
         substitutions: &HashMap<String, Type>,
     ) -> Result<Vec<ElaboratedItem>> {
         match module_expr {
             ModuleExpression::Struct(declarations) => {
-                let mut items = Vec::new();
-
+                // First pass: collect all function names in this module (for intra-module resolution)
+                let mut module_functions: HashSet<String> = HashSet::new();
                 for decl in declarations {
                     match decl {
                         Declaration::Decl(d) => {
-                            // Apply type substitutions to the declaration signature only
-                            let elaborated_decl = self.elaborate_decl_signature(d, substitutions);
+                            module_functions.insert(d.name.clone());
+                        }
+                        Declaration::Sig(sig_decl) => {
+                            module_functions.insert(sig_decl.name.clone());
+                        }
+                        _ => {}
+                    }
+                }
+
+                let mut items = Vec::new();
+
+                // Second pass: elaborate declarations with name resolution
+                for decl in declarations {
+                    match decl {
+                        Declaration::Decl(d) => {
+                            // Apply type substitutions and resolve names
+                            let elaborated_decl = self.elaborate_decl_signature(d, module_name, &module_functions, substitutions);
                             items.push(ElaboratedItem::Decl(elaborated_decl));
                         }
                         Declaration::Sig(sig_decl) => {
@@ -743,13 +793,28 @@ impl ModuleManager {
     }
 
     /// Elaborate a declaration's signature (params and return type) with type substitutions
-    fn elaborate_decl_signature(&self, decl: &Decl, substitutions: &HashMap<String, Type>) -> Decl {
+    fn elaborate_decl_signature(
+        &self,
+        decl: &Decl,
+        module_name: &str,
+        module_functions: &HashSet<String>,
+        substitutions: &HashMap<String, Type>,
+    ) -> Decl {
         // Apply type substitutions to params
         let new_params: Vec<Pattern> =
             decl.params.iter().map(|p| self.substitute_in_pattern(p, substitutions)).collect();
 
         // Apply type substitutions to return type
         let new_ty = decl.ty.as_ref().map(|ty| self.substitute_in_type(ty, substitutions));
+
+        // Collect parameter names to avoid qualifying them as module functions
+        let param_names: HashSet<String> = decl.params.iter()
+            .flat_map(|p| self.collect_pattern_names(p))
+            .collect();
+
+        // Resolve names in body (convert FieldAccess to QualifiedName, qualify intra-module refs)
+        let mut new_body = decl.body.clone();
+        self.resolve_names_in_expr(&mut new_body, module_name, module_functions, &param_names);
 
         Decl {
             keyword: decl.keyword,
@@ -759,7 +824,180 @@ impl ModuleManager {
             type_params: decl.type_params.clone(),
             params: new_params,
             ty: new_ty,
-            body: decl.body.clone(), // TODO: Apply type substitution and name resolution in body
+            body: new_body,
+        }
+    }
+
+    /// Collect all bound names from a pattern
+    fn collect_pattern_names(&self, pattern: &Pattern) -> Vec<String> {
+        use crate::ast::PatternKind;
+        let mut names = Vec::new();
+        match &pattern.kind {
+            PatternKind::Name(name) => names.push(name.clone()),
+            PatternKind::Typed(inner, _) => names.extend(self.collect_pattern_names(inner)),
+            PatternKind::Tuple(pats) => {
+                for p in pats {
+                    names.extend(self.collect_pattern_names(p));
+                }
+            }
+            PatternKind::Constructor(_, pats) => {
+                for p in pats {
+                    names.extend(self.collect_pattern_names(p));
+                }
+            }
+            PatternKind::Record(fields) => {
+                for f in fields {
+                    if let Some(p) = &f.pattern {
+                        names.extend(self.collect_pattern_names(p));
+                    } else {
+                        names.push(f.field.clone());
+                    }
+                }
+            }
+            PatternKind::Attributed(_, inner) => names.extend(self.collect_pattern_names(inner)),
+            PatternKind::Wildcard | PatternKind::Unit | PatternKind::Literal(_) => {}
+        }
+        names
+    }
+
+    /// Resolve names in an expression within a module context
+    /// - Converts FieldAccess to QualifiedName for external module references
+    /// - Qualifies intra-module function references
+    fn resolve_names_in_expr(
+        &self,
+        expr: &mut crate::ast::Expression,
+        module_name: &str,
+        module_functions: &HashSet<String>,
+        local_bindings: &HashSet<String>,
+    ) {
+        use crate::ast::ExprKind;
+
+        match &mut expr.kind {
+            ExprKind::Identifier(name) => {
+                // Check if this is an intra-module function reference (not shadowed by local binding)
+                if !local_bindings.contains(name) && module_functions.contains(name) {
+                    // Convert to qualified name: next -> rand.next
+                    expr.kind = ExprKind::QualifiedName(vec![module_name.to_string()], name.clone());
+                }
+            }
+            ExprKind::FieldAccess(obj, field) => {
+                // Check if this is module.name pattern
+                if let ExprKind::Identifier(name) = &obj.kind {
+                    if self.known_modules.contains(name) {
+                        // Convert to QualifiedName
+                        expr.kind = ExprKind::QualifiedName(vec![name.clone()], field.clone());
+                        return;
+                    }
+                }
+                // Otherwise recurse into object
+                self.resolve_names_in_expr(obj, module_name, module_functions, local_bindings);
+            }
+            ExprKind::Application(func, args) => {
+                self.resolve_names_in_expr(func, module_name, module_functions, local_bindings);
+                for arg in args {
+                    self.resolve_names_in_expr(arg, module_name, module_functions, local_bindings);
+                }
+            }
+            ExprKind::Lambda(lambda) => {
+                // Collect lambda parameter names
+                let mut inner_bindings = local_bindings.clone();
+                for p in &lambda.params {
+                    inner_bindings.extend(self.collect_pattern_names(p));
+                }
+                self.resolve_names_in_expr(&mut lambda.body, module_name, module_functions, &inner_bindings);
+            }
+            ExprKind::LetIn(let_in) => {
+                self.resolve_names_in_expr(&mut let_in.value, module_name, module_functions, local_bindings);
+                // Collect let binding names
+                let mut inner_bindings = local_bindings.clone();
+                inner_bindings.extend(self.collect_pattern_names(&let_in.pattern));
+                self.resolve_names_in_expr(&mut let_in.body, module_name, module_functions, &inner_bindings);
+            }
+            ExprKind::If(if_expr) => {
+                self.resolve_names_in_expr(&mut if_expr.condition, module_name, module_functions, local_bindings);
+                self.resolve_names_in_expr(&mut if_expr.then_branch, module_name, module_functions, local_bindings);
+                self.resolve_names_in_expr(&mut if_expr.else_branch, module_name, module_functions, local_bindings);
+            }
+            ExprKind::BinaryOp(_, lhs, rhs) => {
+                self.resolve_names_in_expr(lhs, module_name, module_functions, local_bindings);
+                self.resolve_names_in_expr(rhs, module_name, module_functions, local_bindings);
+            }
+            ExprKind::UnaryOp(_, operand) => {
+                self.resolve_names_in_expr(operand, module_name, module_functions, local_bindings);
+            }
+            ExprKind::Tuple(exprs) | ExprKind::ArrayLiteral(exprs) | ExprKind::VecMatLiteral(exprs) => {
+                for e in exprs {
+                    self.resolve_names_in_expr(e, module_name, module_functions, local_bindings);
+                }
+            }
+            ExprKind::ArrayIndex(arr, idx) => {
+                self.resolve_names_in_expr(arr, module_name, module_functions, local_bindings);
+                self.resolve_names_in_expr(idx, module_name, module_functions, local_bindings);
+            }
+            ExprKind::ArrayWith { array, index, value } => {
+                self.resolve_names_in_expr(array, module_name, module_functions, local_bindings);
+                self.resolve_names_in_expr(index, module_name, module_functions, local_bindings);
+                self.resolve_names_in_expr(value, module_name, module_functions, local_bindings);
+            }
+            ExprKind::RecordLiteral(fields) => {
+                for (_, e) in fields {
+                    self.resolve_names_in_expr(e, module_name, module_functions, local_bindings);
+                }
+            }
+            ExprKind::Loop(loop_expr) => {
+                if let Some(ref mut init) = loop_expr.init {
+                    self.resolve_names_in_expr(init, module_name, module_functions, local_bindings);
+                }
+                // Collect loop variable binding
+                let mut inner_bindings = local_bindings.clone();
+                inner_bindings.extend(self.collect_pattern_names(&loop_expr.pattern));
+                match &mut loop_expr.form {
+                    crate::ast::LoopForm::While(cond) => {
+                        self.resolve_names_in_expr(cond, module_name, module_functions, &inner_bindings);
+                    }
+                    crate::ast::LoopForm::For(var, bound) => {
+                        inner_bindings.insert(var.clone());
+                        self.resolve_names_in_expr(bound, module_name, module_functions, local_bindings);
+                    }
+                    crate::ast::LoopForm::ForIn(var_pat, iter) => {
+                        inner_bindings.extend(self.collect_pattern_names(var_pat));
+                        self.resolve_names_in_expr(iter, module_name, module_functions, local_bindings);
+                    }
+                }
+                self.resolve_names_in_expr(&mut loop_expr.body, module_name, module_functions, &inner_bindings);
+            }
+            ExprKind::Match(match_expr) => {
+                self.resolve_names_in_expr(&mut match_expr.scrutinee, module_name, module_functions, local_bindings);
+                for case in &mut match_expr.cases {
+                    let mut inner_bindings = local_bindings.clone();
+                    inner_bindings.extend(self.collect_pattern_names(&case.pattern));
+                    self.resolve_names_in_expr(&mut case.body, module_name, module_functions, &inner_bindings);
+                }
+            }
+            ExprKind::Range(range_expr) => {
+                self.resolve_names_in_expr(&mut range_expr.start, module_name, module_functions, local_bindings);
+                self.resolve_names_in_expr(&mut range_expr.end, module_name, module_functions, local_bindings);
+            }
+            ExprKind::Pipe(lhs, rhs) => {
+                self.resolve_names_in_expr(lhs, module_name, module_functions, local_bindings);
+                self.resolve_names_in_expr(rhs, module_name, module_functions, local_bindings);
+            }
+            ExprKind::TypeAscription(inner, _) | ExprKind::TypeCoercion(inner, _) => {
+                self.resolve_names_in_expr(inner, module_name, module_functions, local_bindings);
+            }
+            ExprKind::Assert(cond, body) => {
+                self.resolve_names_in_expr(cond, module_name, module_functions, local_bindings);
+                self.resolve_names_in_expr(body, module_name, module_functions, local_bindings);
+            }
+            // Leaf expressions - nothing to resolve
+            ExprKind::QualifiedName(_, _)
+            | ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::Unit
+            | ExprKind::OperatorSection(_)
+            | ExprKind::TypeHole => {}
         }
     }
 

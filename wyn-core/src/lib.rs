@@ -141,10 +141,14 @@ impl Resolved {
         // Collect warnings
         let warnings: Vec<_> = checker.warnings().to_vec();
 
+        // Get the module manager back from the checker
+        let module_manager = checker.into_module_manager();
+
         Ok(TypeChecked {
             ast: self.ast,
             type_table,
             warnings,
+            module_manager,
         })
     }
 }
@@ -154,6 +158,7 @@ pub struct TypeChecked {
     pub ast: ast::Program,
     pub type_table: TypeTable,
     pub warnings: Vec<type_checker::TypeWarning>,
+    pub module_manager: module_manager::ModuleManager,
 }
 
 impl TypeChecked {
@@ -180,6 +185,7 @@ impl TypeChecked {
             type_table: self.type_table,
             warnings: self.warnings,
             alias_result,
+            module_manager: self.module_manager,
         })
     }
 }
@@ -190,6 +196,7 @@ pub struct AliasChecked {
     pub type_table: TypeTable,
     pub warnings: Vec<type_checker::TypeWarning>,
     pub alias_result: alias_checker::AliasCheckResult,
+    pub module_manager: module_manager::ModuleManager,
 }
 
 impl AliasChecked {
@@ -224,6 +231,7 @@ impl AliasChecked {
             type_table: self.type_table,
             warnings: self.warnings,
             alias_result: self.alias_result,
+            module_manager: self.module_manager,
         }
     }
 
@@ -232,9 +240,21 @@ impl AliasChecked {
     pub fn flatten(self) -> Result<Flattened> {
         let builtins = impl_source::ImplSource::default().all_names();
         let mut flattener = flattening::Flattener::new(self.type_table, builtins);
-        let mir = flattener.flatten_program(&self.ast)?;
+        let mut mir = flattener.flatten_program(&self.ast)?;
+
+        // Flatten module function declarations so they're available in SPIR-V
+        for (module_name, decl) in self.module_manager.get_module_function_declarations() {
+            let qualified_name = format!("{}.{}", module_name, decl.name);
+            let defs = flattener.flatten_module_decl(decl, &qualified_name)?;
+            mir.defs.extend(defs);
+        }
+
         let node_counter = flattener.into_node_counter();
-        Ok(Flattened { mir, node_counter })
+        Ok(Flattened {
+            mir,
+            node_counter,
+            module_manager: self.module_manager,
+        })
     }
 }
 
@@ -244,6 +264,7 @@ pub struct AstConstFolded {
     pub type_table: TypeTable,
     pub warnings: Vec<type_checker::TypeWarning>,
     pub alias_result: alias_checker::AliasCheckResult,
+    pub module_manager: module_manager::ModuleManager,
 }
 
 impl AstConstFolded {
@@ -251,9 +272,21 @@ impl AstConstFolded {
     pub fn flatten(self) -> Result<Flattened> {
         let builtins = impl_source::ImplSource::default().all_names();
         let mut flattener = flattening::Flattener::new(self.type_table, builtins);
-        let mir = flattener.flatten_program(&self.ast)?;
+        let mut mir = flattener.flatten_program(&self.ast)?;
+
+        // Flatten module function declarations so they're available in SPIR-V
+        for (module_name, decl) in self.module_manager.get_module_function_declarations() {
+            let qualified_name = format!("{}.{}", module_name, decl.name);
+            let defs = flattener.flatten_module_decl(decl, &qualified_name)?;
+            mir.defs.extend(defs);
+        }
+
         let node_counter = flattener.into_node_counter();
-        Ok(Flattened { mir, node_counter })
+        Ok(Flattened {
+            mir,
+            node_counter,
+            module_manager: self.module_manager,
+        })
     }
 }
 
@@ -261,6 +294,7 @@ impl AstConstFolded {
 pub struct Flattened {
     pub mir: mir::Program,
     pub node_counter: NodeCounter,
+    pub module_manager: module_manager::ModuleManager,
 }
 
 impl Flattened {
@@ -270,6 +304,7 @@ impl Flattened {
         MaterializationsHoisted {
             mir,
             node_counter: self.node_counter,
+            module_manager: self.module_manager,
         }
     }
 }
@@ -278,13 +313,18 @@ impl Flattened {
 pub struct MaterializationsHoisted {
     pub mir: mir::Program,
     pub node_counter: NodeCounter,
+    pub module_manager: module_manager::ModuleManager,
 }
 
 impl MaterializationsHoisted {
     /// Normalize MIR to A-normal form
     pub fn normalize(self) -> Normalized {
         let (mir, node_counter) = normalize::normalize_program(self.mir, self.node_counter);
-        Normalized { mir, node_counter }
+        Normalized {
+            mir,
+            node_counter,
+            module_manager: self.module_manager,
+        }
     }
 }
 
@@ -292,6 +332,7 @@ impl MaterializationsHoisted {
 pub struct Normalized {
     pub mir: mir::Program,
     pub node_counter: NodeCounter,
+    pub module_manager: module_manager::ModuleManager,
 }
 
 impl Normalized {
@@ -301,6 +342,7 @@ impl Normalized {
         Ok(Monomorphized {
             mir,
             node_counter: self.node_counter,
+            module_manager: self.module_manager,
         })
     }
 }
@@ -309,6 +351,7 @@ impl Normalized {
 pub struct Monomorphized {
     pub mir: mir::Program,
     pub node_counter: NodeCounter,
+    pub module_manager: module_manager::ModuleManager,
 }
 
 impl Monomorphized {
@@ -318,6 +361,7 @@ impl Monomorphized {
         Reachable {
             mir,
             node_counter: self.node_counter,
+            module_manager: self.module_manager,
         }
     }
 }
@@ -326,6 +370,7 @@ impl Monomorphized {
 pub struct Reachable {
     pub mir: mir::Program,
     pub node_counter: NodeCounter,
+    pub module_manager: module_manager::ModuleManager,
 }
 
 impl Reachable {
@@ -335,6 +380,7 @@ impl Reachable {
         Ok(Folded {
             mir,
             node_counter: self.node_counter,
+            module_manager: self.module_manager,
         })
     }
 }
@@ -343,6 +389,7 @@ impl Reachable {
 pub struct Folded {
     pub mir: mir::Program,
     pub node_counter: NodeCounter,
+    pub module_manager: module_manager::ModuleManager,
 }
 
 impl Folded {
@@ -353,6 +400,7 @@ impl Folded {
         Ok(Lifted {
             mir,
             node_counter: self.node_counter,
+            module_manager: self.module_manager,
         })
     }
 }
@@ -362,6 +410,7 @@ pub struct Lifted {
     pub mir: mir::Program,
     #[allow(dead_code)]
     pub node_counter: NodeCounter,
+    pub module_manager: module_manager::ModuleManager,
 }
 
 impl Lifted {

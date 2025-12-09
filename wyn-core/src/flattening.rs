@@ -437,6 +437,63 @@ impl Flattener {
         Ok(())
     }
 
+    /// Flatten a module declaration with a qualified name (e.g., "rand.init")
+    pub fn flatten_module_decl(
+        &mut self,
+        d: &ast::Decl,
+        qualified_name: &str,
+    ) -> Result<Vec<mir::Def>> {
+        self.enclosing_decl_stack.push(qualified_name.to_string());
+
+        let def = if d.params.is_empty() {
+            // Constant
+            let (body, _) = self.flatten_expr(&d.body)?;
+            let ty = self.get_expr_type(&d.body);
+            mir::Def::Constant {
+                id: self.next_node_id(),
+                name: qualified_name.to_string(),
+                ty,
+                attributes: self.convert_attributes(&d.attributes),
+                body,
+                span: d.body.h.span,
+            }
+        } else {
+            // Function
+            let params = self.flatten_params(&d.params)?;
+            let param_attrs = self.extract_param_attributes(&d.params);
+            let span = d.body.h.span;
+
+            // Register params with binding IDs before flattening body
+            let param_bindings = self.register_param_bindings(&d.params)?;
+
+            let (body, _) = self.flatten_expr(&d.body)?;
+
+            // Wrap body with backing stores for params that need them
+            let body = self.wrap_param_backing_stores(body, param_bindings, span);
+
+            let ret_type = self.get_expr_type(&d.body);
+            mir::Def::Function {
+                id: self.next_node_id(),
+                name: qualified_name.to_string(),
+                params,
+                ret_type,
+                attributes: self.convert_attributes(&d.attributes),
+                param_attributes: param_attrs,
+                return_attributes: vec![],
+                body,
+                span,
+            }
+        };
+
+        // Collect generated lambdas before the definition
+        let mut defs = Vec::new();
+        defs.append(&mut self.generated_functions);
+        defs.push(def);
+
+        self.enclosing_decl_stack.pop();
+        Ok(defs)
+    }
+
     /// Flatten an entire program
     pub fn flatten_program(&mut self, program: &ast::Program) -> Result<mir::Program> {
         let mut defs = Vec::new();

@@ -292,6 +292,11 @@ impl TypeChecker {
         &self.warnings
     }
 
+    /// Consume the type checker and return the module manager
+    pub fn into_module_manager(self) -> crate::module_manager::ModuleManager {
+        self.module_manager
+    }
+
     /// Create a fresh type for a pattern based on its structure
     /// For tuple patterns, creates a tuple of fresh type variables
     /// For simple patterns, creates a single fresh type variable
@@ -305,10 +310,7 @@ impl TypeChecker {
             }
             PatternKind::Typed(_, annotated_type) => {
                 // Pattern has explicit type, resolve any module type aliases
-                eprintln!("DEBUG fresh_type_for_pattern: resolving {:?}", annotated_type);
-                let resolved = self.resolve_type_aliases(annotated_type);
-                eprintln!("DEBUG fresh_type_for_pattern: resolved to {:?}", resolved);
-                resolved
+                self.resolve_type_aliases(annotated_type)
             }
             PatternKind::Attributed(_, inner_pattern) => {
                 // Ignore attributes, recurse on inner pattern
@@ -872,6 +874,10 @@ impl TypeChecker {
             }
         }
 
+        // Type-check module function bodies (e.g., rand.init, rand.int)
+        // This ensures module functions have type table entries for flattening
+        self.check_module_functions()?;
+
         // Process user declarations
         for decl in &program.declarations {
             self.check_declaration(decl)?;
@@ -1017,6 +1023,117 @@ impl TypeChecker {
             }
             // For other declaration types, just use normal checking
             _ => self.check_declaration(decl),
+        }
+    }
+
+    /// Type-check function bodies from modules (e.g., rand.init, rand.int)
+    /// This populates the type table so these functions can be flattened to MIR.
+    fn check_module_functions(&mut self) -> Result<()> {
+        // Collect all module function declarations to avoid borrowing issues
+        let module_functions: Vec<(String, crate::ast::Decl)> = self
+            .module_manager
+            .get_module_function_declarations()
+            .into_iter()
+            .map(|(module_name, decl)| (module_name.to_string(), decl.clone()))
+            .collect();
+
+        // Type-check each module function
+        for (module_name, decl) in module_functions {
+            let qualified_name = format!("{}.{}", module_name, decl.name);
+            debug!("Type-checking module function: {}", qualified_name);
+
+            // Resolve type aliases in the declaration (e.g., "state" -> "f32" within rand module)
+            let resolved_decl = self.resolve_decl_type_aliases(&decl, &module_name);
+
+            // Type-check the declaration body
+            self.check_decl(&resolved_decl)?;
+
+            // Register with qualified name so it can be found during flattening
+            if let Some(type_scheme) = self.scope_stack.lookup(&decl.name) {
+                self.scope_stack.insert(qualified_name.clone(), type_scheme.clone());
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Resolve type aliases in a declaration within a module context
+    fn resolve_decl_type_aliases(&self, decl: &crate::ast::Decl, module_name: &str) -> crate::ast::Decl {
+        // Resolve type aliases in the return type
+        let resolved_ty = decl.ty.as_ref().map(|ty| {
+            self.resolve_type_aliases_in_module(ty, module_name)
+        });
+
+        // Resolve type aliases in parameter patterns
+        let resolved_params: Vec<_> = decl.params.iter()
+            .map(|p| self.resolve_pattern_type_aliases(p, module_name))
+            .collect();
+
+        crate::ast::Decl {
+            keyword: decl.keyword,
+            attributes: decl.attributes.clone(),
+            name: decl.name.clone(),
+            size_params: decl.size_params.clone(),
+            type_params: decl.type_params.clone(),
+            params: resolved_params,
+            ty: resolved_ty,
+            body: decl.body.clone(),
+        }
+    }
+
+    /// Resolve type aliases in a pattern within a module context
+    fn resolve_pattern_type_aliases(&self, pattern: &Pattern, module_name: &str) -> Pattern {
+        use crate::ast::PatternKind;
+
+        let resolved_kind = match &pattern.kind {
+            PatternKind::Typed(inner, ty) => {
+                let resolved_ty = self.resolve_type_aliases_in_module(ty, module_name);
+                PatternKind::Typed(inner.clone(), resolved_ty)
+            }
+            PatternKind::Tuple(pats) => {
+                let resolved_pats: Vec<_> = pats.iter()
+                    .map(|p| self.resolve_pattern_type_aliases(p, module_name))
+                    .collect();
+                PatternKind::Tuple(resolved_pats)
+            }
+            other => other.clone(),
+        };
+
+        Pattern {
+            kind: resolved_kind,
+            h: pattern.h.clone(),
+        }
+    }
+
+    /// Resolve type aliases in a type within a module context (unqualified names like "state")
+    fn resolve_type_aliases_in_module(&self, ty: &Type, module_name: &str) -> Type {
+        match ty {
+            Type::Constructed(TypeName::Named(name), args) => {
+                // Try to resolve as a module-local type alias
+                let qualified_name = if name.contains('.') {
+                    name.clone() // Already qualified
+                } else {
+                    format!("{}.{}", module_name, name) // Make qualified
+                };
+
+                if let Some(underlying) = self.module_manager.resolve_type_alias(&qualified_name) {
+                    // Recursively resolve in case of nested aliases
+                    self.resolve_type_aliases_in_module(underlying, module_name)
+                } else {
+                    // Not a known alias, keep as-is but resolve args
+                    let resolved_args: Vec<Type> = args.iter()
+                        .map(|a| self.resolve_type_aliases_in_module(a, module_name))
+                        .collect();
+                    Type::Constructed(TypeName::Named(name.clone()), resolved_args)
+                }
+            }
+            Type::Constructed(name, args) => {
+                let resolved_args: Vec<Type> = args.iter()
+                    .map(|a| self.resolve_type_aliases_in_module(a, module_name))
+                    .collect();
+                Type::Constructed(name.clone(), resolved_args)
+            }
+            Type::Variable(v) => Type::Variable(*v),
         }
     }
 
@@ -1659,6 +1776,14 @@ impl TypeChecker {
                             BuiltinLookup::Overloaded(overloads) => overloads.fresh_type(&mut self.context),
                         };
                         self.type_table.insert(expr.h.id, TypeScheme::Monotype(ty.clone()));
+                        return Ok(ty);
+                    }
+
+                    // Try to look up in elaborated modules (e.g., f32.i32 for type conversion)
+                    let module_name = &qual_name.qualifiers[0];
+                    if let Ok(type_scheme) = self.module_manager.get_module_function_type(module_name, &qual_name.name, &mut self.context) {
+                        let ty = type_scheme.instantiate(&mut self.context);
+                        self.type_table.insert(expr.h.id, type_scheme);
                         return Ok(ty);
                     }
 
