@@ -866,14 +866,6 @@ impl TypeChecker {
     }
 
     pub fn check_program(&mut self, program: &Program) -> Result<HashMap<crate::ast::NodeId, TypeScheme>> {
-        // Process library modules first (so they're available to user code)
-        // Register each module's declarations with qualified names
-        for (module_name, declarations) in &program.library_modules {
-            for decl in declarations {
-                self.check_module_declaration(module_name, decl)?;
-            }
-        }
-
         // Type-check module function bodies (e.g., rand.init, rand.int)
         // This ensures module functions have type table entries for flattening
         self.check_module_functions()?;
@@ -999,31 +991,6 @@ impl TypeChecker {
         self.scope_stack.pop_scope();
 
         Ok((param_types, body_type))
-    }
-
-    /// Check a declaration from a library module, registering it with a qualified name
-    fn check_module_declaration(&mut self, module_name: &str, decl: &Declaration) -> Result<()> {
-        match decl {
-            Declaration::Decl(decl_node) => {
-                debug!(
-                    "Checking module {} declaration: {}.{}",
-                    module_name, module_name, decl_node.name
-                );
-                // Check the declaration normally first
-                self.check_decl(decl_node)?;
-
-                // Now also register it with the qualified name
-                // The unqualified name was already registered in check_decl
-                let qualified_name = format!("{}.{}", module_name, decl_node.name);
-                if let Some(type_scheme) = self.scope_stack.lookup(&decl_node.name) {
-                    self.scope_stack.insert(qualified_name.clone(), type_scheme.clone());
-                    debug!("Registered module function as '{}'", qualified_name);
-                }
-                Ok(())
-            }
-            // For other declaration types, just use normal checking
-            _ => self.check_declaration(decl),
-        }
     }
 
     /// Type-check function bodies from modules (e.g., rand.init, rand.int)

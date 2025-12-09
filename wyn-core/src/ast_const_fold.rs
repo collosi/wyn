@@ -55,13 +55,6 @@ impl AstConstFolder {
         for decl in &mut program.declarations {
             self.fold_declaration(decl);
         }
-
-        // Also process library modules
-        for (_name, decls) in &mut program.library_modules {
-            for decl in decls {
-                self.fold_declaration(decl);
-            }
-        }
     }
 
     fn fold_declaration(&mut self, decl: &mut Declaration) {

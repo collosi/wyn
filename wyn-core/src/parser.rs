@@ -90,10 +90,7 @@ impl Parser {
             declarations.push(self.parse_declaration()?);
         }
 
-        Ok(Program {
-            declarations,
-            library_modules: std::collections::HashMap::new(),
-        })
+        Ok(Program { declarations })
     }
 
     fn parse_declaration(&mut self) -> Result<Declaration> {
