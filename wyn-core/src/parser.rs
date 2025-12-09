@@ -136,11 +136,6 @@ impl Parser {
                 let path = self.expect_string_literal()?;
                 Ok(Declaration::Import(path))
             }
-            Some(Token::Local) => {
-                self.advance();
-                let inner = self.parse_declaration()?;
-                Ok(Declaration::Local(Box::new(inner)))
-            }
             _ => Err(err_parse_at!(
                 self.current_span(),
                 "Expected declaration, got {:?}",

@@ -587,8 +587,7 @@ impl Flattener {
                 | ast::Declaration::ModuleBind(_)
                 | ast::Declaration::ModuleTypeBind(_)
                 | ast::Declaration::Open(_)
-                | ast::Declaration::Import(_)
-                | ast::Declaration::Local(_) => {
+                | ast::Declaration::Import(_) => {
                     // Skip declarations that don't produce MIR defs
                 }
             }

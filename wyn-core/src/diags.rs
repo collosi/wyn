@@ -236,12 +236,6 @@ impl AstFormatter {
             Declaration::Import(path) => {
                 self.write_line(&format!("import \"{}\"", path));
             }
-            Declaration::Local(inner) => {
-                self.write_line("local");
-                self.indent += 1;
-                self.write_declaration(inner);
-                self.indent -= 1;
-            }
         }
     }
 

@@ -1585,16 +1585,6 @@ fn test_parse_nested_qualified_name() {
 }
 
 #[test]
-fn test_parse_local_declaration() {
-    let program = parse_ok("local def x : i32 = 42");
-    assert_eq!(program.declarations.len(), 1);
-
-    assert!(
-        matches!(&program.declarations[0], Declaration::Local(inner) if matches!(**inner, Declaration::Decl(_)))
-    );
-}
-
-#[test]
 fn test_parse_record_type_empty() {
     // Test empty record type {}
     let decl = single_decl("let x: {} = ???");

@@ -54,7 +54,6 @@ pub enum Token {
     Module,
     Open,
     Import,
-    Local,
     Type,
     Include,
     With,
@@ -140,7 +139,6 @@ fn parse_keyword(input: &str) -> IResult<&str, Token> {
             keyword("assert", Token::Assert),
             keyword("match", Token::Match),
             keyword("case", Token::Case),
-            keyword("local", Token::Local),
         )),
         alt((
             keyword("let", Token::Let),

@@ -1156,11 +1156,6 @@ impl TypeChecker {
                 // Import declarations should be resolved during elaboration
                 Ok(())
             }
-            Declaration::Local(inner) => {
-                // Local just marks a declaration as local scope
-                // Check the inner declaration
-                self.check_declaration(inner)
-            }
         }
     }
 

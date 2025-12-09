@@ -250,7 +250,6 @@ pub enum Declaration {
     ModuleTypeBind(ModuleTypeBind), // Module type declarations
     Open(ModuleExpression),         // open mod_exp
     Import(String),                 // import "path"
-    Local(Box<Declaration>),        // local dec
 }
 
 #[derive(Debug, Clone, PartialEq)]

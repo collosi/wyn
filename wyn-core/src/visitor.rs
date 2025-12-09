@@ -235,9 +235,6 @@ pub fn walk_declaration<V: Visitor>(v: &mut V, d: &Declaration) -> ControlFlow<V
         Declaration::Import(_) => {
             unimplemented!("Import declarations are not yet supported in visitor")
         }
-        Declaration::Local(_) => {
-            unimplemented!("Local declarations are not yet supported in visitor")
-        }
     }
 }
 

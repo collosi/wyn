@@ -250,9 +250,6 @@ fn find_in_declaration(
         ast::Declaration::Entry(entry) => {
             find_in_expr(&entry.body, line, col, best);
         }
-        ast::Declaration::Local(inner) => {
-            find_in_declaration(inner, line, col, best);
-        }
         _ => {}
     }
 }

@@ -61,7 +61,6 @@ impl AstConstFolder {
         match decl {
             Declaration::Decl(d) => self.fold_decl(d),
             Declaration::Entry(e) => self.fold_entry_decl(e),
-            Declaration::Local(inner) => self.fold_declaration(inner),
             // Uniform, Sig, TypeBind, ModuleBind, etc. don't contain expressions to fold
             _ => {}
         }
