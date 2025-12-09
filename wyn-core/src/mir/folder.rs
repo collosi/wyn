@@ -104,6 +104,20 @@ pub trait MirFolder: Sized {
         walk_storage(self, id, name, ty, set, binding, layout, access, ctx)
     }
 
+    fn visit_entry_point(
+        &mut self,
+        id: NodeId,
+        name: String,
+        execution_model: ExecutionModel,
+        inputs: Vec<EntryInput>,
+        outputs: Vec<EntryOutput>,
+        body: Expr,
+        span: Span,
+        ctx: &mut Self::Ctx,
+    ) -> Result<Def, Self::Error> {
+        walk_entry_point(self, id, name, execution_model, inputs, outputs, body, span, ctx)
+    }
+
     fn visit_param(&mut self, p: Param, ctx: &mut Self::Ctx) -> Result<Param, Self::Error> {
         walk_param(self, p, ctx)
     }
@@ -384,6 +398,15 @@ pub fn walk_def<V: MirFolder>(v: &mut V, d: Def, ctx: &mut V::Ctx) -> Result<Def
             layout,
             access,
         } => v.visit_storage(id, name, ty, set, binding, layout, access, ctx),
+        Def::EntryPoint {
+            id,
+            name,
+            execution_model,
+            inputs,
+            outputs,
+            body,
+            span,
+        } => v.visit_entry_point(id, name, execution_model, inputs, outputs, body, span, ctx),
     }
 }
 
@@ -496,6 +519,56 @@ pub fn walk_storage<V: MirFolder>(
         binding,
         layout,
         access,
+    })
+}
+
+pub fn walk_entry_point<V: MirFolder>(
+    v: &mut V,
+    id: NodeId,
+    name: String,
+    execution_model: ExecutionModel,
+    inputs: Vec<EntryInput>,
+    outputs: Vec<EntryOutput>,
+    body: Expr,
+    span: Span,
+    ctx: &mut V::Ctx,
+) -> Result<Def, V::Error> {
+    // Visit types in inputs
+    let inputs = inputs
+        .into_iter()
+        .map(|input| {
+            let ty = v.visit_type(input.ty, ctx)?;
+            Ok(EntryInput {
+                name: input.name,
+                ty,
+                decoration: input.decoration,
+            })
+        })
+        .collect::<Result<Vec<_>, V::Error>>()?;
+
+    // Visit types in outputs
+    let outputs = outputs
+        .into_iter()
+        .map(|output| {
+            let ty = v.visit_type(output.ty, ctx)?;
+            Ok(EntryOutput {
+                ty,
+                decoration: output.decoration,
+            })
+        })
+        .collect::<Result<Vec<_>, V::Error>>()?;
+
+    // Visit body
+    let body = v.visit_expr(body, ctx)?;
+
+    Ok(Def::EntryPoint {
+        id,
+        name,
+        execution_model,
+        inputs,
+        outputs,
+        body,
+        span,
     })
 }
 

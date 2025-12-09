@@ -720,6 +720,64 @@ impl Display for mir::Def {
                     format_type(ty)
                 )
             }
+            mir::Def::EntryPoint {
+                name,
+                execution_model,
+                inputs,
+                outputs,
+                body,
+                ..
+            } => {
+                // Write execution model
+                match execution_model {
+                    mir::ExecutionModel::Vertex => writeln!(f, "#[vertex]")?,
+                    mir::ExecutionModel::Fragment => writeln!(f, "#[fragment]")?,
+                    mir::ExecutionModel::Compute { local_size } => {
+                        writeln!(
+                            f,
+                            "#[compute({}, {}, {})]",
+                            local_size.0, local_size.1, local_size.2
+                        )?;
+                    }
+                }
+                // Write entry signature with inputs
+                write!(f, "entry {}", name)?;
+                for input in inputs.iter() {
+                    let decoration = match &input.decoration {
+                        Some(mir::IoDecoration::Location(loc)) => format!(" @location({})", loc),
+                        Some(mir::IoDecoration::BuiltIn(b)) => format!(" @builtin({:?})", b),
+                        None => String::new(),
+                    };
+                    write!(f, " ({}{}: {})", input.name, decoration, format_type(&input.ty))?;
+                }
+                // Write return type
+                if outputs.len() == 1 {
+                    let out = &outputs[0];
+                    let decoration = match &out.decoration {
+                        Some(mir::IoDecoration::Location(loc)) => format!(" @location({})", loc),
+                        Some(mir::IoDecoration::BuiltIn(b)) => format!(" @builtin({:?})", b),
+                        None => String::new(),
+                    };
+                    write!(f, ":{} {}", decoration, format_type(&out.ty))?;
+                } else if !outputs.is_empty() {
+                    write!(f, ": (")?;
+                    for (i, out) in outputs.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        let decoration = match &out.decoration {
+                            Some(mir::IoDecoration::Location(loc)) => format!("@location({}) ", loc),
+                            Some(mir::IoDecoration::BuiltIn(b)) => format!("@builtin({:?}) ", b),
+                            None => String::new(),
+                        };
+                        write!(f, "{}{}", decoration, format_type(&out.ty))?;
+                    }
+                    write!(f, ")")?;
+                }
+                writeln!(f, " =")?;
+                // Write body with indentation
+                write!(f, "  {}", body)
+            }
         }
     }
 }

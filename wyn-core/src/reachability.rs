@@ -6,25 +6,17 @@
 //! so the lowerer can process them without forward references.
 
 use crate::mir::folder::MirFolder;
-use crate::mir::{Attribute, Def, Expr, ExprKind, Literal, Program};
+use crate::mir::{Def, Expr, ExprKind, Literal, Program};
 use std::collections::HashSet;
 
 /// Find all functions reachable from entry points, in topological order.
 /// Returns a Vec with callees before callers (post-order DFS).
 pub fn reachable_functions_ordered(program: &Program) -> Vec<String> {
-    // Find entry points (functions with #[vertex], #[fragment], or #[compute] attributes)
+    // Find entry points (Def::EntryPoint variants)
     let mut entry_points = Vec::new();
     for def in &program.defs {
-        if let Def::Function { name, attributes, .. } = def {
-            for attr in attributes {
-                if matches!(
-                    attr,
-                    Attribute::Vertex | Attribute::Fragment | Attribute::Compute { .. }
-                ) {
-                    entry_points.push(name.clone());
-                    break;
-                }
-            }
+        if let Def::EntryPoint { name, .. } = def {
+            entry_points.push(name.clone());
         }
     }
 
@@ -37,6 +29,9 @@ pub fn reachable_functions_ordered(program: &Program) -> Vec<String> {
             }
             Def::Constant { name, body, .. } => {
                 // Constants might call functions too
+                functions.insert(name.clone(), body);
+            }
+            Def::EntryPoint { name, body, .. } => {
                 functions.insert(name.clone(), body);
             }
             Def::Uniform { .. } => {
@@ -205,6 +200,7 @@ pub fn filter_reachable(program: Program) -> Program {
                 Def::Constant { name, .. } => name.clone(),
                 Def::Uniform { name, .. } => name.clone(),
                 Def::Storage { name, .. } => name.clone(),
+                Def::EntryPoint { name, .. } => name.clone(),
             };
             (name, def)
         })

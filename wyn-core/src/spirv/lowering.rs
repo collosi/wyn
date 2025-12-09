@@ -702,32 +702,34 @@ impl<'a> LowerCtx<'a> {
 
         for (i, def) in program.defs.iter().enumerate() {
             let name = match def {
-                Def::Function { name, attributes, .. } => {
+                Def::Function { name, .. } => name.clone(),
+                Def::EntryPoint {
+                    name,
+                    execution_model,
+                    ..
+                } => {
                     // Collect entry points
-                    for attr in attributes {
-                        match attr {
-                            mir::Attribute::Vertex => {
-                                entry_points.push(EntryPointInfo {
-                                    name: name.clone(),
-                                    model: spirv::ExecutionModel::Vertex,
-                                    local_size: None,
-                                });
-                            }
-                            mir::Attribute::Fragment => {
-                                entry_points.push(EntryPointInfo {
-                                    name: name.clone(),
-                                    model: spirv::ExecutionModel::Fragment,
-                                    local_size: None,
-                                });
-                            }
-                            mir::Attribute::Compute { local_size } => {
-                                entry_points.push(EntryPointInfo {
-                                    name: name.clone(),
-                                    model: spirv::ExecutionModel::GLCompute,
-                                    local_size: Some(*local_size),
-                                });
-                            }
-                            _ => {}
+                    match execution_model {
+                        mir::ExecutionModel::Vertex => {
+                            entry_points.push(EntryPointInfo {
+                                name: name.clone(),
+                                model: spirv::ExecutionModel::Vertex,
+                                local_size: None,
+                            });
+                        }
+                        mir::ExecutionModel::Fragment => {
+                            entry_points.push(EntryPointInfo {
+                                name: name.clone(),
+                                model: spirv::ExecutionModel::Fragment,
+                                local_size: None,
+                            });
+                        }
+                        mir::ExecutionModel::Compute { local_size } => {
+                            entry_points.push(EntryPointInfo {
+                                name: name.clone(),
+                                model: spirv::ExecutionModel::GLCompute,
+                                local_size: Some(*local_size),
+                            });
                         }
                     }
                     name.clone()
@@ -780,36 +782,26 @@ impl<'a> LowerCtx<'a> {
                 name,
                 params,
                 ret_type,
-                attributes,
-                param_attributes,
-                return_attributes,
                 body,
                 ..
             } => {
                 // First, ensure all dependencies are lowered
                 self.ensure_deps_lowered(body)?;
 
-                // Check if this is an entry point
-                let is_entry = attributes.iter().any(|a| {
-                    matches!(
-                        a,
-                        mir::Attribute::Vertex | mir::Attribute::Fragment | mir::Attribute::Compute { .. }
-                    )
-                });
+                // Regular function (entry points are now Def::EntryPoint)
+                lower_regular_function(&mut self.constructor, name, params, ret_type, body)?;
+            }
+            Def::EntryPoint {
+                name,
+                inputs,
+                outputs,
+                body,
+                ..
+            } => {
+                // First, ensure all dependencies are lowered
+                self.ensure_deps_lowered(body)?;
 
-                if is_entry {
-                    lower_entry_point(
-                        &mut self.constructor,
-                        name,
-                        params,
-                        ret_type,
-                        param_attributes,
-                        return_attributes,
-                        body,
-                    )?;
-                } else {
-                    lower_regular_function(&mut self.constructor, name, params, ret_type, body)?;
-                }
+                lower_entry_point_from_def(&mut self.constructor, name, inputs, outputs, body)?;
             }
             Def::Constant { name, body, .. } => {
                 // First, ensure all dependencies are lowered
@@ -1275,6 +1267,164 @@ fn lower_entry_point(
         } else if let Some(&output_var) = constructor.current_output_vars.first() {
             constructor.builder.store(output_var, result, None, [])?;
         }
+    }
+
+    // Return void
+    constructor.builder.ret()?;
+
+    // Terminate the variables block with a branch to the code block
+    if let (Some(vars_block), Some(code_block)) =
+        (constructor.variables_block, constructor.first_code_block)
+    {
+        // Find the variables block index and select it
+        let func = constructor.builder.module_ref().functions.last().expect("No function");
+        let vars_idx = func
+            .blocks
+            .iter()
+            .position(|b| b.label.as_ref().map(|l| l.result_id) == Some(Some(vars_block)));
+
+        if let Some(idx) = vars_idx {
+            constructor.builder.select_block(Some(idx))?;
+            constructor.builder.branch(code_block)?;
+        }
+    }
+
+    constructor.builder.end_function()?;
+
+    // Clean up
+    constructor.current_is_entry_point = false;
+    constructor.current_used_globals.clear();
+    constructor.variables_block = None;
+    constructor.first_code_block = None;
+    constructor.env.clear();
+
+    Ok(())
+}
+
+/// Lower an entry point from Def::EntryPoint structure (new format with EntryInput/EntryOutput)
+fn lower_entry_point_from_def(
+    constructor: &mut Constructor,
+    name: &str,
+    inputs: &[mir::EntryInput],
+    outputs: &[mir::EntryOutput],
+    body: &Expr,
+) -> Result<()> {
+    constructor.current_is_entry_point = true;
+    constructor.current_output_vars.clear();
+    constructor.current_input_vars.clear();
+
+    let mut interface_vars = Vec::new();
+
+    // Create Input variables for parameters
+    for input in inputs.iter() {
+        let input_type_id = constructor.ast_type_to_spirv(&input.ty);
+        let ptr_type_id = constructor.get_or_create_ptr_type(StorageClass::Input, input_type_id);
+        let var_id = constructor.builder.variable(ptr_type_id, None, StorageClass::Input, None);
+
+        // Add decorations from IoDecoration
+        if let Some(decoration) = &input.decoration {
+            match decoration {
+                mir::IoDecoration::Location(loc) => {
+                    constructor.builder.decorate(
+                        var_id,
+                        spirv::Decoration::Location,
+                        [rspirv::dr::Operand::LiteralBit32(*loc)],
+                    );
+                }
+                mir::IoDecoration::BuiltIn(builtin) => {
+                    constructor.builder.decorate(
+                        var_id,
+                        spirv::Decoration::BuiltIn,
+                        [rspirv::dr::Operand::BuiltIn(*builtin)],
+                    );
+                }
+            }
+        }
+
+        interface_vars.push(var_id);
+        constructor.current_input_vars.push((var_id, input.name.clone(), input_type_id));
+    }
+
+    // Create Output variables for return values
+    for output in outputs.iter() {
+        let output_type_id = constructor.ast_type_to_spirv(&output.ty);
+        let ptr_type_id = constructor.get_or_create_ptr_type(StorageClass::Output, output_type_id);
+        let var_id = constructor.builder.variable(ptr_type_id, None, StorageClass::Output, None);
+
+        // Add decorations from IoDecoration
+        if let Some(decoration) = &output.decoration {
+            match decoration {
+                mir::IoDecoration::Location(loc) => {
+                    constructor.builder.decorate(
+                        var_id,
+                        spirv::Decoration::Location,
+                        [rspirv::dr::Operand::LiteralBit32(*loc)],
+                    );
+                }
+                mir::IoDecoration::BuiltIn(builtin) => {
+                    constructor.builder.decorate(
+                        var_id,
+                        spirv::Decoration::BuiltIn,
+                        [rspirv::dr::Operand::BuiltIn(*builtin)],
+                    );
+                }
+            }
+        }
+
+        interface_vars.push(var_id);
+        constructor.current_output_vars.push(var_id);
+    }
+
+    // Store interface variables for entry point declaration
+    constructor.entry_point_interfaces.insert(name.to_string(), interface_vars);
+
+    // Create void(void) function for entry point
+    let func_type = constructor.builder.type_function(constructor.void_type, vec![]);
+    let func_id = constructor.builder.begin_function(
+        constructor.void_type,
+        None,
+        spirv::FunctionControl::NONE,
+        func_type,
+    )?;
+    constructor.functions.insert(name.to_string(), func_id);
+
+    // Create two blocks: one for variables, one for code (same pattern as regular functions)
+    let vars_block_id = constructor.builder.id();
+    let code_block_id = constructor.builder.id();
+    constructor.variables_block = Some(vars_block_id);
+    constructor.first_code_block = Some(code_block_id);
+
+    // Begin variables block (leave it open - no terminator yet)
+    constructor.builder.begin_block(Some(vars_block_id))?;
+
+    // Deselect current block so we can begin a new one
+    constructor.builder.select_block(None)?;
+
+    // Begin code block - this is where we'll emit code
+    constructor.builder.begin_block(Some(code_block_id))?;
+    constructor.current_block = Some(code_block_id);
+
+    // Load input variables into environment
+    for (var_id, param_name, type_id) in constructor.current_input_vars.clone() {
+        let loaded = constructor.builder.load(type_id, None, var_id, None, [])?;
+        constructor.env.insert(param_name, loaded);
+    }
+
+    // Lower the body
+    let result = lower_expr(constructor, body)?;
+
+    // Store result to output variables
+    if outputs.len() > 1 {
+        // Multiple outputs - extract components from tuple result
+        for (i, &output_var) in constructor.current_output_vars.clone().iter().enumerate() {
+            let comp_type_id = constructor.ast_type_to_spirv(&outputs[i].ty);
+            let component =
+                constructor.builder.composite_extract(comp_type_id, None, result, [i as u32])?;
+            constructor.builder.store(output_var, component, None, [])?;
+        }
+    } else if let Some(&output_var) = constructor.current_output_vars.first() {
+        // Single output
+        constructor.builder.store(output_var, result, None, [])?;
     }
 
     // Return void

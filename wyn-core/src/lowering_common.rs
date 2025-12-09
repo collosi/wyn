@@ -1,7 +1,7 @@
 //! Common utilities shared between lowering backends (SPIR-V, GLSL, etc.)
 
 use crate::ast::TypeName;
-use crate::mir::{self, Attribute, Def};
+use crate::mir::{self, Def, ExecutionModel};
 use polytype::Type as PolyType;
 
 /// Shader stage for entry points
@@ -12,6 +12,16 @@ pub enum ShaderStage {
     Compute {
         local_size: (u32, u32, u32),
     },
+}
+
+impl From<ExecutionModel> for ShaderStage {
+    fn from(model: ExecutionModel) -> Self {
+        match model {
+            ExecutionModel::Vertex => ShaderStage::Vertex,
+            ExecutionModel::Fragment => ShaderStage::Fragment,
+            ExecutionModel::Compute { local_size } => ShaderStage::Compute { local_size },
+        }
+    }
 }
 
 /// An entry point extracted from MIR
@@ -26,46 +36,20 @@ pub fn find_entry_points(program: &mir::Program) -> Vec<EntryPoint> {
     let mut entry_points = Vec::new();
 
     for def in &program.defs {
-        if let Def::Function { name, attributes, .. } = def {
-            for attr in attributes {
-                match attr {
-                    Attribute::Vertex => {
-                        entry_points.push(EntryPoint {
-                            name: name.clone(),
-                            stage: ShaderStage::Vertex,
-                        });
-                    }
-                    Attribute::Fragment => {
-                        entry_points.push(EntryPoint {
-                            name: name.clone(),
-                            stage: ShaderStage::Fragment,
-                        });
-                    }
-                    Attribute::Compute { local_size } => {
-                        entry_points.push(EntryPoint {
-                            name: name.clone(),
-                            stage: ShaderStage::Compute {
-                                local_size: *local_size,
-                            },
-                        });
-                    }
-                    _ => {}
-                }
-            }
+        if let Def::EntryPoint {
+            name,
+            execution_model,
+            ..
+        } = def
+        {
+            entry_points.push(EntryPoint {
+                name: name.clone(),
+                stage: (*execution_model).into(),
+            });
         }
     }
 
     entry_points
-}
-
-/// Check if a function has entry point attributes
-pub fn is_entry_point(attributes: &[Attribute]) -> bool {
-    attributes.iter().any(|a| {
-        matches!(
-            a,
-            Attribute::Vertex | Attribute::Fragment | Attribute::Compute { .. }
-        )
-    })
 }
 
 /// Check if a type represents an empty closure (no captured variables)

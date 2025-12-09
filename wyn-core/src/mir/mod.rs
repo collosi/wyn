@@ -94,6 +94,24 @@ pub enum Def {
         /// Access mode (read, write, readwrite).
         access: crate::ast::StorageAccess,
     },
+    /// A shader entry point (vertex, fragment, or compute shader).
+    EntryPoint {
+        /// Unique node identifier.
+        id: NodeId,
+        /// Entry point name.
+        name: String,
+        /// Execution model (vertex, fragment, compute).
+        execution_model: ExecutionModel,
+        /// Input parameters with their I/O decorations.
+        inputs: Vec<EntryInput>,
+        /// Output values with their I/O decorations.
+        /// For single return: one element. For tuple return: one per tuple element.
+        outputs: Vec<EntryOutput>,
+        /// The entry point body expression.
+        body: Expr,
+        /// Source location.
+        span: Span,
+    },
 }
 
 /// A function parameter.
@@ -108,6 +126,7 @@ pub struct Param {
 }
 
 /// An attribute that can be attached to functions or expressions.
+/// NOTE: Vertex/Fragment/Compute are deprecated for functions - use Def::EntryPoint instead.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Attribute {
     BuiltIn(spirv::BuiltIn),
@@ -119,6 +138,41 @@ pub enum Attribute {
     },
     Uniform,
     Storage,
+}
+
+/// Execution model for a shader entry point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionModel {
+    Vertex,
+    Fragment,
+    Compute { local_size: (u32, u32, u32) },
+}
+
+/// Decoration for shader I/O (entry point parameters and return values).
+#[derive(Debug, Clone, PartialEq)]
+pub enum IoDecoration {
+    BuiltIn(spirv::BuiltIn),
+    Location(u32),
+}
+
+/// An input parameter to a shader entry point.
+#[derive(Debug, Clone)]
+pub struct EntryInput {
+    /// Parameter name.
+    pub name: String,
+    /// Parameter type.
+    pub ty: Type<TypeName>,
+    /// I/O decoration (location or builtin).
+    pub decoration: Option<IoDecoration>,
+}
+
+/// An output from a shader entry point.
+#[derive(Debug, Clone)]
+pub struct EntryOutput {
+    /// Output type.
+    pub ty: Type<TypeName>,
+    /// I/O decoration (location or builtin).
+    pub decoration: Option<IoDecoration>,
 }
 
 /// The main expression type with source location and type.

@@ -508,8 +508,6 @@ impl Flattener {
                 ast::Declaration::Entry(e) => {
                     self.enclosing_decl_stack.push(e.name.clone());
 
-                    let params = self.flatten_params(&e.params)?;
-                    let param_attrs = self.extract_param_attributes(&e.params);
                     let span = e.body.h.span;
 
                     // Register params with binding IDs before flattening body
@@ -520,38 +518,78 @@ impl Flattener {
                     // Wrap body with backing stores for params that need them
                     let body = self.wrap_param_backing_stores(body, param_bindings, span);
 
-                    let ret_type = self.get_expr_type(&e.body);
-                    let attrs = vec![match &e.entry_type {
-                        ast::Attribute::Vertex => mir::Attribute::Vertex,
-                        ast::Attribute::Fragment => mir::Attribute::Fragment,
-                        ast::Attribute::Compute { local_size } => mir::Attribute::Compute {
+                    // Convert entry type to ExecutionModel
+                    let execution_model = match &e.entry_type {
+                        ast::Attribute::Vertex => mir::ExecutionModel::Vertex,
+                        ast::Attribute::Fragment => mir::ExecutionModel::Fragment,
+                        ast::Attribute::Compute { local_size } => mir::ExecutionModel::Compute {
                             local_size: *local_size,
                         },
                         _ => panic!("Invalid entry type attribute: {:?}", e.entry_type),
-                    }];
+                    };
 
-                    // Extract return attributes from EntryDecl
-                    // Each return value gets its own Vec of attributes
-                    let return_attrs: Vec<Vec<mir::Attribute>> =
-                        e.return_attributes
-                            .iter()
-                            .map(|opt| {
-                                if let Some(attr) = opt {
-                                    vec![self.convert_attribute(attr)]
-                                } else {
-                                    vec![]
-                                }
-                            })
-                            .collect();
+                    // Convert params to EntryInput with IoDecoration
+                    let inputs: Vec<mir::EntryInput> = e
+                        .params
+                        .iter()
+                        .map(|p| {
+                            let name = self.extract_param_name(p).unwrap_or_default();
+                            let ty = self.get_pattern_type(p);
+                            let decoration = self.extract_io_decoration(p);
+                            mir::EntryInput {
+                                name,
+                                ty,
+                                decoration,
+                            }
+                        })
+                        .collect();
 
-                    let def = mir::Def::Function {
+                    // Convert return type + return_attrs to EntryOutput with IoDecoration
+                    let ret_type = self.get_expr_type(&e.body);
+                    let outputs: Vec<mir::EntryOutput> = if e.return_attributes.is_empty() {
+                        // Single output without explicit decoration
+                        if !matches!(ret_type, polytype::Type::Constructed(ast::TypeName::Unit, _)) {
+                            vec![mir::EntryOutput {
+                                ty: ret_type,
+                                decoration: None,
+                            }]
+                        } else {
+                            vec![]
+                        }
+                    } else {
+                        // Multiple outputs with decorations (tuple return)
+                        if let polytype::Type::Constructed(ast::TypeName::Tuple(_), component_types) =
+                            &ret_type
+                        {
+                            e.return_attributes
+                                .iter()
+                                .zip(component_types.iter())
+                                .map(|(opt_attr, ty)| mir::EntryOutput {
+                                    ty: ty.clone(),
+                                    decoration: opt_attr
+                                        .as_ref()
+                                        .and_then(|a| self.convert_to_io_decoration(a)),
+                                })
+                                .collect()
+                        } else {
+                            // Single output with decoration
+                            vec![mir::EntryOutput {
+                                ty: ret_type,
+                                decoration: e
+                                    .return_attributes
+                                    .first()
+                                    .and_then(|opt| opt.as_ref())
+                                    .and_then(|a| self.convert_to_io_decoration(a)),
+                            }]
+                        }
+                    };
+
+                    let def = mir::Def::EntryPoint {
                         id: self.next_node_id(),
                         name: e.name.clone(),
-                        params,
-                        ret_type,
-                        attributes: attrs,
-                        param_attributes: param_attrs,
-                        return_attributes: return_attrs,
+                        execution_model,
+                        inputs,
+                        outputs,
                         body,
                         span,
                     };
@@ -618,6 +656,33 @@ impl Flattener {
             ast::Attribute::Uniform { .. } => mir::Attribute::Uniform,
             // The binding is stored in Def::Storage, not the Attribute
             ast::Attribute::Storage { .. } => mir::Attribute::Storage,
+        }
+    }
+
+    /// Convert an AST attribute to IoDecoration (only Location and BuiltIn are valid)
+    fn convert_to_io_decoration(&self, attr: &ast::Attribute) -> Option<mir::IoDecoration> {
+        match attr {
+            ast::Attribute::BuiltIn(builtin) => Some(mir::IoDecoration::BuiltIn(*builtin)),
+            ast::Attribute::Location(loc) => Some(mir::IoDecoration::Location(*loc)),
+            _ => None,
+        }
+    }
+
+    /// Extract IoDecoration from a pattern (for entry point parameters)
+    fn extract_io_decoration(&self, pattern: &ast::Pattern) -> Option<mir::IoDecoration> {
+        match &pattern.kind {
+            PatternKind::Attributed(attrs, inner) => {
+                // Look for Location or BuiltIn in attributes
+                for attr in attrs {
+                    if let Some(dec) = self.convert_to_io_decoration(attr) {
+                        return Some(dec);
+                    }
+                }
+                // Recurse into inner pattern
+                self.extract_io_decoration(inner)
+            }
+            PatternKind::Typed(inner, _) => self.extract_io_decoration(inner),
+            _ => None,
         }
     }
 

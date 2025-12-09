@@ -7,8 +7,8 @@ use crate::ast::TypeName;
 use crate::bail_glsl;
 use crate::error::Result;
 use crate::impl_source::{BuiltinImpl, ImplSource, PrimOp};
-use crate::lowering_common::{ShaderStage, is_entry_point};
-use crate::mir::{Attribute, Def, Expr, ExprKind, Literal, LoopKind, Program};
+use crate::lowering_common::ShaderStage;
+use crate::mir::{Attribute, Def, ExecutionModel, Expr, ExprKind, Literal, LoopKind, Program};
 use polytype::Type as PolyType;
 use rspirv::spirv;
 use std::collections::{HashMap, HashSet};
@@ -68,6 +68,7 @@ impl<'a> LowerCtx<'a> {
                 Def::Constant { name, .. } => name,
                 Def::Uniform { name, .. } => name,
                 Def::Storage { name, .. } => name,
+                Def::EntryPoint { name, .. } => name,
             };
             def_index.insert(name.clone(), i);
         }
@@ -107,16 +108,21 @@ impl<'a> LowerCtx<'a> {
 
         // Find entry points and generate shaders
         for def in &self.program.defs {
-            if let Def::Function { name, attributes, .. } = def {
-                for attr in attributes {
-                    match attr {
-                        Attribute::Vertex => {
-                            vertex_shader = Some(self.lower_shader(name, ShaderStage::Vertex)?);
-                        }
-                        Attribute::Fragment => {
-                            fragment_shader = Some(self.lower_shader(name, ShaderStage::Fragment)?);
-                        }
-                        _ => {}
+            if let Def::EntryPoint {
+                name,
+                execution_model,
+                ..
+            } = def
+            {
+                match execution_model {
+                    ExecutionModel::Vertex => {
+                        vertex_shader = Some(self.lower_shader(name, ShaderStage::Vertex)?);
+                    }
+                    ExecutionModel::Fragment => {
+                        fragment_shader = Some(self.lower_shader(name, ShaderStage::Fragment)?);
+                    }
+                    ExecutionModel::Compute { .. } => {
+                        // Compute shaders not supported in this output format
                     }
                 }
             }
@@ -132,13 +138,14 @@ impl<'a> LowerCtx<'a> {
         // Find fragment entry point
         let mut entry_name = None;
         for def in &self.program.defs {
-            if let Def::Function { name, attributes, .. } = def {
-                for attr in attributes {
-                    if let Attribute::Fragment = attr {
-                        entry_name = Some(name.clone());
-                        break;
-                    }
-                }
+            if let Def::EntryPoint {
+                name,
+                execution_model: ExecutionModel::Fragment,
+                ..
+            } = def
+            {
+                entry_name = Some(name.clone());
+                break;
             }
         }
 
@@ -357,6 +364,9 @@ impl<'a> LowerCtx<'a> {
                 Def::Constant { body, .. } => {
                     self.collect_expr_deps(body, deps, visited)?;
                 }
+                Def::EntryPoint { body, .. } => {
+                    self.collect_expr_deps(body, deps, visited)?;
+                }
                 Def::Uniform { .. } => {}
                 Def::Storage { .. } => {}
             }
@@ -470,17 +480,17 @@ impl<'a> LowerCtx<'a> {
 
     fn lower_def(&mut self, def: &Def, output: &mut String) -> Result<()> {
         match def {
+            Def::EntryPoint { .. } => {
+                // Entry points handled separately via lower_shader
+                return Ok(());
+            }
             Def::Function {
                 name,
                 params,
                 ret_type,
                 body,
-                attributes,
                 ..
             } => {
-                if is_entry_point(attributes) {
-                    return Ok(()); // Entry points handled separately
-                }
 
                 // Clear declared variables for this function
                 self.declared_vars.clear();

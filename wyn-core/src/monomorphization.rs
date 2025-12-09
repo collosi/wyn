@@ -14,7 +14,7 @@
 use crate::ast::{Type, TypeName};
 use crate::error::Result;
 use crate::mir::folder::MirFolder;
-use crate::mir::{Attribute, Def, Expr, ExprKind, Param, Program};
+use crate::mir::{Def, Expr, ExprKind, Param, Program};
 use polytype::Type as PolyType;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -144,21 +144,15 @@ impl Monomorphizer {
                 Def::Constant { name, .. } => name.clone(),
                 Def::Uniform { name, .. } => name.clone(),
                 Def::Storage { name, .. } => name.clone(),
+                Def::EntryPoint { name, .. } => name.clone(),
             };
 
             // Check if this is an entry point
-            if let Def::Function { attributes, .. } = &def {
-                for attr in attributes {
-                    if matches!(
-                        attr,
-                        Attribute::Vertex | Attribute::Fragment | Attribute::Compute { .. }
-                    ) {
-                        entry_points.push(WorkItem {
-                            name: name.clone(),
-                            def: def.clone(),
-                        });
-                    }
-                }
+            if let Def::EntryPoint { .. } = &def {
+                entry_points.push(WorkItem {
+                    name: name.clone(),
+                    def: def.clone(),
+                });
             }
 
             poly_functions.insert(name, def);
@@ -249,6 +243,26 @@ impl Monomorphizer {
                     name,
                     ty,
                     attributes,
+                    body,
+                    span,
+                })
+            }
+            Def::EntryPoint {
+                id,
+                name,
+                execution_model,
+                inputs,
+                outputs,
+                body,
+                span,
+            } => {
+                let body = self.process_expr(body)?;
+                Ok(Def::EntryPoint {
+                    id,
+                    name,
+                    execution_model,
+                    inputs,
+                    outputs,
                     body,
                     span,
                 })
@@ -404,6 +418,7 @@ impl Monomorphizer {
         // Get parameter types from the definition
         let param_types = match poly_def {
             Def::Function { params, .. } => params.iter().map(|p| &p.ty).collect::<Vec<_>>(),
+            Def::EntryPoint { inputs, .. } => inputs.iter().map(|i| &i.ty).collect::<Vec<_>>(),
             Def::Constant { .. } => return Ok(subst), // No parameters
             Def::Uniform { .. } => return Ok(subst),  // No parameters
             Def::Storage { .. } => return Ok(subst),  // No parameters
@@ -471,6 +486,9 @@ impl Monomorphizer {
 
     /// Create a specialized version of a function by applying substitution
     fn specialize_def(&self, def: Def, subst: &Substitution, new_name: &str) -> Result<Def> {
+        use crate::mir::EntryInput;
+        use crate::mir::EntryOutput;
+
         match def {
             Def::Function {
                 id,
@@ -502,6 +520,42 @@ impl Monomorphizer {
                     attributes,
                     param_attributes,
                     return_attributes,
+                    body,
+                    span,
+                })
+            }
+            Def::EntryPoint {
+                id,
+                execution_model,
+                inputs,
+                outputs,
+                body,
+                span,
+                ..
+            } => {
+                let inputs = inputs
+                    .into_iter()
+                    .map(|i| EntryInput {
+                        name: i.name,
+                        ty: apply_subst(&i.ty, subst),
+                        decoration: i.decoration,
+                    })
+                    .collect();
+                let outputs = outputs
+                    .into_iter()
+                    .map(|o| EntryOutput {
+                        ty: apply_subst(&o.ty, subst),
+                        decoration: o.decoration,
+                    })
+                    .collect();
+                let body = apply_subst_expr(body, subst);
+
+                Ok(Def::EntryPoint {
+                    id,
+                    name: new_name.to_string(),
+                    execution_model,
+                    inputs,
+                    outputs,
                     body,
                     span,
                 })

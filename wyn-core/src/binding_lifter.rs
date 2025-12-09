@@ -111,6 +111,26 @@ impl BindingLifter {
             }
             Def::Uniform { .. } => Ok(def),
             Def::Storage { .. } => Ok(def),
+            Def::EntryPoint {
+                id,
+                name,
+                execution_model,
+                inputs,
+                outputs,
+                body,
+                span,
+            } => {
+                let body = self.lift_expr(body)?;
+                Ok(Def::EntryPoint {
+                    id,
+                    name,
+                    execution_model,
+                    inputs,
+                    outputs,
+                    body,
+                    span,
+                })
+            }
         }
     }
 

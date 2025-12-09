@@ -90,6 +90,28 @@ impl Normalizer {
             Def::Constant { .. } => def,
             Def::Uniform { .. } => def,  // Uniforms have no body to normalize
             Def::Storage { .. } => def,  // Storage buffers have no body to normalize
+            Def::EntryPoint {
+                id,
+                name,
+                execution_model,
+                inputs,
+                outputs,
+                body,
+                span,
+            } => {
+                let mut bindings = Vec::new();
+                let body = self.normalize_expr(body, &mut bindings);
+                let body = self.wrap_bindings(body, bindings);
+                Def::EntryPoint {
+                    id,
+                    name,
+                    execution_model,
+                    inputs,
+                    outputs,
+                    body,
+                    span,
+                }
+            }
         }
     }
 
@@ -464,7 +486,7 @@ pub fn find_max_binding_id(program: &Program) -> u64 {
     let mut max_id = 0;
     for def in &program.defs {
         match def {
-            Def::Function { body, .. } | Def::Constant { body, .. } => {
+            Def::Function { body, .. } | Def::Constant { body, .. } | Def::EntryPoint { body, .. } => {
                 max_id = max_id.max(find_max_binding_id_in_expr(body));
             }
             Def::Uniform { .. } => {}
