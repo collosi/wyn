@@ -43,10 +43,150 @@ mod monomorphization_tests;
 mod normalize_tests;
 
 use std::collections::HashMap;
+use std::hash::Hash;
+use std::marker::PhantomData;
+
+use indexmap::IndexMap;
 
 use ast::{NodeCounter, NodeId};
 use error::Result;
 use polytype::TypeScheme;
+
+// =============================================================================
+// Generic ID allocation
+// =============================================================================
+
+/// Generic counter for generating unique IDs.
+///
+/// The ID type must implement `From<u32>` to convert the raw counter value.
+#[derive(Debug, Clone)]
+pub struct IdSource<Id> {
+    next_id: u32,
+    _phantom: PhantomData<Id>,
+}
+
+impl<Id: From<u32>> IdSource<Id> {
+    pub fn new() -> Self {
+        IdSource {
+            next_id: 0,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn next(&mut self) -> Id {
+        let id = Id::from(self.next_id);
+        self.next_id += 1;
+        id
+    }
+}
+
+impl<Id: From<u32>> Default for IdSource<Id> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Arena that allocates IDs and stores associated items.
+///
+/// Combines ID generation with storage, ensuring each item gets a unique ID.
+/// Uses IndexMap for deterministic iteration order (insertion order).
+#[derive(Debug, Clone)]
+pub struct IdArena<Id, T> {
+    source: IdSource<Id>,
+    items: IndexMap<Id, T>,
+}
+
+impl<Id: From<u32> + Copy + Eq + Hash, T> IdArena<Id, T> {
+    pub fn new() -> Self {
+        IdArena {
+            source: IdSource::new(),
+            items: IndexMap::new(),
+        }
+    }
+
+    /// Allocate a new ID and store the item.
+    pub fn alloc(&mut self, item: T) -> Id {
+        let id = self.source.next();
+        self.items.insert(id, item);
+        id
+    }
+
+    /// Allocate a new ID without storing anything yet.
+    /// Use `insert` later to store the item.
+    pub fn alloc_id(&mut self) -> Id {
+        self.source.next()
+    }
+
+    /// Insert an item with a pre-allocated ID.
+    /// Panics if the ID is already in use.
+    pub fn insert(&mut self, id: Id, item: T) {
+        let old = self.items.insert(id, item);
+        assert!(old.is_none(), "IdArena::insert called with duplicate ID");
+    }
+
+    /// Get an item by ID.
+    pub fn get(&self, id: Id) -> Option<&T> {
+        self.items.get(&id)
+    }
+
+    /// Get a mutable reference to an item by ID.
+    pub fn get_mut(&mut self, id: Id) -> Option<&mut T> {
+        self.items.get_mut(&id)
+    }
+
+    /// Iterate over all (id, item) pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&Id, &T)> {
+        self.items.iter()
+    }
+
+    /// Iterate over all items (without IDs).
+    pub fn values(&self) -> impl Iterator<Item = &T> {
+        self.items.values()
+    }
+
+    /// Number of items in the arena.
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Check if the arena is empty.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+
+impl<Id: From<u32> + Copy + Eq + Hash, T> Default for IdArena<Id, T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<Id: From<u32> + Copy + Eq + Hash, T> IntoIterator for IdArena<Id, T> {
+    type Item = (Id, T);
+    type IntoIter = indexmap::map::IntoIter<Id, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.into_iter()
+    }
+}
+
+impl<'a, Id: From<u32> + Copy + Eq + Hash, T> IntoIterator for &'a IdArena<Id, T> {
+    type Item = (&'a Id, &'a T);
+    type IntoIter = indexmap::map::Iter<'a, Id, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.iter()
+    }
+}
+
+impl<'a, Id: From<u32> + Copy + Eq + Hash, T> IntoIterator for &'a mut IdArena<Id, T> {
+    type Item = (&'a Id, &'a mut T);
+    type IntoIter = indexmap::map::IterMut<'a, Id, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.iter_mut()
+    }
+}
 
 // Re-export key types for the public API
 pub use ast::TypeName;

@@ -2282,6 +2282,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "env_logger",
+ "indexmap",
  "itertools 0.14.0",
  "log",
  "naga 22.1.0",
