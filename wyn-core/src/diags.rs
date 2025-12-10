@@ -818,12 +818,11 @@ impl Display for mir::ExprKind {
                 write!(f, "if {} then {} else {}", cond, then_branch, else_branch)
             }
             mir::ExprKind::Let {
-                name,
-                binding_id,
+                local,
                 value,
                 body,
             } => {
-                write!(f, "let {}{{{}}} = {} in\n{}", name, binding_id, value, body)
+                write!(f, "let {} = {} in\n{}", local, value, body)
             }
             mir::ExprKind::Loop {
                 loop_var,
@@ -834,14 +833,14 @@ impl Display for mir::ExprKind {
             } => {
                 write!(f, "loop ({}, ", loop_var)?;
                 if init_bindings.len() == 1 {
-                    let (name, binding) = &init_bindings[0];
-                    write!(f, "{}) = ({}, {})", name, init, binding)?;
+                    let (local, binding) = &init_bindings[0];
+                    write!(f, "{}) = ({}, {})", local, init, binding)?;
                 } else {
-                    for (i, (name, _)) in init_bindings.iter().enumerate() {
+                    for (i, (local, _)) in init_bindings.iter().enumerate() {
                         if i > 0 {
                             write!(f, ", ")?;
                         }
-                        write!(f, "{}", name)?;
+                        write!(f, "{}", local)?;
                     }
                     write!(f, ") = ({}, ", init)?;
                     for (i, (_, binding)) in init_bindings.iter().enumerate() {
@@ -854,15 +853,20 @@ impl Display for mir::ExprKind {
                 }
                 write!(f, " {} do {}", kind, body)
             }
-            mir::ExprKind::Call { func, args } => {
-                write!(f, "{}", func)?;
+            mir::ExprKind::Call { func, func_name, args } => {
+                // Use func_name if available (for builtins), otherwise show DefId
+                if let Some(name) = func_name {
+                    write!(f, "{}", name)?;
+                } else {
+                    write!(f, "{}", func)?;
+                }
                 for arg in args.iter() {
                     write!(f, " {}", arg)?;
                 }
                 Ok(())
             }
-            mir::ExprKind::Intrinsic { name, args } => {
-                write!(f, "@{}(", name)?;
+            mir::ExprKind::Intrinsic { id, args } => {
+                write!(f, "@{}(", id)?;
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
@@ -881,10 +885,10 @@ impl Display for mir::ExprKind {
                 write!(f, "@materialize({})", inner)
             }
             mir::ExprKind::Closure {
-                lambda_name,
+                lambda,
                 captures,
             } => {
-                write!(f, "@closure({}, [", lambda_name)?;
+                write!(f, "@closure({}, [", lambda)?;
                 for (i, cap) in captures.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;

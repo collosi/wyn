@@ -142,7 +142,7 @@ pub trait MirFolder: Sized {
 
     fn visit_expr_var(
         &mut self,
-        _name: String,
+        _local: LocalId,
         expr: Expr,
         _ctx: &mut Self::Ctx,
     ) -> Result<Expr, Self::Error> {
@@ -183,21 +183,20 @@ pub trait MirFolder: Sized {
 
     fn visit_expr_let(
         &mut self,
-        name: String,
-        binding_id: u64,
+        local: LocalId,
         value: Expr,
         body: Expr,
         expr: Expr,
         ctx: &mut Self::Ctx,
     ) -> Result<Expr, Self::Error> {
-        walk_expr_let(self, name, binding_id, value, body, expr, ctx)
+        walk_expr_let(self, local, value, body, expr, ctx)
     }
 
     fn visit_expr_loop(
         &mut self,
-        loop_var: String,
+        loop_var: LocalId,
         init: Expr,
-        init_bindings: Vec<(String, Expr)>,
+        init_bindings: Vec<(LocalId, Expr)>,
         kind: LoopKind,
         body: Expr,
         expr: Expr,
@@ -208,22 +207,23 @@ pub trait MirFolder: Sized {
 
     fn visit_expr_call(
         &mut self,
-        func: String,
+        func: DefId,
+        func_name: Option<String>,
         args: Vec<Expr>,
         expr: Expr,
         ctx: &mut Self::Ctx,
     ) -> Result<Expr, Self::Error> {
-        walk_expr_call(self, func, args, expr, ctx)
+        walk_expr_call(self, func, func_name, args, expr, ctx)
     }
 
     fn visit_expr_intrinsic(
         &mut self,
-        name: String,
+        id: IntrinsicId,
         args: Vec<Expr>,
         expr: Expr,
         ctx: &mut Self::Ctx,
     ) -> Result<Expr, Self::Error> {
-        walk_expr_intrinsic(self, name, args, expr, ctx)
+        walk_expr_intrinsic(self, id, args, expr, ctx)
     }
 
     fn visit_expr_attributed(
@@ -247,12 +247,12 @@ pub trait MirFolder: Sized {
 
     fn visit_expr_closure(
         &mut self,
-        lambda_name: String,
+        lambda: DefId,
         captures: Vec<Expr>,
         expr: Expr,
         ctx: &mut Self::Ctx,
     ) -> Result<Expr, Self::Error> {
-        walk_expr_closure(self, lambda_name, captures, expr, ctx)
+        walk_expr_closure(self, lambda, captures, expr, ctx)
     }
 
     // --- Literals ---
@@ -301,7 +301,7 @@ pub trait MirFolder: Sized {
 
     fn visit_for_loop(
         &mut self,
-        var: String,
+        var: LocalId,
         iter: Expr,
         ctx: &mut Self::Ctx,
     ) -> Result<LoopKind, Self::Error> {
@@ -310,7 +310,7 @@ pub trait MirFolder: Sized {
 
     fn visit_for_range_loop(
         &mut self,
-        var: String,
+        var: LocalId,
         bound: Expr,
         ctx: &mut Self::Ctx,
     ) -> Result<LoopKind, Self::Error> {
@@ -502,6 +502,7 @@ pub fn walk_entry_point<V: MirFolder>(
             let ty = v.visit_type(input.ty, ctx)?;
             Ok(EntryInput {
                 name: input.name,
+                local_id: input.local_id,
                 ty,
                 decoration: input.decoration,
             })
@@ -578,20 +579,20 @@ pub fn walk_expr<V: MirFolder>(v: &mut V, e: Expr, ctx: &mut V::Ctx) -> Result<E
             kind: ExprKind::Unit,
             span,
         }),
-        ExprKind::Var(ref name) => {
+        ExprKind::Var(local) => {
             let expr = Expr {
                 id,
                 ty,
-                kind: ExprKind::Var(name.clone()),
+                kind: ExprKind::Var(local),
                 span,
             };
-            v.visit_expr_var(name.clone(), expr, ctx)
+            v.visit_expr_var(local, expr, ctx)
         }
         ExprKind::BinOp { op, lhs, rhs } => {
             let expr = Expr {
                 id,
                 ty,
-                kind: ExprKind::Var(String::new()), // Dummy kind, won't be used
+                kind: ExprKind::Var(LocalId(0)), // Dummy kind, won't be used
                 span,
             };
             v.visit_expr_bin_op(op, *lhs, *rhs, expr, ctx)
@@ -600,7 +601,7 @@ pub fn walk_expr<V: MirFolder>(v: &mut V, e: Expr, ctx: &mut V::Ctx) -> Result<E
             let expr = Expr {
                 id,
                 ty,
-                kind: ExprKind::Var(String::new()),
+                kind: ExprKind::Var(LocalId(0)),
                 span,
             };
             v.visit_expr_unary_op(op, *operand, expr, ctx)
@@ -613,24 +614,23 @@ pub fn walk_expr<V: MirFolder>(v: &mut V, e: Expr, ctx: &mut V::Ctx) -> Result<E
             let expr = Expr {
                 id,
                 ty,
-                kind: ExprKind::Var(String::new()),
+                kind: ExprKind::Var(LocalId(0)),
                 span,
             };
             v.visit_expr_if(*cond, *then_branch, *else_branch, expr, ctx)
         }
         ExprKind::Let {
-            name,
-            binding_id,
+            local,
             value,
             body,
         } => {
             let expr = Expr {
                 id,
                 ty,
-                kind: ExprKind::Var(String::new()),
+                kind: ExprKind::Var(LocalId(0)),
                 span,
             };
-            v.visit_expr_let(name, binding_id, *value, *body, expr, ctx)
+            v.visit_expr_let(local, *value, *body, expr, ctx)
         }
         ExprKind::Loop {
             loop_var,
@@ -642,28 +642,28 @@ pub fn walk_expr<V: MirFolder>(v: &mut V, e: Expr, ctx: &mut V::Ctx) -> Result<E
             let expr = Expr {
                 id,
                 ty,
-                kind: ExprKind::Var(String::new()),
+                kind: ExprKind::Var(LocalId(0)),
                 span,
             };
             v.visit_expr_loop(loop_var, *init, init_bindings, kind, *body, expr, ctx)
         }
-        ExprKind::Call { func, args } => {
+        ExprKind::Call { func, func_name, args } => {
             let expr = Expr {
                 id,
                 ty,
-                kind: ExprKind::Var(String::new()),
+                kind: ExprKind::Var(LocalId(0)),
                 span,
             };
-            v.visit_expr_call(func, args, expr, ctx)
+            v.visit_expr_call(func, func_name, args, expr, ctx)
         }
-        ExprKind::Intrinsic { name, args } => {
+        ExprKind::Intrinsic { id: intrinsic_id, args } => {
             let expr = Expr {
                 id,
                 ty,
-                kind: ExprKind::Var(String::new()),
+                kind: ExprKind::Var(LocalId(0)),
                 span,
             };
-            v.visit_expr_intrinsic(name, args, expr, ctx)
+            v.visit_expr_intrinsic(intrinsic_id, args, expr, ctx)
         }
         ExprKind::Attributed {
             attributes,
@@ -672,7 +672,7 @@ pub fn walk_expr<V: MirFolder>(v: &mut V, e: Expr, ctx: &mut V::Ctx) -> Result<E
             let expr = Expr {
                 id,
                 ty,
-                kind: ExprKind::Var(String::new()),
+                kind: ExprKind::Var(LocalId(0)),
                 span,
             };
             v.visit_expr_attributed(attributes, *inner, expr, ctx)
@@ -681,22 +681,22 @@ pub fn walk_expr<V: MirFolder>(v: &mut V, e: Expr, ctx: &mut V::Ctx) -> Result<E
             let expr = Expr {
                 id,
                 ty,
-                kind: ExprKind::Var(String::new()),
+                kind: ExprKind::Var(LocalId(0)),
                 span,
             };
             v.visit_expr_materialize(*inner, expr, ctx)
         }
         ExprKind::Closure {
-            lambda_name,
+            lambda,
             captures,
         } => {
             let expr = Expr {
                 id,
                 ty,
-                kind: ExprKind::Var(String::new()),
+                kind: ExprKind::Var(LocalId(0)),
                 span,
             };
-            v.visit_expr_closure(lambda_name, captures, expr, ctx)
+            v.visit_expr_closure(lambda, captures, expr, ctx)
         }
     }
 }
@@ -761,8 +761,7 @@ pub fn walk_expr_if<V: MirFolder>(
 
 pub fn walk_expr_let<V: MirFolder>(
     v: &mut V,
-    name: String,
-    binding_id: u64,
+    local: LocalId,
     value: Expr,
     body: Expr,
     expr: Expr,
@@ -772,8 +771,7 @@ pub fn walk_expr_let<V: MirFolder>(
     let body = v.visit_expr(body, ctx)?;
     Ok(Expr {
         kind: ExprKind::Let {
-            name,
-            binding_id,
+            local,
             value: Box::new(value),
             body: Box::new(body),
         },
@@ -783,9 +781,9 @@ pub fn walk_expr_let<V: MirFolder>(
 
 pub fn walk_expr_loop<V: MirFolder>(
     v: &mut V,
-    loop_var: String,
+    loop_var: LocalId,
     init: Expr,
-    init_bindings: Vec<(String, Expr)>,
+    init_bindings: Vec<(LocalId, Expr)>,
     kind: LoopKind,
     body: Expr,
     expr: Expr,
@@ -794,7 +792,7 @@ pub fn walk_expr_loop<V: MirFolder>(
     let init = v.visit_expr(init, ctx)?;
     let init_bindings = init_bindings
         .into_iter()
-        .map(|(name, e)| Ok((name, v.visit_expr(e, ctx)?)))
+        .map(|(local, e)| Ok((local, v.visit_expr(e, ctx)?)))
         .collect::<Result<Vec<_>, _>>()?;
 
     let kind = v.visit_loop_kind(kind, ctx)?;
@@ -814,28 +812,29 @@ pub fn walk_expr_loop<V: MirFolder>(
 
 pub fn walk_expr_call<V: MirFolder>(
     v: &mut V,
-    func: String,
+    func: DefId,
+    func_name: Option<String>,
     args: Vec<Expr>,
     expr: Expr,
     ctx: &mut V::Ctx,
 ) -> Result<Expr, V::Error> {
     let args = args.into_iter().map(|arg| v.visit_expr(arg, ctx)).collect::<Result<Vec<_>, _>>()?;
     Ok(Expr {
-        kind: ExprKind::Call { func, args },
+        kind: ExprKind::Call { func, func_name, args },
         ..expr
     })
 }
 
 pub fn walk_expr_intrinsic<V: MirFolder>(
     v: &mut V,
-    name: String,
+    id: IntrinsicId,
     args: Vec<Expr>,
     expr: Expr,
     ctx: &mut V::Ctx,
 ) -> Result<Expr, V::Error> {
     let args = args.into_iter().map(|arg| v.visit_expr(arg, ctx)).collect::<Result<Vec<_>, _>>()?;
     Ok(Expr {
-        kind: ExprKind::Intrinsic { name, args },
+        kind: ExprKind::Intrinsic { id, args },
         ..expr
     })
 }
@@ -876,7 +875,7 @@ pub fn walk_expr_materialize<V: MirFolder>(
 
 pub fn walk_expr_closure<V: MirFolder>(
     v: &mut V,
-    lambda_name: String,
+    lambda: DefId,
     captures: Vec<Expr>,
     expr: Expr,
     ctx: &mut V::Ctx,
@@ -887,7 +886,7 @@ pub fn walk_expr_closure<V: MirFolder>(
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Expr {
         kind: ExprKind::Closure {
-            lambda_name,
+            lambda,
             captures,
         },
         ..expr
@@ -952,7 +951,7 @@ pub fn walk_loop_kind<V: MirFolder>(
 
 pub fn walk_for_loop<V: MirFolder>(
     v: &mut V,
-    var: String,
+    var: LocalId,
     iter: Expr,
     ctx: &mut V::Ctx,
 ) -> Result<LoopKind, V::Error> {
@@ -965,7 +964,7 @@ pub fn walk_for_loop<V: MirFolder>(
 
 pub fn walk_for_range_loop<V: MirFolder>(
     v: &mut V,
-    var: String,
+    var: LocalId,
     bound: Expr,
     ctx: &mut V::Ctx,
 ) -> Result<LoopKind, V::Error> {

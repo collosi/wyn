@@ -6,7 +6,7 @@
 //! so the lowerer can process them without forward references.
 
 use crate::mir::folder::MirFolder;
-use crate::mir::{Def, Expr, ExprKind, Literal, Program};
+use crate::mir::{Def, DefId, Expr, ExprKind, LocalId, Literal, Program};
 use std::collections::HashSet;
 
 /// Find all functions reachable from entry points, in topological order.
@@ -49,7 +49,7 @@ pub fn reachable_functions_ordered(program: &Program) -> Vec<String> {
     let mut order = Vec::new();
 
     for entry in entry_points {
-        dfs_postorder(&entry, &functions, &mut visited, &mut in_stack, &mut order);
+        dfs_postorder(&entry, &functions, program, &mut visited, &mut in_stack, &mut order);
     }
 
     order
@@ -58,6 +58,7 @@ pub fn reachable_functions_ordered(program: &Program) -> Vec<String> {
 fn dfs_postorder(
     name: &str,
     functions: &std::collections::HashMap<String, &Expr>,
+    program: &Program,
     visited: &mut HashSet<String>,
     in_stack: &mut HashSet<String>,
     order: &mut Vec<String>,
@@ -70,10 +71,10 @@ fn dfs_postorder(
 
     // Visit all callees first (if they exist in the program)
     if let Some(body) = functions.get(name) {
-        let callees = collect_callees(body);
+        let callees = collect_callees(body, program);
         for callee in callees {
             if functions.contains_key(&callee) {
-                dfs_postorder(&callee, functions, visited, in_stack, order);
+                dfs_postorder(&callee, functions, program, visited, in_stack, order);
             }
         }
     }
@@ -89,23 +90,27 @@ pub fn reachable_functions(program: &Program) -> HashSet<String> {
 }
 
 /// Visitor that collects function names called in expressions
-struct CalleeCollector {
+struct CalleeCollector<'a> {
+    program: &'a Program,
     callees: HashSet<String>,
 }
 
-impl MirFolder for CalleeCollector {
+impl<'a> MirFolder for CalleeCollector<'a> {
     type Error = std::convert::Infallible;
     type Ctx = ();
 
     fn visit_expr_call(
         &mut self,
-        func: String,
+        func: DefId,
+        func_name: Option<String>,
         args: Vec<Expr>,
         expr: Expr,
         ctx: &mut Self::Ctx,
     ) -> Result<Expr, Self::Error> {
-        // Collect the function name
-        self.callees.insert(func.clone());
+        // Look up the function name from DefId or use provided func_name
+        if let Some(name) = self.program.def_name(func).or(func_name.as_deref()) {
+            self.callees.insert(name.to_string());
+        }
 
         // Continue traversal of arguments
         for arg in &args {
@@ -113,21 +118,21 @@ impl MirFolder for CalleeCollector {
         }
 
         Ok(Expr {
-            kind: ExprKind::Call { func, args },
+            kind: ExprKind::Call { func, func_name, args },
             ..expr
         })
     }
 
     fn visit_expr_var(
         &mut self,
-        name: String,
+        local: LocalId,
         expr: Expr,
         _ctx: &mut Self::Ctx,
     ) -> Result<Expr, Self::Error> {
-        // Variable references might refer to top-level constants
-        self.callees.insert(name.clone());
+        // LocalId is a local variable, not a top-level reference
+        // No need to collect it as a callee
         Ok(Expr {
-            kind: ExprKind::Var(name),
+            kind: ExprKind::Var(local),
             ..expr
         })
     }
@@ -153,13 +158,15 @@ impl MirFolder for CalleeCollector {
 
     fn visit_expr_closure(
         &mut self,
-        lambda_name: String,
+        lambda: DefId,
         captures: Vec<Expr>,
         expr: Expr,
         ctx: &mut Self::Ctx,
     ) -> Result<Expr, Self::Error> {
-        // Collect the lambda function name as a callee
-        self.callees.insert(lambda_name.clone());
+        // Look up the lambda function name from DefId
+        if let Some(name) = self.program.def_name(lambda) {
+            self.callees.insert(name.to_string());
+        }
 
         // Continue traversal into captures
         for cap in &captures {
@@ -168,7 +175,7 @@ impl MirFolder for CalleeCollector {
 
         Ok(Expr {
             kind: ExprKind::Closure {
-                lambda_name,
+                lambda,
                 captures,
             },
             ..expr
@@ -177,8 +184,9 @@ impl MirFolder for CalleeCollector {
 }
 
 /// Collect all function names called in an expression
-fn collect_callees(expr: &Expr) -> HashSet<String> {
+fn collect_callees(expr: &Expr, program: &Program) -> HashSet<String> {
     let mut collector = CalleeCollector {
+        program,
         callees: HashSet::new(),
     };
     collector.visit_expr(expr.clone(), &mut ()).ok();

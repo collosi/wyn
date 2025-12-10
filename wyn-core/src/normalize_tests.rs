@@ -2,7 +2,7 @@
 
 use crate::ast::{NodeCounter, NodeId, Span, TypeName};
 use crate::error::CompilerError;
-use crate::mir::{Expr, ExprKind, Literal};
+use crate::mir::{DefId, Expr, ExprKind, Literal, LocalId};
 use crate::normalize::{Normalizer, is_atomic};
 use polytype::Type;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -38,16 +38,21 @@ fn i32_type() -> Type<TypeName> {
 
 // Global counter for test node IDs (tests don't care about the actual values)
 static TEST_NODE_ID: AtomicU32 = AtomicU32::new(0);
+static TEST_LOCAL_ID: AtomicU32 = AtomicU32::new(1000); // Start high to avoid conflicts
 
 fn next_id() -> NodeId {
     NodeId(TEST_NODE_ID.fetch_add(1, Ordering::Relaxed))
 }
 
-fn var(name: &str) -> Expr {
+fn next_local_id() -> LocalId {
+    LocalId(TEST_LOCAL_ID.fetch_add(1, Ordering::Relaxed))
+}
+
+fn var(local_id: LocalId) -> Expr {
     Expr::new(
         next_id(),
         i32_type(),
-        ExprKind::Var(name.to_string()),
+        ExprKind::Var(local_id),
         test_span(),
     )
 }
@@ -74,12 +79,13 @@ fn binop(op: &str, lhs: Expr, rhs: Expr) -> Expr {
     )
 }
 
-fn call(func: &str, args: Vec<Expr>) -> Expr {
+fn call(func: DefId, args: Vec<Expr>) -> Expr {
     Expr::new(
         next_id(),
         i32_type(),
         ExprKind::Call {
-            func: func.to_string(),
+            func,
+            func_name: None,
             args,
         },
         test_span(),
@@ -88,7 +94,8 @@ fn call(func: &str, args: Vec<Expr>) -> Expr {
 
 #[test]
 fn test_atomic_var() {
-    let expr = var("x");
+    let local_id = next_local_id();
+    let expr = var(local_id);
     assert!(is_atomic(&expr));
 }
 
@@ -100,16 +107,20 @@ fn test_atomic_int_literal() {
 
 #[test]
 fn test_not_atomic_binop() {
-    let expr = binop("+", var("a"), var("b"));
+    let a = next_local_id();
+    let b = next_local_id();
+    let expr = binop("+", var(a), var(b));
     assert!(!is_atomic(&expr));
 }
 
 #[test]
 fn test_normalize_binop_with_atomic_operands() {
     // a + b should stay as a + b (no new bindings)
-    let expr = binop("+", var("a"), var("b"));
+    let a = next_local_id();
+    let b = next_local_id();
+    let expr = binop("+", var(a), var(b));
     let mut bindings = Vec::new();
-    let mut normalizer = Normalizer::new(0, NodeCounter::new());
+    let mut normalizer = Normalizer::new(NodeCounter::new());
     let result = normalizer.normalize_expr(expr, &mut bindings);
 
     assert!(bindings.is_empty());
@@ -119,21 +130,26 @@ fn test_normalize_binop_with_atomic_operands() {
 #[test]
 fn test_normalize_nested_binop() {
     // (a + b) + c should become:
-    // let _w_norm_0 = a + b in _w_norm_0 + c
-    let inner = binop("+", var("a"), var("b"));
-    let expr = binop("+", inner, var("c"));
+    // let temp = a + b in temp + c
+    let a = next_local_id();
+    let b = next_local_id();
+    let c = next_local_id();
+    let inner = binop("+", var(a), var(b));
+    let expr = binop("+", inner, var(c));
     let mut bindings = Vec::new();
-    let mut normalizer = Normalizer::new(0, NodeCounter::new());
+    let mut normalizer = Normalizer::new(NodeCounter::new());
     let result = normalizer.normalize_expr(expr, &mut bindings);
 
     // Should have one binding for the inner binop
     assert_eq!(bindings.len(), 1);
-    assert_eq!(bindings[0].0, "_w_norm_0");
+    let (temp_local, _) = &bindings[0];
 
-    // Result should be _w_norm_0 + c
+    // Result should be temp + c
     if let ExprKind::BinOp { lhs, rhs, .. } = &result.kind {
-        assert!(matches!(lhs.kind, ExprKind::Var(ref n) if n == "_w_norm_0"));
-        assert!(matches!(rhs.kind, ExprKind::Var(ref n) if n == "c"));
+        // LHS should be the temp variable
+        assert!(matches!(lhs.kind, ExprKind::Var(ref v) if *v == *temp_local));
+        // RHS should be c
+        assert!(matches!(rhs.kind, ExprKind::Var(ref v) if *v == c));
     } else {
         panic!("Expected BinOp");
     }
@@ -142,20 +158,24 @@ fn test_normalize_nested_binop() {
 #[test]
 fn test_normalize_call_with_binop_arg() {
     // foo(a + b) should become:
-    // let _w_norm_0 = a + b in foo(_w_norm_0)
-    let arg = binop("+", var("a"), var("b"));
-    let expr = call("foo", vec![arg]);
+    // let temp = a + b in foo(temp)
+    let a = next_local_id();
+    let b = next_local_id();
+    let arg = binop("+", var(a), var(b));
+    let func_id = DefId(999); // Use sentinel for test
+    let expr = call(func_id, vec![arg]);
     let mut bindings = Vec::new();
-    let mut normalizer = Normalizer::new(0, NodeCounter::new());
+    let mut normalizer = Normalizer::new(NodeCounter::new());
     let result = normalizer.normalize_expr(expr, &mut bindings);
 
     // Should have one binding for the binop
     assert_eq!(bindings.len(), 1);
+    let (temp_local, _) = &bindings[0];
 
-    // Result should be foo(_w_norm_0)
+    // Result should be foo(temp)
     if let ExprKind::Call { args, .. } = &result.kind {
         assert_eq!(args.len(), 1);
-        assert!(matches!(args[0].kind, ExprKind::Var(ref n) if n == "_w_norm_0"));
+        assert!(matches!(args[0].kind, ExprKind::Var(ref v) if *v == *temp_local));
     } else {
         panic!("Expected Call");
     }

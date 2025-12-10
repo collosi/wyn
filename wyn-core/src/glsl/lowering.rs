@@ -8,7 +8,7 @@ use crate::bail_glsl;
 use crate::error::Result;
 use crate::impl_source::{BuiltinImpl, ImplSource, PrimOp};
 use crate::lowering_common::ShaderStage;
-use crate::mir::{Def, ExecutionModel, Expr, ExprKind, Literal, LoopKind, Program};
+use crate::mir::{Def, DefId, ExecutionModel, Expr, ExprKind, IntrinsicId, Literal, LocalId, LoopKind, Program};
 use polytype::Type as PolyType;
 use rspirv::spirv;
 use std::collections::{HashMap, HashSet};
@@ -41,6 +41,8 @@ struct LowerCtx<'a> {
     program: &'a Program,
     /// Map from definition name to its index
     def_index: HashMap<String, usize>,
+    /// Map from DefId to function name
+    def_id_to_name: HashMap<DefId, String>,
     /// Functions that have been lowered
     lowered: HashSet<String>,
     /// Builtin implementations
@@ -62,7 +64,9 @@ struct LowerCtx<'a> {
 impl<'a> LowerCtx<'a> {
     fn new(program: &'a Program) -> Self {
         let mut def_index = HashMap::new();
+        let mut def_id_to_name = HashMap::new();
         for (i, def) in program.defs.iter().enumerate() {
+            let def_id = DefId(i as u32);
             let name = match def {
                 Def::Function { name, .. } => name,
                 Def::Constant { name, .. } => name,
@@ -71,11 +75,13 @@ impl<'a> LowerCtx<'a> {
                 Def::EntryPoint { name, .. } => name,
             };
             def_index.insert(name.clone(), i);
+            def_id_to_name.insert(def_id, name.clone());
         }
 
         LowerCtx {
             program,
             def_index,
+            def_id_to_name,
             lowered: HashSet::new(),
             impl_source: ImplSource::default(),
             indent: 0,
@@ -375,10 +381,14 @@ impl<'a> LowerCtx<'a> {
         visited: &mut HashSet<String>,
     ) -> Result<()> {
         match &expr.kind {
-            ExprKind::Call { func, args } => {
+            ExprKind::Call { func, func_name, args } => {
                 // If it's a user function (not a builtin), collect it
-                if self.def_index.contains_key(func) && self.impl_source.get(func).is_none() {
-                    self.collect_deps_recursive(func, deps, visited)?;
+                // Try the func_name first (for builtins), then look up from DefId
+                let resolved_name = func_name.clone().or_else(|| self.def_id_to_name.get(func).cloned());
+                if let Some(ref name) = resolved_name {
+                    if self.impl_source.get(name).is_none() {
+                        self.collect_deps_recursive(name, deps, visited)?;
+                    }
                 }
                 for arg in args {
                     self.collect_expr_deps(arg, deps, visited)?;
@@ -423,23 +433,21 @@ impl<'a> LowerCtx<'a> {
                 self.collect_literal_deps(lit, deps, visited)?;
             }
             ExprKind::Closure {
-                lambda_name,
+                lambda,
                 captures,
             } => {
                 // Collect the lambda function as a dependency
-                self.collect_deps_recursive(lambda_name, deps, visited)?;
+                if let Some(lambda_name) = self.def_id_to_name.get(lambda) {
+                    self.collect_deps_recursive(lambda_name, deps, visited)?;
+                }
                 // Collect dependencies from captures
                 for cap in captures {
                     self.collect_expr_deps(cap, deps, visited)?;
                 }
             }
-            ExprKind::Var(name) => {
-                // Check if this references a constant
-                if let Some(&idx) = self.def_index.get(name) {
-                    if matches!(self.program.defs[idx], Def::Constant { .. }) {
-                        self.collect_deps_recursive(name, deps, visited)?;
-                    }
-                }
+            ExprKind::Var(_local_id) => {
+                // Local variables don't have dependencies
+                // Constants are no longer referenced by Var - they use their own paths
             }
             ExprKind::Unit => {}
         }
@@ -647,7 +655,7 @@ impl<'a> LowerCtx<'a> {
 
             ExprKind::Unit => Ok("".to_string()),
 
-            ExprKind::Var(name) => Ok(name.clone()),
+            ExprKind::Var(local_id) => Ok(format!("_w_{}", local_id.0)),
 
             ExprKind::BinOp { op, lhs, rhs } => {
                 let l = self.lower_expr(lhs, output)?;
@@ -703,12 +711,13 @@ impl<'a> LowerCtx<'a> {
             }
 
             ExprKind::Let {
-                name, value, body, ..
+                local, value, body,
             } => {
+                let var_name = format!("_w_{}", local.0);
                 let v = self.lower_expr(value, output)?;
-                if self.declared_vars.contains(name) {
+                if self.declared_vars.contains(&var_name) {
                     // Variable already declared, just assign
-                    writeln!(output, "{}{} = {};", self.indent_str(), name, v).unwrap();
+                    writeln!(output, "{}{} = {};", self.indent_str(), var_name, v).unwrap();
                 } else {
                     // New variable, declare with type
                     writeln!(
@@ -716,35 +725,39 @@ impl<'a> LowerCtx<'a> {
                         "{}{} {} = {};",
                         self.indent_str(),
                         self.type_to_glsl(&value.ty),
-                        name,
+                        var_name,
                         v
                     )
                     .unwrap();
-                    self.declared_vars.insert(name.clone());
+                    self.declared_vars.insert(var_name.clone());
                 }
                 self.lower_expr(body, output)
             }
 
-            ExprKind::Call { func, args } => {
+            ExprKind::Call { func, func_name: call_func_name, args } => {
                 let mut arg_strs = Vec::new();
                 for arg in args {
                     arg_strs.push(self.lower_expr(arg, output)?);
                 }
 
+                // Use call_func_name if available (for builtins), otherwise look up from DefId
+                let resolved_name = call_func_name.clone().or_else(|| self.def_id_to_name.get(func).cloned());
+
                 // Check if it's a builtin
-                if let Some(impl_) = self.impl_source.get(func) {
+                if let Some(impl_) = resolved_name.as_ref().and_then(|n| self.impl_source.get(n)) {
                     self.lower_builtin_call(impl_, &arg_strs, &expr.ty)
                 } else {
-                    Ok(format!("{}({})", func, arg_strs.join(", ")))
+                    let name = resolved_name.unwrap_or_else(|| format!("_w_func_{}", func.0));
+                    Ok(format!("{}({})", name, arg_strs.join(", ")))
                 }
             }
 
-            ExprKind::Intrinsic { name, args } => {
+            ExprKind::Intrinsic { id: intrinsic_id, args } => {
                 let mut arg_strs = Vec::new();
                 for arg in args {
                     arg_strs.push(self.lower_expr(arg, output)?);
                 }
-                self.lower_intrinsic(name, &arg_strs, args, &expr.ty)
+                self.lower_intrinsic(intrinsic_id, &arg_strs, args, &expr.ty)
             }
 
             ExprKind::Loop {
@@ -909,13 +922,13 @@ impl<'a> LowerCtx<'a> {
 
     fn lower_intrinsic(
         &self,
-        name: &str,
+        intrinsic_id: &IntrinsicId,
         args: &[String],
         arg_exprs: &[Expr],
         _ret_ty: &PolyType<TypeName>,
     ) -> Result<String> {
-        match name {
-            "tuple_access" => {
+        match intrinsic_id {
+            IntrinsicId::TupleAccess => {
                 // args[0] is the tuple/vector, args[1] is the index
                 if let ExprKind::Literal(Literal::Int(idx_str)) = &arg_exprs[1].kind {
                     let idx: usize = idx_str.parse().unwrap_or(0);
@@ -938,7 +951,7 @@ impl<'a> LowerCtx<'a> {
                     Ok(format!("{}[{}]", args[0], args[1]))
                 }
             }
-            "record_access" => {
+            IntrinsicId::RecordAccess => {
                 // args[0] is the record, args[1] is the field name (as string literal)
                 if let ExprKind::Literal(Literal::String(field)) = &arg_exprs[1].kind {
                     Ok(format!("{}.{}", args[0], field))
@@ -946,55 +959,57 @@ impl<'a> LowerCtx<'a> {
                     Ok(format!("{}.{}", args[0], args[1]))
                 }
             }
-            "index" => Ok(format!("{}[{}]", args[0], args[1])),
-            "length" => Ok(format!("{}.length()", args[0])),
-            _ => bail_glsl!("Unknown intrinsic: {}", name),
+            IntrinsicId::Index => Ok(format!("{}[{}]", args[0], args[1])),
+            IntrinsicId::Length => Ok(format!("{}.length()", args[0])),
+            _ => bail_glsl!("Unknown intrinsic: {:?}", intrinsic_id),
         }
     }
 
     fn lower_loop(
         &mut self,
-        loop_var: &str,
+        loop_var: &LocalId,
         init: &Expr,
-        init_bindings: &[(String, Expr)],
+        init_bindings: &[(LocalId, Expr)],
         kind: &LoopKind,
         body: &Expr,
         _ret_ty: &PolyType<TypeName>,
         output: &mut String,
     ) -> Result<String> {
         // Emit init
+        let loop_var_name = format!("_w_{}", loop_var.0);
         let init_val = self.lower_expr(init, output)?;
-        if self.declared_vars.contains(loop_var) {
-            writeln!(output, "{}{} = {};", self.indent_str(), loop_var, init_val).unwrap();
+        if self.declared_vars.contains(&loop_var_name) {
+            writeln!(output, "{}{} = {};", self.indent_str(), loop_var_name, init_val).unwrap();
         } else {
             writeln!(
                 output,
                 "{}{} {} = {};",
                 self.indent_str(),
                 self.type_to_glsl(&init.ty),
-                loop_var,
+                loop_var_name,
                 init_val
             )
             .unwrap();
-            self.declared_vars.insert(loop_var.to_string());
+            self.declared_vars.insert(loop_var_name.clone());
         }
 
         // Emit init bindings
-        for (name, expr) in init_bindings {
+        for (local_id, expr) in init_bindings {
+            let binding_name = format!("_w_{}", local_id.0);
             let val = self.lower_expr(expr, output)?;
-            if self.declared_vars.contains(name) {
-                writeln!(output, "{}{} = {};", self.indent_str(), name, val).unwrap();
+            if self.declared_vars.contains(&binding_name) {
+                writeln!(output, "{}{} = {};", self.indent_str(), binding_name, val).unwrap();
             } else {
                 writeln!(
                     output,
                     "{}{} {} = {};",
                     self.indent_str(),
                     self.type_to_glsl(&expr.ty),
-                    name,
+                    binding_name,
                     val
                 )
                 .unwrap();
-                self.declared_vars.insert(name.clone());
+                self.declared_vars.insert(binding_name.clone());
             }
         }
 
@@ -1008,19 +1023,21 @@ impl<'a> LowerCtx<'a> {
                 self.indent -= 1;
             }
             LoopKind::ForRange { var, bound } => {
+                let var_name = format!("_w_{}", var.0);
                 let bound_str = self.lower_expr(bound, output)?;
                 writeln!(
                     output,
                     "{}for (int {} = 0; {} < {}; {}++) {{",
                     self.indent_str(),
-                    var,
-                    var,
+                    var_name,
+                    var_name,
                     bound_str,
-                    var
+                    var_name
                 )
                 .unwrap();
             }
             LoopKind::For { var, iter } => {
+                let var_name = format!("_w_{}", var.0);
                 let iter_str = self.lower_expr(iter, output)?;
                 writeln!(
                     output,
@@ -1035,7 +1052,7 @@ impl<'a> LowerCtx<'a> {
                     "{}{} {} = {}[_i];",
                     self.indent_str(),
                     self.type_to_glsl(&body.ty), // TODO: get element type
-                    var,
+                    var_name,
                     iter_str
                 )
                 .unwrap();
@@ -1045,19 +1062,20 @@ impl<'a> LowerCtx<'a> {
 
         self.indent += 1;
         let body_result = self.lower_expr(body, output)?;
-        writeln!(output, "{}{} = {};", self.indent_str(), loop_var, body_result).unwrap();
+        writeln!(output, "{}{} = {};", self.indent_str(), loop_var_name, body_result).unwrap();
 
         // Re-extract loop bindings from the updated tuple
-        for (name, expr) in init_bindings {
+        for (local_id, expr) in init_bindings {
+            let binding_name = format!("_w_{}", local_id.0);
             let val = self.lower_expr(expr, output)?;
-            writeln!(output, "{}{} = {};", self.indent_str(), name, val).unwrap();
+            writeln!(output, "{}{} = {};", self.indent_str(), binding_name, val).unwrap();
         }
 
         self.indent -= 1;
 
         writeln!(output, "{}}}", self.indent_str()).unwrap();
 
-        Ok(loop_var.to_string())
+        Ok(loop_var_name)
     }
 
     fn type_to_glsl(&mut self, ty: &PolyType<TypeName>) -> String {

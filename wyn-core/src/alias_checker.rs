@@ -613,7 +613,7 @@ pub fn analyze_map_inplace(mir: &mir::Program) -> InPlaceMapInfo {
 
 fn analyze_function_body(body: &mir::Expr, result: &mut InPlaceMapInfo) {
     // Build alias map and uses-after map
-    let mut aliases: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut aliases: HashMap<mir::LocalId, HashSet<mir::LocalId>> = HashMap::new();
     let uses_after = compute_uses_after(body, &HashSet::new(), &mut aliases);
 
     // Find eligible map calls
@@ -621,14 +621,14 @@ fn analyze_function_body(body: &mir::Expr, result: &mut InPlaceMapInfo) {
 }
 
 /// Collect all variable uses in an expression (bottom-up)
-fn collect_uses(expr: &mir::Expr) -> HashSet<String> {
+fn collect_uses(expr: &mir::Expr) -> HashSet<mir::LocalId> {
     use mir::ExprKind::*;
 
     let mut uses = HashSet::new();
 
     match &expr.kind {
-        Var(name) => {
-            uses.insert(name.clone());
+        Var(local) => {
+            uses.insert(*local);
         }
         Literal(lit) => {
             collect_uses_in_literal(lit, &mut uses);
@@ -646,10 +646,10 @@ fn collect_uses(expr: &mir::Expr) -> HashSet<String> {
             uses.extend(collect_uses(then_branch));
             uses.extend(collect_uses(else_branch));
         }
-        Let { name, value, body, .. } => {
+        Let { local, value, body } => {
             uses.extend(collect_uses(value));
             let mut body_uses = collect_uses(body);
-            body_uses.remove(name); // Remove bound variable
+            body_uses.remove(local); // Remove bound variable
             uses.extend(body_uses);
         }
         Loop { init, init_bindings, kind, body, loop_var } => {
@@ -665,8 +665,8 @@ fn collect_uses(expr: &mir::Expr) -> HashSet<String> {
             let mut body_uses = collect_uses(body);
             body_uses.remove(loop_var);
             // Remove bound variables from init_bindings
-            for (binding_name, _) in init_bindings {
-                body_uses.remove(binding_name);
+            for (binding_local, _) in init_bindings {
+                body_uses.remove(binding_local);
             }
             if let mir::LoopKind::For { var, .. } | mir::LoopKind::ForRange { var, .. } = kind {
                 body_uses.remove(var);
@@ -699,7 +699,7 @@ fn collect_uses(expr: &mir::Expr) -> HashSet<String> {
     uses
 }
 
-fn collect_uses_in_literal(lit: &mir::Literal, uses: &mut HashSet<String>) {
+fn collect_uses_in_literal(lit: &mir::Literal, uses: &mut HashSet<mir::LocalId>) {
     match lit {
         mir::Literal::Int(_) | mir::Literal::Float(_) | mir::Literal::Bool(_) | mir::Literal::String(_) => {}
         mir::Literal::Tuple(elems) | mir::Literal::Array(elems) | mir::Literal::Vector(elems) => {
@@ -722,9 +722,9 @@ fn collect_uses_in_literal(lit: &mir::Literal, uses: &mut HashSet<String>) {
 /// Also populates the aliases map: var -> set of variables it aliases.
 fn compute_uses_after(
     expr: &mir::Expr,
-    after: &HashSet<String>,
-    aliases: &mut HashMap<String, HashSet<String>>,
-) -> HashMap<NodeId, HashSet<String>> {
+    after: &HashSet<mir::LocalId>,
+    aliases: &mut HashMap<mir::LocalId, HashSet<mir::LocalId>>,
+) -> HashMap<NodeId, HashSet<mir::LocalId>> {
     use mir::ExprKind::*;
 
     let mut result = HashMap::new();
@@ -759,21 +759,21 @@ fn compute_uses_after(
             result.extend(compute_uses_after(else_branch, after, aliases));
         }
 
-        Let { name, value, body, .. } => {
-            // Track aliases: if value is Var(x), then name aliases x
-            if let Var(source_var) = &value.kind {
+        Let { local, value, body } => {
+            // Track aliases: if value is Var(x), then local aliases x
+            if let Var(source_local) = &value.kind {
                 let mut alias_set = HashSet::new();
-                alias_set.insert(source_var.clone());
+                alias_set.insert(*source_local);
                 // Transitively include aliases of source
-                if let Some(source_aliases) = aliases.get(source_var) {
+                if let Some(source_aliases) = aliases.get(source_local) {
                     alias_set.extend(source_aliases.iter().cloned());
                 }
-                aliases.insert(name.clone(), alias_set);
+                aliases.insert(*local, alias_set);
             }
 
-            // After value: uses in body + after (minus name since it's being bound)
+            // After value: uses in body + after (minus local since it's being bound)
             let mut body_uses = collect_uses(body);
-            body_uses.remove(name);
+            body_uses.remove(local);
             let after_value: HashSet<_> = body_uses.union(after).cloned().collect();
             result.extend(compute_uses_after(value, &after_value, aliases));
 
@@ -839,30 +839,32 @@ fn compute_uses_after(
 }
 
 /// Find map calls where the input array can be reused.
+/// TODO: Now that func is DefId, we need to pass program to look up the name
 fn find_inplace_map_calls(
     expr: &mir::Expr,
-    uses_after: &HashMap<NodeId, HashSet<String>>,
-    aliases: &HashMap<String, HashSet<String>>,
+    uses_after: &HashMap<NodeId, HashSet<mir::LocalId>>,
+    aliases: &HashMap<mir::LocalId, HashSet<mir::LocalId>>,
     result: &mut InPlaceMapInfo,
 ) {
     use mir::ExprKind::*;
 
     match &expr.kind {
-        Call { func, args } if func == "map" && args.len() == 2 => {
+        // TODO: func is now DefId, need program reference to check if it's "map"
+        Call { func: _, func_name: _, args } if args.len() == 2 => {
             // args[0] is closure, args[1] is array
-            if let Var(arr_name) = &args[1].kind {
-                // Get all variables that alias arr_name
-                let mut all_aliases: HashSet<_> = std::iter::once(arr_name.clone()).collect();
+            if let Var(arr_local) = &args[1].kind {
+                // Get all variables that alias arr_local
+                let mut all_aliases: HashSet<_> = std::iter::once(*arr_local).collect();
 
-                // Add variables that arr_name aliases
-                if let Some(arr_aliases) = aliases.get(arr_name) {
+                // Add variables that arr_local aliases
+                if let Some(arr_aliases) = aliases.get(arr_local) {
                     all_aliases.extend(arr_aliases.iter().cloned());
                 }
 
-                // Add variables that alias arr_name (reverse lookup)
+                // Add variables that alias arr_local (reverse lookup)
                 for (var, var_aliases) in aliases {
-                    if var_aliases.contains(arr_name) {
-                        all_aliases.insert(var.clone());
+                    if var_aliases.contains(arr_local) {
+                        all_aliases.insert(*var);
                     }
                 }
 

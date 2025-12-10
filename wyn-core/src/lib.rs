@@ -240,12 +240,22 @@ impl AliasChecked {
     pub fn flatten(self) -> Result<Flattened> {
         let builtins = impl_source::ImplSource::default().all_names();
         let mut flattener = flattening::Flattener::new(self.type_table, builtins);
+
+        // Pre-register module function names so lookups work during flattening
+        // Start DefIds after user declarations
+        let user_decl_count = self.ast.declarations.len() as u32;
+        let module_funcs = self.module_manager.get_module_function_declarations();
+        for (idx, (module_name, decl)) in module_funcs.iter().enumerate() {
+            let qualified_name = format!("{}.{}", module_name, decl.name);
+            flattener.pre_register_def(&qualified_name, mir::DefId(user_decl_count + idx as u32));
+        }
+
         let mut mir = flattener.flatten_program(&self.ast)?;
 
         // Flatten module function declarations so they're available in SPIR-V
-        for (module_name, decl) in self.module_manager.get_module_function_declarations() {
+        for (module_name, decl) in module_funcs {
             let qualified_name = format!("{}.{}", module_name, decl.name);
-            let defs = flattener.flatten_module_decl(decl, &qualified_name)?;
+            let defs = flattener.flatten_module_decl(&decl, &qualified_name)?;
             mir.defs.extend(defs);
         }
 
@@ -272,12 +282,22 @@ impl AstConstFolded {
     pub fn flatten(self) -> Result<Flattened> {
         let builtins = impl_source::ImplSource::default().all_names();
         let mut flattener = flattening::Flattener::new(self.type_table, builtins);
+
+        // Pre-register module function names so lookups work during flattening
+        // Start DefIds after user declarations
+        let user_decl_count = self.ast.declarations.len() as u32;
+        let module_funcs = self.module_manager.get_module_function_declarations();
+        for (idx, (module_name, decl)) in module_funcs.iter().enumerate() {
+            let qualified_name = format!("{}.{}", module_name, decl.name);
+            flattener.pre_register_def(&qualified_name, mir::DefId(user_decl_count + idx as u32));
+        }
+
         let mut mir = flattener.flatten_program(&self.ast)?;
 
         // Flatten module function declarations so they're available in SPIR-V
-        for (module_name, decl) in self.module_manager.get_module_function_declarations() {
+        for (module_name, decl) in module_funcs {
             let qualified_name = format!("{}.{}", module_name, decl.name);
-            let defs = flattener.flatten_module_decl(decl, &qualified_name)?;
+            let defs = flattener.flatten_module_decl(&decl, &qualified_name)?;
             mir.defs.extend(defs);
         }
 

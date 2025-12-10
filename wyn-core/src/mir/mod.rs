@@ -335,6 +335,8 @@ pub enum IoDecoration {
 pub struct EntryInput {
     /// Parameter name.
     pub name: String,
+    /// Local variable ID for this input.
+    pub local_id: LocalId,
     /// Parameter type.
     pub ty: Type<TypeName>,
     /// I/O decoration (location or builtin).
@@ -375,8 +377,8 @@ pub enum ExprKind {
     /// Unit value ().
     Unit,
 
-    /// A variable reference by name.
-    Var(String),
+    /// A variable reference by LocalId.
+    Var(LocalId),
 
     /// A binary operation.
     BinOp {
@@ -406,12 +408,10 @@ pub enum ExprKind {
         else_branch: Box<Expr>,
     },
 
-    /// Let binding: `let name = value in body`.
+    /// Let binding: `let local = value in body`.
     Let {
-        /// Bound variable name.
-        name: String,
-        /// Unique binding ID for tracking backing stores.
-        binding_id: u64,
+        /// The local variable being bound.
+        local: LocalId,
         /// Value to bind.
         value: Box<Expr>,
         /// Body expression where the binding is in scope.
@@ -420,14 +420,14 @@ pub enum ExprKind {
 
     /// Unified loop construct.
     Loop {
-        /// Name for the value returned by the body each iteration.
-        loop_var: String,
+        /// LocalId for the value returned by the body each iteration.
+        loop_var: LocalId,
         /// Initial value for loop_var.
         init: Box<Expr>,
         /// Bindings that extract from loop_var for use in condition/body.
         /// For single var: `[(x, Var(loop_var))]`
         /// For tuple: `[(a, tuple_access(loop_var, 0)), (b, tuple_access(loop_var, 1))]`
-        init_bindings: Vec<(String, Expr)>,
+        init_bindings: Vec<(LocalId, Expr)>,
         /// The kind of loop (for, for-range, or while).
         kind: LoopKind,
         /// Loop body expression.
@@ -436,17 +436,18 @@ pub enum ExprKind {
 
     /// Regular function call.
     Call {
-        /// Function name.
-        func: String,
+        /// DefId of the function to call. For builtins, this is DefId(u32::MAX).
+        func: DefId,
+        /// Function name (used for builtins where DefId is a sentinel).
+        func_name: Option<String>,
         /// Arguments.
         args: Vec<Expr>,
     },
 
     /// Compiler intrinsic call.
     Intrinsic {
-        /// Intrinsic name (e.g., "index", "slice", "length", "assert",
-        /// "record_access", "record_update", "tuple_access").
-        name: String,
+        /// Which intrinsic to call.
+        id: IntrinsicId,
         /// Arguments.
         args: Vec<Expr>,
     },
@@ -467,8 +468,8 @@ pub enum ExprKind {
     /// A closure value (defunctionalized lambda).
     /// Represents a lambda that has been lifted to a top-level function with captured values.
     Closure {
-        /// Name of the generated lambda function to call.
-        lambda_name: String,
+        /// DefId of the generated lambda function to call.
+        lambda: DefId,
         /// Captured variables (may be empty for lambdas with no free variables).
         captures: Vec<Expr>,
     },
@@ -503,15 +504,15 @@ pub enum Literal {
 pub enum LoopKind {
     /// For loop over an array: `for x in arr`.
     For {
-        /// Loop variable name.
-        var: String,
+        /// Loop variable LocalId.
+        var: LocalId,
         /// Array to iterate over.
         iter: Box<Expr>,
     },
     /// For loop with range bound: `for i < n`.
     ForRange {
-        /// Loop variable name.
-        var: String,
+        /// Loop variable LocalId.
+        var: LocalId,
         /// Upper bound.
         bound: Box<Expr>,
     },

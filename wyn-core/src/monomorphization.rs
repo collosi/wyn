@@ -14,7 +14,7 @@
 use crate::ast::{Type, TypeName};
 use crate::error::Result;
 use crate::mir::folder::MirFolder;
-use crate::mir::{Def, Expr, ExprKind, Param, Program};
+use crate::mir::{Def, DefId, Expr, ExprKind, Param, Program};
 use polytype::Type as PolyType;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -30,16 +30,22 @@ pub fn monomorphize(program: Program) -> Result<Program> {
 struct Monomorphizer {
     /// Original polymorphic functions by name
     poly_functions: HashMap<String, Def>,
+    /// Map from DefId to function name (for looking up names from Call expressions)
+    def_id_to_name: HashMap<DefId, String>,
+    /// Map from function name to DefId
+    name_to_def_id: HashMap<String, DefId>,
     /// Generated monomorphic functions
     mono_functions: Vec<Def>,
-    /// Map from (function_name, substitution) to specialized name
-    specializations: HashMap<(String, SubstKey), String>,
+    /// Map from (function_name, substitution) to specialized DefId
+    specializations: HashMap<(String, SubstKey), DefId>,
     /// Worklist of functions to process
     worklist: VecDeque<WorkItem>,
     /// Functions already processed
     processed: HashSet<String>,
     /// Lambda registry from original program
     lambda_registry: Vec<(String, usize)>,
+    /// Next DefId to allocate for specialized functions
+    next_def_id: u32,
 }
 
 struct WorkItem {
@@ -136,9 +142,12 @@ impl Monomorphizer {
     fn new(program: Program) -> Self {
         // Build map of polymorphic functions
         let mut poly_functions = HashMap::new();
+        let mut def_id_to_name = HashMap::new();
+        let mut name_to_def_id = HashMap::new();
         let mut entry_points = Vec::new();
 
-        for def in program.defs {
+        for (idx, def) in program.defs.into_iter().enumerate() {
+            let def_id = DefId(idx as u32);
             let name = match &def {
                 Def::Function { name, .. } => name.clone(),
                 Def::Constant { name, .. } => name.clone(),
@@ -146,6 +155,9 @@ impl Monomorphizer {
                 Def::Storage { name, .. } => name.clone(),
                 Def::EntryPoint { name, .. } => name.clone(),
             };
+
+            def_id_to_name.insert(def_id, name.clone());
+            name_to_def_id.insert(name.clone(), def_id);
 
             // Check if this is an entry point
             if let Def::EntryPoint { .. } = &def {
@@ -161,13 +173,18 @@ impl Monomorphizer {
         let mut worklist = VecDeque::new();
         worklist.extend(entry_points);
 
+        let next_def_id = def_id_to_name.len() as u32;
+
         Monomorphizer {
             poly_functions,
+            def_id_to_name,
+            name_to_def_id,
             mono_functions: Vec::new(),
             specializations: HashMap::new(),
             worklist,
             processed: HashSet::new(),
             lambda_registry: program.lambda_registry,
+            next_def_id,
         }
     }
 
@@ -278,30 +295,39 @@ impl Monomorphizer {
 
     fn process_expr(&mut self, expr: Expr) -> Result<Expr> {
         let kind = match expr.kind {
-            ExprKind::Call { func, args } => {
+            ExprKind::Call { func, func_name: call_func_name, args } => {
                 // Process arguments first
                 let args: Result<Vec<_>> = args.into_iter().map(|arg| self.process_expr(arg)).collect();
                 let args = args?;
 
-                // Check if this is a call to a polymorphic function
-                if let Some(poly_def) = self.poly_functions.get(&func).cloned() {
-                    let subst = self.infer_substitution(&poly_def, &args)?;
+                // Look up function name from DefId, or use call_func_name for builtins
+                let resolved_name = call_func_name.clone().or_else(|| self.def_id_to_name.get(&func).cloned());
 
-                    if !subst.is_empty() {
-                        // This is a polymorphic call - specialize it
-                        let specialized_name =
-                            self.get_or_create_specialization(&func, &subst, &poly_def)?;
-                        ExprKind::Call {
-                            func: specialized_name,
-                            args,
+                if let Some(ref name) = resolved_name {
+                    // Check if this is a call to a polymorphic function
+                    if let Some(poly_def) = self.poly_functions.get(name).cloned() {
+                        let subst = self.infer_substitution(&poly_def, &args)?;
+
+                        if !subst.is_empty() {
+                            // This is a polymorphic call - specialize it
+                            let specialized_def_id =
+                                self.get_or_create_specialization(name, &subst, &poly_def)?;
+                            ExprKind::Call {
+                                func: specialized_def_id,
+                                func_name: None, // Specialized functions have real DefIds
+                                args,
+                            }
+                        } else {
+                            // Monomorphic call - ensure the callee is in the worklist
+                            self.ensure_in_worklist(name, poly_def);
+                            ExprKind::Call { func, func_name: call_func_name, args }
                         }
                     } else {
-                        // Monomorphic call - ensure the callee is in the worklist
-                        self.ensure_in_worklist(&func, poly_def);
-                        ExprKind::Call { func, args }
+                        ExprKind::Call { func, func_name: call_func_name, args }
                     }
                 } else {
-                    ExprKind::Call { func, args }
+                    // Unknown DefId (possibly a builtin) - pass through
+                    ExprKind::Call { func, func_name: call_func_name, args }
                 }
             }
             ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
@@ -322,14 +348,8 @@ impl Monomorphizer {
                 then_branch: Box::new(self.process_expr(*then_branch)?),
                 else_branch: Box::new(self.process_expr(*else_branch)?),
             },
-            ExprKind::Let {
-                name,
-                binding_id,
-                value,
-                body,
-            } => ExprKind::Let {
-                name,
-                binding_id,
+            ExprKind::Let { local, value, body } => ExprKind::Let {
+                local,
                 value: Box::new(self.process_expr(*value)?),
                 body: Box::new(self.process_expr(*body)?),
             },
@@ -342,7 +362,7 @@ impl Monomorphizer {
             } => {
                 let init_bindings: Result<Vec<_>> = init_bindings
                     .into_iter()
-                    .map(|(name, expr)| Ok((name, self.process_expr(expr)?)))
+                    .map(|(local, expr)| Ok((local, self.process_expr(expr)?)))
                     .collect();
                 ExprKind::Loop {
                     loop_var,
@@ -352,9 +372,9 @@ impl Monomorphizer {
                     body: Box::new(self.process_expr(*body)?),
                 }
             }
-            ExprKind::Intrinsic { name, args } => {
+            ExprKind::Intrinsic { id: intrinsic_id, args } => {
                 let args: Result<Vec<_>> = args.into_iter().map(|arg| self.process_expr(arg)).collect();
-                ExprKind::Intrinsic { name, args: args? }
+                ExprKind::Intrinsic { id: intrinsic_id, args: args? }
             }
             ExprKind::Attributed { attributes, expr } => ExprKind::Attributed {
                 attributes,
@@ -362,17 +382,8 @@ impl Monomorphizer {
             },
             ExprKind::Materialize(inner) => ExprKind::Materialize(Box::new(self.process_expr(*inner)?)),
             // Leaf nodes - no recursion needed
-            ExprKind::Var(ref name) => {
-                // Variable reference might refer to a top-level constant
-                // NOTE: This can't distinguish local variables from global constants,
-                // so it may unnecessarily queue constants when a local variable shadows
-                // a constant name. This is safe but suboptimal - it won't change the
-                // semantics, just might do extra work.
-                // A proper fix would require tracking local scope or using resolved
-                // symbol IDs instead of strings.
-                if let Some(def) = self.poly_functions.get(name).cloned() {
-                    self.ensure_in_worklist(name, def);
-                }
+            ExprKind::Var(_) => {
+                // With LocalId, we can't confuse local variables with global constants
                 expr.kind
             }
             ExprKind::Literal(ref lit) => {
@@ -384,13 +395,12 @@ impl Monomorphizer {
                 }
                 expr.kind
             }
-            ExprKind::Closure {
-                ref lambda_name,
-                ref captures,
-            } => {
+            ExprKind::Closure { lambda, ref captures } => {
                 // Ensure lambda function is in worklist
-                if let Some(def) = self.poly_functions.get(lambda_name).cloned() {
-                    self.ensure_in_worklist(lambda_name, def);
+                if let Some(lambda_name) = self.def_id_to_name.get(&lambda).cloned() {
+                    if let Some(def) = self.poly_functions.get(&lambda_name).cloned() {
+                        self.ensure_in_worklist(&lambda_name, def);
+                    }
                 }
                 // Process captures recursively
                 for cap in captures {
@@ -459,12 +469,16 @@ impl Monomorphizer {
         func_name: &str,
         subst: &Substitution,
         poly_def: &Def,
-    ) -> Result<String> {
+    ) -> Result<DefId> {
         let key = (func_name.to_string(), SubstKey::from_subst(subst));
 
-        if let Some(specialized_name) = self.specializations.get(&key) {
-            return Ok(specialized_name.clone());
+        if let Some(specialized_def_id) = self.specializations.get(&key) {
+            return Ok(*specialized_def_id);
         }
+
+        // Allocate a new DefId for the specialized function
+        let specialized_def_id = DefId(self.next_def_id);
+        self.next_def_id += 1;
 
         // Create new specialized name
         let specialized_name = format!("{}${}", func_name, format_subst(subst));
@@ -472,14 +486,19 @@ impl Monomorphizer {
         // Clone and specialize the function
         let specialized_def = self.specialize_def(poly_def.clone(), subst, &specialized_name)?;
 
+        // Register the new function in our maps
+        self.def_id_to_name.insert(specialized_def_id, specialized_name.clone());
+        self.name_to_def_id.insert(specialized_name.clone(), specialized_def_id);
+        self.poly_functions.insert(specialized_name.clone(), specialized_def.clone());
+
         // Add to worklist to process its body
         self.worklist.push_back(WorkItem {
-            name: specialized_name.clone(),
+            name: specialized_name,
             def: specialized_def,
         });
 
-        self.specializations.insert(key, specialized_name.clone());
-        Ok(specialized_name)
+        self.specializations.insert(key, specialized_def_id);
+        Ok(specialized_def_id)
     }
 
     /// Create a specialized version of a function by applying substitution
@@ -531,6 +550,7 @@ impl Monomorphizer {
                     .into_iter()
                     .map(|i| EntryInput {
                         name: i.name,
+                        local_id: i.local_id,
                         ty: apply_subst(&i.ty, subst),
                         decoration: i.decoration,
                     })

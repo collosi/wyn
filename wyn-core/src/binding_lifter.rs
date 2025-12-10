@@ -24,17 +24,17 @@ use std::collections::HashSet;
 
 use crate::ast::Span;
 use crate::error::Result;
-use crate::mir::{Def, Expr, ExprKind, Literal, LoopKind, Program};
+use crate::mir::{Def, Expr, ExprKind, LocalId, Literal, LoopKind, Program};
 
 /// A single binding in linear form, extracted from nested Let chains.
 struct LinearBinding {
     /// The NodeId of the original Let expression
     id: crate::ast::NodeId,
-    name: String,
-    binding_id: u64,
+    /// The LocalId of the variable being bound
+    local: LocalId,
     value: Expr,
     /// Set of free variables in the value expression.
-    free_vars: HashSet<String>,
+    free_vars: HashSet<LocalId>,
     span: Span,
 }
 
@@ -140,12 +140,7 @@ impl BindingLifter {
         match expr.kind {
             ExprKind::Loop { .. } => self.lift_loop(expr),
 
-            ExprKind::Let {
-                name,
-                binding_id,
-                value,
-                body,
-            } => {
+            ExprKind::Let { local, value, body } => {
                 // Recursively lift in both value and body
                 let value = self.lift_expr(*value)?;
                 let body = self.lift_expr(*body)?;
@@ -153,8 +148,7 @@ impl BindingLifter {
                     id,
                     ty,
                     ExprKind::Let {
-                        name,
-                        binding_id,
+                        local,
                         value: Box::new(value),
                         body: Box::new(body),
                     },
@@ -210,14 +204,14 @@ impl BindingLifter {
                 ))
             }
 
-            ExprKind::Call { func, args } => {
+            ExprKind::Call { func, func_name, args } => {
                 let args = args.into_iter().map(|a| self.lift_expr(a)).collect::<Result<Vec<_>>>()?;
-                Ok(Expr::new(id, ty, ExprKind::Call { func, args }, span))
+                Ok(Expr::new(id, ty, ExprKind::Call { func, func_name, args }, span))
             }
 
-            ExprKind::Intrinsic { name, args } => {
+            ExprKind::Intrinsic { id: intrinsic_id, args } => {
                 let args = args.into_iter().map(|a| self.lift_expr(a)).collect::<Result<Vec<_>>>()?;
-                Ok(Expr::new(id, ty, ExprKind::Intrinsic { name, args }, span))
+                Ok(Expr::new(id, ty, ExprKind::Intrinsic { id: intrinsic_id, args }, span))
             }
 
             ExprKind::Attributed {
@@ -246,19 +240,13 @@ impl BindingLifter {
                 Ok(Expr::new(id, ty, ExprKind::Literal(lit), span))
             }
 
-            ExprKind::Closure {
-                lambda_name,
-                captures,
-            } => {
+            ExprKind::Closure { lambda, captures } => {
                 let captures =
                     captures.into_iter().map(|c| self.lift_expr(c)).collect::<Result<Vec<_>>>()?;
                 Ok(Expr::new(
                     id,
                     ty,
-                    ExprKind::Closure {
-                        lambda_name,
-                        captures,
-                    },
+                    ExprKind::Closure { lambda, captures },
                     span,
                 ))
             }
@@ -351,20 +339,20 @@ impl BindingLifter {
         }
 
         // 6. Compute loop-scoped variables
-        let mut loop_vars: HashSet<String> = HashSet::new();
-        loop_vars.insert(loop_var.clone());
-        for (name, _) in &init_bindings {
-            loop_vars.insert(name.clone());
+        let mut loop_scoped_vars: HashSet<LocalId> = HashSet::new();
+        loop_scoped_vars.insert(loop_var);
+        for (local, _) in &init_bindings {
+            loop_scoped_vars.insert(*local);
         }
         match &kind {
             LoopKind::For { var, .. } | LoopKind::ForRange { var, .. } => {
-                loop_vars.insert(var.clone());
+                loop_scoped_vars.insert(*var);
             }
             LoopKind::While { .. } => {}
         }
 
         // 7. Partition bindings into hoistable and remaining
-        let (hoistable, remaining) = partition_bindings(bindings, &loop_vars);
+        let (hoistable, remaining) = partition_bindings(bindings, &loop_scoped_vars);
 
         // 8. Rebuild the loop body with remaining bindings
         let new_body = rebuild_nested_lets(remaining, result);
@@ -416,18 +404,11 @@ impl BindingLifter {
 fn linearize_body(mut expr: Expr) -> LinearizedBody {
     let mut bindings = Vec::new();
 
-    while let ExprKind::Let {
-        name,
-        binding_id,
-        value,
-        body,
-    } = expr.kind
-    {
+    while let ExprKind::Let { local, value, body } = expr.kind {
         let free_vars = collect_free_vars(&value);
         bindings.push(LinearBinding {
             id: expr.id,
-            name,
-            binding_id,
+            local,
             value: *value,
             free_vars,
             span: expr.span,
@@ -444,7 +425,7 @@ fn linearize_body(mut expr: Expr) -> LinearizedBody {
 /// Partition bindings into hoistable (loop-invariant) and remaining (loop-dependent).
 fn partition_bindings(
     bindings: Vec<LinearBinding>,
-    loop_vars: &HashSet<String>,
+    loop_vars: &HashSet<LocalId>,
 ) -> (Vec<LinearBinding>, Vec<LinearBinding>) {
     let mut tainted = loop_vars.clone();
     let mut hoistable = Vec::new();
@@ -455,8 +436,8 @@ fn partition_bindings(
             // Can hoist - no loop dependencies
             hoistable.push(binding);
         } else {
-            // Cannot hoist - mark this name as tainted for subsequent bindings
-            tainted.insert(binding.name.clone());
+            // Cannot hoist - mark this local as tainted for subsequent bindings
+            tainted.insert(binding.local);
             remaining.push(binding);
         }
     }
@@ -471,8 +452,7 @@ fn rebuild_nested_lets(bindings: Vec<LinearBinding>, result: Expr) -> Expr {
             binding.id,
             body.ty.clone(),
             ExprKind::Let {
-                name: binding.name,
-                binding_id: binding.binding_id,
+                local: binding.local,
                 value: Box::new(binding.value),
                 body: Box::new(body),
             },
@@ -482,27 +462,25 @@ fn rebuild_nested_lets(bindings: Vec<LinearBinding>, result: Expr) -> Expr {
 }
 
 /// Collect free variables in an expression.
-pub fn collect_free_vars(expr: &Expr) -> HashSet<String> {
+pub fn collect_free_vars(expr: &Expr) -> HashSet<LocalId> {
     let mut free = HashSet::new();
     collect_free_vars_inner(expr, &HashSet::new(), &mut free);
     free
 }
 
 /// Inner recursive function for collecting free variables.
-fn collect_free_vars_inner(expr: &Expr, bound: &HashSet<String>, free: &mut HashSet<String>) {
+fn collect_free_vars_inner(expr: &Expr, bound: &HashSet<LocalId>, free: &mut HashSet<LocalId>) {
     match &expr.kind {
-        ExprKind::Var(name) => {
-            if !bound.contains(name) {
-                free.insert(name.clone());
+        ExprKind::Var(local) => {
+            if !bound.contains(local) {
+                free.insert(*local);
             }
         }
 
-        ExprKind::Let {
-            name, value, body, ..
-        } => {
+        ExprKind::Let { local, value, body } => {
             collect_free_vars_inner(value, bound, free);
             let mut extended = bound.clone();
-            extended.insert(name.clone());
+            extended.insert(*local);
             collect_free_vars_inner(body, &extended, free);
         }
 
@@ -518,21 +496,21 @@ fn collect_free_vars_inner(expr: &Expr, bound: &HashSet<String>, free: &mut Hash
             // init_bindings reference loop_var, but their expressions are evaluated
             // in the context where loop_var is bound
             let mut extended = bound.clone();
-            extended.insert(loop_var.clone());
+            extended.insert(*loop_var);
 
-            for (name, binding_expr) in init_bindings {
+            for (local, binding_expr) in init_bindings {
                 collect_free_vars_inner(binding_expr, &extended, free);
-                extended.insert(name.clone());
+                extended.insert(*local);
             }
 
             match kind {
                 LoopKind::For { var, iter } => {
                     collect_free_vars_inner(iter, bound, free);
-                    extended.insert(var.clone());
+                    extended.insert(*var);
                 }
                 LoopKind::ForRange { var, bound: upper } => {
                     collect_free_vars_inner(upper, bound, free);
-                    extended.insert(var.clone());
+                    extended.insert(*var);
                 }
                 LoopKind::While { cond } => {
                     collect_free_vars_inner(cond, &extended, free);
@@ -590,7 +568,7 @@ fn collect_free_vars_inner(expr: &Expr, bound: &HashSet<String>, free: &mut Hash
 }
 
 /// Collect free variables in literal expressions.
-fn collect_free_vars_in_literal(lit: &Literal, bound: &HashSet<String>, free: &mut HashSet<String>) {
+fn collect_free_vars_in_literal(lit: &Literal, bound: &HashSet<LocalId>, free: &mut HashSet<LocalId>) {
     match lit {
         Literal::Tuple(elems) | Literal::Array(elems) | Literal::Vector(elems) => {
             for elem in elems {

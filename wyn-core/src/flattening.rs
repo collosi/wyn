@@ -7,7 +7,7 @@
 
 use crate::ast::{self, ExprKind, Expression, NodeCounter, NodeId, PatternKind, Span, Type, TypeName};
 use crate::error::Result;
-use crate::mir::{self, Expr};
+use crate::mir::{self, DefId, Expr, IntrinsicId, LocalId, LocalTable};
 use crate::pattern;
 use crate::scope::ScopeStack;
 use crate::types;
@@ -25,19 +25,19 @@ enum ArgShape {
 
 /// Static values for defunctionalization (Futhark TFP'18 approach).
 /// Tracks what each expression evaluates to at compile time.
-/// Each variant includes a binding_id for tracking backing stores.
+/// Each variant includes a LocalId for tracking backing stores.
 #[derive(Debug, Clone)]
 enum StaticValue {
-    /// Dynamic runtime value with its binding ID
+    /// Dynamic runtime value with its LocalId
     Dyn {
-        binding_id: u64,
+        local: LocalId,
     },
     /// Defunctionalized closure with known call target
     Closure {
         /// Name of the generated lambda function
         lam_name: String,
-        /// Binding ID for this closure
-        binding_id: u64,
+        /// LocalId for this closure
+        local: LocalId,
     },
 }
 
@@ -45,8 +45,6 @@ enum StaticValue {
 pub struct Flattener {
     /// Counter for generating unique names
     next_id: usize,
-    /// Counter for generating unique binding IDs
-    next_binding_id: u64,
     /// Counter for generating unique MIR node IDs
     node_counter: NodeCounter,
     /// Generated lambda functions (collected during flattening)
@@ -62,15 +60,21 @@ pub struct Flattener {
     static_values: ScopeStack<StaticValue>,
     /// Set of builtin names to exclude from free variable capture
     builtins: HashSet<String>,
-    /// Set of binding IDs that need backing stores (materialization)
-    needs_backing_store: HashSet<u64>,
+    /// Set of LocalIds that need backing stores (materialization)
+    needs_backing_store: HashSet<LocalId>,
+    /// Current function's local table (reset for each function)
+    current_local_table: LocalTable,
+    /// Collected local tables for all functions, keyed by def name
+    /// (will be converted to DefId keys after flattening)
+    local_tables_by_name: HashMap<String, LocalTable>,
+    /// Map from function name to DefId (built as we add defs)
+    name_to_def_id: HashMap<String, DefId>,
 }
 
 impl Flattener {
     pub fn new(type_table: HashMap<NodeId, TypeScheme<TypeName>>, builtins: HashSet<String>) -> Self {
         Flattener {
             next_id: 0,
-            next_binding_id: 0,
             node_counter: NodeCounter::new(),
             generated_functions: Vec::new(),
             enclosing_decl_stack: Vec::new(),
@@ -79,6 +83,9 @@ impl Flattener {
             static_values: ScopeStack::new(),
             builtins,
             needs_backing_store: HashSet::new(),
+            current_local_table: LocalTable::new(),
+            local_tables_by_name: HashMap::new(),
+            name_to_def_id: HashMap::new(),
         }
     }
 
@@ -97,21 +104,53 @@ impl Flattener {
         self.node_counter.next()
     }
 
-    /// Generate a fresh binding ID
-    fn fresh_binding_id(&mut self) -> u64 {
-        let id = self.next_binding_id;
-        self.next_binding_id += 1;
-        id
+    /// Allocate a new local variable in the current function's local table
+    fn alloc_local(&mut self, debug_name: String, ty: Type, span: Option<Span>) -> LocalId {
+        self.current_local_table.alloc(debug_name, ty, span)
     }
 
-    /// Get the backing store variable name for a binding ID
-    fn backing_store_name(binding_id: u64) -> String {
-        format!("_w_ptr_{}", binding_id)
+    /// Get the backing store local for a given LocalId
+    fn backing_store_local(&mut self, original: LocalId, ty: Type, span: Option<Span>) -> LocalId {
+        let debug_name = format!("_w_ptr_{}", original.0);
+        self.alloc_local(debug_name, ty, span)
     }
 
     /// Register a lambda function.
     fn add_lambda(&mut self, func_name: String, arity: usize) {
         self.lambda_registry.push((func_name, arity));
+    }
+
+    /// Look up DefId for a function name. Returns None for builtins/externals.
+    fn lookup_def_id(&self, name: &str) -> Option<DefId> {
+        self.name_to_def_id.get(name).copied()
+    }
+
+    /// Register a def with the next available DefId
+    #[allow(dead_code)]
+    fn register_def(&mut self, name: &str, current_def_count: usize) -> DefId {
+        let def_id = DefId(current_def_count as u32);
+        self.name_to_def_id.insert(name.to_string(), def_id);
+        def_id
+    }
+
+    /// Pre-register a function name with a specific DefId
+    /// This allows lookups to work during flattening even for forward references.
+    pub fn pre_register_def(&mut self, name: &str, def_id: DefId) {
+        self.name_to_def_id.insert(name.to_string(), def_id);
+    }
+
+    /// Reset local table for a new function
+    fn reset_local_table(&mut self) {
+        self.current_local_table = LocalTable::new();
+        self.needs_backing_store.clear();
+    }
+
+    /// Save current local table for a function
+    fn save_local_table(&mut self, func_name: &str) {
+        self.local_tables_by_name.insert(
+            func_name.to_string(),
+            std::mem::take(&mut self.current_local_table),
+        );
     }
 
     /// Extract the monotype from a TypeScheme
@@ -294,15 +333,13 @@ impl Flattener {
     /// This ensures materialized pointers are at the same scope level as their referents.
     fn hoist_inner_lets(&mut self, expr_kind: mir::ExprKind, span: Span) -> mir::ExprKind {
         if let mir::ExprKind::Let {
-            name,
-            binding_id,
+            local,
             value,
             body,
         } = expr_kind
         {
             if let mir::ExprKind::Let {
-                name: inner_name,
-                binding_id: inner_binding_id,
+                local: inner_local,
                 value: inner_value,
                 body: inner_body,
             } = value.kind
@@ -311,8 +348,7 @@ impl Flattener {
                 // Capture body's type before moving it
                 let body_ty = body.ty.clone();
                 let new_inner = mir::ExprKind::Let {
-                    name,
-                    binding_id,
+                    local,
                     value: inner_body,
                     body,
                 };
@@ -320,15 +356,13 @@ impl Flattener {
                 // Recursively hoist in case there are more nested Lets
                 let hoisted_inner = self.hoist_inner_lets(new_inner_expr.kind, span);
                 mir::ExprKind::Let {
-                    name: inner_name,
-                    binding_id: inner_binding_id,
+                    local: inner_local,
                     value: inner_value,
                     body: Box::new(self.mk_expr(body_ty, hoisted_inner, span)),
                 }
             } else {
                 mir::ExprKind::Let {
-                    name,
-                    binding_id,
+                    local,
                     value,
                     body,
                 }
@@ -492,6 +526,30 @@ impl Flattener {
     pub fn flatten_program(&mut self, program: &ast::Program) -> Result<mir::Program> {
         let mut defs = Vec::new();
 
+        // Pre-register all function/constant names with DefIds so lookups work during flattening
+        let mut def_idx = 0;
+        for decl in &program.declarations {
+            match decl {
+                ast::Declaration::Decl(d) => {
+                    self.name_to_def_id.insert(d.name.clone(), DefId(def_idx));
+                    def_idx += 1;
+                }
+                ast::Declaration::Entry(e) => {
+                    self.name_to_def_id.insert(e.name.clone(), DefId(def_idx));
+                    def_idx += 1;
+                }
+                ast::Declaration::Uniform(u) => {
+                    self.name_to_def_id.insert(u.name.clone(), DefId(def_idx));
+                    def_idx += 1;
+                }
+                ast::Declaration::Storage(s) => {
+                    self.name_to_def_id.insert(s.name.clone(), DefId(def_idx));
+                    def_idx += 1;
+                }
+                // Other declarations don't produce defs
+                _ => {}
+            }
+        }
         // Flatten user declarations
         for decl in &program.declarations {
             match decl {
@@ -509,9 +567,6 @@ impl Flattener {
 
                     let (body, _) = self.flatten_expr(&e.body)?;
 
-                    // Wrap body with backing stores for params that need them
-                    let body = self.wrap_param_backing_stores(body, param_bindings, span);
-
                     // Convert entry type to ExecutionModel
                     let execution_model = match &e.entry_type {
                         ast::Attribute::Vertex => mir::ExecutionModel::Vertex,
@@ -522,21 +577,26 @@ impl Flattener {
                         _ => panic!("Invalid entry type attribute: {:?}", e.entry_type),
                     };
 
-                    // Convert params to EntryInput with IoDecoration
+                    // Convert params to EntryInput with IoDecoration and LocalId
                     let inputs: Vec<mir::EntryInput> = e
                         .params
                         .iter()
-                        .map(|p| {
+                        .zip(param_bindings.iter())
+                        .map(|(p, (_, _, local_id))| {
                             let name = self.extract_param_name(p).unwrap_or_default();
                             let ty = self.get_pattern_type(p);
                             let decoration = self.extract_io_decoration(p);
                             mir::EntryInput {
                                 name,
+                                local_id: *local_id,
                                 ty,
                                 decoration,
                             }
                         })
                         .collect();
+
+                    // Wrap body with backing stores for params that need them
+                    let body = self.wrap_param_backing_stores(body, param_bindings, span);
 
                     // Convert AST EntryOutput to MIR EntryOutput with IoDecoration
                     let ret_type = self.get_expr_type(&e.body);
@@ -698,17 +758,17 @@ impl Flattener {
         Ok(result)
     }
 
-    /// Register function parameters with binding IDs for backing store tracking.
-    /// Returns a Vec of (param_name, param_type, binding_id) tuples.
-    fn register_param_bindings(&mut self, params: &[ast::Pattern]) -> Result<Vec<(String, Type, u64)>> {
+    /// Register function parameters with LocalIds for backing store tracking.
+    /// Returns a Vec of (param_name, param_type, local_id) tuples.
+    fn register_param_bindings(&mut self, params: &[ast::Pattern]) -> Result<Vec<(String, Type, LocalId)>> {
         self.static_values.push_scope();
         let mut param_bindings = Vec::new();
         for param in params {
             let name = self.extract_param_name(param)?;
             let ty = self.get_pattern_type(param);
-            let binding_id = self.fresh_binding_id();
-            self.static_values.insert(name.clone(), StaticValue::Dyn { binding_id });
-            param_bindings.push((name, ty, binding_id));
+            let local_id = self.alloc_local(name.clone(), ty.clone(), None);
+            self.static_values.insert(name.clone(), StaticValue::Dyn { local: local_id });
+            param_bindings.push((name, ty, local_id));
         }
         Ok(param_bindings)
     }
@@ -717,7 +777,7 @@ impl Flattener {
     fn wrap_param_backing_stores(
         &mut self,
         body: Expr,
-        param_bindings: Vec<(String, Type, u64)>,
+        param_bindings: Vec<(String, Type, LocalId)>,
         span: Span,
     ) -> Expr {
         self.static_values.pop_scope();
@@ -725,16 +785,15 @@ impl Flattener {
         // Collect params that need backing stores (in reverse order for proper nesting)
         let params_needing_stores: Vec<_> = param_bindings
             .into_iter()
-            .filter(|(_, _, binding_id)| self.needs_backing_store.contains(binding_id))
+            .filter(|(_, _, local_id)| self.needs_backing_store.contains(local_id))
             .collect();
 
         // Wrap body with backing stores for each param that needs one
         let mut result = body;
-        for (param_name, param_ty, binding_id) in params_needing_stores.into_iter().rev() {
-            let ptr_name = Self::backing_store_name(binding_id);
-            let ptr_binding_id = self.fresh_binding_id();
+        for (_, param_ty, local_id) in params_needing_stores.into_iter().rev() {
+            let ptr_local = self.backing_store_local(local_id, types::pointer(param_ty.clone()), Some(span));
             // Build inner expressions first to avoid nested mutable borrows
-            let var_expr = self.mk_expr(param_ty.clone(), mir::ExprKind::Var(param_name), span);
+            let var_expr = self.mk_expr(param_ty.clone(), mir::ExprKind::Var(local_id), span);
             let materialize_expr = self.mk_expr(
                 types::pointer(param_ty),
                 mir::ExprKind::Materialize(Box::new(var_expr)),
@@ -744,8 +803,7 @@ impl Flattener {
             result = self.mk_expr(
                 result_ty,
                 mir::ExprKind::Let {
-                    name: ptr_name,
-                    binding_id: ptr_binding_id,
+                    local: ptr_local,
                     value: Box::new(materialize_expr),
                     body: Box::new(result),
                 },
@@ -772,28 +830,33 @@ impl Flattener {
         let (kind, sv) = match &expr.kind {
             ExprKind::IntLiteral(n) => (
                 mir::ExprKind::Literal(mir::Literal::Int(n.to_string())),
-                StaticValue::Dyn { binding_id: 0 },
+                StaticValue::Dyn { local: LocalId(0) },
             ),
             ExprKind::FloatLiteral(f) => (
                 mir::ExprKind::Literal(mir::Literal::Float(f.to_string())),
-                StaticValue::Dyn { binding_id: 0 },
+                StaticValue::Dyn { local: LocalId(0) },
             ),
             ExprKind::BoolLiteral(b) => (
                 mir::ExprKind::Literal(mir::Literal::Bool(*b)),
-                StaticValue::Dyn { binding_id: 0 },
+                StaticValue::Dyn { local: LocalId(0) },
             ),
             ExprKind::StringLiteral(s) => (
                 mir::ExprKind::Literal(mir::Literal::String(s.clone())),
-                StaticValue::Dyn { binding_id: 0 },
+                StaticValue::Dyn { local: LocalId(0) },
             ),
-            ExprKind::Unit => (mir::ExprKind::Unit, StaticValue::Dyn { binding_id: 0 }),
+            ExprKind::Unit => (mir::ExprKind::Unit, StaticValue::Dyn { local: LocalId(0) }),
             ExprKind::Identifier(quals, name) => {
                 let full_name =
                     if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) };
                 // Look up static value for this variable
                 let sv =
-                    self.static_values.lookup(&full_name).cloned().unwrap_or(StaticValue::Dyn { binding_id: 0 });
-                (mir::ExprKind::Var(full_name), sv)
+                    self.static_values.lookup(&full_name).cloned().unwrap_or(StaticValue::Dyn { local: LocalId(0) });
+                // Extract LocalId from static value
+                let local_id = match &sv {
+                    StaticValue::Dyn { local } => *local,
+                    StaticValue::Closure { local, .. } => *local,
+                };
+                (mir::ExprKind::Var(local_id), sv)
             }
             ExprKind::BinaryOp(op, lhs, rhs) => {
                 let (lhs, _) = self.flatten_expr(lhs)?;
@@ -804,7 +867,7 @@ impl Flattener {
                         lhs: Box::new(lhs),
                         rhs: Box::new(rhs),
                     },
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn { local: LocalId(0) },
                 )
             }
             ExprKind::UnaryOp(op, operand) => {
@@ -814,7 +877,7 @@ impl Flattener {
                         op: op.op.clone(),
                         operand: Box::new(operand),
                     },
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn { local: LocalId(0) },
                 )
             }
             ExprKind::If(if_expr) => {
@@ -827,7 +890,7 @@ impl Flattener {
                         then_branch: Box::new(then_branch),
                         else_branch: Box::new(else_branch),
                     },
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn { local: LocalId(0) },
                 )
             }
             ExprKind::LetIn(let_in) => self.flatten_let_in(let_in, span)?,
@@ -838,7 +901,7 @@ impl Flattener {
                     elems.iter().map(|e| self.flatten_expr(e).map(|(e, _)| e)).collect();
                 (
                     mir::ExprKind::Literal(mir::Literal::Tuple(elems?)),
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn { local: LocalId(0) },
                 )
             }
             ExprKind::ArrayLiteral(elems) => {
@@ -846,7 +909,7 @@ impl Flattener {
                     elems.iter().map(|e| self.flatten_expr(e).map(|(e, _)| e)).collect();
                 (
                     mir::ExprKind::Literal(mir::Literal::Array(elems?)),
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn { local: LocalId(0) },
                 )
             }
             ExprKind::VecMatLiteral(elems) => {
@@ -871,7 +934,7 @@ impl Flattener {
                     }
                     (
                         mir::ExprKind::Literal(mir::Literal::Matrix(rows)),
-                        StaticValue::Dyn { binding_id: 0 },
+                        StaticValue::Dyn { local: LocalId(0) },
                     )
                 } else {
                     // Vector
@@ -879,7 +942,7 @@ impl Flattener {
                         elems.iter().map(|e| self.flatten_expr(e).map(|(e, _)| e)).collect();
                     (
                         mir::ExprKind::Literal(mir::Literal::Vector(elems?)),
-                        StaticValue::Dyn { binding_id: 0 },
+                        StaticValue::Dyn { local: LocalId(0) },
                     )
                 }
             }
@@ -889,7 +952,7 @@ impl Flattener {
                     fields.iter().map(|(_, expr)| Ok(self.flatten_expr(expr)?.0)).collect();
                 (
                     mir::ExprKind::Literal(mir::Literal::Tuple(elems?)),
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn { local: LocalId(0) },
                 )
             }
             ExprKind::ArrayIndex(arr_expr, idx_expr) => {
@@ -901,34 +964,35 @@ impl Flattener {
                 if let mir::ExprKind::Literal(mir::Literal::Int(_)) = &idx.kind {
                     // Constant index: use tuple_access directly on value
                     let kind = mir::ExprKind::Intrinsic {
-                        name: "tuple_access".to_string(),
+                        id: IntrinsicId::TupleAccess,
                         args: vec![arr, idx],
                     };
-                    return Ok((self.mk_expr(ty, kind, span), StaticValue::Dyn { binding_id: 0 }));
+                    return Ok((self.mk_expr(ty, kind, span), StaticValue::Dyn { local: LocalId(0) }));
                 }
 
                 // Dynamic index: need backing store for OpAccessChain
-                if let mir::ExprKind::Var(ref var_name) = arr.kind {
-                    // Look up binding_id from static_values
-                    if let Some(sv) = self.static_values.lookup(var_name) {
-                        let binding_id = match sv {
-                            StaticValue::Dyn { binding_id } => *binding_id,
-                            StaticValue::Closure { binding_id, .. } => *binding_id,
+                // Check if the original expression is an identifier we can look up
+                if let ExprKind::Identifier(quals, name) = &arr_expr.kind {
+                    let full_name = if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) };
+                    if let Some(sv) = self.static_values.lookup(&full_name) {
+                        let local_id = match sv {
+                            StaticValue::Dyn { local } => *local,
+                            StaticValue::Closure { local, .. } => *local,
                         };
                         // Mark this binding as needing a backing store
-                        self.needs_backing_store.insert(binding_id);
-                        // Use the backing store variable name
-                        let ptr_name = Self::backing_store_name(binding_id);
+                        self.needs_backing_store.insert(local_id);
+                        // Allocate a backing store local and reference it
+                        let ptr_local = self.backing_store_local(local_id, types::pointer(arr.ty.clone()), Some(span));
                         let ptr_var = self.mk_expr(
                             types::pointer(arr.ty.clone()),
-                            mir::ExprKind::Var(ptr_name),
+                            mir::ExprKind::Var(ptr_local),
                             span,
                         );
                         let kind = mir::ExprKind::Intrinsic {
-                            name: "index".to_string(),
+                            id: IntrinsicId::Index,
                             args: vec![ptr_var, idx],
                         };
-                        return Ok((self.mk_expr(ty, kind, span), StaticValue::Dyn { binding_id: 0 }));
+                        return Ok((self.mk_expr(ty, kind, span), StaticValue::Dyn { local: LocalId(0) }));
                     }
                 }
 
@@ -940,10 +1004,10 @@ impl Flattener {
                 );
                 (
                     mir::ExprKind::Intrinsic {
-                        name: "index".to_string(),
+                        id: IntrinsicId::Index,
                         args: vec![materialized_arr, idx],
                     },
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn { local: LocalId(0) },
                 )
             }
             ExprKind::ArrayWith { array, index, value } => {
@@ -954,13 +1018,16 @@ impl Flattener {
                 let (val, _) = self.flatten_expr(value)?;
 
                 // Generate a call to _w_array_with(arr, idx, val)
-                let func_name = "_w_array_with".to_string();
+                // Use sentinel DefId for builtin - will be resolved during lowering
+                let func_id = self.lookup_def_id("_w_array_with").unwrap_or(DefId(u32::MAX));
+                let func_name = if func_id == DefId(u32::MAX) { Some("_w_array_with".to_string()) } else { None };
                 (
                     mir::ExprKind::Call {
-                        func: func_name,
+                        func: func_id,
+                        func_name,
                         args: vec![arr, idx, val],
                     },
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn { local: LocalId(0) },
                 )
             }
             ExprKind::FieldAccess(obj_expr, field) => {
@@ -981,10 +1048,10 @@ impl Flattener {
                 // Lowering handles both pointer and value inputs correctly
                 (
                     mir::ExprKind::Intrinsic {
-                        name: "tuple_access".to_string(),
+                        id: IntrinsicId::TupleAccess,
                         args: vec![obj, idx_expr],
                     },
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn { local: LocalId(0) },
                 )
             }
             ExprKind::Loop(loop_expr) => self.flatten_loop(loop_expr, span)?,
@@ -997,10 +1064,10 @@ impl Flattener {
                 let (body, _) = self.flatten_expr(body)?;
                 (
                     mir::ExprKind::Intrinsic {
-                        name: "assert".to_string(),
+                        id: IntrinsicId::Assert,
                         args: vec![cond, body],
                     },
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn { local: LocalId(0) },
                 )
             }
             ExprKind::TypeHole => {
@@ -1028,13 +1095,13 @@ impl Flattener {
         // Check if pattern is simple (just a name)
         match &let_in.pattern.kind {
             PatternKind::Name(name) => {
-                // Assign a unique binding ID for this binding
-                let binding_id = self.fresh_binding_id();
+                // Allocate a LocalId for this binding
+                let local_id = self.alloc_local(name.clone(), value.ty.clone(), Some(span));
 
-                // Create static value with the binding ID
+                // Create static value with the LocalId
                 let sv_with_id = match value_sv {
-                    StaticValue::Dyn { .. } => StaticValue::Dyn { binding_id },
-                    StaticValue::Closure { lam_name, .. } => StaticValue::Closure { lam_name, binding_id },
+                    StaticValue::Dyn { .. } => StaticValue::Dyn { local: local_id },
+                    StaticValue::Closure { lam_name, .. } => StaticValue::Closure { lam_name, local: local_id },
                 };
 
                 // Track the static value of this binding
@@ -1046,13 +1113,12 @@ impl Flattener {
                 self.static_values.pop_scope();
 
                 // Check if this binding needs a backing store
-                let body = if self.needs_backing_store.contains(&binding_id) {
+                let body = if self.needs_backing_store.contains(&local_id) {
                     // Wrap body with backing store materialization:
                     // let _w_ptr_{id} = materialize(name) in body
-                    let ptr_name = Self::backing_store_name(binding_id);
-                    let ptr_binding_id = self.fresh_binding_id();
+                    let ptr_local = self.backing_store_local(local_id, types::pointer(value.ty.clone()), Some(span));
                     // Build inner expressions first to avoid nested mutable borrow
-                    let var_expr = self.mk_expr(value.ty.clone(), mir::ExprKind::Var(name.clone()), span);
+                    let var_expr = self.mk_expr(value.ty.clone(), mir::ExprKind::Var(local_id), span);
                     let materialize_expr = self.mk_expr(
                         types::pointer(value.ty.clone()),
                         mir::ExprKind::Materialize(Box::new(var_expr)),
@@ -1062,8 +1128,7 @@ impl Flattener {
                     self.mk_expr(
                         body_ty,
                         mir::ExprKind::Let {
-                            name: ptr_name,
-                            binding_id: ptr_binding_id,
+                            local: ptr_local,
                             value: Box::new(materialize_expr),
                             body: Box::new(body),
                         },
@@ -1076,8 +1141,7 @@ impl Flattener {
                 // If the value is a Let, hoist it out:
                 // let x = (let y = A in B) in C  =>  let y = A in let x = B in C
                 let result = mir::ExprKind::Let {
-                    name: name.clone(),
-                    binding_id,
+                    local: local_id,
                     value: Box::new(value),
                     body: Box::new(body),
                 };
@@ -1097,12 +1161,12 @@ impl Flattener {
             }
             PatternKind::Wildcard => {
                 // Bind to ignored variable, just for side effects
-                let binding_id = self.fresh_binding_id();
+                let ignored_name = self.fresh_name("ignored");
+                let local_id = self.alloc_local(ignored_name, value.ty.clone(), Some(span));
                 let (body, body_sv) = self.flatten_expr(&let_in.body)?;
                 Ok((
                     mir::ExprKind::Let {
-                        name: self.fresh_name("ignored"),
-                        binding_id,
+                        local: local_id,
                         value: Box::new(value),
                         body: Box::new(body),
                     },
@@ -1110,11 +1174,12 @@ impl Flattener {
                 ))
             }
             PatternKind::Tuple(patterns) => {
-                // Generate a temp name for the tuple value
-                let tmp = self.fresh_name("tup");
-
-                // Get the tuple type and element types
+                // Allocate a local for the tuple value
                 let tuple_ty = self.get_pattern_type(&let_in.pattern);
+                let tup_name = self.fresh_name("tup");
+                let tuple_local = self.alloc_local(tup_name, tuple_ty.clone(), Some(span));
+
+                // Get the element types
                 let elem_types: Vec<Type> = match &tuple_ty {
                     Type::Constructed(TypeName::Tuple(_), args) => args.clone(),
                     _ => {
@@ -1151,7 +1216,7 @@ impl Flattener {
                     let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
 
                     // Pass value directly to tuple_access - no Materialize needed
-                    let tuple_var = self.mk_expr(tuple_ty.clone(), mir::ExprKind::Var(tmp.clone()), span);
+                    let tuple_var = self.mk_expr(tuple_ty.clone(), mir::ExprKind::Var(tuple_local), span);
                     let idx_expr = self.mk_expr(
                         i32_type,
                         mir::ExprKind::Literal(mir::Literal::Int(i.to_string())),
@@ -1161,18 +1226,17 @@ impl Flattener {
                     let extract = self.mk_expr(
                         elem_ty.clone(),
                         mir::ExprKind::Intrinsic {
-                            name: "tuple_access".to_string(),
+                            id: IntrinsicId::TupleAccess,
                             args: vec![tuple_var, idx_expr],
                         },
                         span,
                     );
 
-                    let elem_binding_id = self.fresh_binding_id();
+                    let elem_local = self.alloc_local(name, elem_ty, Some(span));
                     body = self.mk_expr(
                         body.ty.clone(),
                         mir::ExprKind::Let {
-                            name,
-                            binding_id: elem_binding_id,
+                            local: elem_local,
                             value: Box::new(extract),
                             body: Box::new(body),
                         },
@@ -1181,11 +1245,9 @@ impl Flattener {
                 }
 
                 // Wrap with the tuple binding
-                let tuple_binding_id = self.fresh_binding_id();
                 Ok((
                     mir::ExprKind::Let {
-                        name: tmp,
-                        binding_id: tuple_binding_id,
+                        local: tuple_local,
                         value: Box::new(value),
                         body: Box::new(body),
                     },
@@ -1230,13 +1292,20 @@ impl Flattener {
         let mut sorted_vars: Vec<_> = free_vars.iter().collect();
         sorted_vars.sort();
         for var in &sorted_vars {
-            // Look up the type of the free variable from the lambda body
+            // Look up the type and LocalId of the free variable
             let var_type = self
                 .find_var_type_in_expr(&lambda.body, var)
                 .unwrap_or_else(|| {
                     panic!("BUG: Free variable '{}' in lambda has no type. Type checking should ensure all variables have types.", var)
                 });
-            capture_elems.push(self.mk_expr(var_type.clone(), mir::ExprKind::Var((*var).clone()), span));
+            // Look up the LocalId from static_values
+            let local_id = self.static_values.lookup(*var)
+                .map(|sv| match sv {
+                    StaticValue::Dyn { local } => *local,
+                    StaticValue::Closure { local, .. } => *local,
+                })
+                .unwrap_or(LocalId(0)); // Fallback for globals/builtins
+            capture_elems.push(self.mk_expr(var_type.clone(), mir::ExprKind::Var(local_id), span));
             capture_fields.push(((*var).clone(), var_type));
         }
 
@@ -1282,15 +1351,18 @@ impl Flattener {
         };
         self.generated_functions.push(func);
 
+        // Use sentinel DefId for now - will be resolved after all defs are collected
+        let lambda_def_id = DefId(u32::MAX);
+
         // Return the closure along with the static value indicating it's a known closure
         let sv = StaticValue::Closure {
-            lam_name: func_name.clone(),
-            binding_id: 0,
+            lam_name: func_name,
+            local: LocalId(0),
         };
 
         Ok((
             mir::ExprKind::Closure {
-                lambda_name: func_name,
+                lambda: lambda_def_id,
                 captures: capture_elems,
             },
             sv,
@@ -1352,11 +1424,15 @@ impl Flattener {
         let mut wrapped = body;
         let i32_type = Type::Constructed(TypeName::Int(32), vec![]);
 
+        // The _w_closure parameter is the first parameter of the generated function
+        // Allocate a LocalId for it (parameter 0)
+        let closure_local = self.alloc_local("_w_closure".to_string(), captures_type.clone(), Some(span));
+
         // Iterate in reverse so innermost let is first free var
         for (idx, (var_name, var_type)) in capture_fields.iter().enumerate().rev() {
             let closure_var = self.mk_expr(
                 captures_type.clone(),
-                mir::ExprKind::Var("_w_closure".to_string()),
+                mir::ExprKind::Var(closure_local),
                 span,
             );
             let idx_expr = self.mk_expr(
@@ -1367,18 +1443,17 @@ impl Flattener {
             let tuple_access = self.mk_expr(
                 var_type.clone(),
                 mir::ExprKind::Intrinsic {
-                    name: "tuple_access".to_string(),
+                    id: IntrinsicId::TupleAccess,
                     args: vec![closure_var, idx_expr],
                 },
                 span,
             );
 
-            let binding_id = self.fresh_binding_id();
+            let local = self.alloc_local(var_name.clone(), var_type.clone(), Some(span));
             wrapped = self.mk_expr(
                 wrapped.ty.clone(),
                 mir::ExprKind::Let {
-                    name: var_name.clone(),
-                    binding_id,
+                    local,
                     value: Box::new(tuple_access),
                     body: Box::new(wrapped),
                 },
@@ -1436,16 +1511,22 @@ impl Flattener {
             is_consumed: false,
         }];
 
-        let mut remaining_param_names = vec![];
         for (i, param_ty) in remaining_param_types.iter().enumerate() {
             let param_name = format!("_w_arg_{}", i);
-            remaining_param_names.push(param_name.clone());
             params.push(mir::Param {
                 name: param_name,
                 ty: param_ty.clone(),
                 is_consumed: false,
             });
         }
+
+        // Allocate LocalIds for the lambda's parameters
+        let closure_local = self.alloc_local("_w_closure".to_string(), closure_type.clone(), Some(span));
+        let remaining_param_locals: Vec<LocalId> = remaining_param_types
+            .iter()
+            .enumerate()
+            .map(|(i, ty)| self.alloc_local(format!("_w_arg_{}", i), ty.clone(), Some(span)))
+            .collect();
 
         // Build the body: call original function with captured args + remaining args
         // First, extract captured args from closure using tuple_access intrinsic
@@ -1454,7 +1535,7 @@ impl Flattener {
         for (i, (_, field_ty)) in capture_fields.iter().enumerate() {
             let closure_var = self.mk_expr(
                 closure_type.clone(),
-                mir::ExprKind::Var("_w_closure".to_string()),
+                mir::ExprKind::Var(closure_local),
                 span,
             );
             let idx_expr = self.mk_expr(
@@ -1465,7 +1546,7 @@ impl Flattener {
             let field_access = self.mk_expr(
                 field_ty.clone(),
                 mir::ExprKind::Intrinsic {
-                    name: "tuple_access".to_string(),
+                    id: IntrinsicId::TupleAccess,
                     args: vec![closure_var, idx_expr],
                 },
                 span,
@@ -1475,15 +1556,19 @@ impl Flattener {
 
         // Then add remaining parameter references
         for (i, param_ty) in remaining_param_types.iter().enumerate() {
-            let param_name = format!("_w_arg_{}", i);
-            call_args.push(self.mk_expr(param_ty.clone(), mir::ExprKind::Var(param_name), span));
+            call_args.push(self.mk_expr(param_ty.clone(), mir::ExprKind::Var(remaining_param_locals[i]), span));
         }
+
+        // Look up DefId for the function being called (use sentinel for builtins)
+        let func_def_id = self.lookup_def_id(&func_name).unwrap_or(DefId(u32::MAX));
+        let call_func_name = if func_def_id == DefId(u32::MAX) { Some(func_name.clone()) } else { None };
 
         // Create the call expression
         let body = self.mk_expr(
             final_return_type.clone(),
             mir::ExprKind::Call {
-                func: func_name,
+                func: func_def_id,
+                func_name: call_func_name,
                 args: call_args,
             },
             span,
@@ -1501,15 +1586,18 @@ impl Flattener {
         };
         self.generated_functions.push(func);
 
+        // Use sentinel DefId for now - will be resolved after all defs are collected
+        let lambda_def_id = DefId(u32::MAX);
+
         // Return the closure
         let sv = StaticValue::Closure {
             lam_name: lam_name.clone(),
-            binding_id: 0,
+            local: LocalId(0),
         };
 
         Ok((
             mir::ExprKind::Closure {
-                lambda_name: lam_name,
+                lambda: lambda_def_id,
                 captures: capture_elems,
             },
             sv,
@@ -1539,12 +1627,15 @@ impl Flattener {
                     // Direct call to the lambda function with closure as first argument
                     let mut all_args = vec![func_flat];
                     all_args.extend(args_flat);
+                    let func_id = self.lookup_def_id(&lam_name).unwrap_or(DefId(u32::MAX));
+                    let call_func_name = if func_id == DefId(u32::MAX) { Some(lam_name.clone()) } else { None };
                     Ok((
                         mir::ExprKind::Call {
-                            func: lam_name,
+                            func: func_id,
+                            func_name: call_func_name,
                             args: all_args,
                         },
-                        StaticValue::Dyn { binding_id: 0 },
+                        StaticValue::Dyn { local: LocalId(0) },
                     ))
                 } else {
                     let full_name =
@@ -1559,12 +1650,15 @@ impl Flattener {
                         self.synthesize_partial_application(desugared_name, args_flat, result_type, span)
                     } else {
                         // Direct function call (not a closure)
+                        let func_id = self.lookup_def_id(&desugared_name).unwrap_or(DefId(u32::MAX));
+                        let call_func_name = if func_id == DefId(u32::MAX) { Some(desugared_name.clone()) } else { None };
                         Ok((
                             mir::ExprKind::Call {
-                                func: desugared_name,
+                                func: func_id,
+                                func_name: call_func_name,
                                 args: args_flat,
                             },
-                            StaticValue::Dyn { binding_id: 0 },
+                            StaticValue::Dyn { local: LocalId(0) },
                         ))
                     }
                 }
@@ -1574,12 +1668,15 @@ impl Flattener {
                 if let StaticValue::Closure { lam_name, .. } = func_sv {
                     let mut all_args = vec![func_flat];
                     all_args.extend(args_flat);
+                    let func_id = self.lookup_def_id(&lam_name).unwrap_or(DefId(u32::MAX));
+                    let call_func_name = if func_id == DefId(u32::MAX) { Some(lam_name.clone()) } else { None };
                     Ok((
                         mir::ExprKind::Call {
-                            func: lam_name,
+                            func: func_id,
+                            func_name: call_func_name,
                             args: all_args,
                         },
-                        StaticValue::Dyn { binding_id: 0 },
+                        StaticValue::Dyn { local: LocalId(0) },
                     ))
                 } else {
                     Err(err_flatten!(
@@ -1595,12 +1692,15 @@ impl Flattener {
                     // Direct call to the lambda function with closure as first argument
                     let mut all_args = vec![func_flat];
                     all_args.extend(args_flat);
+                    let func_id = self.lookup_def_id(&lam_name).unwrap_or(DefId(u32::MAX));
+                    let call_func_name = if func_id == DefId(u32::MAX) { Some(lam_name.clone()) } else { None };
                     Ok((
                         mir::ExprKind::Call {
-                            func: lam_name,
+                            func: func_id,
+                            func_name: call_func_name,
                             args: all_args,
                         },
-                        StaticValue::Dyn { binding_id: 0 },
+                        StaticValue::Dyn { local: LocalId(0) },
                     ))
                 } else {
                     // Unknown closure - this should not happen with proper function value restrictions
@@ -1632,21 +1732,28 @@ impl Flattener {
             }
             ast::LoopForm::For(var, bound) => {
                 let (bound, _) = self.flatten_expr(bound)?;
+                // Allocate a LocalId for the loop counter variable
+                let var_ty = Type::Constructed(TypeName::Int(32), vec![]);
+                let var_local = self.alloc_local(var.clone(), var_ty, Some(span));
                 mir::LoopKind::ForRange {
-                    var: var.clone(),
+                    var: var_local,
                     bound: Box::new(bound),
                 }
             }
             ast::LoopForm::ForIn(pat, iter) => {
-                let var = match &pat.kind {
+                let var_name = match &pat.kind {
                     PatternKind::Name(n) => n.clone(),
                     _ => {
                         bail_flatten!("Complex for-in patterns not supported");
                     }
                 };
                 let (iter, _) = self.flatten_expr(iter)?;
+                // Allocate a LocalId for the loop element variable
+                // Infer type from iterator element type
+                let elem_ty = self.get_pattern_type(pat);
+                let var_local = self.alloc_local(var_name, elem_ty, Some(span));
                 mir::LoopKind::For {
-                    var,
+                    var: var_local,
                     iter: Box::new(iter),
                 }
             }
@@ -1662,57 +1769,60 @@ impl Flattener {
                 kind,
                 body: Box::new(body),
             },
-            StaticValue::Dyn { binding_id: 0 },
+            StaticValue::Dyn { local: LocalId(0) },
         ))
     }
 
-    /// Extract loop_var name, init expr, and bindings from pattern and init expression.
-    /// Returns (loop_var_name, init_expr, bindings) where bindings extract from loop_var.
+    /// Extract loop_var LocalId, init expr, and bindings from pattern and init expression.
+    /// Returns (loop_var_local, init_expr, bindings) where bindings extract from loop_var.
     fn extract_loop_bindings(
         &mut self,
         pattern: &ast::Pattern,
         init: Option<&Expression>,
         span: Span,
-    ) -> Result<(String, Expr, Vec<(String, Expr)>)> {
+    ) -> Result<(LocalId, Expr, Vec<(LocalId, Expr)>)> {
         let init_expr = init.ok_or_else(|| err_flatten!("Loop must have init expression"))?;
 
         let (init_flat, _) = self.flatten_expr(init_expr)?;
         let init_ty = init_flat.ty.clone();
-        let loop_var = self.fresh_name("loop_var");
+        let loop_var_name = self.fresh_name("loop_var");
+        let loop_var_local = self.alloc_local(loop_var_name, init_ty.clone(), Some(span));
 
         let bindings = match &pattern.kind {
             PatternKind::Name(name) => {
                 // Single variable: binding is just identity (Var(loop_var))
-                let binding = self.mk_expr(init_ty, mir::ExprKind::Var(loop_var.clone()), span);
-                vec![(name.clone(), binding)]
+                let binding = self.mk_expr(init_ty.clone(), mir::ExprKind::Var(loop_var_local), span);
+                let name_local = self.alloc_local(name.clone(), init_ty, Some(span));
+                vec![(name_local, binding)]
             }
             PatternKind::Typed(inner, _) => {
                 // Unwrap type annotation and recurse
-                self.extract_bindings_from_pattern(inner, &loop_var, &init_ty, span)?
+                self.extract_bindings_from_pattern(inner, loop_var_local, &init_ty, span)?
             }
             PatternKind::Tuple(patterns) => {
-                self.extract_tuple_bindings(patterns, &loop_var, &init_ty, span)?
+                self.extract_tuple_bindings(patterns, loop_var_local, &init_ty, span)?
             }
             _ => {
                 bail_flatten!("Loop pattern {:?} not supported", pattern.kind);
             }
         };
 
-        Ok((loop_var, init_flat, bindings))
+        Ok((loop_var_local, init_flat, bindings))
     }
 
-    /// Helper to extract bindings from pattern given loop_var and init_ty
+    /// Helper to extract bindings from pattern given loop_var LocalId and init_ty
     fn extract_bindings_from_pattern(
         &mut self,
         pattern: &ast::Pattern,
-        loop_var: &str,
+        loop_var: LocalId,
         init_ty: &Type,
         span: Span,
-    ) -> Result<Vec<(String, Expr)>> {
+    ) -> Result<Vec<(LocalId, Expr)>> {
         match &pattern.kind {
             PatternKind::Name(name) => {
-                let binding = self.mk_expr(init_ty.clone(), mir::ExprKind::Var(loop_var.to_string()), span);
-                Ok(vec![(name.clone(), binding)])
+                let binding = self.mk_expr(init_ty.clone(), mir::ExprKind::Var(loop_var), span);
+                let name_local = self.alloc_local(name.clone(), init_ty.clone(), Some(span));
+                Ok(vec![(name_local, binding)])
             }
             PatternKind::Typed(inner, _) => {
                 self.extract_bindings_from_pattern(inner, loop_var, init_ty, span)
@@ -1726,10 +1836,10 @@ impl Flattener {
     fn extract_tuple_bindings(
         &mut self,
         patterns: &[ast::Pattern],
-        loop_var: &str,
+        loop_var: LocalId,
         tuple_ty: &Type,
         span: Span,
-    ) -> Result<Vec<(String, Expr)>> {
+    ) -> Result<Vec<(LocalId, Expr)>> {
         // Get element types from tuple type
         let elem_types: Vec<Type> = match tuple_ty {
             Type::Constructed(TypeName::Tuple(_), args) => args.clone(),
@@ -1761,7 +1871,7 @@ impl Flattener {
 
             // Pass value directly to tuple_access - no Materialize needed
             let loop_var_expr =
-                self.mk_expr(tuple_ty.clone(), mir::ExprKind::Var(loop_var.to_string()), span);
+                self.mk_expr(tuple_ty.clone(), mir::ExprKind::Var(loop_var), span);
             let idx_expr = self.mk_expr(
                 i32_type,
                 mir::ExprKind::Literal(mir::Literal::Int(i.to_string())),
@@ -1769,15 +1879,16 @@ impl Flattener {
             );
 
             let extract = self.mk_expr(
-                elem_ty,
+                elem_ty.clone(),
                 mir::ExprKind::Intrinsic {
-                    name: "tuple_access".to_string(),
+                    id: IntrinsicId::TupleAccess,
                     args: vec![loop_var_expr, idx_expr],
                 },
                 span,
             );
 
-            bindings.push((name, extract));
+            let name_local = self.alloc_local(name, elem_ty, Some(span));
+            bindings.push((name_local, extract));
         }
 
         Ok(bindings)

@@ -21,6 +21,10 @@ fn test_simple_function() {
     let span = test_span();
 
     // Represents: def add(x, y) = x + y
+    // Use LocalIds for parameters
+    let x_local = LocalId(0);
+    let y_local = LocalId(1);
+
     let add_fn = Def::Function {
         id: nc.next(),
         name: "add".to_string(),
@@ -46,13 +50,13 @@ fn test_simple_function() {
                 lhs: Box::new(Expr::new(
                     nc.next(),
                     i32_type(),
-                    ExprKind::Var("x".to_string()),
+                    ExprKind::Var(x_local),
                     span,
                 )),
                 rhs: Box::new(Expr::new(
                     nc.next(),
                     i32_type(),
-                    ExprKind::Var("y".to_string()),
+                    ExprKind::Var(y_local),
                     span,
                 )),
             },

@@ -2,7 +2,7 @@
 
 use crate::ast::{NodeId, Span};
 use crate::constant_folding::ConstantFolder;
-use crate::mir::{Expr, ExprKind, Literal};
+use crate::mir::{Expr, ExprKind, Literal, LocalId};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 fn i32_type() -> polytype::Type<crate::ast::TypeName> {
@@ -355,6 +355,7 @@ fn test_no_fold_with_variable() {
     let mut folder = ConstantFolder::new();
 
     // x + 1 (should not fold since x is a variable)
+    let x = LocalId(0);
     let expr = Expr::new(
         next_id(),
         i32_type(),
@@ -363,7 +364,7 @@ fn test_no_fold_with_variable() {
             lhs: Box::new(Expr::new(
                 next_id(),
                 i32_type(),
-                ExprKind::Var("x".to_string()),
+                ExprKind::Var(x),
                 test_span(),
             )),
             rhs: Box::new(Expr::new(

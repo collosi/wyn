@@ -9,43 +9,44 @@
 //! - If/Loop conditions are Var or scalar Literal
 
 use crate::ast::NodeCounter;
-use crate::mir::{Def, Expr, ExprKind, Literal, LoopKind, Program};
+use crate::mir::{Def, Expr, ExprKind, Literal, LocalId, LocalTable, LoopKind, Program};
+use polytype::Type;
+use crate::ast::{Span, TypeName};
 
-/// A pending let binding (name, binding_id, value).
-type Binding = (String, u64, Expr);
+/// A pending let binding (local_id, value).
+type Binding = (LocalId, Expr);
 
 /// Normalizer state for the ANF transformation.
 pub struct Normalizer {
-    /// Counter for generating unique binding IDs.
-    next_binding_id: u64,
     /// Counter for generating unique temp names.
     next_temp_id: usize,
     /// Counter for generating unique node IDs.
     node_counter: NodeCounter,
+    /// Current function's local table for allocating new locals.
+    current_local_table: LocalTable,
 }
 
 impl Normalizer {
-    /// Create a new normalizer with the given starting binding ID and node counter.
-    pub fn new(starting_binding_id: u64, node_counter: NodeCounter) -> Self {
+    /// Create a new normalizer with the given node counter.
+    pub fn new(node_counter: NodeCounter) -> Self {
         Normalizer {
-            next_binding_id: starting_binding_id,
             next_temp_id: 0,
             node_counter,
+            current_local_table: LocalTable::new(),
         }
     }
 
-    /// Generate a fresh binding ID.
-    fn fresh_binding_id(&mut self) -> u64 {
-        let id = self.next_binding_id;
-        self.next_binding_id += 1;
-        id
-    }
-
-    /// Generate a fresh temp variable name.
-    fn fresh_temp_name(&mut self) -> String {
+    /// Allocate a fresh local for a temp variable.
+    fn alloc_temp(&mut self, ty: Type<TypeName>, span: Option<Span>) -> LocalId {
         let id = self.next_temp_id;
         self.next_temp_id += 1;
-        format!("_w_norm_{}", id)
+        let name = format!("_w_norm_{}", id);
+        self.current_local_table.alloc(name, ty, span)
+    }
+
+    /// Reset local table for a new function.
+    fn reset_local_table(&mut self) {
+        self.current_local_table = LocalTable::new();
     }
 
     /// Normalize an entire program.
@@ -162,7 +163,7 @@ impl Normalizer {
             }
 
             // Function call - atomize all args
-            ExprKind::Call { func, args } => {
+            ExprKind::Call { func, func_name, args } => {
                 let args = args
                     .into_iter()
                     .map(|a| {
@@ -170,11 +171,11 @@ impl Normalizer {
                         self.atomize(a, bindings)
                     })
                     .collect();
-                Expr::new(id, ty, ExprKind::Call { func, args }, span)
+                Expr::new(id, ty, ExprKind::Call { func, func_name, args }, span)
             }
 
             // Intrinsic - atomize all args
-            ExprKind::Intrinsic { name, args } => {
+            ExprKind::Intrinsic { id: intrinsic_id, args } => {
                 let args = args
                     .into_iter()
                     .map(|a| {
@@ -182,7 +183,7 @@ impl Normalizer {
                         self.atomize(a, bindings)
                     })
                     .collect();
-                Expr::new(id, ty, ExprKind::Intrinsic { name, args }, span)
+                Expr::new(id, ty, ExprKind::Intrinsic { id: intrinsic_id, args }, span)
             }
 
             // Tuple literal - handle empty and non-empty cases
@@ -249,16 +250,11 @@ impl Normalizer {
             }
 
             // Let binding - normalize value and body
-            ExprKind::Let {
-                name,
-                binding_id,
-                value,
-                body,
-            } => {
-                // Value gets normalized with outer bindings (value is evaluated before name is bound)
+            ExprKind::Let { local, value, body } => {
+                // Value gets normalized with outer bindings (value is evaluated before local is bound)
                 let value = self.normalize_expr(*value, bindings);
 
-                // Body gets its own scope - bindings from body may reference `name`
+                // Body gets its own scope - bindings from body may reference `local`
                 let mut body_bindings = Vec::new();
                 let body = self.normalize_expr(*body, &mut body_bindings);
                 let body = self.wrap_bindings(body, body_bindings);
@@ -267,8 +263,7 @@ impl Normalizer {
                     id,
                     ty,
                     ExprKind::Let {
-                        name,
-                        binding_id,
+                        local,
                         value: Box::new(value),
                         body: Box::new(body),
                     },
@@ -397,10 +392,7 @@ impl Normalizer {
             }
 
             // Closure - normalize and atomize captures
-            ExprKind::Closure {
-                lambda_name,
-                captures,
-            } => {
+            ExprKind::Closure { lambda, captures } => {
                 let captures = captures
                     .into_iter()
                     .map(|c| {
@@ -411,10 +403,7 @@ impl Normalizer {
                 Expr::new(
                     id,
                     ty,
-                    ExprKind::Closure {
-                        lambda_name,
-                        captures,
-                    },
+                    ExprKind::Closure { lambda, captures },
                     span,
                 )
             }
@@ -426,19 +415,18 @@ impl Normalizer {
         if is_atomic(&expr) {
             expr
         } else {
-            let name = self.fresh_temp_name();
-            let binding_id = self.fresh_binding_id();
             let ty = expr.ty.clone();
             let span = expr.span;
-            bindings.push((name.clone(), binding_id, expr));
+            let local_id = self.alloc_temp(ty.clone(), Some(span));
+            bindings.push((local_id, expr));
             let node_id = self.node_counter.next();
-            Expr::new(node_id, ty, ExprKind::Var(name), span)
+            Expr::new(node_id, ty, ExprKind::Var(local_id), span)
         }
     }
 
     /// Wrap collected bindings around an expression as nested Lets.
     fn wrap_bindings(&mut self, mut expr: Expr, bindings: Vec<Binding>) -> Expr {
-        for (name, binding_id, value) in bindings.into_iter().rev() {
+        for (local, value) in bindings.into_iter().rev() {
             let node_id = self.node_counter.next();
             let ty = expr.ty.clone();
             let span = expr.span;
@@ -446,8 +434,7 @@ impl Normalizer {
                 node_id,
                 ty,
                 ExprKind::Let {
-                    name,
-                    binding_id,
+                    local,
                     value: Box::new(value),
                     body: Box::new(expr),
                 },
@@ -477,88 +464,9 @@ fn is_scalar_literal(lit: &Literal) -> bool {
     )
 }
 
-/// Find the maximum binding ID in a program.
-/// Used to initialize the normalizer with a safe starting ID.
-pub fn find_max_binding_id(program: &Program) -> u64 {
-    let mut max_id = 0;
-    for def in &program.defs {
-        match def {
-            Def::Function { body, .. } | Def::Constant { body, .. } | Def::EntryPoint { body, .. } => {
-                max_id = max_id.max(find_max_binding_id_in_expr(body));
-            }
-            Def::Uniform { .. } => {}
-            Def::Storage { .. } => {}
-        }
-    }
-    max_id
-}
-
-fn find_max_binding_id_in_expr(expr: &Expr) -> u64 {
-    match &expr.kind {
-        ExprKind::Let {
-            binding_id,
-            value,
-            body,
-            ..
-        } => {
-            let v = find_max_binding_id_in_expr(value);
-            let b = find_max_binding_id_in_expr(body);
-            (*binding_id).max(v).max(b)
-        }
-        ExprKind::BinOp { lhs, rhs, .. } => {
-            find_max_binding_id_in_expr(lhs).max(find_max_binding_id_in_expr(rhs))
-        }
-        ExprKind::UnaryOp { operand, .. } => find_max_binding_id_in_expr(operand),
-        ExprKind::If {
-            cond,
-            then_branch,
-            else_branch,
-        } => find_max_binding_id_in_expr(cond)
-            .max(find_max_binding_id_in_expr(then_branch))
-            .max(find_max_binding_id_in_expr(else_branch)),
-        ExprKind::Loop {
-            init,
-            init_bindings,
-            kind,
-            body,
-            ..
-        } => {
-            let mut max = find_max_binding_id_in_expr(init);
-            for (_, e) in init_bindings {
-                max = max.max(find_max_binding_id_in_expr(e));
-            }
-            max = match kind {
-                LoopKind::While { cond } => max.max(find_max_binding_id_in_expr(cond)),
-                LoopKind::ForRange { bound, .. } => max.max(find_max_binding_id_in_expr(bound)),
-                LoopKind::For { iter, .. } => max.max(find_max_binding_id_in_expr(iter)),
-            };
-            max.max(find_max_binding_id_in_expr(body))
-        }
-        ExprKind::Call { args, .. } | ExprKind::Intrinsic { args, .. } => {
-            args.iter().map(find_max_binding_id_in_expr).max().unwrap_or(0)
-        }
-        ExprKind::Literal(lit) => match lit {
-            Literal::Tuple(elems) | Literal::Array(elems) | Literal::Vector(elems) => {
-                elems.iter().map(find_max_binding_id_in_expr).max().unwrap_or(0)
-            }
-            Literal::Matrix(rows) => {
-                rows.iter().flat_map(|row| row.iter()).map(find_max_binding_id_in_expr).max().unwrap_or(0)
-            }
-            _ => 0,
-        },
-        ExprKind::Materialize(inner) => find_max_binding_id_in_expr(inner),
-        ExprKind::Attributed { expr, .. } => find_max_binding_id_in_expr(expr),
-        ExprKind::Closure { captures, .. } => {
-            captures.iter().map(find_max_binding_id_in_expr).max().unwrap_or(0)
-        }
-        ExprKind::Var(_) | ExprKind::Unit => 0,
-    }
-}
-
 /// Normalize a MIR program to A-normal form.
 pub fn normalize_program(program: Program, node_counter: NodeCounter) -> (Program, NodeCounter) {
-    let max_id = find_max_binding_id(&program);
-    let mut normalizer = Normalizer::new(max_id + 1, node_counter);
+    let mut normalizer = Normalizer::new(node_counter);
     let program = normalizer.normalize_program(program);
     (program, normalizer.node_counter)
 }

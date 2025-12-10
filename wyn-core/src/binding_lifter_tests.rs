@@ -2,7 +2,7 @@
 
 use crate::ast::{NodeId, Span, TypeName};
 use crate::binding_lifter::BindingLifter;
-use crate::mir::{Expr, ExprKind, Literal, LoopKind};
+use crate::mir::{Expr, ExprKind, Literal, LocalId, LoopKind};
 use polytype::Type;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -20,17 +20,22 @@ fn test_span() -> Span {
 
 // Global counter for test node IDs (tests don't care about the actual values)
 static TEST_NODE_ID: AtomicU32 = AtomicU32::new(0);
+static TEST_LOCAL_ID: AtomicU32 = AtomicU32::new(1000);
 
 fn next_id() -> NodeId {
     NodeId(TEST_NODE_ID.fetch_add(1, Ordering::Relaxed))
+}
+
+fn next_local_id() -> LocalId {
+    LocalId(TEST_LOCAL_ID.fetch_add(1, Ordering::Relaxed))
 }
 
 // =============================================================================
 // Test Helpers - Expression Constructors
 // =============================================================================
 
-fn var(name: &str, ty: Type<TypeName>) -> Expr {
-    Expr::new(next_id(), ty, ExprKind::Var(name.to_string()), test_span())
+fn var(local_id: LocalId, ty: Type<TypeName>) -> Expr {
+    Expr::new(next_id(), ty, ExprKind::Var(local_id), test_span())
 }
 
 fn int_lit(n: i32) -> Expr {
@@ -56,14 +61,13 @@ fn binop(op: &str, lhs: Expr, rhs: Expr) -> Expr {
     )
 }
 
-fn let_bind(name: &str, value: Expr, body: Expr) -> Expr {
+fn let_bind(local: LocalId, value: Expr, body: Expr) -> Expr {
     let ty = body.ty.clone();
     Expr::new(
         next_id(),
         ty,
         ExprKind::Let {
-            name: name.to_string(),
-            binding_id: 0,
+            local,
             value: Box::new(value),
             body: Box::new(body),
         },
@@ -72,18 +76,18 @@ fn let_bind(name: &str, value: Expr, body: Expr) -> Expr {
 }
 
 /// Create a for-range loop: `loop loop_var = init for iter_var < bound do body`
-fn for_range_loop(loop_var: &str, init: Expr, iter_var: &str, bound: Expr, body: Expr) -> Expr {
+fn for_range_loop(loop_var: LocalId, init: Expr, iter_var: LocalId, bound: Expr, body: Expr) -> Expr {
     let ty = body.ty.clone();
     let init_ty = init.ty.clone();
     Expr::new(
         next_id(),
         ty,
         ExprKind::Loop {
-            loop_var: loop_var.to_string(),
+            loop_var,
             init: Box::new(init),
-            init_bindings: vec![(loop_var.to_string(), var(loop_var, init_ty))],
+            init_bindings: vec![(loop_var, var(loop_var, init_ty))],
             kind: LoopKind::ForRange {
-                var: iter_var.to_string(),
+                var: iter_var,
                 bound: Box::new(bound),
             },
             body: Box::new(body),
@@ -131,12 +135,16 @@ fn test_hoist_constant_from_loop() {
     // =>
     // let x = 42 in loop acc = 0 for i < 10 do acc + x
 
+    let acc = next_local_id();
+    let i = next_local_id();
+    let x = next_local_id();
+
     let body = let_bind(
-        "x",
+        x,
         int_lit(42),
-        binop("+", var("acc", i32_type()), var("x", i32_type())),
+        binop("+", var(acc, i32_type()), var(x, i32_type())),
     );
-    let input = for_range_loop("acc", int_lit(0), "i", int_lit(10), body);
+    let input = for_range_loop(acc, int_lit(0), i, int_lit(10), body);
 
     let mut lifter = BindingLifter::new();
     let result = lifter.lift_expr(input).unwrap();
@@ -151,12 +159,16 @@ fn test_no_hoist_loop_dependent() {
     //   let x = acc + 1 in x * 2
     // => unchanged (x depends on acc)
 
+    let acc = next_local_id();
+    let i = next_local_id();
+    let x = next_local_id();
+
     let body = let_bind(
-        "x",
-        binop("+", var("acc", i32_type()), int_lit(1)),
-        binop("*", var("x", i32_type()), int_lit(2)),
+        x,
+        binop("+", var(acc, i32_type()), int_lit(1)),
+        binop("*", var(x, i32_type()), int_lit(2)),
     );
-    let input = for_range_loop("acc", int_lit(0), "i", int_lit(10), body);
+    let input = for_range_loop(acc, int_lit(0), i, int_lit(10), body);
 
     let mut lifter = BindingLifter::new();
     let result = lifter.lift_expr(input).unwrap();
@@ -174,16 +186,21 @@ fn test_hoist_chain_of_invariants() {
     // =>
     // let x = 1 in let y = x + 2 in loop acc = 0 for i < 10 do acc + y
 
+    let acc = next_local_id();
+    let i = next_local_id();
+    let x = next_local_id();
+    let y = next_local_id();
+
     let body = let_bind(
-        "x",
+        x,
         int_lit(1),
         let_bind(
-            "y",
-            binop("+", var("x", i32_type()), int_lit(2)),
-            binop("+", var("acc", i32_type()), var("y", i32_type())),
+            y,
+            binop("+", var(x, i32_type()), int_lit(2)),
+            binop("+", var(acc, i32_type()), var(y, i32_type())),
         ),
     );
-    let input = for_range_loop("acc", int_lit(0), "i", int_lit(10), body);
+    let input = for_range_loop(acc, int_lit(0), i, int_lit(10), body);
 
     let mut lifter = BindingLifter::new();
     let result = lifter.lift_expr(input).unwrap();
@@ -200,20 +217,26 @@ fn test_partial_hoist_transitive_dependency() {
     //   let z = y * 2 in       -- NOT hoistable (depends on y which depends on acc)
     //   z
 
+    let acc = next_local_id();
+    let i = next_local_id();
+    let x = next_local_id();
+    let y = next_local_id();
+    let z = next_local_id();
+
     let body = let_bind(
-        "x",
+        x,
         int_lit(42),
         let_bind(
-            "y",
-            binop("+", var("acc", i32_type()), var("x", i32_type())),
+            y,
+            binop("+", var(acc, i32_type()), var(x, i32_type())),
             let_bind(
-                "z",
-                binop("*", var("y", i32_type()), int_lit(2)),
-                var("z", i32_type()),
+                z,
+                binop("*", var(y, i32_type()), int_lit(2)),
+                var(z, i32_type()),
             ),
         ),
     );
-    let input = for_range_loop("acc", int_lit(0), "i", int_lit(10), body);
+    let input = for_range_loop(acc, int_lit(0), i, int_lit(10), body);
 
     let mut lifter = BindingLifter::new();
     let result = lifter.lift_expr(input).unwrap();
@@ -229,12 +252,16 @@ fn test_iteration_var_dependency() {
     //   let x = i * 2 in       -- NOT hoistable (depends on i)
     //   acc + x
 
+    let acc = next_local_id();
+    let i = next_local_id();
+    let x = next_local_id();
+
     let body = let_bind(
-        "x",
-        binop("*", var("i", i32_type()), int_lit(2)),
-        binop("+", var("acc", i32_type()), var("x", i32_type())),
+        x,
+        binop("*", var(i, i32_type()), int_lit(2)),
+        binop("+", var(acc, i32_type()), var(x, i32_type())),
     );
-    let input = for_range_loop("acc", int_lit(0), "i", int_lit(10), body);
+    let input = for_range_loop(acc, int_lit(0), i, int_lit(10), body);
 
     let mut lifter = BindingLifter::new();
     let result = lifter.lift_expr(input).unwrap();
@@ -248,8 +275,11 @@ fn test_no_bindings_in_loop() {
     // loop acc = 0 for i < 10 do acc + 1
     // => unchanged (nothing to hoist)
 
-    let body = binop("+", var("acc", i32_type()), int_lit(1));
-    let input = for_range_loop("acc", int_lit(0), "i", int_lit(10), body);
+    let acc = next_local_id();
+    let i = next_local_id();
+
+    let body = binop("+", var(acc, i32_type()), int_lit(1));
+    let input = for_range_loop(acc, int_lit(0), i, int_lit(10), body);
 
     let mut lifter = BindingLifter::new();
     let result = lifter.lift_expr(input).unwrap();
@@ -267,20 +297,25 @@ fn test_multiple_independent_hoistable() {
     // =>
     // let x = 1 in let y = 2 in loop ... acc + x + y
 
+    let acc = next_local_id();
+    let i = next_local_id();
+    let x = next_local_id();
+    let y = next_local_id();
+
     let body = let_bind(
-        "x",
+        x,
         int_lit(1),
         let_bind(
-            "y",
+            y,
             int_lit(2),
             binop(
                 "+",
-                binop("+", var("acc", i32_type()), var("x", i32_type())),
-                var("y", i32_type()),
+                binop("+", var(acc, i32_type()), var(x, i32_type())),
+                var(y, i32_type()),
             ),
         ),
     );
-    let input = for_range_loop("acc", int_lit(0), "i", int_lit(10), body);
+    let input = for_range_loop(acc, int_lit(0), i, int_lit(10), body);
 
     let mut lifter = BindingLifter::new();
     let result = lifter.lift_expr(input).unwrap();
@@ -297,24 +332,30 @@ fn test_mixed_hoistable_and_dependent() {
     //   let c = 200 in         -- hoistable (doesn't depend on b)
     //   b + a + c
 
+    let acc = next_local_id();
+    let i = next_local_id();
+    let a = next_local_id();
+    let b = next_local_id();
+    let c = next_local_id();
+
     let body = let_bind(
-        "a",
+        a,
         int_lit(100),
         let_bind(
-            "b",
-            var("acc", i32_type()),
+            b,
+            var(acc, i32_type()),
             let_bind(
-                "c",
+                c,
                 int_lit(200),
                 binop(
                     "+",
-                    binop("+", var("b", i32_type()), var("a", i32_type())),
-                    var("c", i32_type()),
+                    binop("+", var(b, i32_type()), var(a, i32_type())),
+                    var(c, i32_type()),
                 ),
             ),
         ),
     );
-    let input = for_range_loop("acc", int_lit(0), "i", int_lit(10), body);
+    let input = for_range_loop(acc, int_lit(0), i, int_lit(10), body);
 
     let mut lifter = BindingLifter::new();
     let result = lifter.lift_expr(input).unwrap();

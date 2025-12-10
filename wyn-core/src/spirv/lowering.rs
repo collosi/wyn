@@ -9,7 +9,7 @@ use crate::ast::TypeName;
 use crate::error::Result;
 use crate::impl_source::{BuiltinImpl, ImplSource, PrimOp};
 use crate::lowering_common::is_empty_closure_type;
-use crate::mir::{self, Def, Expr, ExprKind, Literal, LoopKind, Program};
+use crate::mir::{self, Def, DefId, Expr, ExprKind, IntrinsicId, Literal, LocalId, LoopKind, Program};
 use crate::types;
 use crate::{bail_spirv, err_spirv};
 use polytype::Type as PolyType;
@@ -73,11 +73,16 @@ struct Constructor {
     variables_block: Option<spirv::Word>, // Block for OpVariable declarations
     first_code_block: Option<spirv::Word>, // First block with actual code
 
-    // Environment: name -> value ID
-    env: HashMap<String, spirv::Word>,
+    // Environment: LocalId -> value ID
+    env: HashMap<LocalId, spirv::Word>,
 
-    // Function map: name -> function ID
-    functions: HashMap<String, spirv::Word>,
+    // Function map: DefId -> function ID
+    functions: HashMap<DefId, spirv::Word>,
+
+    // DefId to name lookup for function calls
+    def_id_to_name: HashMap<DefId, String>,
+    // Name to DefId lookup for builtin function dispatch
+    name_to_def_id: HashMap<String, DefId>,
 
     // GLSL extended instruction set
     glsl_ext_inst_id: spirv::Word,
@@ -92,7 +97,7 @@ struct Constructor {
     entry_point_interfaces: HashMap<String, Vec<spirv::Word>>,
     current_is_entry_point: bool,
     current_output_vars: Vec<spirv::Word>,
-    current_input_vars: Vec<(spirv::Word, String, spirv::Word)>, // (var_id, param_name, type_id)
+    current_input_vars: Vec<(spirv::Word, LocalId, spirv::Word)>, // (var_id, local_id, type_id)
     current_used_globals: Vec<spirv::Word>, // Global constants accessed in current entry point
 
     // Global constants: name -> constant_id (SPIR-V OpConstant)
@@ -144,6 +149,8 @@ impl Constructor {
             first_code_block: None,
             env: HashMap::new(),
             functions: HashMap::new(),
+            def_id_to_name: HashMap::new(),
+            name_to_def_id: HashMap::new(),
             glsl_ext_inst_id,
             vec_type_cache: HashMap::new(),
             mat_type_cache: HashMap::new(),
@@ -395,8 +402,8 @@ impl Constructor {
     /// Begin a new function
     fn begin_function(
         &mut self,
-        name: &str,
-        param_names: &[&str],
+        def_id: DefId,
+        param_local_ids: &[LocalId],
         param_types: &[spirv::Word],
         return_type: spirv::Word,
     ) -> Result<spirv::Word> {
@@ -404,12 +411,12 @@ impl Constructor {
         let func_id =
             self.builder.begin_function(return_type, None, spirv::FunctionControl::NONE, func_type)?;
 
-        self.functions.insert(name.to_string(), func_id);
+        self.functions.insert(def_id, func_id);
 
         // Create function parameters
-        for (i, &param_name) in param_names.iter().enumerate() {
+        for (i, &param_local_id) in param_local_ids.iter().enumerate() {
             let param_id = self.builder.function_parameter(param_types[i])?;
-            self.env.insert(param_name.to_string(), param_id);
+            self.env.insert(param_local_id, param_id);
         }
 
         // Create two blocks: one for variables, one for code
@@ -701,6 +708,7 @@ impl<'a> LowerCtx<'a> {
         let mut entry_points = Vec::new();
 
         for (i, def) in program.defs.iter().enumerate() {
+            let def_id = DefId(i as u32);
             let name = match def {
                 Def::Function { name, .. } => name.clone(),
                 Def::EntryPoint {
@@ -738,7 +746,9 @@ impl<'a> LowerCtx<'a> {
                 Def::Uniform { name, .. } => name.clone(),
                 Def::Storage { name, .. } => name.clone(),
             };
-            def_index.insert(name, i);
+            def_index.insert(name.clone(), i);
+            constructor.def_id_to_name.insert(def_id, name.clone());
+            constructor.name_to_def_id.insert(name, def_id);
         }
 
         LowerCtx {
@@ -769,17 +779,17 @@ impl<'a> LowerCtx<'a> {
         self.state.insert(name.to_string(), LowerState::InProgress);
 
         let def = &self.program.defs[def_idx];
-        self.lower_def(def)?;
+        let def_id = DefId(def_idx as u32);
+        self.lower_def(def_id, def)?;
 
         self.state.insert(name.to_string(), LowerState::Done);
         Ok(())
     }
 
     /// Lower a single definition
-    fn lower_def(&mut self, def: &Def) -> Result<()> {
+    fn lower_def(&mut self, def_id: DefId, def: &Def) -> Result<()> {
         match def {
             Def::Function {
-                name,
                 params,
                 ret_type,
                 body,
@@ -789,7 +799,7 @@ impl<'a> LowerCtx<'a> {
                 self.ensure_deps_lowered(body)?;
 
                 // Regular function (entry points are now Def::EntryPoint)
-                lower_regular_function(&mut self.constructor, name, params, ret_type, body)?;
+                lower_regular_function(&mut self.constructor, def_id, params, ret_type, body)?;
             }
             Def::EntryPoint {
                 name,
@@ -801,7 +811,7 @@ impl<'a> LowerCtx<'a> {
                 // First, ensure all dependencies are lowered
                 self.ensure_deps_lowered(body)?;
 
-                lower_entry_point_from_def(&mut self.constructor, name, inputs, outputs, body)?;
+                lower_entry_point_from_def(&mut self.constructor, def_id, name, inputs, outputs, body)?;
             }
             Def::Constant { name, body, .. } => {
                 // First, ensure all dependencies are lowered
@@ -881,11 +891,21 @@ impl<'a> LowerCtx<'a> {
     /// Walk an expression and ensure all referenced definitions are lowered
     fn ensure_deps_lowered(&mut self, expr: &Expr) -> Result<()> {
         match &expr.kind {
-            ExprKind::Var(name) => {
-                self.ensure_lowered(name)?;
+            ExprKind::Var(_) => {
+                // LocalId references are local variables, not global definitions
+                // No need to ensure_lowered for locals
             }
-            ExprKind::Call { func, args } => {
-                self.ensure_lowered(func)?;
+            ExprKind::Call { func, func_name, args } => {
+                // Look up the definition name by DefId and ensure it's lowered
+                // For builtins, func_name is set and func is sentinel - no need to ensure lowered
+                if func.0 != u32::MAX {
+                    if let Some(def) = self.program.defs.get(func.0 as usize) {
+                        self.ensure_lowered(def.name())?;
+                    }
+                } else if let Some(name) = func_name {
+                    // Builtin with name - try to ensure it's lowered if it's a user function
+                    self.ensure_lowered(name)?;
+                }
                 for arg in args {
                     self.ensure_deps_lowered(arg)?;
                 }
@@ -937,12 +957,11 @@ impl<'a> LowerCtx<'a> {
                     }
                 }
             }
-            ExprKind::Closure {
-                lambda_name,
-                captures,
-            } => {
+            ExprKind::Closure { lambda, captures } => {
                 // Ensure the lambda function is lowered
-                self.ensure_lowered(lambda_name)?;
+                if let Some(def) = self.program.defs.get(lambda.0 as usize) {
+                    self.ensure_lowered(def.name())?;
+                }
                 // Recurse into captures
                 for cap in captures {
                     self.ensure_deps_lowered(cap)?;
@@ -965,7 +984,10 @@ impl<'a> LowerCtx<'a> {
 
         // Emit entry points with interface variables
         for ep in &self.entry_points {
-            if let Some(&func_id) = self.constructor.functions.get(&ep.name) {
+            // Look up the DefId for this entry point
+            let ep_def_id = self.def_index.get(&ep.name).map(|&idx| DefId(idx as u32));
+            let func_id = ep_def_id.and_then(|def_id| self.constructor.functions.get(&def_id).copied());
+            if let Some(func_id) = func_id {
                 let mut interfaces =
                     self.constructor.entry_point_interfaces.get(&ep.name).cloned().unwrap_or_default();
                 // Global constants are now true OpConstants (not variables), so they don't need
@@ -1032,7 +1054,7 @@ pub fn lower(program: &mir::Program, debug_enabled: bool, inplace_info: &InPlace
 
 fn lower_regular_function(
     constructor: &mut Constructor,
-    name: &str,
+    def_id: DefId,
     params: &[mir::Param],
     ret_type: &PolyType<TypeName>,
     body: &Expr,
@@ -1044,11 +1066,15 @@ fn lower_regular_function(
 
     let params_to_lower = if skip_first_param { &params[1..] } else { params };
 
-    let param_names: Vec<&str> = params_to_lower.iter().map(|p| p.name.as_str()).collect();
+    // Generate LocalIds for parameters (indices 0..n for this function)
+    let start_idx = if skip_first_param { 1 } else { 0 };
+    let param_local_ids: Vec<LocalId> = (0..params_to_lower.len())
+        .map(|i| LocalId((start_idx + i) as u32))
+        .collect();
     let param_types: Vec<spirv::Word> =
         params_to_lower.iter().map(|p| constructor.ast_type_to_spirv(&p.ty)).collect();
     let return_type = constructor.ast_type_to_spirv(ret_type);
-    constructor.begin_function(name, &param_names, &param_types, return_type)?;
+    constructor.begin_function(def_id, &param_local_ids, &param_types, return_type)?;
 
     let result = lower_expr(constructor, body)?;
     constructor.builder.ret_value(result)?;
@@ -1060,6 +1086,7 @@ fn lower_regular_function(
 /// Lower an entry point from Def::EntryPoint structure (new format with EntryInput/EntryOutput)
 fn lower_entry_point_from_def(
     constructor: &mut Constructor,
+    def_id: DefId,
     name: &str,
     inputs: &[mir::EntryInput],
     outputs: &[mir::EntryOutput],
@@ -1098,7 +1125,7 @@ fn lower_entry_point_from_def(
         }
 
         interface_vars.push(var_id);
-        constructor.current_input_vars.push((var_id, input.name.clone(), input_type_id));
+        constructor.current_input_vars.push((var_id, input.local_id, input_type_id));
     }
 
     // Create Output variables for return values
@@ -1142,7 +1169,7 @@ fn lower_entry_point_from_def(
         spirv::FunctionControl::NONE,
         func_type,
     )?;
-    constructor.functions.insert(name.to_string(), func_id);
+    constructor.functions.insert(def_id, func_id);
 
     // Create two blocks: one for variables, one for code (same pattern as regular functions)
     let vars_block_id = constructor.builder.id();
@@ -1161,9 +1188,9 @@ fn lower_entry_point_from_def(
     constructor.current_block = Some(code_block_id);
 
     // Load input variables into environment
-    for (var_id, param_name, type_id) in constructor.current_input_vars.clone() {
+    for (var_id, local_id, type_id) in constructor.current_input_vars.clone() {
         let loaded = constructor.builder.load(type_id, None, var_id, None, [])?;
-        constructor.env.insert(param_name, loaded);
+        constructor.env.insert(local_id, loaded);
     }
 
     // Lower the body
@@ -1222,22 +1249,14 @@ fn lower_const_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv:
     match &expr.kind {
         ExprKind::Literal(lit) => lower_const_literal(constructor, lit),
 
-        ExprKind::Var(name) => {
-            // Reference to another global constant
-            if let Some(&const_id) = constructor.global_constants.get(name) {
-                return Ok(const_id);
-            }
-            // Uniforms cannot be used in constant expressions
-            if constructor.uniform_variables.contains_key(name) {
-                bail_spirv!(
-                    "Uniform variable '{}' cannot be used in constant expressions",
-                    name
-                );
-            }
+        ExprKind::Var(local_id) => {
+            // In constant expressions, Var should not appear - all references
+            // to other constants should be inlined during flattening.
+            // If we encounter a Var here, it's an error.
             Err(err_spirv!(
-                "Global constant '{}' references undefined constant '{}'",
-                "?",
-                name
+                "Unexpected local variable reference (LocalId {}) in constant expression. \
+                 Global constants should be inlined during flattening.",
+                local_id
             ))
         }
 
@@ -1271,32 +1290,12 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             Ok(constructor.const_i32(0))
         }
 
-        ExprKind::Var(name) => {
-            // First check local environment
-            if let Some(&id) = constructor.env.get(name) {
+        ExprKind::Var(local_id) => {
+            // Look up in local environment (keyed by LocalId)
+            if let Some(&id) = constructor.env.get(local_id) {
                 return Ok(id);
             }
-            // Then check global constants (these are now OpConstants, not variables)
-            if let Some(&const_id) = constructor.global_constants.get(name) {
-                return Ok(const_id);
-            }
-            // Check if it's a uniform variable
-            if let Some(&var_id) = constructor.uniform_variables.get(name) {
-                // Check cache first to avoid redundant OpLoads
-                if let Some(&cached_id) = constructor.uniform_load_cache.get(name) {
-                    return Ok(cached_id);
-                }
-                // Load from the uniform variable and cache the result
-                let value_type_id = constructor
-                    .uniform_types
-                    .get(name)
-                    .copied()
-                    .ok_or_else(|| err_spirv!("Could not find type for uniform variable: {}", name))?;
-                let load_id = constructor.builder.load(value_type_id, None, var_id, None, [])?;
-                constructor.uniform_load_cache.insert(name.to_string(), load_id);
-                return Ok(load_id);
-            }
-            Err(err_spirv!("Undefined variable: {}", name))
+            Err(err_spirv!("Undefined local variable: LocalId({})", local_id.0))
         }
 
         ExprKind::BinOp { op, lhs, rhs } => {
@@ -1457,20 +1456,13 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             }
         }
 
-        ExprKind::Let {
-            name, value, body, ..
-        } => {
-            // If binding to _, evaluate value for side effects but don't store it
-            if name == "_" {
-                let _ = lower_expr(constructor, value)?;
-                lower_expr(constructor, body)
-            } else {
-                let value_id = lower_expr(constructor, value)?;
-                constructor.env.insert(name.clone(), value_id);
-                let result = lower_expr(constructor, body)?;
-                constructor.env.remove(name);
-                Ok(result)
-            }
+        ExprKind::Let { local, value, body } => {
+            // Evaluate the value and bind it to the local
+            let value_id = lower_expr(constructor, value)?;
+            constructor.env.insert(*local, value_id);
+            let result = lower_expr(constructor, body)?;
+            constructor.env.remove(local);
+            Ok(result)
         }
 
         ExprKind::Loop {
@@ -1500,22 +1492,22 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
 
             // Allocate phi ID for loop_var
             let loop_var_phi_id = constructor.builder.id();
-            constructor.env.insert(loop_var.clone(), loop_var_phi_id);
+            constructor.env.insert(*loop_var, loop_var_phi_id);
 
             // For ForRange loops, also create a phi for the iteration variable
             let iter_var_phi = if let LoopKind::ForRange { var, .. } = kind {
                 let iter_phi_id = constructor.builder.id();
-                constructor.env.insert(var.clone(), iter_phi_id);
-                Some((var.clone(), iter_phi_id))
+                constructor.env.insert(*var, iter_phi_id);
+                Some((*var, iter_phi_id))
             } else {
                 None
             };
 
             // Evaluate init_bindings to bind user variables from loop_var
             // These extractions reference loop_var which is now bound to the phi
-            for (name, binding_expr) in init_bindings.iter() {
+            for (local, binding_expr) in init_bindings.iter() {
                 let val = lower_expr(constructor, binding_expr)?;
-                constructor.env.insert(name.clone(), val);
+                constructor.env.insert(*local, val);
             }
 
             // Generate condition based on loop kind
@@ -1526,7 +1518,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                     let var_id = *constructor
                         .env
                         .get(var)
-                        .ok_or_else(|| err_spirv!("Loop variable {} not found", var))?;
+                        .ok_or_else(|| err_spirv!("Loop variable LocalId({}) not found", var.0))?;
                     constructor.builder.s_less_than(constructor.bool_type, None, var_id, bound_id)?
                 }
                 LoopKind::For { .. } => {
@@ -1552,8 +1544,8 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             constructor.begin_block(continue_block_id)?;
 
             // For ForRange loops, increment the iteration variable
-            let iter_next_val = if let Some((ref var_name, _)) = iter_var_phi {
-                let var_id = *constructor.env.get(var_name).unwrap();
+            let iter_next_val = if let Some((var_local, _)) = iter_var_phi {
+                let var_id = *constructor.env.get(&var_local).unwrap();
                 let one = constructor.const_i32(1);
                 let next_val = constructor.builder.i_add(constructor.i32_type, None, var_id, one)?;
                 Some(next_val)
@@ -1593,24 +1585,27 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             constructor.begin_block(merge_block_id)?;
 
             // Clean up environment
-            constructor.env.remove(loop_var.as_str());
-            for (name, _) in init_bindings.iter() {
-                constructor.env.remove(name.as_str());
+            constructor.env.remove(loop_var);
+            for (local_id, _) in init_bindings.iter() {
+                constructor.env.remove(local_id);
             }
-            if let Some((ref var_name, _)) = iter_var_phi {
-                constructor.env.remove(var_name.as_str());
+            if let Some((ref var_local_id, _)) = iter_var_phi {
+                constructor.env.remove(var_local_id);
             }
 
             // Return the loop_var phi value as loop result
             Ok(loop_var_phi_id)
         }
 
-        ExprKind::Call { func, args } => {
+        ExprKind::Call { func, func_name: call_func_name, args } => {
             // Get the result type from the expression
             let result_type = constructor.ast_type_to_spirv(&expr.ty);
 
+            // Use call_func_name if available (for builtins), otherwise look up from DefId
+            let func_name = call_func_name.clone().or_else(|| constructor.def_id_to_name.get(func).cloned());
+
             // Special case for map - extract lambda name from closure before lowering
-            if func == "map" {
+            if func_name.as_deref() == Some("map") {
                 // map closure array -> array
                 // args[0] is closure tuple (_w_lambda_name, captures)
                 // args[1] is input array
@@ -1618,13 +1613,12 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                     bail_spirv!("map requires 2 args (closure, array), got {}", args.len());
                 }
 
-                // Extract lambda name and captures from closure tuple
-                // Extract lambda name and captures from Closure expression
-                let (lambda_name, captures) = match &args[0].kind {
+                // Extract lambda DefId and captures from Closure expression
+                let (lambda_def_id, captures) = match &args[0].kind {
                     ExprKind::Closure {
-                        lambda_name,
+                        lambda,
                         captures,
-                    } => (lambda_name.clone(), captures),
+                    } => (*lambda, captures),
                     _ => {
                         bail_spirv!("map closure argument must be a Closure expression");
                     }
@@ -1663,11 +1657,11 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
 
                 let output_elem_type = constructor.ast_type_to_spirv(output_elem_mir_type);
 
-                // Look up the lambda function by name
+                // Look up the lambda function by DefId
                 let lambda_func_id = *constructor
                     .functions
-                    .get(&lambda_name)
-                    .ok_or_else(|| err_spirv!("Lambda function not found: {}", lambda_name))?;
+                    .get(&lambda_def_id)
+                    .ok_or_else(|| err_spirv!("Lambda function not found: {:?}", lambda_def_id))?;
 
                 // Check if we can do in-place update:
                 // 1. This map call was marked as having a dead-after input array
@@ -1716,14 +1710,14 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                 args.iter().map(|a| lower_expr(constructor, a)).collect::<Result<Vec<_>>>()?;
 
             // Check for builtin vector constructors
-            match func.as_str() {
-                "vec2" | "vec3" | "vec4" => {
+            match func_name.as_deref() {
+                Some("vec2") | Some("vec3") | Some("vec4") => {
                     // Use the result type which should be the proper vector type
                     Ok(constructor.builder.composite_construct(result_type, None, arg_ids)?)
                 }
                 _ => {
                     // Check if it's a builtin function
-                    if let Some(builtin_impl) = constructor.impl_source.get(func) {
+                    if let Some(builtin_impl) = func_name.as_deref().and_then(|n| constructor.impl_source.get(n)) {
                         match builtin_impl {
                             BuiltinImpl::PrimOp(spirv_op) => {
                                 // Handle core SPIR-V operations
@@ -1851,14 +1845,14 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                         Ok(constructor.builder.bitcast(result_type, None, arg_ids[0])?)
                                     }
                                     _ => {
-                                        bail_spirv!("Unsupported PrimOp for: {}", func)
+                                        bail_spirv!("Unsupported PrimOp for: {:?}", func_name)
                                     }
                                 }
                             }
                             BuiltinImpl::Intrinsic(custom_impl) => {
                                 use crate::impl_source::Intrinsic;
                                 match custom_impl {
-                                    Intrinsic::Placeholder if func == "length" => {
+                                    Intrinsic::Placeholder if func_name.as_deref() == Some("length") => {
                                         // Array length: extract size from array type
                                         if args.len() != 1 {
                                             bail_spirv!("length expects exactly 1 argument");
@@ -1882,8 +1876,8 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                                     Intrinsic::Placeholder => {
                                         // Other placeholder intrinsics should have been desugared
                                         bail_spirv!(
-                                            "Placeholder intrinsic '{}' should have been desugared before lowering",
-                                            func
+                                            "Placeholder intrinsic '{:?}' should have been desugared before lowering",
+                                            func_name
                                         )
                                     }
                                     Intrinsic::Uninit => {
@@ -2153,10 +2147,14 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                             }
                             BuiltinImpl::CoreFn(core_fn_name) => {
                                 // Library-level builtins implemented as normal functions in prelude
-                                // Look up the function and call it
+                                // Look up the function by name -> DefId -> spirv::Word
+                                let core_def_id = constructor
+                                    .name_to_def_id
+                                    .get(core_fn_name)
+                                    .ok_or_else(|| err_spirv!("CoreFn DefId not found: {}", core_fn_name))?;
                                 let func_id = *constructor
                                     .functions
-                                    .get(core_fn_name)
+                                    .get(core_def_id)
                                     .ok_or_else(|| err_spirv!("CoreFn not found: {}", core_fn_name))?;
 
                                 Ok(constructor.builder.function_call(
@@ -2172,19 +2170,19 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                         let func_id = *constructor
                             .functions
                             .get(func)
-                            .ok_or_else(|| err_spirv!("Unknown function: {}", func))?;
+                            .ok_or_else(|| err_spirv!("Unknown function: {:?}", func_name))?;
                         Ok(constructor.builder.function_call(result_type, None, func_id, arg_ids)?)
                     }
                 }
             }
         }
 
-        ExprKind::Intrinsic { name, args } => {
+        ExprKind::Intrinsic { id: intrinsic_id, args } => {
             // Get the result type from the expression
             let result_type = constructor.ast_type_to_spirv(&expr.ty);
 
-            match name.as_str() {
-                "tuple_access" => {
+            match intrinsic_id {
+                IntrinsicId::TupleAccess => {
                     if args.len() != 2 {
                         bail_spirv!("tuple_access requires 2 args");
                     }
@@ -2213,7 +2211,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
 
                     Ok(constructor.builder.composite_extract(result_type, None, composite_id, [index])?)
                 }
-                "index" => {
+                IntrinsicId::Index => {
                     if args.len() != 2 {
                         bail_spirv!("index requires 2 args");
                     }
@@ -2241,7 +2239,7 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                     // Load the element
                     Ok(constructor.builder.load(result_type, None, elem_ptr, None, [])?)
                 }
-                "assert" => {
+                IntrinsicId::Assert => {
                     // Assertions are no-ops in release, return body
                     if args.len() >= 2 {
                         lower_expr(constructor, &args[1])
@@ -2249,7 +2247,16 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                         Ok(constructor.const_i32(0))
                     }
                 }
-                _ => Err(err_spirv!("Unknown intrinsic: {}", name)),
+                IntrinsicId::Length => {
+                    // Array length - should be compile-time constant
+                    bail_spirv!("length intrinsic not yet implemented in SPIR-V")
+                }
+                IntrinsicId::RecordAccess => {
+                    bail_spirv!("record_access intrinsic not yet implemented in SPIR-V")
+                }
+                IntrinsicId::RecordUpdate => {
+                    bail_spirv!("record_update intrinsic not yet implemented in SPIR-V")
+                }
             }
         }
 
