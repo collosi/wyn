@@ -1,3 +1,4 @@
+use crate::IdArena;
 use crate::ast::{NodeCounter, Span, TypeName};
 use polytype::Type;
 
@@ -63,7 +64,7 @@ fn test_simple_function() {
 
     let program = Program {
         defs: vec![add_fn],
-        lambda_registry: vec![],
+        lambda_registry: IdArena::new(),
     };
 
     assert_eq!(program.defs.len(), 1);

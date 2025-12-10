@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod defun_analysis;
 pub mod diags;
 pub mod error;
 pub mod flattening;
@@ -390,7 +391,8 @@ impl AliasChecked {
     /// Returns the flattened MIR and a BackEnd for subsequent passes.
     pub fn flatten(self, module_manager: &module_manager::ModuleManager) -> Result<(Flattened, BackEnd)> {
         let builtins = impl_source::ImplSource::default().all_names();
-        let mut flattener = flattening::Flattener::new(self.type_table, builtins);
+        let defun_analysis = defun_analysis::analyze_program(&self.ast, &self.type_table, &builtins);
+        let mut flattener = flattening::Flattener::new(self.type_table, builtins, defun_analysis);
         let mut mir = flattener.flatten_program(&self.ast)?;
 
         // Flatten module function declarations so they're available in SPIR-V
@@ -418,7 +420,8 @@ impl AstConstFolded {
     /// Returns the flattened MIR and a BackEnd for subsequent passes.
     pub fn flatten(self, module_manager: &module_manager::ModuleManager) -> Result<(Flattened, BackEnd)> {
         let builtins = impl_source::ImplSource::default().all_names();
-        let mut flattener = flattening::Flattener::new(self.type_table, builtins);
+        let defun_analysis = defun_analysis::analyze_program(&self.ast, &self.type_table, &builtins);
+        let mut flattener = flattening::Flattener::new(self.type_table, builtins, defun_analysis);
         let mut mir = flattener.flatten_program(&self.ast)?;
 
         // Flatten module function declarations so they're available in SPIR-V

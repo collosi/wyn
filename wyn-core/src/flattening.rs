@@ -6,12 +6,12 @@
 //! - Lambda lifting: all functions become top-level Def entries
 
 use crate::ast::{self, ExprKind, Expression, NodeCounter, NodeId, PatternKind, Span, Type, TypeName};
+use crate::defun_analysis::DefunAnalysis;
 use crate::error::Result;
-use crate::mir::{self, Expr};
-use crate::pattern;
+use crate::mir::{self, Expr, LambdaId, LambdaInfo};
 use crate::scope::ScopeStack;
 use crate::types;
-use crate::{bail_flatten, err_flatten, err_type};
+use crate::{IdArena, bail_flatten, err_flatten, err_type};
 use polytype::TypeScheme;
 use std::collections::{HashMap, HashSet};
 
@@ -53,9 +53,10 @@ pub struct Flattener {
     generated_functions: Vec<mir::Def>,
     /// Stack of enclosing declaration names for lambda naming
     enclosing_decl_stack: Vec<String>,
-    /// Registry of lambdas: tag index -> (function_name, arity)
-    /// Tags are assigned sequentially starting from 0.
-    lambda_registry: Vec<(String, usize)>,
+    /// Pre-computed defunctionalization analysis
+    defun_analysis: DefunAnalysis,
+    /// Lambda registry: all lambdas (source and synthesized)
+    lambda_registry: IdArena<LambdaId, LambdaInfo>,
     /// Type table from type checking - maps NodeId to TypeScheme
     type_table: HashMap<NodeId, TypeScheme<TypeName>>,
     /// Scope stack for tracking static values of variables
@@ -67,14 +68,19 @@ pub struct Flattener {
 }
 
 impl Flattener {
-    pub fn new(type_table: HashMap<NodeId, TypeScheme<TypeName>>, builtins: HashSet<String>) -> Self {
+    pub fn new(
+        type_table: HashMap<NodeId, TypeScheme<TypeName>>,
+        builtins: HashSet<String>,
+        defun_analysis: DefunAnalysis,
+    ) -> Self {
         Flattener {
             next_id: 0,
             next_binding_id: 0,
             node_counter: NodeCounter::new(),
             generated_functions: Vec::new(),
             enclosing_decl_stack: Vec::new(),
-            lambda_registry: Vec::new(),
+            defun_analysis,
+            lambda_registry: IdArena::new(),
             type_table,
             static_values: ScopeStack::new(),
             builtins,
@@ -109,9 +115,9 @@ impl Flattener {
         format!("_w_ptr_{}", binding_id)
     }
 
-    /// Register a lambda function.
-    fn add_lambda(&mut self, func_name: String, arity: usize) {
-        self.lambda_registry.push((func_name, arity));
+    /// Register a lambda function and return its ID.
+    fn add_lambda(&mut self, name: String, arity: usize) -> LambdaId {
+        self.lambda_registry.alloc(LambdaInfo { name, arity })
     }
 
     /// Extract the monotype from a TypeScheme
@@ -826,7 +832,7 @@ impl Flattener {
                 )
             }
             ExprKind::LetIn(let_in) => self.flatten_let_in(let_in, span)?,
-            ExprKind::Lambda(lambda) => self.flatten_lambda(lambda, span)?,
+            ExprKind::Lambda(lambda) => self.flatten_lambda(lambda, expr.h.id, span)?,
             ExprKind::Application(func, args) => self.flatten_application(func, args, &ty, span)?,
             ExprKind::Tuple(elems) => {
                 let elems: Result<Vec<_>> =
@@ -1198,41 +1204,31 @@ impl Flattener {
     fn flatten_lambda(
         &mut self,
         lambda: &ast::LambdaExpr,
+        node_id: NodeId,
         span: Span,
     ) -> Result<(mir::ExprKind, StaticValue)> {
-        // Find free variables
-        let mut bound = HashSet::new();
-        for param in &lambda.params {
-            if let Some(name) = param.simple_name() {
-                bound.insert(name.to_string());
+        // Look up pre-computed analysis for this lambda
+        let analysis = self.defun_analysis.get_or_panic(node_id);
+        let (func_name, free_vars) = match analysis {
+            crate::defun_analysis::StaticValue::Closure { lam_name, free_vars } => {
+                (lam_name.clone(), free_vars.clone())
             }
-        }
-        let free_vars = self.find_free_variables(&lambda.body, &bound);
+            crate::defun_analysis::StaticValue::Dyn => {
+                panic!("BUG: Lambda expression classified as Dyn in defun analysis")
+            }
+        };
 
-        // Generate function name
-        let id = self.fresh_id();
-        let enclosing = self.enclosing_decl_stack.last().map(|s| s.as_str()).unwrap_or("anon");
-        let func_name = format!("_w_lam_{}_{}", enclosing, id);
-
-        // Register lambda
+        // Register lambda in the runtime registry
         let arity = lambda.params.len();
         self.add_lambda(func_name.clone(), arity);
 
-        // Build closure captures
+        // Build closure captures using pre-computed free_vars (already typed)
         let mut capture_elems = vec![];
         let mut capture_fields = vec![];
 
-        let mut sorted_vars: Vec<_> = free_vars.iter().collect();
-        sorted_vars.sort();
-        for var in &sorted_vars {
-            // Look up the type of the free variable from the lambda body
-            let var_type = self
-                .find_var_type_in_expr(&lambda.body, var)
-                .unwrap_or_else(|| {
-                    panic!("BUG: Free variable '{}' in lambda has no type. Type checking should ensure all variables have types.", var)
-                });
-            capture_elems.push(self.mk_expr(var_type.clone(), mir::ExprKind::Var((*var).clone()), span));
-            capture_fields.push(((*var).clone(), var_type));
+        for (var_name, var_type) in &free_vars {
+            capture_elems.push(self.mk_expr(var_type.clone(), mir::ExprKind::Var(var_name.clone()), span));
+            capture_fields.push((var_name.clone(), var_type.clone()));
         }
 
         // The closure type is the captures tuple (what the generated function receives)
@@ -1290,45 +1286,6 @@ impl Flattener {
             },
             sv,
         ))
-    }
-
-    /// Find the type of a variable by searching for its use in an expression
-    fn find_var_type_in_expr(&self, expr: &Expression, var_name: &str) -> Option<Type> {
-        match &expr.kind {
-            ExprKind::Identifier(quals, name) if quals.is_empty() && name == var_name => {
-                Some(self.get_expr_type(expr))
-            }
-            ExprKind::BinaryOp(_, lhs, rhs) => self
-                .find_var_type_in_expr(lhs, var_name)
-                .or_else(|| self.find_var_type_in_expr(rhs, var_name)),
-            ExprKind::UnaryOp(_, operand) => self.find_var_type_in_expr(operand, var_name),
-            ExprKind::If(if_expr) => self
-                .find_var_type_in_expr(&if_expr.condition, var_name)
-                .or_else(|| self.find_var_type_in_expr(&if_expr.then_branch, var_name))
-                .or_else(|| self.find_var_type_in_expr(&if_expr.else_branch, var_name)),
-            ExprKind::LetIn(let_in) => self
-                .find_var_type_in_expr(&let_in.value, var_name)
-                .or_else(|| self.find_var_type_in_expr(&let_in.body, var_name)),
-            ExprKind::Application(func, args) => self
-                .find_var_type_in_expr(func, var_name)
-                .or_else(|| args.iter().find_map(|a| self.find_var_type_in_expr(a, var_name))),
-            ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => {
-                elems.iter().find_map(|e| self.find_var_type_in_expr(e, var_name))
-            }
-            ExprKind::ArrayIndex(arr, idx) => self
-                .find_var_type_in_expr(arr, var_name)
-                .or_else(|| self.find_var_type_in_expr(idx, var_name)),
-            ExprKind::ArrayWith { array, index, value } => self
-                .find_var_type_in_expr(array, var_name)
-                .or_else(|| self.find_var_type_in_expr(index, var_name))
-                .or_else(|| self.find_var_type_in_expr(value, var_name)),
-            ExprKind::FieldAccess(obj, _) => self.find_var_type_in_expr(obj, var_name),
-            ExprKind::RecordLiteral(fields) => {
-                fields.iter().find_map(|(_, e)| self.find_var_type_in_expr(e, var_name))
-            }
-            ExprKind::Lambda(lambda) => self.find_var_type_in_expr(&lambda.body, var_name),
-            _ => None,
-        }
     }
 
     /// Check if a type is an Arrow type and return the (param, result) if so
@@ -1781,135 +1738,5 @@ impl Flattener {
         }
 
         Ok(bindings)
-    }
-
-    /// Find free variables in an expression
-    fn find_free_variables(&self, expr: &Expression, bound: &HashSet<String>) -> HashSet<String> {
-        let mut free = HashSet::new();
-        self.collect_free_vars(expr, bound, &mut free);
-        free
-    }
-
-    fn collect_free_vars(&self, expr: &Expression, bound: &HashSet<String>, free: &mut HashSet<String>) {
-        match &expr.kind {
-            ExprKind::Identifier(quals, name) => {
-                // Only unqualified names can be free variables
-                if quals.is_empty() && !bound.contains(name) && !self.builtins.contains(name) {
-                    free.insert(name.clone());
-                }
-            }
-            ExprKind::IntLiteral(_)
-            | ExprKind::FloatLiteral(_)
-            | ExprKind::BoolLiteral(_)
-            | ExprKind::StringLiteral(_)
-            | ExprKind::Unit
-            | ExprKind::TypeHole => {}
-            ExprKind::BinaryOp(_, lhs, rhs) => {
-                self.collect_free_vars(lhs, bound, free);
-                self.collect_free_vars(rhs, bound, free);
-            }
-            ExprKind::UnaryOp(_, operand) => {
-                self.collect_free_vars(operand, bound, free);
-            }
-            ExprKind::If(if_expr) => {
-                self.collect_free_vars(&if_expr.condition, bound, free);
-                self.collect_free_vars(&if_expr.then_branch, bound, free);
-                self.collect_free_vars(&if_expr.else_branch, bound, free);
-            }
-            ExprKind::LetIn(let_in) => {
-                self.collect_free_vars(&let_in.value, bound, free);
-                let mut extended = bound.clone();
-                for name in pattern::bound_names(&let_in.pattern) {
-                    extended.insert(name);
-                }
-                self.collect_free_vars(&let_in.body, &extended, free);
-            }
-            ExprKind::Lambda(lambda) => {
-                let mut extended = bound.clone();
-                for param in &lambda.params {
-                    if let Some(name) = param.simple_name() {
-                        extended.insert(name.to_string());
-                    }
-                }
-                self.collect_free_vars(&lambda.body, &extended, free);
-            }
-            ExprKind::Application(func, args) => {
-                self.collect_free_vars(func, bound, free);
-                for arg in args {
-                    self.collect_free_vars(arg, bound, free);
-                }
-            }
-            ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) | ExprKind::VecMatLiteral(elems) => {
-                for elem in elems {
-                    self.collect_free_vars(elem, bound, free);
-                }
-            }
-            ExprKind::RecordLiteral(fields) => {
-                for (_, expr) in fields {
-                    self.collect_free_vars(expr, bound, free);
-                }
-            }
-            ExprKind::ArrayIndex(arr, idx) => {
-                self.collect_free_vars(arr, bound, free);
-                self.collect_free_vars(idx, bound, free);
-            }
-            ExprKind::ArrayWith { array, index, value } => {
-                self.collect_free_vars(array, bound, free);
-                self.collect_free_vars(index, bound, free);
-                self.collect_free_vars(value, bound, free);
-            }
-            ExprKind::FieldAccess(obj, _) => {
-                self.collect_free_vars(obj, bound, free);
-            }
-            ExprKind::Loop(loop_expr) => {
-                if let Some(init) = &loop_expr.init {
-                    self.collect_free_vars(init, bound, free);
-                }
-                let mut extended = bound.clone();
-                for name in pattern::bound_names(&loop_expr.pattern) {
-                    extended.insert(name);
-                }
-                match &loop_expr.form {
-                    ast::LoopForm::While(cond) => {
-                        self.collect_free_vars(cond, &extended, free);
-                    }
-                    ast::LoopForm::For(var, bound_expr) => {
-                        extended.insert(var.clone());
-                        self.collect_free_vars(bound_expr, &extended, free);
-                    }
-                    ast::LoopForm::ForIn(pat, iter) => {
-                        self.collect_free_vars(iter, bound, free);
-                        for name in pattern::bound_names(pat) {
-                            extended.insert(name);
-                        }
-                    }
-                }
-                self.collect_free_vars(&loop_expr.body, &extended, free);
-            }
-            ExprKind::TypeAscription(inner, _) | ExprKind::TypeCoercion(inner, _) => {
-                self.collect_free_vars(inner, bound, free);
-            }
-            ExprKind::Assert(cond, body) => {
-                self.collect_free_vars(cond, bound, free);
-                self.collect_free_vars(body, bound, free);
-            }
-            ExprKind::Match(match_expr) => {
-                self.collect_free_vars(&match_expr.scrutinee, bound, free);
-                for case in &match_expr.cases {
-                    let mut extended = bound.clone();
-                    for name in pattern::bound_names(&case.pattern) {
-                        extended.insert(name);
-                    }
-                    self.collect_free_vars(&case.body, &extended, free);
-                }
-            }
-            ExprKind::Range(range) => {
-                self.collect_free_vars(&range.start, bound, free);
-                self.collect_free_vars(&range.end, bound, free);
-                if let Some(step) = &range.step {
-                    self.collect_free_vars(step, bound, free);
-                }
-            }
-        }
     }
 }

@@ -11,10 +11,11 @@
 //!
 //! This happens after type checking and flattening, before lowering.
 
+use crate::IdArena;
 use crate::ast::{Type, TypeName};
 use crate::error::Result;
 use crate::mir::folder::MirFolder;
-use crate::mir::{Def, Expr, ExprKind, Param, Program};
+use crate::mir::{Def, Expr, ExprKind, LambdaId, LambdaInfo, Param, Program};
 use polytype::Type as PolyType;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -39,7 +40,7 @@ struct Monomorphizer {
     /// Functions already processed
     processed: HashSet<String>,
     /// Lambda registry from original program
-    lambda_registry: Vec<(String, usize)>,
+    lambda_registry: IdArena<LambdaId, LambdaInfo>,
 }
 
 struct WorkItem {

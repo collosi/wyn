@@ -7,6 +7,7 @@
 //! - Imports and namespacing have been resolved
 //! - Range expressions have been desugared
 
+use crate::IdArena;
 use crate::ast::{NodeId, Span, TypeName};
 use polytype::Type;
 
@@ -15,15 +16,33 @@ mod tests;
 
 pub mod folder;
 
+/// Unique identifier for a lambda/closure in the registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LambdaId(pub u32);
+
+impl From<u32> for LambdaId {
+    fn from(id: u32) -> Self {
+        LambdaId(id)
+    }
+}
+
+/// Information about a registered lambda.
+#[derive(Debug, Clone)]
+pub struct LambdaInfo {
+    /// Name of the generated function
+    pub name: String,
+    /// Number of parameters (excluding closure parameter)
+    pub arity: usize,
+}
+
 /// A complete MIR program.
 #[derive(Debug, Clone)]
 pub struct Program {
     /// All top-level definitions in the program.
     pub defs: Vec<Def>,
-    /// Lambda registry: maps tag -> (function_name, arity).
+    /// Lambda registry: maps LambdaId -> LambdaInfo.
     /// Used for closure dispatch in higher-order builtins like map.
-    /// Tags are assigned in order during flattening.
-    pub lambda_registry: Vec<(String, usize)>,
+    pub lambda_registry: IdArena<LambdaId, LambdaInfo>,
 }
 
 /// A top-level definition (function or constant).

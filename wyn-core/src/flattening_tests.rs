@@ -267,8 +267,9 @@ def test_map (arr:[4]i32) : [4]i32 =
     assert!(mir_str.contains("@closure(_w_lam_test_map_"));
     // Lambda registry should have the lambda function
     assert_eq!(mir.lambda_registry.len(), 1);
-    assert_eq!(mir.lambda_registry[0].0, "_w_lam_test_map_0");
-    assert_eq!(mir.lambda_registry[0].1, 1); // arity 1
+    let (_, info) = mir.lambda_registry.iter().next().unwrap();
+    assert_eq!(info.name, "_w_lam_test_map_0");
+    assert_eq!(info.arity, 1);
 }
 
 #[test]

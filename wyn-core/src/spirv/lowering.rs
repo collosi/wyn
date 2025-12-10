@@ -9,9 +9,9 @@ use crate::ast::TypeName;
 use crate::error::Result;
 use crate::impl_source::{BuiltinImpl, ImplSource, PrimOp};
 use crate::lowering_common::is_empty_closure_type;
-use crate::mir::{self, Def, Expr, ExprKind, Literal, LoopKind, Program};
+use crate::mir::{self, Def, Expr, ExprKind, LambdaId, LambdaInfo, Literal, LoopKind, Program};
 use crate::types;
-use crate::{bail_spirv, err_spirv};
+use crate::{IdArena, bail_spirv, err_spirv};
 use polytype::Type as PolyType;
 use rspirv::binary::Assemble;
 use rspirv::dr::Operand;
@@ -101,8 +101,8 @@ struct Constructor {
     uniform_types: HashMap<String, spirv::Word>, // uniform name -> SPIR-V type ID
     uniform_load_cache: HashMap<String, spirv::Word>, // cached OpLoad results per function
 
-    // Lambda registry: tag index -> (function_name, arity)
-    lambda_registry: Vec<(String, usize)>,
+    /// Lambda registry: LambdaId -> LambdaInfo
+    lambda_registry: IdArena<LambdaId, LambdaInfo>,
 
     // Builtin function registry
     impl_source: ImplSource,
@@ -158,7 +158,7 @@ impl Constructor {
             uniform_variables: HashMap::new(),
             uniform_types: HashMap::new(),
             uniform_load_cache: HashMap::new(),
-            lambda_registry: Vec::new(),
+            lambda_registry: IdArena::new(),
             impl_source: ImplSource::default(),
             debug_buffer: None,
             inplace_map_nodes: HashSet::new(),
