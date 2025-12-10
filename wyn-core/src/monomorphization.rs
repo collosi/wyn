@@ -16,6 +16,7 @@ use crate::ast::{Type, TypeName};
 use crate::error::Result;
 use crate::mir::folder::MirFolder;
 use crate::mir::{Def, Expr, ExprKind, LambdaId, LambdaInfo, Param, Program};
+use crate::types::UniqueTypeExt;
 use polytype::Type as PolyType;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -76,6 +77,10 @@ impl SubstKey {
 
 impl TypeKey {
     fn from_type(ty: &Type) -> Self {
+        // Handle unique types first via dedicated API
+        if let Some(inner) = ty.as_unique_inner() {
+            return TypeKey::Constructed("unique".to_string(), vec![TypeKey::from_type(inner)]);
+        }
         match ty {
             PolyType::Variable(id) => TypeKey::Var(*id),
             PolyType::Constructed(name, args) => {
@@ -121,7 +126,7 @@ impl TypeKey {
                     TypeName::SizeVar(s) => format!("sizevar_{}", s),
                     TypeName::UserVar(s) => format!("uservar_{}", s),
                     TypeName::Named(s) => s.clone(),
-                    TypeName::Unique => "unique".to_string(),
+                    TypeName::Unique => unreachable!("Handled above via as_unique_inner()"),
                     TypeName::Unit => "unit".to_string(),
                     TypeName::Tuple(n) => format!("tuple{}", n),
                     TypeName::Pointer => "ptr".to_string(),

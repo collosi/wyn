@@ -1,4 +1,4 @@
-use super::{Type, TypeName, TypeScheme};
+use super::{Type, TypeName, TypeScheme, UniqueTypeExt};
 use crate::ast::*;
 use crate::error::Result;
 use crate::scope::ScopeStack;
@@ -1771,6 +1771,9 @@ impl<'a> TypeChecker<'a> {
                     // Apply context to resolve any type variables that have been unified
                     let expr_type = expr_type.apply(&self.context);
 
+                    // Strip uniqueness for field access - the inner type's fields are accessible
+                    let expr_type = expr_type.strip_unique().clone();
+
                     // Extract the type name from the expression type
                     // First check if it's a record with the requested field
                     if let Type::Constructed(TypeName::Record(fields), field_types) = &expr_type {
@@ -1889,7 +1892,7 @@ impl<'a> TypeChecker<'a> {
                                     TypeName::SizeVar(name) => name.clone(),
                                     TypeName::UserVar(name) => format!("'{}", name),
                                     TypeName::Named(name) => name.clone(),
-                                    TypeName::Unique => "unique".to_string(),
+                                    TypeName::Unique => unreachable!("Uniqueness stripped above"),
                                     TypeName::Record(_) => "record".to_string(),
                                     TypeName::Unit => "unit".to_string(),
                                     TypeName::Tuple(_) => "tuple".to_string(),

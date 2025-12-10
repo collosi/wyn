@@ -249,6 +249,51 @@ impl From<&'static str> for TypeName {
 }
 
 // =============================================================================
+// Type extension traits
+// =============================================================================
+
+/// Extension trait for uniqueness-related operations on Type.
+///
+/// Centralizes all uniqueness handling so passes don't need to pattern-match
+/// on TypeName::Unique directly.
+pub trait UniqueTypeExt {
+    /// Create a unique (consuming/alias-free) type: *T
+    fn unique(inner: Type) -> Type;
+
+    /// Check if this type is marked as unique/consuming
+    fn is_unique(&self) -> bool;
+
+    /// Get the inner type if this is a unique type, None otherwise
+    fn as_unique_inner(&self) -> Option<&Type>;
+
+    /// Strip the uniqueness marker if present, otherwise return self
+    fn strip_unique(&self) -> &Type;
+}
+
+impl UniqueTypeExt for Type {
+    fn unique(inner: Type) -> Type {
+        Type::Constructed(TypeName::Unique, vec![inner])
+    }
+
+    fn is_unique(&self) -> bool {
+        matches!(self, Type::Constructed(TypeName::Unique, _))
+    }
+
+    fn as_unique_inner(&self) -> Option<&Type> {
+        if let Type::Constructed(TypeName::Unique, args) = self {
+            debug_assert_eq!(args.len(), 1, "Unique type must have exactly one inner type");
+            args.first()
+        } else {
+            None
+        }
+    }
+
+    fn strip_unique(&self) -> &Type {
+        self.as_unique_inner().unwrap_or(self)
+    }
+}
+
+// =============================================================================
 // Type helper functions
 // =============================================================================
 

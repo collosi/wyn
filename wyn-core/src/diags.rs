@@ -4,6 +4,7 @@
 //! something close to Wyn syntax.
 
 use crate::ast::*;
+use crate::types::UniqueTypeExt;
 use polytype::Type as PolyType;
 use std::fmt::Write;
 
@@ -12,6 +13,10 @@ use std::fmt::Write;
 /// Converts `Constructed(Str("f32"), [])` to `"f32"`,
 /// `Constructed(Array, [Size(3), Str("f32")])` to `"[3]f32"`, etc.
 pub fn format_type(ty: &PolyType<TypeName>) -> String {
+    // Handle unique types first via dedicated API
+    if let Some(inner) = ty.as_unique_inner() {
+        return format!("*{}", format_type(inner));
+    }
     match ty {
         PolyType::Variable(id) => format!("?{}", id),
         PolyType::Constructed(name, args) => format_constructed_type(name, args),
@@ -121,8 +126,8 @@ fn format_constructed_type(name: &TypeName, args: &[PolyType<TypeName>]) -> Stri
             items.join(" | ")
         }
         TypeName::Unique => {
-            // *T
-            if args.len() == 1 { format!("*{}", format_type(&args[0])) } else { "*?".to_string() }
+            // Handled in format_type() via UniqueTypeExt
+            unreachable!("Unique types should be handled in format_type")
         }
         TypeName::UserVar(s) => format!("'{}", s),
         TypeName::Named(s) => {

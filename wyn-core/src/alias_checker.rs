@@ -7,6 +7,7 @@
 
 use crate::ast::*;
 use crate::error::Result;
+use crate::types::UniqueTypeExt;
 use crate::visitor::{self, Visitor};
 use crate::{NodeId, TypeTable};
 use polytype::TypeScheme;
@@ -505,6 +506,10 @@ impl<'a> Visitor for AliasChecker<'a> {
 // --- Helper functions for type checking ---
 
 fn is_copy_type(ty: &polytype::Type<TypeName>) -> bool {
+    // Unique types are not copy
+    if ty.is_unique() {
+        return false;
+    }
     match ty {
         polytype::Type::Constructed(name, args) => match name {
             TypeName::Int(_) => true,
@@ -515,10 +520,10 @@ fn is_copy_type(ty: &polytype::Type<TypeName>) -> bool {
             TypeName::Array => false,
             TypeName::Vec => false,
             TypeName::Mat => false,
-            TypeName::Unique => false,
             TypeName::Tuple(_) => args.iter().all(is_copy_type),
             TypeName::Arrow => true, // Functions are copy
-            _ => true,               // Conservative: treat unknown as copy
+            TypeName::Unique => unreachable!("Handled above via is_unique()"),
+            _ => true, // Conservative: treat unknown as copy
         },
         polytype::Type::Variable(_) => true,
     }
@@ -529,7 +534,7 @@ fn is_copy_type_scheme(scheme: &TypeScheme<TypeName>) -> bool {
 }
 
 fn is_unique_type(ty: &polytype::Type<TypeName>) -> bool {
-    matches!(ty, polytype::Type::Constructed(TypeName::Unique, _))
+    ty.is_unique()
 }
 
 fn unwrap_scheme(scheme: &TypeScheme<TypeName>) -> &polytype::Type<TypeName> {
@@ -557,8 +562,7 @@ fn get_return_type_is_fresh(ty: &polytype::Type<TypeName>) -> bool {
         polytype::Type::Constructed(TypeName::Arrow, args) if args.len() == 2 => {
             get_return_type_is_fresh(&args[1])
         }
-        polytype::Type::Constructed(TypeName::Unique, _) => true,
-        _ => false,
+        _ => ty.is_unique(),
     }
 }
 
