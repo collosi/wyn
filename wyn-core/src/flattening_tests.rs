@@ -654,22 +654,6 @@ def test: f32 =
 }
 
 #[test]
-fn test_curried_partial_application() {
-    // Partial application creating a closure
-    let mir = flatten_program(
-        r#"
-def add (x: f32) (y: f32): f32 = x + y
-def test: f32 =
-    let add5 = add 5.0f32 in
-    add5 3.0f32
-"#,
-    );
-    let mir_str = format!("{}", mir);
-    println!("MIR:\n{}", mir_str);
-    assert!(mir_str.contains("add"));
-}
-
-#[test]
 fn test_higher_order_function_parameter() {
     // Function parameter with arrow type
     let mir = flatten_program(
@@ -719,22 +703,4 @@ def test: f32 =
     let mir_str = format!("{}", mir);
     println!("MIR:\n{}", mir_str);
     assert!(mir_str.contains("def reduce_f32"));
-}
-
-#[test]
-fn test_partial_application_of_curried_function() {
-    // Partial application of a curried non-lambda function
-    // This should synthesize a lambda to capture the partial args
-    let mir = flatten_program(
-        r#"
-def vec3 (x: f32) (y: f32) (z: f32): vec3f32 = @[x, y, z]
-def test: vec3f32 =
-    let make_red = vec3 1.0f32 in
-    make_red 0.0f32 0.0f32
-"#,
-    );
-    let mir_str = format!("{}", mir);
-    println!("MIR:\n{}", mir_str);
-    // Should generate a synthetic lambda for the partial application
-    assert!(mir_str.contains("_w_partial_"));
 }

@@ -63,6 +63,7 @@ pub struct TypeChecker<'a> {
     type_table: HashMap<crate::ast::NodeId, TypeScheme>, // Maps NodeId to type scheme
     warnings: Vec<TypeWarning>,          // Collected warnings
     type_holes: Vec<(NodeId, Span)>,     // Track type hole locations for warning emission
+    arity_map: HashMap<String, usize>,   // function name -> required arity (number of params)
 }
 
 /// Compute free type variables in a Type
@@ -271,6 +272,7 @@ impl<'a> TypeChecker<'a> {
             type_table: HashMap::new(),
             warnings: Vec::new(),
             type_holes: Vec::new(),
+            arity_map: HashMap::new(),
         }
     }
 
@@ -1284,6 +1286,9 @@ impl<'a> TypeChecker<'a> {
             let type_scheme = self.generalize(&func_type);
             self.scope_stack.insert(decl.name.clone(), type_scheme);
 
+            // Track arity for partial application checking
+            self.arity_map.insert(decl.name.clone(), decl.params.len());
+
             debug!("Inferred type for {}: {}", decl.name, func_type);
         }
 
@@ -1660,6 +1665,31 @@ impl<'a> TypeChecker<'a> {
                 Ok(body_type)
             }
             ExprKind::Application(func, args) => {
+                // Check arity for partial application prevention
+                let required_arity: Option<usize> = match &func.kind {
+                    ExprKind::Identifier(quals, name) => {
+                        let full_name = if quals.is_empty() {
+                            name.clone()
+                        } else {
+                            format!("{}.{}", quals.join("."), name)
+                        };
+                        self.arity_map.get(&full_name).copied()
+                    }
+                    ExprKind::Lambda(lambda) => Some(lambda.params.len()),
+                    _ => None,
+                };
+
+                if let Some(arity) = required_arity {
+                    if args.len() < arity {
+                        bail_type_at!(
+                            expr.h.span,
+                            "Partial application not allowed: function requires {} argument(s), but {} provided",
+                            arity,
+                            args.len()
+                        );
+                    }
+                }
+
                 // Check if the function is an overloaded builtin identifier
                 // If so, perform overload resolution based on argument types
                 if let ExprKind::Identifier(quals, name) = &func.kind {

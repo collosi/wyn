@@ -1391,7 +1391,7 @@ Evaluation is eager or call-by-value, like most non-Haskell languages. However, 
 
 The evaluation semantics are entirely sequential, with parallelism being solely an operational detail. Hence, race conditions are impossible. The Wyn compiler does not automatically go looking for parallelism. Only certain special constructs and built-in library functions (such as `map`, `reduce`, `scan`, and `filter`) may be executed in parallel.
 
-Currying and partial application work as usual (although functions are not fully first class; see Types below). Although the `assert` construct looks like a function, it is not, and it cannot be partially applied.
+Functions have a fixed number of arguments and must be called with all of them (although functions are not fully first class; see Types below). Although the `assert` construct looks like a function, it is not.
 
 Lambda terms are written as `\x -> x + 2`, as in Haskell.
 

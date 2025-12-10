@@ -1309,6 +1309,9 @@ impl Flattener {
 
     /// Synthesize a lambda for partial application of a function.
     /// Given `f x y` where f expects 4 args, creates `\a b -> f x y a b`
+    /// NOTE: Currently unused as partial application is rejected by type checker.
+    /// Kept for future "escape hatch" feature.
+    #[allow(dead_code)]
     fn synthesize_partial_application(
         &mut self,
         func_name: String,
@@ -1439,7 +1442,7 @@ impl Flattener {
         func: &Expression,
         args: &[Expression],
         result_type: &Type,
-        span: Span,
+        _span: Span,
     ) -> Result<(mir::ExprKind, StaticValue)> {
         let (func_flat, func_sv) = self.flatten_expr(func)?;
 
@@ -1475,8 +1478,8 @@ impl Flattener {
 
                     // Check if this is a partial application (result type is Arrow)
                     if Self::as_arrow_type(result_type).is_some() {
-                        // Partial application: synthesize a lambda
-                        self.synthesize_partial_application(desugared_name, args_flat, result_type, span)
+                        // Partial application should be rejected by type checker
+                        unreachable!("partial application should be rejected by type checker");
                     } else {
                         // Direct function call (not a closure)
                         Ok((
