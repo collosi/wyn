@@ -246,17 +246,15 @@ impl ModuleManager {
                     self.resolve_type_aliases_in_module(underlying, module_name)
                 } else {
                     // Not a known alias, keep as-is but resolve args
-                    let resolved_args: Vec<Type> = args.iter()
-                        .map(|a| self.resolve_type_aliases_in_module(a, module_name))
-                        .collect();
+                    let resolved_args: Vec<Type> =
+                        args.iter().map(|a| self.resolve_type_aliases_in_module(a, module_name)).collect();
                     Type::Constructed(TypeName::Named(name.clone()), resolved_args)
                 }
             }
             Type::Constructed(name, args) => {
                 // Resolve aliases in type arguments
-                let resolved_args: Vec<Type> = args.iter()
-                    .map(|a| self.resolve_type_aliases_in_module(a, module_name))
-                    .collect();
+                let resolved_args: Vec<Type> =
+                    args.iter().map(|a| self.resolve_type_aliases_in_module(a, module_name)).collect();
                 Type::Constructed(name.clone(), resolved_args)
             }
             Type::Variable(id) => Type::Variable(*id),
@@ -675,11 +673,21 @@ impl ModuleManager {
     /// Builtin/intrinsic modules that shouldn't be type-checked
     /// (their implementations use internal __builtin_* or __gdp_* functions)
     const BUILTIN_MODULES: &'static [&'static str] = &[
-        "f32", "f64", "f16",
-        "i8", "i16", "i32", "i64",
-        "u8", "u16", "u32", "u64",
+        "f32",
+        "f64",
+        "f16",
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
         "bool",
-        "gdp", "graphics32", "graphics64",
+        "gdp",
+        "graphics32",
+        "graphics64",
     ];
 
     /// Check if a module is a builtin primitive module
@@ -749,7 +757,12 @@ impl ModuleManager {
                     match decl {
                         Declaration::Decl(d) => {
                             // Apply type substitutions and resolve names
-                            let elaborated_decl = self.elaborate_decl_signature(d, module_name, &module_functions, substitutions);
+                            let elaborated_decl = self.elaborate_decl_signature(
+                                d,
+                                module_name,
+                                &module_functions,
+                                substitutions,
+                            );
                             items.push(ElaboratedItem::Decl(elaborated_decl));
                         }
                         Declaration::Sig(sig_decl) => {
@@ -774,7 +787,8 @@ impl ModuleManager {
                         }
                         Declaration::TypeBind(type_bind) => {
                             // Record type aliases (e.g., `type state = f32`)
-                            let substituted_ty = self.substitute_in_type(&type_bind.definition, substitutions);
+                            let substituted_ty =
+                                self.substitute_in_type(&type_bind.definition, substitutions);
                             items.push(ElaboratedItem::TypeAlias(type_bind.name.clone(), substituted_ty));
                         }
                         _ => {
@@ -808,9 +822,8 @@ impl ModuleManager {
         let new_ty = decl.ty.as_ref().map(|ty| self.substitute_in_type(ty, substitutions));
 
         // Collect parameter names to avoid qualifying them as module functions
-        let param_names: HashSet<String> = decl.params.iter()
-            .flat_map(|p| self.collect_pattern_names(p))
-            .collect();
+        let param_names: HashSet<String> =
+            decl.params.iter().flat_map(|p| self.collect_pattern_names(p)).collect();
 
         // Resolve names in body (convert FieldAccess to QualifiedName, qualify intra-module refs)
         let mut new_body = decl.body.clone();
@@ -904,19 +917,49 @@ impl ModuleManager {
                 for p in &lambda.params {
                     inner_bindings.extend(self.collect_pattern_names(p));
                 }
-                self.resolve_names_in_expr(&mut lambda.body, module_name, module_functions, &inner_bindings);
+                self.resolve_names_in_expr(
+                    &mut lambda.body,
+                    module_name,
+                    module_functions,
+                    &inner_bindings,
+                );
             }
             ExprKind::LetIn(let_in) => {
-                self.resolve_names_in_expr(&mut let_in.value, module_name, module_functions, local_bindings);
+                self.resolve_names_in_expr(
+                    &mut let_in.value,
+                    module_name,
+                    module_functions,
+                    local_bindings,
+                );
                 // Collect let binding names
                 let mut inner_bindings = local_bindings.clone();
                 inner_bindings.extend(self.collect_pattern_names(&let_in.pattern));
-                self.resolve_names_in_expr(&mut let_in.body, module_name, module_functions, &inner_bindings);
+                self.resolve_names_in_expr(
+                    &mut let_in.body,
+                    module_name,
+                    module_functions,
+                    &inner_bindings,
+                );
             }
             ExprKind::If(if_expr) => {
-                self.resolve_names_in_expr(&mut if_expr.condition, module_name, module_functions, local_bindings);
-                self.resolve_names_in_expr(&mut if_expr.then_branch, module_name, module_functions, local_bindings);
-                self.resolve_names_in_expr(&mut if_expr.else_branch, module_name, module_functions, local_bindings);
+                self.resolve_names_in_expr(
+                    &mut if_expr.condition,
+                    module_name,
+                    module_functions,
+                    local_bindings,
+                );
+                self.resolve_names_in_expr(
+                    &mut if_expr.then_branch,
+                    module_name,
+                    module_functions,
+                    local_bindings,
+                );
+                self.resolve_names_in_expr(
+                    &mut if_expr.else_branch,
+                    module_name,
+                    module_functions,
+                    local_bindings,
+                );
             }
             ExprKind::BinaryOp(_, lhs, rhs) => {
                 self.resolve_names_in_expr(lhs, module_name, module_functions, local_bindings);
@@ -964,19 +1007,44 @@ impl ModuleManager {
                         self.resolve_names_in_expr(iter, module_name, module_functions, local_bindings);
                     }
                 }
-                self.resolve_names_in_expr(&mut loop_expr.body, module_name, module_functions, &inner_bindings);
+                self.resolve_names_in_expr(
+                    &mut loop_expr.body,
+                    module_name,
+                    module_functions,
+                    &inner_bindings,
+                );
             }
             ExprKind::Match(match_expr) => {
-                self.resolve_names_in_expr(&mut match_expr.scrutinee, module_name, module_functions, local_bindings);
+                self.resolve_names_in_expr(
+                    &mut match_expr.scrutinee,
+                    module_name,
+                    module_functions,
+                    local_bindings,
+                );
                 for case in &mut match_expr.cases {
                     let mut inner_bindings = local_bindings.clone();
                     inner_bindings.extend(self.collect_pattern_names(&case.pattern));
-                    self.resolve_names_in_expr(&mut case.body, module_name, module_functions, &inner_bindings);
+                    self.resolve_names_in_expr(
+                        &mut case.body,
+                        module_name,
+                        module_functions,
+                        &inner_bindings,
+                    );
                 }
             }
             ExprKind::Range(range_expr) => {
-                self.resolve_names_in_expr(&mut range_expr.start, module_name, module_functions, local_bindings);
-                self.resolve_names_in_expr(&mut range_expr.end, module_name, module_functions, local_bindings);
+                self.resolve_names_in_expr(
+                    &mut range_expr.start,
+                    module_name,
+                    module_functions,
+                    local_bindings,
+                );
+                self.resolve_names_in_expr(
+                    &mut range_expr.end,
+                    module_name,
+                    module_functions,
+                    local_bindings,
+                );
             }
             ExprKind::TypeAscription(inner, _) | ExprKind::TypeCoercion(inner, _) => {
                 self.resolve_names_in_expr(inner, module_name, module_functions, local_bindings);

@@ -169,7 +169,13 @@ impl Parser {
             if let Attribute::Uniform { set, binding } = attr { Some((*set, *binding)) } else { None }
         });
         let storage_attr = attributes.iter().find_map(|attr| {
-            if let Attribute::Storage { set, binding, layout, access } = attr {
+            if let Attribute::Storage {
+                set,
+                binding,
+                layout,
+                access,
+            } = attr
+            {
                 Some((*set, *binding, *layout, *access))
             } else {
                 None
@@ -423,10 +429,21 @@ impl Parser {
             bail_parse!("Uniform declarations cannot have initializer values");
         }
 
-        Ok(Declaration::Uniform(UniformDecl { name, ty, set, binding }))
+        Ok(Declaration::Uniform(UniformDecl {
+            name,
+            ty,
+            set,
+            binding,
+        }))
     }
 
-    fn parse_storage_decl(&mut self, set: u32, binding: u32, layout: StorageLayout, access: StorageAccess) -> Result<Declaration> {
+    fn parse_storage_decl(
+        &mut self,
+        set: u32,
+        binding: u32,
+        layout: StorageLayout,
+        access: StorageAccess,
+    ) -> Result<Declaration> {
         // Consume 'def' keyword
         self.expect(Token::Def)?;
 
@@ -441,7 +458,14 @@ impl Parser {
             bail_parse!("Storage buffer declarations cannot have initializer values");
         }
 
-        Ok(Declaration::Storage(StorageDecl { name, ty, set, binding, layout, access }))
+        Ok(Declaration::Storage(StorageDecl {
+            name,
+            ty,
+            set,
+            binding,
+            layout,
+            access,
+        }))
     }
 
     fn parse_attribute(&mut self) -> Result<Attribute> {
@@ -503,7 +527,8 @@ impl Parser {
                 self.expect(Token::RightParen)?;
                 self.expect(Token::RightBracket)?;
 
-                let binding = binding.ok_or_else(|| err_parse!("uniform attribute requires 'binding' parameter"))?;
+                let binding =
+                    binding.ok_or_else(|| err_parse!("uniform attribute requires 'binding' parameter"))?;
 
                 Ok(Attribute::Uniform { set, binding })
             }
@@ -596,9 +621,15 @@ impl Parser {
                 self.expect(Token::RightParen)?;
                 self.expect(Token::RightBracket)?;
 
-                let binding = binding.ok_or_else(|| err_parse!("storage attribute requires 'binding' parameter"))?;
+                let binding =
+                    binding.ok_or_else(|| err_parse!("storage attribute requires 'binding' parameter"))?;
 
-                Ok(Attribute::Storage { set, binding, layout, access })
+                Ok(Attribute::Storage {
+                    set,
+                    binding,
+                    layout,
+                    access,
+                })
             }
             _ => Err(err_parse!("Unknown attribute: {}", attr_name)),
         }
@@ -1495,13 +1526,15 @@ impl Parser {
                     let y_pattern = self.node_counter.mk_node(PatternKind::Name("y".to_string()), span);
 
                     // Create identifier expressions for body: x, y
-                    let x_expr = self.node_counter.mk_node(ExprKind::Identifier(vec![], "x".to_string()), span);
-                    let y_expr = self.node_counter.mk_node(ExprKind::Identifier(vec![], "y".to_string()), span);
+                    let x_expr =
+                        self.node_counter.mk_node(ExprKind::Identifier(vec![], "x".to_string()), span);
+                    let y_expr =
+                        self.node_counter.mk_node(ExprKind::Identifier(vec![], "y".to_string()), span);
 
                     // Create body: x op y
                     let body = self.node_counter.mk_node(
                         ExprKind::BinaryOp(BinaryOp { op }, Box::new(x_expr), Box::new(y_expr)),
-                        span
+                        span,
                     );
 
                     // Create lambda: \x y -> x op y

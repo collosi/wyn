@@ -365,9 +365,9 @@ pub struct UniformDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StorageDecl {
     pub name: String,
-    pub ty: Type,              // Storage buffers have an explicit type (usually runtime-sized array)
-    pub set: u32,              // Descriptor set number
-    pub binding: u32,          // Binding number within the set
+    pub ty: Type,     // Storage buffers have an explicit type (usually runtime-sized array)
+    pub set: u32,     // Descriptor set number
+    pub binding: u32, // Binding number within the set
     pub layout: StorageLayout, // Memory layout (std430, std140)
     pub access: StorageAccess, // Access mode (read, write, readwrite)
 }

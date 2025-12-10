@@ -84,8 +84,8 @@ impl Normalizer {
             }
             // Constants must remain compile-time literals, so don't normalize them
             Def::Constant { .. } => def,
-            Def::Uniform { .. } => def,  // Uniforms have no body to normalize
-            Def::Storage { .. } => def,  // Storage buffers have no body to normalize
+            Def::Uniform { .. } => def, // Uniforms have no body to normalize
+            Def::Storage { .. } => def, // Storage buffers have no body to normalize
             Def::EntryPoint {
                 id,
                 name,

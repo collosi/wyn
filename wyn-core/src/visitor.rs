@@ -66,7 +66,12 @@ pub trait Visitor: Sized {
         ControlFlow::Continue(())
     }
 
-    fn visit_expr_identifier(&mut self, _id: NodeId, _quals: &[String], _name: &str) -> ControlFlow<Self::Break> {
+    fn visit_expr_identifier(
+        &mut self,
+        _id: NodeId,
+        _quals: &[String],
+        _name: &str,
+    ) -> ControlFlow<Self::Break> {
         ControlFlow::Continue(())
     }
 

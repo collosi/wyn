@@ -10,16 +10,16 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// Helper to run full pipeline through lowering with normalization
 fn compile_through_lowering(input: &str) -> Result<(), CompilerError> {
     let parsed = crate::Compiler::parse(input)?;
-    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
-    parsed
-        .elaborate(module_manager)?
-        .resolve()?
-        .type_check()?
+    let module_manager = crate::module_manager::ModuleManager::new();
+    let (flattened, mut backend) = parsed
+        .resolve(&module_manager)?
+        .type_check(&module_manager)?
         .alias_check()?
         .fold_ast_constants()
-        .flatten()?
+        .flatten(&module_manager)?;
+    flattened
         .hoist_materializations()
-        .normalize()
+        .normalize(&mut backend.node_counter)
         .monomorphize()?
         .filter_reachable()
         .fold_constants()?

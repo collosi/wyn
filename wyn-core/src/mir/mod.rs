@@ -142,7 +142,9 @@ pub enum Attribute {
 pub enum ExecutionModel {
     Vertex,
     Fragment,
-    Compute { local_size: (u32, u32, u32) },
+    Compute {
+        local_size: (u32, u32, u32),
+    },
 }
 
 /// Decoration for shader I/O (entry point parameters and return values).
@@ -343,4 +345,3 @@ pub enum LoopKind {
         cond: Box<Expr>,
     },
 }
-

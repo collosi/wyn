@@ -435,11 +435,7 @@ impl Flattener {
     }
 
     /// Flatten a module declaration with a qualified name (e.g., "rand.init")
-    pub fn flatten_module_decl(
-        &mut self,
-        d: &ast::Decl,
-        qualified_name: &str,
-    ) -> Result<Vec<mir::Def>> {
+    pub fn flatten_module_decl(&mut self, d: &ast::Decl, qualified_name: &str) -> Result<Vec<mir::Def>> {
         self.enclosing_decl_stack.push(qualified_name.to_string());
 
         let def = if d.params.is_empty() {
@@ -530,54 +526,51 @@ impl Flattener {
                             let name = self.extract_param_name(p).unwrap_or_default();
                             let ty = self.get_pattern_type(p);
                             let decoration = self.extract_io_decoration(p);
-                            mir::EntryInput {
-                                name,
-                                ty,
-                                decoration,
-                            }
+                            mir::EntryInput { name, ty, decoration }
                         })
                         .collect();
 
                     // Convert AST EntryOutput to MIR EntryOutput with IoDecoration
                     let ret_type = self.get_expr_type(&e.body);
-                    let outputs: Vec<mir::EntryOutput> = if e.outputs.iter().all(|o| o.attribute.is_none()) && e.outputs.len() == 1 {
-                        // Single output without explicit decoration
-                        if !matches!(ret_type, polytype::Type::Constructed(ast::TypeName::Unit, _)) {
-                            vec![mir::EntryOutput {
-                                ty: ret_type,
-                                decoration: None,
-                            }]
+                    let outputs: Vec<mir::EntryOutput> =
+                        if e.outputs.iter().all(|o| o.attribute.is_none()) && e.outputs.len() == 1 {
+                            // Single output without explicit decoration
+                            if !matches!(ret_type, polytype::Type::Constructed(ast::TypeName::Unit, _)) {
+                                vec![mir::EntryOutput {
+                                    ty: ret_type,
+                                    decoration: None,
+                                }]
+                            } else {
+                                vec![]
+                            }
                         } else {
-                            vec![]
-                        }
-                    } else {
-                        // Multiple outputs with decorations (tuple return)
-                        if let polytype::Type::Constructed(ast::TypeName::Tuple(_), component_types) =
-                            &ret_type
-                        {
-                            e.outputs
-                                .iter()
-                                .zip(component_types.iter())
-                                .map(|(output, ty)| mir::EntryOutput {
-                                    ty: ty.clone(),
-                                    decoration: output
-                                        .attribute
-                                        .as_ref()
+                            // Multiple outputs with decorations (tuple return)
+                            if let polytype::Type::Constructed(ast::TypeName::Tuple(_), component_types) =
+                                &ret_type
+                            {
+                                e.outputs
+                                    .iter()
+                                    .zip(component_types.iter())
+                                    .map(|(output, ty)| mir::EntryOutput {
+                                        ty: ty.clone(),
+                                        decoration: output
+                                            .attribute
+                                            .as_ref()
+                                            .and_then(|a| self.convert_to_io_decoration(a)),
+                                    })
+                                    .collect()
+                            } else {
+                                // Single output with decoration
+                                vec![mir::EntryOutput {
+                                    ty: ret_type,
+                                    decoration: e
+                                        .outputs
+                                        .first()
+                                        .and_then(|o| o.attribute.as_ref())
                                         .and_then(|a| self.convert_to_io_decoration(a)),
-                                })
-                                .collect()
-                        } else {
-                            // Single output with decoration
-                            vec![mir::EntryOutput {
-                                ty: ret_type,
-                                decoration: e
-                                    .outputs
-                                    .first()
-                                    .and_then(|o| o.attribute.as_ref())
-                                    .and_then(|a| self.convert_to_io_decoration(a)),
-                            }]
-                        }
-                    };
+                                }]
+                            }
+                        };
 
                     let def = mir::Def::EntryPoint {
                         id: self.next_node_id(),
@@ -790,8 +783,11 @@ impl Flattener {
                 let full_name =
                     if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) };
                 // Look up static value for this variable
-                let sv =
-                    self.static_values.lookup(&full_name).cloned().unwrap_or(StaticValue::Dyn { binding_id: 0 });
+                let sv = self
+                    .static_values
+                    .lookup(&full_name)
+                    .cloned()
+                    .unwrap_or(StaticValue::Dyn { binding_id: 0 });
                 (mir::ExprKind::Var(full_name), sv)
             }
             ExprKind::BinaryOp(op, lhs, rhs) => {
@@ -1299,7 +1295,9 @@ impl Flattener {
     /// Find the type of a variable by searching for its use in an expression
     fn find_var_type_in_expr(&self, expr: &Expression, var_name: &str) -> Option<Type> {
         match &expr.kind {
-            ExprKind::Identifier(quals, name) if quals.is_empty() && name == var_name => Some(self.get_expr_type(expr)),
+            ExprKind::Identifier(quals, name) if quals.is_empty() && name == var_name => {
+                Some(self.get_expr_type(expr))
+            }
             ExprKind::BinaryOp(_, lhs, rhs) => self
                 .find_var_type_in_expr(lhs, var_name)
                 .or_else(|| self.find_var_type_in_expr(rhs, var_name)),
@@ -1546,8 +1544,11 @@ impl Flattener {
                         StaticValue::Dyn { binding_id: 0 },
                     ))
                 } else {
-                    let full_name =
-                        if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) };
+                    let full_name = if quals.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}.{}", quals.join("."), name)
+                    };
 
                     // Desugar overloaded functions based on argument types
                     let desugared_name = self.desugar_function_name(&full_name, args)?;

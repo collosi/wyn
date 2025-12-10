@@ -53,22 +53,16 @@ impl TypeWarning {
     }
 }
 
-pub struct TypeChecker {
+pub struct TypeChecker<'a> {
     scope_stack: ScopeStack<TypeScheme>, // Store polymorphic types
     context: Context<TypeName>,          // Polytype unification context
     record_field_map: HashMap<(String, String), Type>, // Map (type_name, field_name) -> field_type
     impl_source: crate::impl_source::ImplSource, // Implementation source for code generation
     poly_builtins: crate::poly_builtins::PolyBuiltins, // Type registry for polymorphic builtins
-    module_manager: crate::module_manager::ModuleManager, // Lazy module loading
+    module_manager: &'a crate::module_manager::ModuleManager, // Lazy module loading
     type_table: HashMap<crate::ast::NodeId, TypeScheme>, // Maps NodeId to type scheme
     warnings: Vec<TypeWarning>,          // Collected warnings
     type_holes: Vec<(NodeId, Span)>,     // Track type hole locations for warning emission
-}
-
-impl Default for TypeChecker {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 /// Compute free type variables in a Type
@@ -114,7 +108,7 @@ fn quantify(mut body: TypeScheme, vars: &BTreeSet<usize>) -> TypeScheme {
     body
 }
 
-impl TypeChecker {
+impl<'a> TypeChecker<'a> {
     fn types_equal(&self, left: &Type, right: &Type) -> bool {
         match (left, right) {
             (Type::Constructed(l_name, l_args), Type::Constructed(r_name, r_args)) => {
@@ -176,17 +170,14 @@ impl TypeChecker {
                     self.resolve_type_aliases(underlying)
                 } else {
                     // Not a known alias, keep as-is but resolve args
-                    let resolved_args: Vec<Type> = args.iter()
-                        .map(|a| self.resolve_type_aliases(a))
-                        .collect();
+                    let resolved_args: Vec<Type> =
+                        args.iter().map(|a| self.resolve_type_aliases(a)).collect();
                     Type::Constructed(TypeName::Named(name.clone()), resolved_args)
                 }
             }
             Type::Constructed(name, args) => {
                 // Resolve aliases in type arguments
-                let resolved_args: Vec<Type> = args.iter()
-                    .map(|a| self.resolve_type_aliases(a))
-                    .collect();
+                let resolved_args: Vec<Type> = args.iter().map(|a| self.resolve_type_aliases(a)).collect();
                 Type::Constructed(name.clone(), resolved_args)
             }
             Type::Variable(id) => Type::Variable(*id),
@@ -264,12 +255,8 @@ impl TypeChecker {
         }
     }
 
-    pub fn new() -> Self {
-        Self::with_module_manager(crate::module_manager::ModuleManager::new())
-    }
-
-    /// Create a new TypeChecker with an existing ModuleManager
-    pub fn with_module_manager(module_manager: crate::module_manager::ModuleManager) -> Self {
+    /// Create a new TypeChecker with a reference to a ModuleManager
+    pub fn new(module_manager: &'a crate::module_manager::ModuleManager) -> Self {
         let mut context = Context::default();
         let impl_source = crate::impl_source::ImplSource::new();
         let poly_builtins = crate::poly_builtins::PolyBuiltins::new(&mut context);
@@ -290,11 +277,6 @@ impl TypeChecker {
     /// Get all warnings collected during type checking
     pub fn warnings(&self) -> &[TypeWarning] {
         &self.warnings
-    }
-
-    /// Consume the type checker and return the module manager
-    pub fn into_module_manager(self) -> crate::module_manager::ModuleManager {
-        self.module_manager
     }
 
     /// Create a fresh type for a pattern based on its structure
@@ -1027,14 +1009,11 @@ impl TypeChecker {
     /// Resolve type aliases in a declaration within a module context
     fn resolve_decl_type_aliases(&self, decl: &crate::ast::Decl, module_name: &str) -> crate::ast::Decl {
         // Resolve type aliases in the return type
-        let resolved_ty = decl.ty.as_ref().map(|ty| {
-            self.resolve_type_aliases_in_module(ty, module_name)
-        });
+        let resolved_ty = decl.ty.as_ref().map(|ty| self.resolve_type_aliases_in_module(ty, module_name));
 
         // Resolve type aliases in parameter patterns
-        let resolved_params: Vec<_> = decl.params.iter()
-            .map(|p| self.resolve_pattern_type_aliases(p, module_name))
-            .collect();
+        let resolved_params: Vec<_> =
+            decl.params.iter().map(|p| self.resolve_pattern_type_aliases(p, module_name)).collect();
 
         crate::ast::Decl {
             keyword: decl.keyword,
@@ -1058,9 +1037,8 @@ impl TypeChecker {
                 PatternKind::Typed(inner.clone(), resolved_ty)
             }
             PatternKind::Tuple(pats) => {
-                let resolved_pats: Vec<_> = pats.iter()
-                    .map(|p| self.resolve_pattern_type_aliases(p, module_name))
-                    .collect();
+                let resolved_pats: Vec<_> =
+                    pats.iter().map(|p| self.resolve_pattern_type_aliases(p, module_name)).collect();
                 PatternKind::Tuple(resolved_pats)
             }
             other => other.clone(),
@@ -1088,16 +1066,14 @@ impl TypeChecker {
                     self.resolve_type_aliases_in_module(underlying, module_name)
                 } else {
                     // Not a known alias, keep as-is but resolve args
-                    let resolved_args: Vec<Type> = args.iter()
-                        .map(|a| self.resolve_type_aliases_in_module(a, module_name))
-                        .collect();
+                    let resolved_args: Vec<Type> =
+                        args.iter().map(|a| self.resolve_type_aliases_in_module(a, module_name)).collect();
                     Type::Constructed(TypeName::Named(name.clone()), resolved_args)
                 }
             }
             Type::Constructed(name, args) => {
-                let resolved_args: Vec<Type> = args.iter()
-                    .map(|a| self.resolve_type_aliases_in_module(a, module_name))
-                    .collect();
+                let resolved_args: Vec<Type> =
+                    args.iter().map(|a| self.resolve_type_aliases_in_module(a, module_name)).collect();
                 Type::Constructed(name.clone(), resolved_args)
             }
             Type::Variable(v) => Type::Variable(*v),

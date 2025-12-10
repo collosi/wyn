@@ -680,7 +680,11 @@ impl Display for mir::Def {
                 write!(f, "  {}", body)
             }
             mir::Def::Uniform {
-                name, ty, set, binding, ..
+                name,
+                ty,
+                set,
+                binding,
+                ..
             } => {
                 write!(
                     f,
@@ -692,7 +696,11 @@ impl Display for mir::Def {
                 )
             }
             mir::Def::Storage {
-                name, ty, set, binding, ..
+                name,
+                ty,
+                set,
+                binding,
+                ..
             } => {
                 write!(
                     f,

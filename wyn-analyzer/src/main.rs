@@ -170,7 +170,7 @@ impl Backend {
         let result = wyn_core::Compiler::parse(text).and_then(|parsed| {
             let node_counter = NodeCounter::new();
             let module_manager = ModuleManager::from_prelude(get_prelude(), node_counter);
-            parsed.elaborate(module_manager)?.resolve()?.type_check()
+            parsed.resolve(&module_manager)?.type_check(&module_manager)
         });
 
         match result {

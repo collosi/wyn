@@ -815,7 +815,11 @@ impl<'a> LowerCtx<'a> {
                 self.constructor.global_constants.insert(name.clone(), const_id);
             }
             Def::Uniform {
-                name, ty, set, binding, ..
+                name,
+                ty,
+                set,
+                binding,
+                ..
             } => {
                 // Create a SPIR-V uniform variable
                 let uniform_type = self.constructor.ast_type_to_spirv(ty);
@@ -841,16 +845,19 @@ impl<'a> LowerCtx<'a> {
                 self.constructor.uniform_types.insert(name.clone(), uniform_type);
             }
             Def::Storage {
-                name, ty, set, binding, ..
+                name,
+                ty,
+                set,
+                binding,
+                ..
             } => {
                 // Create a SPIR-V storage buffer variable
                 // TODO: Implement proper storage buffer lowering
                 // For now, just register it similarly to uniforms
                 let storage_type = self.constructor.ast_type_to_spirv(ty);
-                let ptr_type = self.constructor.get_or_create_ptr_type(
-                    spirv::StorageClass::StorageBuffer,
-                    storage_type,
-                );
+                let ptr_type = self
+                    .constructor
+                    .get_or_create_ptr_type(spirv::StorageClass::StorageBuffer, storage_type);
                 let var_id = self.constructor.builder.variable(
                     ptr_type,
                     None,
@@ -1010,7 +1017,11 @@ impl<'a> LowerCtx<'a> {
 }
 
 /// Lower a MIR program to SPIR-V
-pub fn lower(program: &mir::Program, debug_enabled: bool, inplace_info: &InPlaceMapInfo) -> Result<Vec<u32>> {
+pub fn lower(
+    program: &mir::Program,
+    debug_enabled: bool,
+    inplace_info: &InPlaceMapInfo,
+) -> Result<Vec<u32>> {
     // Use a thread with larger stack size to handle deeply nested expressions
     // Default Rust stack is 2MB on macOS which is too small for complex shaders
     const STACK_SIZE: usize = 16 * 1024 * 1024; // 16MB
@@ -1672,8 +1683,8 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                 // Check if we can do in-place update:
                 // 1. This map call was marked as having a dead-after input array
                 // 2. Element types match (f : T -> T)
-                let can_inplace = constructor.inplace_map_nodes.contains(&expr.id)
-                    && input_elem_type == output_elem_type;
+                let can_inplace =
+                    constructor.inplace_map_nodes.contains(&expr.id) && input_elem_type == output_elem_type;
 
                 if can_inplace {
                     // In-place optimization: use OpCompositeInsert to update array in place
@@ -1684,10 +1695,20 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                             constructor.builder.composite_extract(input_elem_type, None, array_val, [i])?;
                         let call_args =
                             if is_empty_closure { vec![input_elem] } else { vec![closure_val, input_elem] };
-                        let result_elem =
-                            constructor.builder.function_call(output_elem_type, None, lambda_func_id, call_args)?;
+                        let result_elem = constructor.builder.function_call(
+                            output_elem_type,
+                            None,
+                            lambda_func_id,
+                            call_args,
+                        )?;
                         // Insert the new element into the result array
-                        result = constructor.builder.composite_insert(result_type, None, result_elem, result, [i])?;
+                        result = constructor.builder.composite_insert(
+                            result_type,
+                            None,
+                            result_elem,
+                            result,
+                            [i],
+                        )?;
                     }
                     return Ok(result);
                 } else {
@@ -1701,13 +1722,21 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
                         // Call lambda: for empty closures, only pass element; otherwise pass both
                         let call_args =
                             if is_empty_closure { vec![input_elem] } else { vec![closure_val, input_elem] };
-                        let result_elem =
-                            constructor.builder.function_call(output_elem_type, None, lambda_func_id, call_args)?;
+                        let result_elem = constructor.builder.function_call(
+                            output_elem_type,
+                            None,
+                            lambda_func_id,
+                            call_args,
+                        )?;
                         result_elements.push(result_elem);
                     }
 
                     // Construct result array
-                    return Ok(constructor.builder.composite_construct(result_type, None, result_elements)?);
+                    return Ok(constructor.builder.composite_construct(
+                        result_type,
+                        None,
+                        result_elements,
+                    )?);
                 }
             }
 
@@ -1929,8 +1958,8 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
 
                                         // Store array in a variable, update element, load back
                                         let arr_type = result_type;
-                                        let arr_var = constructor
-                                            .declare_variable("_w_array_with_tmp", arr_type)?;
+                                        let arr_var =
+                                            constructor.declare_variable("_w_array_with_tmp", arr_type)?;
                                         constructor.builder.store(arr_var, arr_id, None, [])?;
 
                                         // Get pointer to element and store new value
@@ -2281,16 +2310,12 @@ fn lower_expr(constructor: &mut Constructor, expr: &Expr) -> Result<spirv::Word>
             }
 
             // Lower all capture expressions
-            let elem_ids: Vec<spirv::Word> = captures
-                .iter()
-                .map(|e| lower_expr(constructor, e))
-                .collect::<Result<Vec<_>>>()?;
+            let elem_ids: Vec<spirv::Word> =
+                captures.iter().map(|e| lower_expr(constructor, e)).collect::<Result<Vec<_>>>()?;
 
             // Create struct type for captures
-            let elem_types: Vec<spirv::Word> = captures
-                .iter()
-                .map(|e| constructor.ast_type_to_spirv(&e.ty))
-                .collect();
+            let elem_types: Vec<spirv::Word> =
+                captures.iter().map(|e| constructor.ast_type_to_spirv(&e.ty)).collect();
             let tuple_type = constructor.builder.type_struct(elem_types);
 
             // Construct the composite
@@ -2519,22 +2544,19 @@ mod tests {
     fn compile_to_spirv(source: &str) -> Result<Vec<u32>> {
         // Use the typestate API to ensure proper compilation pipeline
         let parsed = crate::Compiler::parse(source).expect("Parsing failed");
-        let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
-        let mir = parsed
-            .elaborate(module_manager)
-            .expect("Elaboration failed")
-            .resolve()
+        let module_manager = crate::module_manager::ModuleManager::new();
+        let (flattened, _backend) = parsed
+            .resolve(&module_manager)
             .expect("Name resolution failed")
-            .type_check()
+            .type_check(&module_manager)
             .expect("Type checking failed")
             .alias_check()
             .expect("Alias checking failed")
-            .flatten()
-            .expect("Flattening failed")
-            .mir;
+            .flatten(&module_manager)
+            .expect("Flattening failed");
 
-        let inplace_info = crate::alias_checker::analyze_map_inplace(&mir);
-        lower(&mir, false, &inplace_info)
+        let inplace_info = crate::alias_checker::analyze_map_inplace(&flattened.mir);
+        lower(&flattened.mir, false, &inplace_info)
     }
 
     #[test]

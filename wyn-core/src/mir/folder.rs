@@ -879,10 +879,7 @@ pub fn walk_expr_closure<V: MirFolder>(
     expr: Expr,
     ctx: &mut V::Ctx,
 ) -> Result<Expr, V::Error> {
-    let captures = captures
-        .into_iter()
-        .map(|e| v.visit_expr(e, ctx))
-        .collect::<Result<Vec<_>, _>>()?;
+    let captures = captures.into_iter().map(|e| v.visit_expr(e, ctx)).collect::<Result<Vec<_>, _>>()?;
     Ok(Expr {
         kind: ExprKind::Closure {
             lambda_name,

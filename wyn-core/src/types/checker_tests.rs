@@ -12,18 +12,13 @@ fn typecheck_program(input: &str) {
     result.expect("Type checking should succeed");
 }
 
-/// Helper to parse and type check source code, returning the checker or error
-fn try_typecheck_program(input: &str) -> Result<TypeChecker, CompilerError> {
+/// Helper to parse and type check source code, returning Result
+fn try_typecheck_program(input: &str) -> Result<(), CompilerError> {
     // Use the typestate API to ensure proper pipeline setup
     let parsed = crate::Compiler::parse(input)?;
-    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
-    let _type_checked = parsed.elaborate(module_manager)?.resolve()?.type_check()?;
-
-    // Return a new checker for compatibility with existing tests
-    // (tests expect to query the checker for type information)
-    let mut type_checker = TypeChecker::new();
-    type_checker.load_builtins()?;
-    Ok(type_checker)
+    let module_manager = crate::module_manager::ModuleManager::new();
+    let _type_checked = parsed.resolve(&module_manager)?.type_check(&module_manager)?;
+    Ok(())
 }
 
 #[test]
@@ -103,7 +98,8 @@ fn check_type_hole(source: &str) -> Type {
     let program = parser.parse().unwrap();
 
     // Type check
-    let mut checker = TypeChecker::new();
+    let module_manager = crate::module_manager::ModuleManager::new();
+    let mut checker = TypeChecker::new(&module_manager);
     checker.load_builtins().unwrap();
     let _type_table = checker.check_program(&program).unwrap();
 

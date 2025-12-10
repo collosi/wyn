@@ -4,181 +4,141 @@
 //!   FieldAccess(Identifier(module), field) -> QualifiedName([module], field)
 //! when `module` is a known module name.
 
-use crate::ast::{Declaration, ExprKind, Expression, NodeCounter, Program};
+use crate::ast::{Declaration, ExprKind, Expression, Program};
 use crate::error::Result;
 use crate::module_manager::ModuleManager;
 
-pub struct NameResolver {
-    module_manager: ModuleManager,
+/// Resolve names in a program by rewriting FieldAccess -> QualifiedName
+pub fn resolve_program(program: &mut Program, module_manager: &ModuleManager) -> Result<()> {
+    for decl in &mut program.declarations {
+        resolve_declaration(decl, module_manager)?;
+    }
+    Ok(())
 }
 
-impl NameResolver {
-    pub fn new() -> Self {
-        NameResolver {
-            module_manager: ModuleManager::new(),
+fn resolve_declaration(decl: &mut Declaration, module_manager: &ModuleManager) -> Result<()> {
+    match decl {
+        Declaration::Decl(d) => {
+            resolve_expr(&mut d.body, module_manager)?;
         }
-    }
-
-    /// Create a new NameResolver with a shared NodeCounter
-    /// This ensures modules are parsed with NodeIds that don't collide with user code
-    pub fn new_with_counter(node_counter: NodeCounter) -> Self {
-        NameResolver {
-            module_manager: ModuleManager::new_with_counter(node_counter),
+        Declaration::Entry(entry) => {
+            resolve_expr(&mut entry.body, module_manager)?;
         }
-    }
-
-    /// Create a new NameResolver with an existing ModuleManager
-    pub fn with_module_manager(module_manager: ModuleManager) -> Self {
-        NameResolver { module_manager }
-    }
-
-    /// Consume the resolver and return its ModuleManager
-    pub fn into_module_manager(self) -> ModuleManager {
-        self.module_manager
-    }
-
-    /// Resolve names in a program by rewriting FieldAccess -> QualifiedName
-    pub fn resolve_program(&mut self, program: &mut Program) -> Result<()> {
-        // Resolve names in user code, converting FieldAccess(module, field) -> QualifiedName
-        for decl in &mut program.declarations {
-            self.resolve_declaration(decl)?;
+        Declaration::Sig(_) => {
+            // SigDecl has no body, only a type signature
         }
-
-        // Note: Module declarations are NOT inlined into the AST.
-        // They are accessed via module_manager registry during type checking.
-        Ok(())
+        _ => {}
     }
-
-    fn resolve_declaration(&mut self, decl: &mut Declaration) -> Result<()> {
-        match decl {
-            Declaration::Decl(d) => {
-                self.resolve_expr(&mut d.body)?;
-            }
-            Declaration::Entry(entry) => {
-                self.resolve_expr(&mut entry.body)?;
-            }
-            Declaration::Sig(_) => {
-                // SigDecl has no body, only a type signature
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn resolve_expr(&mut self, expr: &mut Expression) -> Result<()> {
-        match &mut expr.kind {
-            ExprKind::FieldAccess(obj, field) => {
-                // Check if this is module.name pattern
-                if let ExprKind::Identifier(quals, name) = &obj.kind {
-                    if quals.is_empty() && self.module_manager.is_known_module(name) {
-                        // Build the qualified name
-                        let module = name.clone();
-                        let func_name = field.clone();
-
-                        // Rewrite to qualified Identifier
-                        expr.kind = ExprKind::Identifier(vec![module.clone()], func_name);
-                        return Ok(());
-                    }
-                }
-                // Otherwise, it's a real field access - recurse into object
-                self.resolve_expr(obj)?;
-            }
-            ExprKind::Application(func, args) => {
-                self.resolve_expr(func)?;
-                for arg in args {
-                    self.resolve_expr(arg)?;
-                }
-            }
-            ExprKind::Lambda(lambda) => {
-                self.resolve_expr(&mut lambda.body)?;
-            }
-            ExprKind::LetIn(let_in) => {
-                self.resolve_expr(&mut let_in.value)?;
-                self.resolve_expr(&mut let_in.body)?;
-            }
-            ExprKind::If(if_expr) => {
-                self.resolve_expr(&mut if_expr.condition)?;
-                self.resolve_expr(&mut if_expr.then_branch)?;
-                self.resolve_expr(&mut if_expr.else_branch)?;
-            }
-            ExprKind::BinaryOp(_, lhs, rhs) => {
-                self.resolve_expr(lhs)?;
-                self.resolve_expr(rhs)?;
-            }
-            ExprKind::UnaryOp(_, operand) => {
-                self.resolve_expr(operand)?;
-            }
-            ExprKind::Tuple(exprs) | ExprKind::ArrayLiteral(exprs) | ExprKind::VecMatLiteral(exprs) => {
-                for e in exprs {
-                    self.resolve_expr(e)?;
-                }
-            }
-            ExprKind::ArrayIndex(arr, idx) => {
-                self.resolve_expr(arr)?;
-                self.resolve_expr(idx)?;
-            }
-            ExprKind::ArrayWith { array, index, value } => {
-                self.resolve_expr(array)?;
-                self.resolve_expr(index)?;
-                self.resolve_expr(value)?;
-            }
-            ExprKind::RecordLiteral(fields) => {
-                for (_, e) in fields {
-                    self.resolve_expr(e)?;
-                }
-            }
-            ExprKind::Loop(loop_expr) => {
-                if let Some(ref mut init) = loop_expr.init {
-                    self.resolve_expr(init)?;
-                }
-                match &mut loop_expr.form {
-                    crate::ast::LoopForm::While(cond) => {
-                        self.resolve_expr(cond)?;
-                    }
-                    crate::ast::LoopForm::For(_, bound) => {
-                        self.resolve_expr(bound)?;
-                    }
-                    crate::ast::LoopForm::ForIn(_, iter) => {
-                        self.resolve_expr(iter)?;
-                    }
-                }
-                self.resolve_expr(&mut loop_expr.body)?;
-            }
-            ExprKind::Match(match_expr) => {
-                self.resolve_expr(&mut match_expr.scrutinee)?;
-                for case in &mut match_expr.cases {
-                    self.resolve_expr(&mut case.body)?;
-                }
-            }
-            ExprKind::TypeAscription(e, _) | ExprKind::TypeCoercion(e, _) => {
-                self.resolve_expr(e)?;
-            }
-            ExprKind::Assert(cond, body) => {
-                self.resolve_expr(cond)?;
-                self.resolve_expr(body)?;
-            }
-            ExprKind::Range(range) => {
-                self.resolve_expr(&mut range.start)?;
-                self.resolve_expr(&mut range.end)?;
-                if let Some(ref mut step) = range.step {
-                    self.resolve_expr(step)?;
-                }
-            }
-            // Base cases - no sub-expressions to resolve
-            ExprKind::IntLiteral(_)
-            | ExprKind::FloatLiteral(_)
-            | ExprKind::BoolLiteral(_)
-            | ExprKind::StringLiteral(_)
-            | ExprKind::Unit
-            | ExprKind::Identifier(_, _)
-            | ExprKind::TypeHole => {}
-        }
-        Ok(())
-    }
+    Ok(())
 }
 
-impl Default for NameResolver {
-    fn default() -> Self {
-        Self::new()
+fn resolve_expr(expr: &mut Expression, module_manager: &ModuleManager) -> Result<()> {
+    match &mut expr.kind {
+        ExprKind::FieldAccess(obj, field) => {
+            // Check if this is module.name pattern
+            if let ExprKind::Identifier(quals, name) = &obj.kind {
+                if quals.is_empty() && module_manager.is_known_module(name) {
+                    // Build the qualified name
+                    let module = name.clone();
+                    let func_name = field.clone();
+
+                    // Rewrite to qualified Identifier
+                    expr.kind = ExprKind::Identifier(vec![module.clone()], func_name);
+                    return Ok(());
+                }
+            }
+            // Otherwise, it's a real field access - recurse into object
+            resolve_expr(obj, module_manager)?;
+        }
+        ExprKind::Application(func, args) => {
+            resolve_expr(func, module_manager)?;
+            for arg in args {
+                resolve_expr(arg, module_manager)?;
+            }
+        }
+        ExprKind::Lambda(lambda) => {
+            resolve_expr(&mut lambda.body, module_manager)?;
+        }
+        ExprKind::LetIn(let_in) => {
+            resolve_expr(&mut let_in.value, module_manager)?;
+            resolve_expr(&mut let_in.body, module_manager)?;
+        }
+        ExprKind::If(if_expr) => {
+            resolve_expr(&mut if_expr.condition, module_manager)?;
+            resolve_expr(&mut if_expr.then_branch, module_manager)?;
+            resolve_expr(&mut if_expr.else_branch, module_manager)?;
+        }
+        ExprKind::BinaryOp(_, lhs, rhs) => {
+            resolve_expr(lhs, module_manager)?;
+            resolve_expr(rhs, module_manager)?;
+        }
+        ExprKind::UnaryOp(_, operand) => {
+            resolve_expr(operand, module_manager)?;
+        }
+        ExprKind::Tuple(exprs) | ExprKind::ArrayLiteral(exprs) | ExprKind::VecMatLiteral(exprs) => {
+            for e in exprs {
+                resolve_expr(e, module_manager)?;
+            }
+        }
+        ExprKind::ArrayIndex(arr, idx) => {
+            resolve_expr(arr, module_manager)?;
+            resolve_expr(idx, module_manager)?;
+        }
+        ExprKind::ArrayWith { array, index, value } => {
+            resolve_expr(array, module_manager)?;
+            resolve_expr(index, module_manager)?;
+            resolve_expr(value, module_manager)?;
+        }
+        ExprKind::RecordLiteral(fields) => {
+            for (_, e) in fields {
+                resolve_expr(e, module_manager)?;
+            }
+        }
+        ExprKind::Loop(loop_expr) => {
+            if let Some(ref mut init) = loop_expr.init {
+                resolve_expr(init, module_manager)?;
+            }
+            match &mut loop_expr.form {
+                crate::ast::LoopForm::While(cond) => {
+                    resolve_expr(cond, module_manager)?;
+                }
+                crate::ast::LoopForm::For(_, bound) => {
+                    resolve_expr(bound, module_manager)?;
+                }
+                crate::ast::LoopForm::ForIn(_, iter) => {
+                    resolve_expr(iter, module_manager)?;
+                }
+            }
+            resolve_expr(&mut loop_expr.body, module_manager)?;
+        }
+        ExprKind::Match(match_expr) => {
+            resolve_expr(&mut match_expr.scrutinee, module_manager)?;
+            for case in &mut match_expr.cases {
+                resolve_expr(&mut case.body, module_manager)?;
+            }
+        }
+        ExprKind::TypeAscription(e, _) | ExprKind::TypeCoercion(e, _) => {
+            resolve_expr(e, module_manager)?;
+        }
+        ExprKind::Assert(cond, body) => {
+            resolve_expr(cond, module_manager)?;
+            resolve_expr(body, module_manager)?;
+        }
+        ExprKind::Range(range) => {
+            resolve_expr(&mut range.start, module_manager)?;
+            resolve_expr(&mut range.end, module_manager)?;
+            if let Some(ref mut step) = range.step {
+                resolve_expr(step, module_manager)?;
+            }
+        }
+        // Base cases - no sub-expressions to resolve
+        ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::Unit
+        | ExprKind::Identifier(_, _)
+        | ExprKind::TypeHole => {}
     }
+    Ok(())
 }

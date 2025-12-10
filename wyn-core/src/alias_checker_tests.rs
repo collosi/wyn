@@ -3,10 +3,9 @@ use crate::alias_checker::{AliasCheckResult, AliasChecker, InPlaceMapInfo, analy
 
 fn check_alias(source: &str) -> AliasCheckResult {
     let parsed = Compiler::parse(source).expect("parse failed");
-    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
-    let elaborated = parsed.elaborate(module_manager).expect("elaborate failed");
-    let resolved = elaborated.resolve().expect("resolve failed");
-    let type_checked = resolved.type_check().expect("type_check failed");
+    let module_manager = crate::module_manager::ModuleManager::new();
+    let resolved = parsed.resolve(&module_manager).expect("resolve failed");
+    let type_checked = resolved.type_check(&module_manager).expect("type_check failed");
 
     let checker = AliasChecker::new(&type_checked.type_table);
     checker.check_program(&type_checked.ast).expect("alias check failed")
@@ -244,12 +243,11 @@ def main(t: ([4]i32, [4]i32, [4]i32)): i32 =
 /// Helper to analyze in-place map opportunities in a source file
 fn analyze_inplace_map(source: &str) -> InPlaceMapInfo {
     let parsed = Compiler::parse(source).expect("parse failed");
-    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
-    let elaborated = parsed.elaborate(module_manager).expect("elaborate failed");
-    let resolved = elaborated.resolve().expect("resolve failed");
-    let type_checked = resolved.type_check().expect("type_check failed");
+    let module_manager = crate::module_manager::ModuleManager::new();
+    let resolved = parsed.resolve(&module_manager).expect("resolve failed");
+    let type_checked = resolved.type_check(&module_manager).expect("type_check failed");
     let alias_checked = type_checked.alias_check().expect("alias check failed");
-    let flattened = alias_checked.flatten().expect("flatten failed");
+    let (flattened, _backend) = alias_checked.flatten(&module_manager).expect("flatten failed");
 
     analyze_map_inplace(&flattened.mir)
 }
@@ -357,10 +355,9 @@ def main(arr: [4]i32): i32 =
     arr[0]
 "#;
     let parsed = Compiler::parse(source).expect("parse failed");
-    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
-    let elaborated = parsed.elaborate(module_manager).expect("elaborate failed");
-    let resolved = elaborated.resolve().expect("resolve failed");
-    let type_checked = resolved.type_check().expect("type_check failed");
+    let module_manager = crate::module_manager::ModuleManager::new();
+    let resolved = parsed.resolve(&module_manager).expect("resolve failed");
+    let type_checked = resolved.type_check(&module_manager).expect("type_check failed");
     let alias_checked = type_checked.alias_check().expect("alias_check failed");
 
     assert!(
@@ -376,10 +373,9 @@ fn test_pipeline_has_alias_errors_false() {
 def main(x: i32): i32 = x + 1
 "#;
     let parsed = Compiler::parse(source).expect("parse failed");
-    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
-    let elaborated = parsed.elaborate(module_manager).expect("elaborate failed");
-    let resolved = elaborated.resolve().expect("resolve failed");
-    let type_checked = resolved.type_check().expect("type_check failed");
+    let module_manager = crate::module_manager::ModuleManager::new();
+    let resolved = parsed.resolve(&module_manager).expect("resolve failed");
+    let type_checked = resolved.type_check(&module_manager).expect("type_check failed");
     let alias_checked = type_checked.alias_check().expect("alias_check failed");
 
     assert!(

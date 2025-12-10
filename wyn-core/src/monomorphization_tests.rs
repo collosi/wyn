@@ -3,16 +3,16 @@ use crate::error::CompilerError;
 /// Helper to run full pipeline through monomorphization AND lowering
 fn compile_through_lowering(input: &str) -> Result<(), CompilerError> {
     let parsed = crate::Compiler::parse(input)?;
-    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
-    parsed
-        .elaborate(module_manager)?
-        .resolve()?
-        .type_check()?
+    let module_manager = crate::module_manager::ModuleManager::new();
+    let (flattened, mut backend) = parsed
+        .resolve(&module_manager)?
+        .type_check(&module_manager)?
         .alias_check()?
         .fold_ast_constants()
-        .flatten()?
+        .flatten(&module_manager)?;
+    flattened
         .hoist_materializations()
-        .normalize()
+        .normalize(&mut backend.node_counter)
         .monomorphize()?
         .filter_reachable()
         .fold_constants()?
@@ -24,17 +24,14 @@ fn compile_through_lowering(input: &str) -> Result<(), CompilerError> {
 /// Helper to run full pipeline through monomorphization only
 fn compile_through_monomorphization(input: &str) -> Result<(), CompilerError> {
     let parsed = crate::Compiler::parse(input)?;
-    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
-    parsed
-        .elaborate(module_manager)?
-        .resolve()?
-        .type_check()?
+    let module_manager = crate::module_manager::ModuleManager::new();
+    let (flattened, mut backend) = parsed
+        .resolve(&module_manager)?
+        .type_check(&module_manager)?
         .alias_check()?
         .fold_ast_constants()
-        .flatten()?
-        .hoist_materializations()
-        .normalize()
-        .monomorphize()?;
+        .flatten(&module_manager)?;
+    flattened.hoist_materializations().normalize(&mut backend.node_counter).monomorphize()?;
     Ok(())
 }
 

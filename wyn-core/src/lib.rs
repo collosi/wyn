@@ -193,27 +193,68 @@ pub use ast::TypeName;
 pub type TypeTable = HashMap<NodeId, TypeScheme<TypeName>>;
 
 // =============================================================================
-// Typestate Compiler Pipeline
+// Two-Level Typestate Compiler Pipeline
 // =============================================================================
 //
-// Each struct represents a stage in the compilation pipeline. Methods consume
-// `self` and return the next stage, enforcing valid ordering at compile time.
+// The compiler uses a typestate pattern where each struct represents a stage.
+// Methods consume `self` and return the next stage, enforcing valid ordering.
 //
-// Pipeline:
-//   Compiler::parse(source)
-//     -> Parsed
-//       -> .elaborate()  -> Elaborated
-//       -> .resolve()    -> Resolved
-//       -> .type_check() -> TypeChecked
-//       -> .alias_check() -> AliasChecked
-//       -> .fold_ast_constants() -> AstConstFolded (integer constant folding/inlining)
-//       -> .flatten()    -> Flattened
-//       -> .hoist_materializations() -> MaterializationsHoisted
-//       -> .normalize()  -> Normalized (ANF transformation)
-//       -> .monomorphize() -> Monomorphized
-//       -> .filter_reachable() -> Reachable
-//       -> .fold_constants() -> Folded (MIR-level constant folding)
-//       -> .lower()      -> Lowered (contains MIR + SPIR-V)
+// Shared state is held at two top levels and passed as &mut to passes that need it:
+//   - FrontEnd: holds module_manager (used by resolve, type_check, flatten)
+//   - BackEnd: holds node_counter (used by normalize)
+//
+// FrontEnd Pipeline (AST -> MIR):
+//   let parsed = Compiler::parse(source)?;
+//   let mut frontend = FrontEnd::new(module_manager);
+//     -> parsed.resolve(&mut frontend.module_manager)   -> Resolved
+//       -> .type_check(&mut frontend.module_manager)    -> TypeChecked
+//       -> .alias_check()                               -> AliasChecked
+//       -> .fold_ast_constants()                        -> AstConstFolded
+//       -> .flatten(&frontend.module_manager)           -> Flattened
+//
+// BackEnd Pipeline (MIR -> output):
+//   let mut backend = BackEnd::new(node_counter);
+//     -> flattened.hoist_materializations()             -> MaterializationsHoisted
+//       -> .normalize(&mut backend.node_counter)        -> Normalized
+//       -> .monomorphize()                              -> Monomorphized
+//       -> .filter_reachable()                          -> Reachable
+//       -> .fold_constants()                            -> Folded
+//       -> .lift_bindings()                             -> Lifted
+//       -> .lower()                                     -> Lowered
+
+// =============================================================================
+// Top-level state containers
+// =============================================================================
+
+/// Shared state for FrontEnd (AST) passes.
+/// Holds the module manager which is used by resolve, type_check, and flatten.
+pub struct FrontEnd {
+    pub module_manager: module_manager::ModuleManager,
+}
+
+impl FrontEnd {
+    /// Create a new FrontEnd with the given module manager.
+    pub fn new(module_manager: module_manager::ModuleManager) -> Self {
+        FrontEnd { module_manager }
+    }
+}
+
+/// Shared state for BackEnd (MIR) passes.
+/// Holds the node counter which is used by normalize.
+pub struct BackEnd {
+    pub node_counter: NodeCounter,
+}
+
+impl BackEnd {
+    /// Create a new BackEnd with the given node counter.
+    pub fn new(node_counter: NodeCounter) -> Self {
+        BackEnd { node_counter }
+    }
+}
+
+// =============================================================================
+// Compiler entry point
+// =============================================================================
 
 /// Entry point for the compiler. Use `Compiler::parse()` to start the pipeline.
 pub struct Compiler;
@@ -224,71 +265,44 @@ impl Compiler {
         let tokens = lexer::tokenize(source).map_err(|e| err_parse!("{}", e))?;
         let mut parser = parser::Parser::new(tokens);
         let ast = parser.parse()?;
-        let node_counter = parser.take_node_counter();
-        Ok(Parsed { ast, node_counter })
+        Ok(Parsed { ast })
     }
 }
+
+// =============================================================================
+// FrontEnd stages (AST-based)
+// =============================================================================
 
 /// Source has been parsed into an AST
 pub struct Parsed {
     pub ast: ast::Program,
-    pub node_counter: ast::NodeCounter,
 }
 
 impl Parsed {
-    /// Elaborate modules using the provided ModuleManager
-    pub fn elaborate(self, module_manager: module_manager::ModuleManager) -> Result<Elaborated> {
-        // TODO: In the future, this could transform module declarations into flat declarations
-        // For now, modules are handled via module_manager registry during type checking
-        Ok(Elaborated {
-            ast: self.ast,
-            module_manager,
-        })
-    }
-}
-
-/// Modules have been elaborated
-pub struct Elaborated {
-    pub ast: ast::Program,
-    module_manager: module_manager::ModuleManager,
-}
-
-impl Elaborated {
     /// Resolve names: rewrite FieldAccess -> QualifiedName and load modules
-    pub fn resolve(mut self) -> Result<Resolved> {
-        let mut resolver = name_resolution::NameResolver::with_module_manager(self.module_manager);
-        resolver.resolve_program(&mut self.ast)?;
-        Ok(Resolved {
-            ast: self.ast,
-            module_manager: resolver.into_module_manager(),
-        })
+    pub fn resolve(mut self, module_manager: &module_manager::ModuleManager) -> Result<Resolved> {
+        name_resolution::resolve_program(&mut self.ast, module_manager)?;
+        Ok(Resolved { ast: self.ast })
     }
 }
 
 /// Names have been resolved
 pub struct Resolved {
     pub ast: ast::Program,
-    module_manager: module_manager::ModuleManager,
 }
 
 impl Resolved {
     /// Type check the program
-    pub fn type_check(self) -> Result<TypeChecked> {
-        let mut checker = type_checker::TypeChecker::with_module_manager(self.module_manager);
+    pub fn type_check(self, module_manager: &module_manager::ModuleManager) -> Result<TypeChecked> {
+        let mut checker = type_checker::TypeChecker::new(module_manager);
         checker.load_builtins()?;
         let type_table = checker.check_program(&self.ast)?;
-
-        // Collect warnings
         let warnings: Vec<_> = checker.warnings().to_vec();
-
-        // Get the module manager back from the checker
-        let module_manager = checker.into_module_manager();
 
         Ok(TypeChecked {
             ast: self.ast,
             type_table,
             warnings,
-            module_manager,
         })
     }
 }
@@ -298,14 +312,13 @@ pub struct TypeChecked {
     pub ast: ast::Program,
     pub type_table: TypeTable,
     pub warnings: Vec<type_checker::TypeWarning>,
-    pub module_manager: module_manager::ModuleManager,
 }
 
 impl TypeChecked {
     /// Print warnings to stderr (convenience method)
     pub fn print_warnings(&self) {
-        // We need a type checker instance to format types
-        let checker = type_checker::TypeChecker::new();
+        let mm = module_manager::ModuleManager::new();
+        let checker = type_checker::TypeChecker::new(&mm);
         for warning in &self.warnings {
             eprintln!(
                 "Warning: {} at {:?}",
@@ -325,7 +338,6 @@ impl TypeChecked {
             type_table: self.type_table,
             warnings: self.warnings,
             alias_result,
-            module_manager: self.module_manager,
         })
     }
 }
@@ -336,14 +348,13 @@ pub struct AliasChecked {
     pub type_table: TypeTable,
     pub warnings: Vec<type_checker::TypeWarning>,
     pub alias_result: alias_checker::AliasCheckResult,
-    pub module_manager: module_manager::ModuleManager,
 }
 
 impl AliasChecked {
     /// Print warnings to stderr (convenience method)
     pub fn print_warnings(&self) {
-        // We need a type checker instance to format types
-        let checker = type_checker::TypeChecker::new();
+        let mm = module_manager::ModuleManager::new();
+        let checker = type_checker::TypeChecker::new(&mm);
         for warning in &self.warnings {
             eprintln!(
                 "Warning: {} at {:?}",
@@ -371,30 +382,26 @@ impl AliasChecked {
             type_table: self.type_table,
             warnings: self.warnings,
             alias_result: self.alias_result,
-            module_manager: self.module_manager,
         }
     }
 
-    /// Flatten AST to MIR (with defunctionalization and desugaring)
-    /// Note: Consider using fold_ast_constants() first for better optimization
-    pub fn flatten(self) -> Result<Flattened> {
+    /// Flatten AST to MIR (with defunctionalization and desugaring).
+    /// Note: Consider using fold_ast_constants() first for better optimization.
+    /// Returns the flattened MIR and a BackEnd for subsequent passes.
+    pub fn flatten(self, module_manager: &module_manager::ModuleManager) -> Result<(Flattened, BackEnd)> {
         let builtins = impl_source::ImplSource::default().all_names();
         let mut flattener = flattening::Flattener::new(self.type_table, builtins);
         let mut mir = flattener.flatten_program(&self.ast)?;
 
         // Flatten module function declarations so they're available in SPIR-V
-        for (module_name, decl) in self.module_manager.get_module_function_declarations() {
+        for (module_name, decl) in module_manager.get_module_function_declarations() {
             let qualified_name = format!("{}.{}", module_name, decl.name);
             let defs = flattener.flatten_module_decl(decl, &qualified_name)?;
             mir.defs.extend(defs);
         }
 
         let node_counter = flattener.into_node_counter();
-        Ok(Flattened {
-            mir,
-            node_counter,
-            module_manager: self.module_manager,
-        })
+        Ok((Flattened { mir }, BackEnd::new(node_counter)))
     }
 }
 
@@ -404,132 +411,102 @@ pub struct AstConstFolded {
     pub type_table: TypeTable,
     pub warnings: Vec<type_checker::TypeWarning>,
     pub alias_result: alias_checker::AliasCheckResult,
-    pub module_manager: module_manager::ModuleManager,
 }
 
 impl AstConstFolded {
-    /// Flatten AST to MIR (with defunctionalization and desugaring)
-    pub fn flatten(self) -> Result<Flattened> {
+    /// Flatten AST to MIR (with defunctionalization and desugaring).
+    /// Returns the flattened MIR and a BackEnd for subsequent passes.
+    pub fn flatten(self, module_manager: &module_manager::ModuleManager) -> Result<(Flattened, BackEnd)> {
         let builtins = impl_source::ImplSource::default().all_names();
         let mut flattener = flattening::Flattener::new(self.type_table, builtins);
         let mut mir = flattener.flatten_program(&self.ast)?;
 
         // Flatten module function declarations so they're available in SPIR-V
-        for (module_name, decl) in self.module_manager.get_module_function_declarations() {
+        for (module_name, decl) in module_manager.get_module_function_declarations() {
             let qualified_name = format!("{}.{}", module_name, decl.name);
             let defs = flattener.flatten_module_decl(decl, &qualified_name)?;
             mir.defs.extend(defs);
         }
 
         let node_counter = flattener.into_node_counter();
-        Ok(Flattened {
-            mir,
-            node_counter,
-            module_manager: self.module_manager,
-        })
+        Ok((Flattened { mir }, BackEnd::new(node_counter)))
     }
 }
+
+// =============================================================================
+// BackEnd stages (MIR-based)
+// =============================================================================
 
 /// AST has been flattened to MIR
 pub struct Flattened {
     pub mir: mir::Program,
-    pub node_counter: NodeCounter,
-    pub module_manager: module_manager::ModuleManager,
 }
 
 impl Flattened {
     /// Hoist duplicate materializations to let bindings
     pub fn hoist_materializations(self) -> MaterializationsHoisted {
         let mir = materialize_hoisting::hoist_materializations(self.mir);
-        MaterializationsHoisted {
-            mir,
-            node_counter: self.node_counter,
-            module_manager: self.module_manager,
-        }
+        MaterializationsHoisted { mir }
     }
 }
 
 /// Duplicate materializations have been hoisted
 pub struct MaterializationsHoisted {
     pub mir: mir::Program,
-    pub node_counter: NodeCounter,
-    pub module_manager: module_manager::ModuleManager,
 }
 
 impl MaterializationsHoisted {
     /// Normalize MIR to A-normal form
-    pub fn normalize(self) -> Normalized {
-        let (mir, node_counter) = normalize::normalize_program(self.mir, self.node_counter);
-        Normalized {
-            mir,
-            node_counter,
-            module_manager: self.module_manager,
-        }
+    pub fn normalize(self, node_counter: &mut NodeCounter) -> Normalized {
+        let nc = std::mem::replace(node_counter, NodeCounter::new());
+        let (mir, nc) = normalize::normalize_program(self.mir, nc);
+        *node_counter = nc;
+        Normalized { mir }
     }
 }
 
 /// MIR has been normalized to A-normal form
 pub struct Normalized {
     pub mir: mir::Program,
-    pub node_counter: NodeCounter,
-    pub module_manager: module_manager::ModuleManager,
 }
 
 impl Normalized {
     /// Monomorphize: specialize polymorphic functions
     pub fn monomorphize(self) -> Result<Monomorphized> {
         let mir = monomorphization::monomorphize(self.mir)?;
-        Ok(Monomorphized {
-            mir,
-            node_counter: self.node_counter,
-            module_manager: self.module_manager,
-        })
+        Ok(Monomorphized { mir })
     }
 }
 
 /// Program has been monomorphized
 pub struct Monomorphized {
     pub mir: mir::Program,
-    pub node_counter: NodeCounter,
-    pub module_manager: module_manager::ModuleManager,
 }
 
 impl Monomorphized {
     /// Filter to only reachable functions
     pub fn filter_reachable(self) -> Reachable {
         let mir = reachability::filter_reachable(self.mir);
-        Reachable {
-            mir,
-            node_counter: self.node_counter,
-            module_manager: self.module_manager,
-        }
+        Reachable { mir }
     }
 }
 
 /// Unreachable code has been filtered out
 pub struct Reachable {
     pub mir: mir::Program,
-    pub node_counter: NodeCounter,
-    pub module_manager: module_manager::ModuleManager,
 }
 
 impl Reachable {
     /// Fold constants: evaluate constant expressions at compile time
     pub fn fold_constants(self) -> Result<Folded> {
         let mir = constant_folding::fold_constants(self.mir)?;
-        Ok(Folded {
-            mir,
-            node_counter: self.node_counter,
-            module_manager: self.module_manager,
-        })
+        Ok(Folded { mir })
     }
 }
 
 /// Constants have been folded
 pub struct Folded {
     pub mir: mir::Program,
-    pub node_counter: NodeCounter,
-    pub module_manager: module_manager::ModuleManager,
 }
 
 impl Folded {
@@ -537,20 +514,13 @@ impl Folded {
     pub fn lift_bindings(self) -> Result<Lifted> {
         let mut lifter = binding_lifter::BindingLifter::new();
         let mir = lifter.lift_program(self.mir)?;
-        Ok(Lifted {
-            mir,
-            node_counter: self.node_counter,
-            module_manager: self.module_manager,
-        })
+        Ok(Lifted { mir })
     }
 }
 
 /// Bindings have been lifted (loop-invariant code motion)
 pub struct Lifted {
     pub mir: mir::Program,
-    #[allow(dead_code)]
-    pub node_counter: NodeCounter,
-    pub module_manager: module_manager::ModuleManager,
 }
 
 impl Lifted {
@@ -561,7 +531,6 @@ impl Lifted {
 
     /// Lower MIR to SPIR-V with debug mode option
     pub fn lower_with_options(self, debug_enabled: bool) -> Result<Lowered> {
-        // Analyze for in-place map optimization opportunities
         let inplace_info = alias_checker::analyze_map_inplace(&self.mir);
         let spirv = spirv::lower(&self.mir, debug_enabled, &inplace_info)?;
         Ok(Lowered { mir: self.mir, spirv })

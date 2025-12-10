@@ -1569,7 +1569,9 @@ fn test_parse_nested_qualified_name() {
                     // base should be M.N
                     match &base.kind {
                         ExprKind::FieldAccess(inner_base, inner_field) => {
-                            assert!(matches!(&inner_base.kind, ExprKind::Identifier(_, name) if name == "M"));
+                            assert!(
+                                matches!(&inner_base.kind, ExprKind::Identifier(_, name) if name == "M")
+                            );
                             assert_eq!(inner_field, "N");
                         }
                         _ => panic!("Expected nested FieldAccess"),
@@ -2151,7 +2153,10 @@ def test : i32 =
                         other => panic!("Expected Tuple as arg in Application, got {:?}", other),
                     }
                 }
-                other => panic!("Expected Application (desugared pipe) in loop body, got {:?}", other),
+                other => panic!(
+                    "Expected Application (desugared pipe) in loop body, got {:?}",
+                    other
+                ),
             }
         }
         other => panic!("Expected Loop, got {:?}", other),

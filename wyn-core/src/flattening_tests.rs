@@ -8,20 +8,18 @@ use crate::type_checker::TypeChecker;
 fn flatten_program(input: &str) -> mir::Program {
     // Use the typestate API to ensure proper compilation pipeline
     let parsed = crate::Compiler::parse(input).expect("Parsing failed");
-    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
-    parsed
-        .elaborate(module_manager)
-        .expect("Elaboration failed")
-        .resolve()
+    let module_manager = crate::module_manager::ModuleManager::new();
+    let (flattened, _backend) = parsed
+        .resolve(&module_manager)
         .expect("Name resolution failed")
-        .type_check()
+        .type_check(&module_manager)
         .expect("Type checking failed")
         .alias_check()
         .expect("Borrow checking failed")
         .fold_ast_constants()
-        .flatten()
-        .expect("Flattening failed")
-        .mir
+        .flatten(&module_manager)
+        .expect("Flattening failed");
+    flattened.mir
 }
 
 fn flatten_to_string(input: &str) -> String {
@@ -175,20 +173,17 @@ def test : [4]i32 =
 
     // Parse
     let parsed = crate::Compiler::parse(source).expect("Parsing failed");
-    let module_manager = crate::cached_module_manager(parsed.node_counter.clone());
-
-    // Elaborate
-    let elaborated = parsed.elaborate(module_manager).expect("Elaboration failed");
+    let module_manager = crate::module_manager::ModuleManager::new();
 
     // Resolve
-    let resolved = elaborated.resolve().expect("Name resolution failed");
+    let resolved = parsed.resolve(&module_manager).expect("Name resolution failed");
 
     // Print AST to see what NodeId(6) is
     println!("AST:");
     println!("{:#?}", resolved.ast);
 
     // Type check
-    let typed = resolved.type_check().expect("Type checking failed");
+    let typed = resolved.type_check(&module_manager).expect("Type checking failed");
     println!("\nType table has {} entries", typed.type_table.len());
     for (id, scheme) in &typed.type_table {
         println!("  NodeId({:?}): {:?}", id, scheme);
@@ -200,7 +195,8 @@ def test : [4]i32 =
     let alias_checked = typed.alias_check().expect("Alias checking failed");
 
     // Fold AST constants and flatten
-    let flattened = alias_checked.fold_ast_constants().flatten().expect("Flattening failed");
+    let (flattened, _backend) =
+        alias_checked.fold_ast_constants().flatten(&module_manager).expect("Flattening failed");
     let mir_str = format!("{}", flattened.mir);
     println!("MIR: {}", mir_str);
     assert!(mir_str.contains("def test"));
@@ -296,7 +292,8 @@ def test : [2](i32 -> i32) =
     let mut parser = Parser::new(tokens);
     let ast = parser.parse().expect("Parsing failed");
 
-    let mut type_checker = TypeChecker::new();
+    let module_manager = crate::module_manager::ModuleManager::new();
+    let mut type_checker = TypeChecker::new(&module_manager);
     type_checker.load_builtins().expect("Failed to load builtins");
     let result = type_checker.check_program(&ast);
 
@@ -314,7 +311,8 @@ def choose (b:bool) : (i32 -> i32) =
     let mut parser = Parser::new(tokens);
     let ast = parser.parse().expect("Parsing failed");
 
-    let mut type_checker = TypeChecker::new();
+    let module_manager = crate::module_manager::ModuleManager::new();
+    let mut type_checker = TypeChecker::new(&module_manager);
     type_checker.load_builtins().expect("Failed to load builtins");
     let result = type_checker.check_program(&ast);
 
@@ -335,7 +333,8 @@ def test : (i32 -> i32) =
     let mut parser = Parser::new(tokens);
     let ast = parser.parse().expect("Parsing failed");
 
-    let mut type_checker = TypeChecker::new();
+    let module_manager = crate::module_manager::ModuleManager::new();
+    let mut type_checker = TypeChecker::new(&module_manager);
     type_checker.load_builtins().expect("Failed to load builtins");
     let result = type_checker.check_program(&ast);
 
@@ -390,16 +389,18 @@ def test : f32 =
 
     // This should compile successfully
     let result = crate::Compiler::parse(source).and_then(|p| {
-        let mm = crate::cached_module_manager(p.node_counter.clone());
-        p.elaborate(mm)
-            .and_then(|e| e.resolve())
-            .and_then(|r| r.type_check())
+        let mm = crate::module_manager::ModuleManager::new();
+        p.resolve(&mm)
+            .and_then(|r| r.type_check(&mm))
             .and_then(|t| t.alias_check())
             .map(|a| a.fold_ast_constants())
-            .and_then(|b| b.flatten())
-            .map(|f| f.hoist_materializations())
-            .map(|h| h.normalize())
-            .and_then(|h| h.monomorphize())
+            .and_then(|b| b.flatten(&mm))
+            .map(|(f, mut backend)| {
+                let h = f.hoist_materializations();
+                let n = h.normalize(&mut backend.node_counter);
+                (n, backend)
+            })
+            .and_then(|(n, _backend)| n.monomorphize())
             .map(|m| m.filter_reachable())
             .and_then(|r| r.fold_constants())
             .and_then(|f| f.lift_bindings())
@@ -545,20 +546,18 @@ def test (arr: [3]i32) (i: i32) : i32 =
 
     // Run through normalize + hoist_materializations
     let parsed = crate::Compiler::parse(source).expect("parse failed");
-    let mm = crate::cached_module_manager(parsed.node_counter.clone());
-    let hoisted = parsed
-        .elaborate(mm)
-        .expect("elaborate failed")
-        .resolve()
+    let mm = crate::module_manager::ModuleManager::new();
+    let (flattened, _backend) = parsed
+        .resolve(&mm)
         .expect("resolve failed")
-        .type_check()
+        .type_check(&mm)
         .expect("type_check failed")
         .alias_check()
         .expect("alias_check failed")
         .fold_ast_constants()
-        .flatten()
-        .expect("flatten failed")
-        .hoist_materializations();
+        .flatten(&mm)
+        .expect("flatten failed");
+    let hoisted = flattened.hoist_materializations();
 
     let mir_str = format!("{}", hoisted.mir);
     println!("MIR output after hoisting:\n{}", mir_str);

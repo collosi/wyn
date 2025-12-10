@@ -215,7 +215,8 @@ impl<'a> LowerCtx<'a> {
             // Find the fragCoord parameter (builtin position in fragment shader)
             let mut frag_coord_name = None;
             for input in inputs {
-                if let Some(crate::mir::IoDecoration::BuiltIn(spirv::BuiltIn::Position)) = &input.decoration {
+                if let Some(crate::mir::IoDecoration::BuiltIn(spirv::BuiltIn::Position)) = &input.decoration
+                {
                     frag_coord_name = Some(input.name.clone());
                 }
             }
@@ -269,7 +270,11 @@ impl<'a> LowerCtx<'a> {
         // Emit uniforms
         for def in &self.program.defs {
             if let Def::Uniform {
-                name, ty, set, binding, ..
+                name,
+                ty,
+                set,
+                binding,
+                ..
             } = def
             {
                 writeln!(
@@ -483,7 +488,6 @@ impl<'a> LowerCtx<'a> {
                 body,
                 ..
             } => {
-
                 // Clear declared variables for this function
                 self.declared_vars.clear();
 
@@ -624,7 +628,9 @@ impl<'a> LowerCtx<'a> {
             // Handle gl_Position for vertex shaders - extract from tuple if needed
             if stage == ShaderStage::Vertex {
                 for (i, out) in outputs.iter().enumerate() {
-                    if let Some(crate::mir::IoDecoration::BuiltIn(spirv::BuiltIn::Position)) = &out.decoration {
+                    if let Some(crate::mir::IoDecoration::BuiltIn(spirv::BuiltIn::Position)) =
+                        &out.decoration
+                    {
                         if is_tuple_return {
                             writeln!(output, "{}gl_Position = {}._{};", self.indent_str(), result, i)
                                 .unwrap();

@@ -381,11 +381,7 @@ pub fn sized_array(size: usize, elem_type: Type) -> Type {
 }
 
 pub fn tuple(types: Vec<Type>) -> Type {
-    if types.is_empty() {
-        unit()
-    } else {
-        Type::Constructed(TypeName::Tuple(types.len()), types)
-    }
+    if types.is_empty() { unit() } else { Type::Constructed(TypeName::Tuple(types.len()), types) }
 }
 
 pub fn function(arg: Type, ret: Type) -> Type {

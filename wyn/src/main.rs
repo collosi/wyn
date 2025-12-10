@@ -162,10 +162,9 @@ fn compile_file(
 
     // Compile through the pipeline
     let parsed = time("parse", verbose, || Compiler::parse(&source))?;
-    let module_manager = ModuleManager::new_with_counter(parsed.node_counter.clone());
-    let elaborated = time("elaborate", verbose, || parsed.elaborate(module_manager))?;
-    let resolved = time("resolve", verbose, || elaborated.resolve())?;
-    let type_checked = time("type_check", verbose, || resolved.type_check())?;
+    let module_manager = ModuleManager::new();
+    let resolved = time("resolve", verbose, || parsed.resolve(&module_manager))?;
+    let type_checked = time("type_check", verbose, || resolved.type_check(&module_manager))?;
 
     type_checked.print_warnings();
 
@@ -178,7 +177,7 @@ fn compile_file(
     let ast_folded = time("fold_ast_constants", verbose, || {
         alias_checked.fold_ast_constants()
     });
-    let flattened = time("flatten", verbose, || ast_folded.flatten())?;
+    let (flattened, mut backend) = time("flatten", verbose, || ast_folded.flatten(&module_manager))?;
 
     // Write initial MIR if requested (right after flattening)
     write_mir_if_requested(&flattened.mir, &output_init_mir, "initial MIR", verbose)?;
@@ -186,7 +185,9 @@ fn compile_file(
     let hoisted = time("hoist_materializations", verbose, || {
         flattened.hoist_materializations()
     });
-    let normalized = time("normalize", verbose, || hoisted.normalize());
+    let normalized = time("normalize", verbose, || {
+        hoisted.normalize(&mut backend.node_counter)
+    });
     let monomorphized = time("monomorphize", verbose, || normalized.monomorphize())?;
     let reachable = time("filter_reachable", verbose, || monomorphized.filter_reachable());
     let folded = time("fold_constants", verbose, || reachable.fold_constants())?;
@@ -283,8 +284,8 @@ fn check_file(input: PathBuf, output_annotated: Option<PathBuf>, verbose: bool) 
 
     // Type check and alias check, don't generate code
     let parsed = Compiler::parse(&source)?;
-    let module_manager = ModuleManager::new_with_counter(parsed.node_counter.clone());
-    let type_checked = parsed.elaborate(module_manager)?.resolve()?.type_check()?;
+    let module_manager = ModuleManager::new();
+    let type_checked = parsed.resolve(&module_manager)?.type_check(&module_manager)?;
 
     type_checked.print_warnings();
 

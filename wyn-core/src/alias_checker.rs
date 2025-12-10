@@ -276,7 +276,12 @@ impl<'a> Visitor for AliasChecker<'a> {
         ControlFlow::Continue(())
     }
 
-    fn visit_expr_identifier(&mut self, id: NodeId, _quals: &[String], name: &str) -> ControlFlow<Self::Break> {
+    fn visit_expr_identifier(
+        &mut self,
+        id: NodeId,
+        _quals: &[String],
+        name: &str,
+    ) -> ControlFlow<Self::Break> {
         if self.node_is_copy_type(id) {
             self.set_result(id, AliasInfo::copy());
         } else if let Some(stores) = self.lookup_variable(name) {
@@ -435,7 +440,11 @@ impl<'a> Visitor for AliasChecker<'a> {
                 // Consume the argument's backing stores
                 if !arg_info.stores.is_empty() {
                     let var_name = if let ExprKind::Identifier(quals, name) = &arg.kind {
-                        if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) }
+                        if quals.is_empty() {
+                            name.clone()
+                        } else {
+                            format!("{}.{}", quals.join("."), name)
+                        }
                     } else {
                         format!("<expr>")
                     };
@@ -641,18 +650,30 @@ fn collect_uses(expr: &mir::Expr) -> HashSet<String> {
         UnaryOp { operand, .. } => {
             uses.extend(collect_uses(operand));
         }
-        If { cond, then_branch, else_branch } => {
+        If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
             uses.extend(collect_uses(cond));
             uses.extend(collect_uses(then_branch));
             uses.extend(collect_uses(else_branch));
         }
-        Let { name, value, body, .. } => {
+        Let {
+            name, value, body, ..
+        } => {
             uses.extend(collect_uses(value));
             let mut body_uses = collect_uses(body);
             body_uses.remove(name); // Remove bound variable
             uses.extend(body_uses);
         }
-        Loop { init, init_bindings, kind, body, loop_var } => {
+        Loop {
+            init,
+            init_bindings,
+            kind,
+            body,
+            loop_var,
+        } => {
             uses.extend(collect_uses(init));
             for (_, binding_expr) in init_bindings {
                 uses.extend(collect_uses(binding_expr));
@@ -701,7 +722,8 @@ fn collect_uses(expr: &mir::Expr) -> HashSet<String> {
 
 fn collect_uses_in_literal(lit: &mir::Literal, uses: &mut HashSet<String>) {
     match lit {
-        mir::Literal::Int(_) | mir::Literal::Float(_) | mir::Literal::Bool(_) | mir::Literal::String(_) => {}
+        mir::Literal::Int(_) | mir::Literal::Float(_) | mir::Literal::Bool(_) | mir::Literal::String(_) => {
+        }
         mir::Literal::Tuple(elems) | mir::Literal::Array(elems) | mir::Literal::Vector(elems) => {
             for elem in elems {
                 uses.extend(collect_uses(elem));
@@ -747,7 +769,11 @@ fn compute_uses_after(
             result.extend(compute_uses_after(operand, after, aliases));
         }
 
-        If { cond, then_branch, else_branch } => {
+        If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
             // After cond: uses from both branches + after
             let then_uses = collect_uses(then_branch);
             let else_uses = collect_uses(else_branch);
@@ -759,7 +785,9 @@ fn compute_uses_after(
             result.extend(compute_uses_after(else_branch, after, aliases));
         }
 
-        Let { name, value, body, .. } => {
+        Let {
+            name, value, body, ..
+        } => {
             // Track aliases: if value is Var(x), then name aliases x
             if let Var(source_var) = &value.kind {
                 let mut alias_set = HashSet::new();
@@ -781,7 +809,13 @@ fn compute_uses_after(
             result.extend(compute_uses_after(body, after, aliases));
         }
 
-        Loop { init, init_bindings, kind, body, .. } => {
+        Loop {
+            init,
+            init_bindings,
+            kind,
+            body,
+            ..
+        } => {
             // Simplified: treat loop as atomic for now
             result.extend(compute_uses_after(init, after, aliases));
             for (_, binding_expr) in init_bindings {
@@ -893,7 +927,11 @@ fn find_inplace_map_calls(
             find_inplace_map_calls(operand, uses_after, aliases, result);
         }
 
-        If { cond, then_branch, else_branch } => {
+        If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
             find_inplace_map_calls(cond, uses_after, aliases, result);
             find_inplace_map_calls(then_branch, uses_after, aliases, result);
             find_inplace_map_calls(else_branch, uses_after, aliases, result);
@@ -904,7 +942,13 @@ fn find_inplace_map_calls(
             find_inplace_map_calls(body, uses_after, aliases, result);
         }
 
-        Loop { init, init_bindings, kind, body, .. } => {
+        Loop {
+            init,
+            init_bindings,
+            kind,
+            body,
+            ..
+        } => {
             find_inplace_map_calls(init, uses_after, aliases, result);
             for (_, binding_expr) in init_bindings {
                 find_inplace_map_calls(binding_expr, uses_after, aliases, result);
