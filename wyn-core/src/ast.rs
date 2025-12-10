@@ -1,6 +1,7 @@
 pub use spirv;
 
 // Re-export type system types from the types module
+use crate::IdSource;
 pub use crate::types::{RecordFields, Type, TypeName, TypeScheme};
 
 /// Qualified name representing a path through modules to a name
@@ -169,23 +170,15 @@ impl From<u32> for NodeId {
 }
 
 /// Counter for generating unique node IDs across compilation phases
-#[derive(Debug, Clone)]
-pub struct NodeCounter {
-    next_id: u32,
+pub type NodeCounter = IdSource<NodeId>;
+
+/// Extension trait for NodeCounter to provide AST node creation helpers
+pub trait NodeCounterExt {
+    fn mk_node<T>(&mut self, kind: T, span: Span) -> Node<T>;
 }
 
-impl NodeCounter {
-    pub fn new() -> Self {
-        NodeCounter { next_id: 0 }
-    }
-
-    pub fn next(&mut self) -> NodeId {
-        let id = self.next_id;
-        self.next_id += 1;
-        NodeId(id)
-    }
-
-    pub fn mk_node<T>(&mut self, kind: T, span: Span) -> Node<T> {
+impl NodeCounterExt for NodeCounter {
+    fn mk_node<T>(&mut self, kind: T, span: Span) -> Node<T> {
         Node {
             h: Header {
                 id: self.next(),
@@ -197,16 +190,15 @@ impl NodeCounter {
 }
 
 #[cfg(test)]
-impl NodeCounter {
+pub trait NodeCounterTestExt {
     /// Create a node with a dummy span (for testing only)
-    pub fn mk_node_dummy<T>(&mut self, kind: T) -> Node<T> {
-        self.mk_node(kind, Span::dummy())
-    }
+    fn mk_node_dummy<T>(&mut self, kind: T) -> Node<T>;
 }
 
-impl Default for NodeCounter {
-    fn default() -> Self {
-        Self::new()
+#[cfg(test)]
+impl NodeCounterTestExt for NodeCounter {
+    fn mk_node_dummy<T>(&mut self, kind: T) -> Node<T> {
+        self.mk_node(kind, Span::dummy())
     }
 }
 
