@@ -9,6 +9,7 @@
 
 use crate::IdArena;
 use crate::ast::{NodeId, Span, TypeName};
+use crate::types::UniqueTypeExt;
 use polytype::Type;
 
 #[cfg(test)]
@@ -137,8 +138,14 @@ pub struct Param {
     pub name: String,
     /// Parameter type.
     pub ty: Type<TypeName>,
+}
+
+impl Param {
     /// Whether this parameter is consumed (unique/in-place update).
-    pub is_consumed: bool,
+    /// Derived from whether the parameter type is unique (*T).
+    pub fn is_consumed(&self) -> bool {
+        self.ty.is_unique()
+    }
 }
 
 /// An attribute that can be attached to functions or expressions.

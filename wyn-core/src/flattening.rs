@@ -687,11 +687,7 @@ impl Flattener {
         for param in params {
             let name = self.extract_param_name(param)?;
             let ty = self.get_pattern_type(param);
-            result.push(mir::Param {
-                name,
-                ty,
-                is_consumed: false, // TODO: track uniqueness
-            });
+            result.push(mir::Param { name, ty });
         }
         Ok(result)
     }
@@ -1238,7 +1234,6 @@ impl Flattener {
         let mut params = vec![mir::Param {
             name: "_w_closure".to_string(),
             ty: closure_type.clone(),
-            is_consumed: false,
         }];
 
         for param in &lambda.params {
@@ -1247,11 +1242,7 @@ impl Flattener {
                 .ok_or_else(|| err_flatten!("Complex lambda parameter patterns not supported"))?
                 .to_string();
             let ty = self.get_pattern_type(param);
-            params.push(mir::Param {
-                name,
-                ty,
-                is_consumed: false,
-            });
+            params.push(mir::Param { name, ty });
         }
 
         // Flatten the body, then wrap with let bindings to extract free vars from closure
@@ -1387,7 +1378,6 @@ impl Flattener {
         let mut params = vec![mir::Param {
             name: "_w_closure".to_string(),
             ty: closure_type.clone(),
-            is_consumed: false,
         }];
 
         let mut remaining_param_names = vec![];
@@ -1397,7 +1387,6 @@ impl Flattener {
             params.push(mir::Param {
                 name: param_name,
                 ty: param_ty.clone(),
-                is_consumed: false,
             });
         }
 

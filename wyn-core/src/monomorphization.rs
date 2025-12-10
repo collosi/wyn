@@ -506,7 +506,6 @@ impl Monomorphizer {
                     .map(|p| Param {
                         name: p.name,
                         ty: apply_subst(&p.ty, subst),
-                        is_consumed: p.is_consumed,
                     })
                     .collect();
                 let ret_type = apply_subst(&ret_type, subst);

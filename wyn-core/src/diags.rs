@@ -780,7 +780,7 @@ impl Display for mir::Def {
 
 impl Display for mir::Param {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let prefix = if self.is_consumed { "*" } else { "" };
+        let prefix = if self.is_consumed() { "*" } else { "" };
         write!(f, "({}{}: {})", prefix, self.name, format_type(&self.ty))
     }
 }

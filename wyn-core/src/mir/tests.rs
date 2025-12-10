@@ -29,12 +29,10 @@ fn test_simple_function() {
             Param {
                 name: "x".to_string(),
                 ty: i32_type(),
-                is_consumed: false,
             },
             Param {
                 name: "y".to_string(),
                 ty: i32_type(),
-                is_consumed: false,
             },
         ],
         ret_type: i32_type(),

@@ -533,17 +533,9 @@ pub fn walk_entry_point<V: MirFolder>(
 }
 
 pub fn walk_param<V: MirFolder>(v: &mut V, p: Param, ctx: &mut V::Ctx) -> Result<Param, V::Error> {
-    let Param {
-        name,
-        ty,
-        is_consumed,
-    } = p;
+    let Param { name, ty } = p;
     let ty = v.visit_type(ty, ctx)?;
-    Ok(Param {
-        name,
-        ty,
-        is_consumed,
-    })
+    Ok(Param { name, ty })
 }
 
 pub fn walk_attribute<V: MirFolder>(
