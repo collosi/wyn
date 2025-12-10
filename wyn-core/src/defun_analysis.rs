@@ -8,6 +8,7 @@
 
 use crate::ast::{self, ExprKind, Expression, NodeId, Type, TypeName};
 use crate::pattern;
+use crate::scope::ScopeStack;
 use polytype::TypeScheme;
 use std::collections::{HashMap, HashSet};
 
@@ -68,6 +69,9 @@ struct DefunAnalyzer<'a> {
 
     /// Accumulated classifications
     classifications: HashMap<NodeId, StaticValue>,
+
+    /// Scope tracking for name -> StaticValue (propagating Closure through let bindings)
+    scope: ScopeStack<StaticValue>,
 }
 
 impl<'a> DefunAnalyzer<'a> {
@@ -78,6 +82,7 @@ impl<'a> DefunAnalyzer<'a> {
             type_table,
             builtins,
             classifications: HashMap::new(),
+            scope: ScopeStack::new(),
         }
     }
 
@@ -111,12 +116,28 @@ impl<'a> DefunAnalyzer<'a> {
         match decl {
             ast::Declaration::Decl(d) => {
                 self.enclosing_decl_stack.push(d.name.clone());
+                // Register params in scope as Dyn
+                self.scope.push_scope();
+                for param in &d.params {
+                    if let Some(name) = param.simple_name() {
+                        self.scope.insert(name.to_string(), StaticValue::Dyn);
+                    }
+                }
                 self.analyze_expr(&d.body);
+                self.scope.pop_scope();
                 self.enclosing_decl_stack.pop();
             }
             ast::Declaration::Entry(entry) => {
                 self.enclosing_decl_stack.push(entry.name.clone());
+                // Register params in scope as Dyn
+                self.scope.push_scope();
+                for param in &entry.params {
+                    if let Some(name) = param.simple_name() {
+                        self.scope.insert(name.to_string(), StaticValue::Dyn);
+                    }
+                }
                 self.analyze_expr(&entry.body);
+                self.scope.pop_scope();
                 self.enclosing_decl_stack.pop();
             }
             // These don't contain expressions that need analysis
@@ -143,13 +164,30 @@ impl<'a> DefunAnalyzer<'a> {
                 // Store classification (lambda registration happens during flattening)
                 self.classifications.insert(expr.h.id, StaticValue::Closure { lam_name, free_vars });
 
-                // Analyze the lambda body for nested lambdas
+                // Register lambda params in scope as Dyn, then analyze body
+                self.scope.push_scope();
+                for param in &lambda.params {
+                    if let Some(name) = param.simple_name() {
+                        self.scope.insert(name.to_string(), StaticValue::Dyn);
+                    }
+                }
                 self.analyze_expr(&lambda.body);
+                self.scope.pop_scope();
             }
 
-            // All other expressions are classified as Dyn
-            ExprKind::Identifier(_, _)
-            | ExprKind::IntLiteral(_)
+            // Identifiers: look up in scope to propagate Closure classification
+            ExprKind::Identifier(quals, name) => {
+                // Only look up unqualified names (qualified names like M.f are always Dyn)
+                let sv = if quals.is_empty() {
+                    self.scope.lookup(name).cloned().unwrap_or(StaticValue::Dyn)
+                } else {
+                    StaticValue::Dyn
+                };
+                self.classifications.insert(expr.h.id, sv);
+            }
+
+            // Literals are always Dyn
+            ExprKind::IntLiteral(_)
             | ExprKind::FloatLiteral(_)
             | ExprKind::BoolLiteral(_)
             | ExprKind::StringLiteral(_)
@@ -177,8 +215,25 @@ impl<'a> DefunAnalyzer<'a> {
             }
 
             ExprKind::LetIn(let_in) => {
+                // Analyze the value first
                 self.analyze_expr(&let_in.value);
+
+                // Get the value's classification to propagate through simple name bindings
+                let value_sv = self.classifications.get(&let_in.value.h.id).cloned();
+
+                // For simple name patterns, propagate the Closure classification
+                self.scope.push_scope();
+                if let ast::PatternKind::Name(name) = &let_in.pattern.kind {
+                    if let Some(sv) = value_sv {
+                        self.scope.insert(name.clone(), sv);
+                    }
+                }
+
+                // Analyze the body with the new scope
                 self.analyze_expr(&let_in.body);
+                self.scope.pop_scope();
+
+                // The let expression itself is Dyn (it evaluates to its body)
                 self.classifications.insert(expr.h.id, StaticValue::Dyn);
             }
 

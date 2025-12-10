@@ -23,23 +23,8 @@ enum ArgShape {
     Other,
 }
 
-/// Static values for defunctionalization (Futhark TFP'18 approach).
-/// Tracks what each expression evaluates to at compile time.
-/// Each variant includes a binding_id for tracking backing stores.
-#[derive(Debug, Clone)]
-enum StaticValue {
-    /// Dynamic runtime value with its binding ID
-    Dyn {
-        binding_id: u64,
-    },
-    /// Defunctionalized closure with known call target
-    Closure {
-        /// Name of the generated lambda function
-        lam_name: String,
-        /// Binding ID for this closure
-        binding_id: u64,
-    },
-}
+// Re-export StaticValue from defun_analysis for use in flatten_expr return type
+use crate::defun_analysis::StaticValue;
 
 /// Flattener converts AST to MIR with defunctionalization.
 pub struct Flattener {
@@ -59,8 +44,8 @@ pub struct Flattener {
     lambda_registry: IdArena<LambdaId, LambdaInfo>,
     /// Type table from type checking - maps NodeId to TypeScheme
     type_table: HashMap<NodeId, TypeScheme<TypeName>>,
-    /// Scope stack for tracking static values of variables
-    static_values: ScopeStack<StaticValue>,
+    /// Scope stack for tracking binding IDs of variables (for backing store analysis)
+    binding_ids: ScopeStack<u64>,
     /// Set of builtin names to exclude from free variable capture
     builtins: HashSet<String>,
     /// Set of binding IDs that need backing stores (materialization)
@@ -82,7 +67,7 @@ impl Flattener {
             defun_analysis,
             lambda_registry: IdArena::new(),
             type_table,
-            static_values: ScopeStack::new(),
+            binding_ids: ScopeStack::new(),
             builtins,
             needs_backing_store: HashSet::new(),
         }
@@ -118,6 +103,12 @@ impl Flattener {
     /// Register a lambda function and return its ID.
     fn add_lambda(&mut self, name: String, arity: usize) -> LambdaId {
         self.lambda_registry.alloc(LambdaInfo { name, arity })
+    }
+
+    /// Query DefunAnalysis for an expression's classification.
+    /// Returns Dyn for nodes not in DefunAnalysis (builtins, top-level function names).
+    fn get_classification(&self, node_id: NodeId) -> StaticValue {
+        self.defun_analysis.get(node_id).cloned().unwrap_or(StaticValue::Dyn)
     }
 
     /// Extract the monotype from a TypeScheme
@@ -695,13 +686,13 @@ impl Flattener {
     /// Register function parameters with binding IDs for backing store tracking.
     /// Returns a Vec of (param_name, param_type, binding_id) tuples.
     fn register_param_bindings(&mut self, params: &[ast::Pattern]) -> Result<Vec<(String, Type, u64)>> {
-        self.static_values.push_scope();
+        self.binding_ids.push_scope();
         let mut param_bindings = Vec::new();
         for param in params {
             let name = self.extract_param_name(param)?;
             let ty = self.get_pattern_type(param);
             let binding_id = self.fresh_binding_id();
-            self.static_values.insert(name.clone(), StaticValue::Dyn { binding_id });
+            self.binding_ids.insert(name.clone(), binding_id);
             param_bindings.push((name, ty, binding_id));
         }
         Ok(param_bindings)
@@ -714,7 +705,7 @@ impl Flattener {
         param_bindings: Vec<(String, Type, u64)>,
         span: Span,
     ) -> Expr {
-        self.static_values.pop_scope();
+        self.binding_ids.pop_scope();
 
         // Collect params that need backing stores (in reverse order for proper nesting)
         let params_needing_stores: Vec<_> = param_bindings
@@ -766,30 +757,24 @@ impl Flattener {
         let (kind, sv) = match &expr.kind {
             ExprKind::IntLiteral(n) => (
                 mir::ExprKind::Literal(mir::Literal::Int(n.to_string())),
-                StaticValue::Dyn { binding_id: 0 },
+                StaticValue::Dyn,
             ),
             ExprKind::FloatLiteral(f) => (
                 mir::ExprKind::Literal(mir::Literal::Float(f.to_string())),
-                StaticValue::Dyn { binding_id: 0 },
+                StaticValue::Dyn,
             ),
-            ExprKind::BoolLiteral(b) => (
-                mir::ExprKind::Literal(mir::Literal::Bool(*b)),
-                StaticValue::Dyn { binding_id: 0 },
-            ),
+            ExprKind::BoolLiteral(b) => (mir::ExprKind::Literal(mir::Literal::Bool(*b)), StaticValue::Dyn),
             ExprKind::StringLiteral(s) => (
                 mir::ExprKind::Literal(mir::Literal::String(s.clone())),
-                StaticValue::Dyn { binding_id: 0 },
+                StaticValue::Dyn,
             ),
-            ExprKind::Unit => (mir::ExprKind::Unit, StaticValue::Dyn { binding_id: 0 }),
+            ExprKind::Unit => (mir::ExprKind::Unit, StaticValue::Dyn),
             ExprKind::Identifier(quals, name) => {
                 let full_name =
                     if quals.is_empty() { name.clone() } else { format!("{}.{}", quals.join("."), name) };
-                // Look up static value for this variable
-                let sv = self
-                    .static_values
-                    .lookup(&full_name)
-                    .cloned()
-                    .unwrap_or(StaticValue::Dyn { binding_id: 0 });
+
+                // Get classification from DefunAnalysis
+                let sv = self.get_classification(expr.h.id);
                 (mir::ExprKind::Var(full_name), sv)
             }
             ExprKind::BinaryOp(op, lhs, rhs) => {
@@ -801,7 +786,7 @@ impl Flattener {
                         lhs: Box::new(lhs),
                         rhs: Box::new(rhs),
                     },
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn,
                 )
             }
             ExprKind::UnaryOp(op, operand) => {
@@ -811,7 +796,7 @@ impl Flattener {
                         op: op.op.clone(),
                         operand: Box::new(operand),
                     },
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn,
                 )
             }
             ExprKind::If(if_expr) => {
@@ -824,7 +809,7 @@ impl Flattener {
                         then_branch: Box::new(then_branch),
                         else_branch: Box::new(else_branch),
                     },
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn,
                 )
             }
             ExprKind::LetIn(let_in) => self.flatten_let_in(let_in, span)?,
@@ -835,7 +820,7 @@ impl Flattener {
                     elems.iter().map(|e| self.flatten_expr(e).map(|(e, _)| e)).collect();
                 (
                     mir::ExprKind::Literal(mir::Literal::Tuple(elems?)),
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn,
                 )
             }
             ExprKind::ArrayLiteral(elems) => {
@@ -843,7 +828,7 @@ impl Flattener {
                     elems.iter().map(|e| self.flatten_expr(e).map(|(e, _)| e)).collect();
                 (
                     mir::ExprKind::Literal(mir::Literal::Array(elems?)),
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn,
                 )
             }
             ExprKind::VecMatLiteral(elems) => {
@@ -868,7 +853,7 @@ impl Flattener {
                     }
                     (
                         mir::ExprKind::Literal(mir::Literal::Matrix(rows)),
-                        StaticValue::Dyn { binding_id: 0 },
+                        StaticValue::Dyn,
                     )
                 } else {
                     // Vector
@@ -876,7 +861,7 @@ impl Flattener {
                         elems.iter().map(|e| self.flatten_expr(e).map(|(e, _)| e)).collect();
                     (
                         mir::ExprKind::Literal(mir::Literal::Vector(elems?)),
-                        StaticValue::Dyn { binding_id: 0 },
+                        StaticValue::Dyn,
                     )
                 }
             }
@@ -886,7 +871,7 @@ impl Flattener {
                     fields.iter().map(|(_, expr)| Ok(self.flatten_expr(expr)?.0)).collect();
                 (
                     mir::ExprKind::Literal(mir::Literal::Tuple(elems?)),
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn,
                 )
             }
             ExprKind::ArrayIndex(arr_expr, idx_expr) => {
@@ -901,17 +886,12 @@ impl Flattener {
                         name: "tuple_access".to_string(),
                         args: vec![arr, idx],
                     };
-                    return Ok((self.mk_expr(ty, kind, span), StaticValue::Dyn { binding_id: 0 }));
+                    return Ok((self.mk_expr(ty, kind, span), StaticValue::Dyn));
                 }
 
                 // Dynamic index: need backing store for OpAccessChain
                 if let mir::ExprKind::Var(ref var_name) = arr.kind {
-                    // Look up binding_id from static_values
-                    if let Some(sv) = self.static_values.lookup(var_name) {
-                        let binding_id = match sv {
-                            StaticValue::Dyn { binding_id } => *binding_id,
-                            StaticValue::Closure { binding_id, .. } => *binding_id,
-                        };
+                    if let Some(&binding_id) = self.binding_ids.lookup(var_name) {
                         // Mark this binding as needing a backing store
                         self.needs_backing_store.insert(binding_id);
                         // Use the backing store variable name
@@ -925,7 +905,7 @@ impl Flattener {
                             name: "index".to_string(),
                             args: vec![ptr_var, idx],
                         };
-                        return Ok((self.mk_expr(ty, kind, span), StaticValue::Dyn { binding_id: 0 }));
+                        return Ok((self.mk_expr(ty, kind, span), StaticValue::Dyn));
                     }
                 }
 
@@ -940,7 +920,7 @@ impl Flattener {
                         name: "index".to_string(),
                         args: vec![materialized_arr, idx],
                     },
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn,
                 )
             }
             ExprKind::ArrayWith { array, index, value } => {
@@ -957,7 +937,7 @@ impl Flattener {
                         func: func_name,
                         args: vec![arr, idx, val],
                     },
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn,
                 )
             }
             ExprKind::FieldAccess(obj_expr, field) => {
@@ -981,7 +961,7 @@ impl Flattener {
                         name: "tuple_access".to_string(),
                         args: vec![obj, idx_expr],
                     },
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn,
                 )
             }
             ExprKind::Loop(loop_expr) => self.flatten_loop(loop_expr, span)?,
@@ -997,7 +977,7 @@ impl Flattener {
                         name: "assert".to_string(),
                         args: vec![cond, body],
                     },
-                    StaticValue::Dyn { binding_id: 0 },
+                    StaticValue::Dyn,
                 )
             }
             ExprKind::TypeHole => {
@@ -1020,7 +1000,7 @@ impl Flattener {
         let_in: &ast::LetInExpr,
         span: Span,
     ) -> Result<(mir::ExprKind, StaticValue)> {
-        let (value, value_sv) = self.flatten_expr(&let_in.value)?;
+        let (value, _) = self.flatten_expr(&let_in.value)?;
 
         // Check if pattern is simple (just a name)
         match &let_in.pattern.kind {
@@ -1028,19 +1008,13 @@ impl Flattener {
                 // Assign a unique binding ID for this binding
                 let binding_id = self.fresh_binding_id();
 
-                // Create static value with the binding ID
-                let sv_with_id = match value_sv {
-                    StaticValue::Dyn { .. } => StaticValue::Dyn { binding_id },
-                    StaticValue::Closure { lam_name, .. } => StaticValue::Closure { lam_name, binding_id },
-                };
-
-                // Track the static value of this binding
-                self.static_values.push_scope();
-                self.static_values.insert(name.clone(), sv_with_id);
+                // Track binding_id in scope (classification comes from DefunAnalysis)
+                self.binding_ids.push_scope();
+                self.binding_ids.insert(name.clone(), binding_id);
 
                 let (body, body_sv) = self.flatten_expr(&let_in.body)?;
 
-                self.static_values.pop_scope();
+                self.binding_ids.pop_scope();
 
                 // Check if this binding needs a backing store
                 let body = if self.needs_backing_store.contains(&binding_id) {
@@ -1267,7 +1241,7 @@ impl Flattener {
         // Return the closure along with the static value indicating it's a known closure
         let sv = StaticValue::Closure {
             lam_name: func_name.clone(),
-            binding_id: 0,
+            free_vars: free_vars.clone(),
         };
 
         Ok((
@@ -1447,7 +1421,7 @@ impl Flattener {
         // Return the closure
         let sv = StaticValue::Closure {
             lam_name: lam_name.clone(),
-            binding_id: 0,
+            free_vars: capture_fields,
         };
 
         Ok((
@@ -1487,7 +1461,7 @@ impl Flattener {
                             func: lam_name,
                             args: all_args,
                         },
-                        StaticValue::Dyn { binding_id: 0 },
+                        StaticValue::Dyn,
                     ))
                 } else {
                     let full_name = if quals.is_empty() {
@@ -1510,7 +1484,7 @@ impl Flattener {
                                 func: desugared_name,
                                 args: args_flat,
                             },
-                            StaticValue::Dyn { binding_id: 0 },
+                            StaticValue::Dyn,
                         ))
                     }
                 }
@@ -1525,7 +1499,7 @@ impl Flattener {
                             func: lam_name,
                             args: all_args,
                         },
-                        StaticValue::Dyn { binding_id: 0 },
+                        StaticValue::Dyn,
                     ))
                 } else {
                     Err(err_flatten!(
@@ -1546,7 +1520,7 @@ impl Flattener {
                             func: lam_name,
                             args: all_args,
                         },
-                        StaticValue::Dyn { binding_id: 0 },
+                        StaticValue::Dyn,
                     ))
                 } else {
                     // Unknown closure - this should not happen with proper function value restrictions
@@ -1608,7 +1582,7 @@ impl Flattener {
                 kind,
                 body: Box::new(body),
             },
-            StaticValue::Dyn { binding_id: 0 },
+            StaticValue::Dyn,
         ))
     }
 
