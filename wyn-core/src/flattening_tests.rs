@@ -26,6 +26,18 @@ fn flatten_to_string(input: &str) -> String {
     format!("{}", flatten_program(input))
 }
 
+/// Helper to check that code fails type checking (for testing error cases)
+fn should_fail_type_check(input: &str) -> bool {
+    let tokens = tokenize(input).expect("Tokenization failed");
+    let mut parser = Parser::new(tokens);
+    let ast = parser.parse().expect("Parsing failed");
+
+    let module_manager = crate::module_manager::ModuleManager::new();
+    let mut type_checker = TypeChecker::new(&module_manager);
+    type_checker.load_builtins().expect("Failed to load builtins");
+    type_checker.check_program(&ast).is_err()
+}
+
 #[test]
 fn test_simple_constant() {
     let mir = flatten_to_string("def x = 42");
@@ -284,40 +296,27 @@ def test_apply (x:i32) : i32 =
 #[test]
 fn test_error_array_of_functions() {
     // Arrays of functions are not permitted
-    let input = r#"
+    assert!(
+        should_fail_type_check(
+            r#"
 def test : [2](i32 -> i32) =
     [\(x:i32) -> x + 1, \(x:i32) -> x * 2]
-"#;
-    let tokens = tokenize(input).expect("Tokenization failed");
-    let mut parser = Parser::new(tokens);
-    let ast = parser.parse().expect("Parsing failed");
-
-    let module_manager = crate::module_manager::ModuleManager::new();
-    let mut type_checker = TypeChecker::new(&module_manager);
-    type_checker.load_builtins().expect("Failed to load builtins");
-    let result = type_checker.check_program(&ast);
-
-    assert!(result.is_err(), "Should reject arrays of functions");
+"#
+        ),
+        "Should reject arrays of functions"
+    );
 }
 
 #[test]
 fn test_error_function_from_if() {
     // A function cannot be returned from an if expression
-    let input = r#"
+    assert!(
+        should_fail_type_check(
+            r#"
 def choose (b:bool) : (i32 -> i32) =
     if b then \(x:i32) -> x + 1 else \(x:i32) -> x * 2
-"#;
-    let tokens = tokenize(input).expect("Tokenization failed");
-    let mut parser = Parser::new(tokens);
-    let ast = parser.parse().expect("Parsing failed");
-
-    let module_manager = crate::module_manager::ModuleManager::new();
-    let mut type_checker = TypeChecker::new(&module_manager);
-    type_checker.load_builtins().expect("Failed to load builtins");
-    let result = type_checker.check_program(&ast);
-
-    assert!(
-        result.is_err(),
+"#
+        ),
         "Should reject function returned from if expression"
     );
 }
@@ -325,20 +324,15 @@ def choose (b:bool) : (i32 -> i32) =
 #[test]
 fn test_error_loop_parameter_function() {
     // A loop parameter cannot be a function
-    let input = r#"
+    assert!(
+        should_fail_type_check(
+            r#"
 def test : (i32 -> i32) =
     loop f = \(x:i32) -> x while false do f
-"#;
-    let tokens = tokenize(input).expect("Tokenization failed");
-    let mut parser = Parser::new(tokens);
-    let ast = parser.parse().expect("Parsing failed");
-
-    let module_manager = crate::module_manager::ModuleManager::new();
-    let mut type_checker = TypeChecker::new(&module_manager);
-    type_checker.load_builtins().expect("Failed to load builtins");
-    let result = type_checker.check_program(&ast);
-
-    assert!(result.is_err(), "Should reject function as loop parameter");
+"#
+        ),
+        "Should reject function as loop parameter"
+    );
 }
 
 #[test]
