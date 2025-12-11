@@ -2561,7 +2561,7 @@ mod tests {
 
     #[test]
     fn test_simple_constant() {
-        let spirv = compile_to_spirv("def x = 42").unwrap();
+        let spirv = compile_to_spirv("def x() = 42").unwrap();
         assert!(!spirv.is_empty());
         // SPIR-V magic number
         assert_eq!(spirv[0], 0x07230203);
@@ -2569,63 +2569,63 @@ mod tests {
 
     #[test]
     fn test_simple_function() {
-        let spirv = compile_to_spirv("def add x y = x + y").unwrap();
+        let spirv = compile_to_spirv("def add(x, y) = x + y").unwrap();
         assert!(!spirv.is_empty());
         assert_eq!(spirv[0], 0x07230203);
     }
 
     #[test]
     fn test_let_binding() {
-        let spirv = compile_to_spirv("def f = let x = 1 in x + 2").unwrap();
+        let spirv = compile_to_spirv("def f() = let x = 1 in x + 2").unwrap();
         assert!(!spirv.is_empty());
         assert_eq!(spirv[0], 0x07230203);
     }
 
     #[test]
     fn test_arithmetic() {
-        let spirv = compile_to_spirv("def f x y = x * y + x / y - 1").unwrap();
+        let spirv = compile_to_spirv("def f(x, y) = x * y + x / y - 1").unwrap();
         assert!(!spirv.is_empty());
         assert_eq!(spirv[0], 0x07230203);
     }
 
     #[test]
     fn test_nested_let() {
-        let spirv = compile_to_spirv("def f = let a = 1 in let b = 2 in a + b").unwrap();
+        let spirv = compile_to_spirv("def f() = let a = 1 in let b = 2 in a + b").unwrap();
         assert!(!spirv.is_empty());
         assert_eq!(spirv[0], 0x07230203);
     }
 
     #[test]
     fn test_if_expression() {
-        let spirv = compile_to_spirv("def f x = if x == 0 then 1 else 2").unwrap();
+        let spirv = compile_to_spirv("def f(x) = if x == 0 then 1 else 2").unwrap();
         assert!(!spirv.is_empty());
         assert_eq!(spirv[0], 0x07230203);
     }
 
     #[test]
     fn test_comparisons() {
-        let spirv = compile_to_spirv("def f x y = if x < y then 1 else if x > y then 2 else 0").unwrap();
+        let spirv = compile_to_spirv("def f(x, y) = if x < y then 1 else if x > y then 2 else 0").unwrap();
         assert!(!spirv.is_empty());
         assert_eq!(spirv[0], 0x07230203);
     }
 
     #[test]
     fn test_tuple_literal() {
-        let spirv = compile_to_spirv("def f = (1, 2, 3)").unwrap();
+        let spirv = compile_to_spirv("def f() = (1, 2, 3)").unwrap();
         assert!(!spirv.is_empty());
         assert_eq!(spirv[0], 0x07230203);
     }
 
     #[test]
     fn test_array_literal() {
-        let spirv = compile_to_spirv("def f = [1, 2, 3]").unwrap();
+        let spirv = compile_to_spirv("def f() = [1, 2, 3]").unwrap();
         assert!(!spirv.is_empty());
         assert_eq!(spirv[0], 0x07230203);
     }
 
     #[test]
     fn test_unary_negation() {
-        let spirv = compile_to_spirv("def f x = -x").unwrap();
+        let spirv = compile_to_spirv("def f(x) = -x").unwrap();
         assert!(!spirv.is_empty());
         assert_eq!(spirv[0], 0x07230203);
     }
@@ -2634,7 +2634,7 @@ mod tests {
     fn test_record_field_access() {
         let spirv = compile_to_spirv(
             r#"
-def get_x (r:{x:i32, y:i32}) : i32 = r.x
+def get_x(r:{x:i32, y:i32}) -> i32 = r.x
 "#,
         )
         .unwrap();
@@ -2647,8 +2647,8 @@ def get_x (r:{x:i32, y:i32}) : i32 = r.x
         // This test uses tuple_access intrinsic for closure field access
         let spirv = compile_to_spirv(
             r#"
-def test (x:i32) : i32 =
-    let f = \(y:i32) -> x + y in
+def test(x:i32) -> i32 =
+    let f = |y:i32| x + y in
     f 10
 "#,
         )

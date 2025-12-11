@@ -26,11 +26,8 @@ impl Parser {
 
         let name = self.expect_identifier()?;
 
-        // Parse type parameters
-        let mut type_params = Vec::new();
-        while self.can_start_type_param() {
-            type_params.push(self.parse_type_param()?);
-        }
+        // Parse type parameters: <[n], A, B>
+        let type_params = self.parse_type_params()?;
 
         self.expect(Token::Assign)?;
         let definition = self.parse_type()?;
@@ -43,42 +40,44 @@ impl Parser {
         })
     }
 
-    fn can_start_type_param(&self) -> bool {
-        match self.peek() {
-            Some(Token::LeftBracketSpaced) => true,
-            Some(Token::Identifier(s)) if s.starts_with('\'') => true,
-            _ => false,
+    /// Parse generic parameters: <[n], A, B>
+    /// Returns a vector of TypeParams
+    fn parse_type_params(&mut self) -> Result<Vec<TypeParam>> {
+        if !self.check_binop("<") {
+            return Ok(vec![]);
         }
-    }
+        self.advance(); // consume <
 
-    /// Parse a type parameter:
-    /// ```text
-    /// type_param ::= "[" name "]" | "'" name | "'~" name | "'^" name
-    /// ```
-    fn parse_type_param(&mut self) -> Result<TypeParam> {
-        match self.peek() {
-            Some(Token::LeftBracketSpaced) => {
-                self.advance();
-                let name = self.expect_identifier()?;
-                self.expect(Token::RightBracket)?;
-                Ok(TypeParam::Size(name))
-            }
-            Some(Token::Identifier(id)) if id.starts_with('\'') => {
-                let id = id.clone();
-                self.advance();
-
-                if id.starts_with("'~") {
-                    Ok(TypeParam::SizeType(id[2..].to_string()))
-                } else if id.starts_with("'^") {
-                    Ok(TypeParam::LiftedType(id[2..].to_string()))
-                } else if id.starts_with('\'') {
-                    Ok(TypeParam::Type(id[1..].to_string()))
+        let mut params = Vec::new();
+        if !self.check_binop(">") {
+            loop {
+                if self.check(&Token::LeftBracket) || self.check(&Token::LeftBracketSpaced) {
+                    // Size param: [n]
+                    self.advance();
+                    let name = self.expect_identifier()?;
+                    self.expect(Token::RightBracket)?;
+                    params.push(TypeParam::Size(name));
+                } else if let Some(Token::Identifier(name)) = self.peek() {
+                    // Type param: must be uppercase
+                    let name = name.clone();
+                    if !name.chars().next().map_or(false, |c| c.is_uppercase()) {
+                        bail_parse!("Type parameters must be uppercase (got '{}')", name);
+                    }
+                    self.advance();
+                    params.push(TypeParam::Type(name));
                 } else {
-                    Err(err_parse!("Invalid type parameter: {}", id))
+                    bail_parse!("Expected size parameter [n] or type parameter in generics");
                 }
+
+                if !self.check(&Token::Comma) {
+                    break;
+                }
+                self.advance(); // consume comma
             }
-            _ => Err(err_parse!("Expected type parameter")),
         }
+
+        self.expect_binop(">")?;
+        Ok(params)
     }
 
     /// Parse a module binding:
@@ -373,10 +372,8 @@ impl Parser {
                     self.advance();
                     let qualname = self.expect_identifier()?;
 
-                    let mut type_params = Vec::new();
-                    while self.can_start_type_param() {
-                        type_params.push(self.parse_type_param()?);
-                    }
+                    // Parse optional type parameters: <[n], A>
+                    let type_params = self.parse_type_params()?;
 
                     self.expect(Token::Assign)?;
                     let ty = self.parse_type()?;
@@ -475,11 +472,8 @@ impl Parser {
 
                 let name = self.expect_identifier()?;
 
-                // Parse type parameters
-                let mut type_params = Vec::new();
-                while self.can_start_type_param() {
-                    type_params.push(self.parse_type_param()?);
-                }
+                // Parse type parameters: <[n], A>
+                let type_params = self.parse_type_params()?;
 
                 self.expect(Token::Colon)?;
                 let ty = self.parse_type()?;
@@ -492,10 +486,8 @@ impl Parser {
                 let kind = TypeBindKind::Normal; // Simplified
                 let name = self.expect_identifier()?;
 
-                let mut type_params = Vec::new();
-                while self.can_start_type_param() {
-                    type_params.push(self.parse_type_param()?);
-                }
+                // Parse type parameters: <[n], A>
+                let type_params = self.parse_type_params()?;
 
                 let definition = if self.check(&Token::Assign) {
                     self.advance();

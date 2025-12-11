@@ -9,7 +9,7 @@
 
 use crate::IdArena;
 use crate::ast::{NodeId, Span, TypeName};
-use crate::types::UniqueTypeExt;
+use crate::types::TypeExt;
 use polytype::Type;
 
 #[cfg(test)]

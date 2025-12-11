@@ -4,7 +4,7 @@
 //! something close to Wyn syntax.
 
 use crate::ast::*;
-use crate::types::UniqueTypeExt;
+use crate::types::TypeExt;
 use polytype::Type as PolyType;
 use std::fmt::Write;
 
@@ -126,10 +126,10 @@ fn format_constructed_type(name: &TypeName, args: &[PolyType<TypeName>]) -> Stri
             items.join(" | ")
         }
         TypeName::Unique => {
-            // Handled in format_type() via UniqueTypeExt
+            // Handled in format_type() via TypeExt
             unreachable!("Unique types should be handled in format_type")
         }
-        TypeName::UserVar(s) => format!("'{}", s),
+        TypeName::UserVar(s) => s.clone(),
         TypeName::Named(s) => {
             if args.is_empty() {
                 s.clone()
@@ -219,7 +219,22 @@ impl AstFormatter {
                 self.write_line(&format!("storage {}: {}", s.name, s.ty));
             }
             Declaration::Sig(v) => {
-                self.write_line(&format!("sig {}: {}", v.name, v.ty));
+                let mut header = format!("sig {}", v.name);
+                // Rust-style generics: <[n], [m], A, B>
+                if !v.size_params.is_empty() || !v.type_params.is_empty() {
+                    header.push('<');
+                    let mut parts = Vec::new();
+                    for s in &v.size_params {
+                        parts.push(format!("[{}]", s));
+                    }
+                    for t in &v.type_params {
+                        parts.push(t.clone());
+                    }
+                    header.push_str(&parts.join(", "));
+                    header.push('>');
+                }
+                header.push_str(&format!(": {}", v.ty));
+                self.write_line(&header);
             }
             Declaration::TypeBind(tb) => {
                 self.write_line(&format!("type {} = {}", tb.name, tb.definition));
@@ -242,24 +257,31 @@ impl AstFormatter {
     fn write_decl(&mut self, decl: &Decl) {
         let mut header = format!("{} {}", decl.keyword, decl.name);
 
-        // Size params
-        for s in &decl.size_params {
-            header.push_str(&format!(" [{}]", s));
+        // Rust-style generics: <[n], [m], A, B>
+        if !decl.size_params.is_empty() || !decl.type_params.is_empty() {
+            header.push('<');
+            let mut parts = Vec::new();
+            for s in &decl.size_params {
+                parts.push(format!("[{}]", s));
+            }
+            for t in &decl.type_params {
+                parts.push(t.clone());
+            }
+            header.push_str(&parts.join(", "));
+            header.push('>');
         }
 
-        // Type params
-        for t in &decl.type_params {
-            header.push_str(&format!(" '{}", t));
+        // Rust-style comma-separated params: (x: T, y: U)
+        if !decl.params.is_empty() {
+            let params: Vec<String> = decl.params.iter().map(|p| self.format_pattern(p)).collect();
+            header.push_str(&format!("({})", params.join(", ")));
+        } else {
+            header.push_str("()");
         }
 
-        // Params
-        for param in &decl.params {
-            header.push_str(&format!(" {}", self.format_param(param)));
-        }
-
-        // Return type
+        // Rust-style return type: -> T
         if let Some(ty) = &decl.ty {
-            header.push_str(&format!(": {}", ty));
+            header.push_str(&format!(" -> {}", ty));
         }
 
         header.push_str(" =");
@@ -387,8 +409,8 @@ impl AstFormatter {
             }
             ExprKind::Lambda(lambda) => {
                 let params: Vec<String> = lambda.params.iter().map(|p| self.format_pattern(p)).collect();
-                let ret = lambda.return_type.as_ref().map(|t| format!(": {}", t)).unwrap_or_default();
-                self.write_line(&format!("\\{}{} ->", params.join(" "), ret));
+                let ret = lambda.return_type.as_ref().map(|t| format!(" -> {}", t)).unwrap_or_default();
+                self.write_line(&format!("|{}|{}", params.join(", "), ret));
                 self.indent += 1;
                 self.write_expression(&lambda.body);
                 self.indent -= 1;
