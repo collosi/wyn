@@ -4,7 +4,7 @@
 //! something close to Wyn syntax.
 
 use crate::ast::*;
-use crate::types::UniqueTypeExt;
+use crate::types::TypeExt;
 use polytype::Type as PolyType;
 use std::fmt::Write;
 
@@ -126,7 +126,7 @@ fn format_constructed_type(name: &TypeName, args: &[PolyType<TypeName>]) -> Stri
             items.join(" | ")
         }
         TypeName::Unique => {
-            // Handled in format_type() via UniqueTypeExt
+            // Handled in format_type() via TypeExt
             unreachable!("Unique types should be handled in format_type")
         }
         TypeName::UserVar(s) => format!("'{}", s),

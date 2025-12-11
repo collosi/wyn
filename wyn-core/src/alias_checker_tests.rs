@@ -384,3 +384,131 @@ fn test_pipeline_has_alias_errors_false() {
         "Expected has_alias_errors() to return false for valid code"
     );
 }
+
+// =============================================================================
+// Liveness Analysis Tests
+// =============================================================================
+
+#[test]
+fn test_liveness_simple_last_use() {
+    // Array passed to function, not used after - should be alias_free=true, released=true
+    let source = r#"
+def f(arr: [4]i32): i32 = arr[0]
+
+def main(): i32 =
+    let x = [1, 2, 3, 4] in
+    f(x)
+"#;
+    let result = check_alias(source);
+    assert!(!result.has_errors());
+
+    // Should have liveness info for the array argument
+    assert!(
+        !result.liveness.is_empty(),
+        "Expected liveness info for array argument"
+    );
+
+    // The single entry should be alias_free and released
+    for (_, info) in &result.liveness {
+        assert!(info.alias_free, "Expected alias_free=true for unaliased array");
+        assert!(info.released, "Expected released=true for last use");
+    }
+}
+
+#[test]
+fn test_liveness_aliased_array() {
+    // Array aliased by another variable - should be alias_free=false
+    let source = r#"
+def f(arr: [4]i32): i32 = arr[0]
+
+def main(): i32 =
+    let x = [1, 2, 3, 4] in
+    let y = x in
+    f(x)
+"#;
+    let result = check_alias(source);
+    assert!(!result.has_errors());
+
+    // Should have liveness info
+    assert!(
+        !result.liveness.is_empty(),
+        "Expected liveness info for array argument"
+    );
+
+    // The entry should NOT be alias_free (y aliases x)
+    for (_, info) in &result.liveness {
+        assert!(!info.alias_free, "Expected alias_free=false when array is aliased");
+    }
+}
+
+#[test]
+fn test_liveness_multiple_uses() {
+    // Array used twice - first use should have released=false
+    let source = r#"
+def f(arr: [4]i32): i32 = arr[0]
+
+def main(): i32 =
+    let x = [1, 2, 3, 4] in
+    f(x) + f(x)
+"#;
+    let result = check_alias(source);
+    assert!(!result.has_errors());
+
+    // Should have 2 liveness entries (one per call)
+    assert_eq!(
+        result.liveness.len(), 2,
+        "Expected 2 liveness entries for 2 array arguments"
+    );
+
+    // At least one should have released=false (first use)
+    // At least one should have released=true (last use)
+    let released_count = result.liveness.values().filter(|info| info.released).count();
+    let not_released_count = result.liveness.values().filter(|info| !info.released).count();
+
+    assert_eq!(released_count, 1, "Expected exactly one use to be released (last use)");
+    assert_eq!(not_released_count, 1, "Expected exactly one use to not be released (first use)");
+}
+
+#[test]
+fn test_liveness_fresh_array_literal() {
+    // Array literal passed directly - should be alias_free=true, released=true
+    let source = r#"
+def f(arr: [4]i32): i32 = arr[0]
+
+def main(): i32 =
+    f([1, 2, 3, 4])
+"#;
+    let result = check_alias(source);
+    assert!(!result.has_errors());
+
+    // Should have liveness info for the array literal
+    assert!(
+        !result.liveness.is_empty(),
+        "Expected liveness info for array literal argument"
+    );
+
+    // Fresh array literal should be alias_free and released
+    for (_, info) in &result.liveness {
+        assert!(info.alias_free, "Expected alias_free=true for fresh array literal");
+        assert!(info.released, "Expected released=true for array literal (no other uses)");
+    }
+}
+
+#[test]
+fn test_liveness_no_info_for_non_array() {
+    // Non-array arguments should not have liveness info
+    let source = r#"
+def f(x: i32): i32 = x + 1
+
+def main(): i32 =
+    f(42)
+"#;
+    let result = check_alias(source);
+    assert!(!result.has_errors());
+
+    // Should have NO liveness info (no array arguments)
+    assert!(
+        result.liveness.is_empty(),
+        "Expected no liveness info for non-array arguments"
+    );
+}

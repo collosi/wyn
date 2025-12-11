@@ -16,7 +16,7 @@ use crate::ast::{Type, TypeName};
 use crate::error::Result;
 use crate::mir::folder::MirFolder;
 use crate::mir::{Def, Expr, ExprKind, LambdaId, LambdaInfo, Param, Program};
-use crate::types::UniqueTypeExt;
+use crate::types::TypeExt;
 use polytype::Type as PolyType;
 use std::collections::{HashMap, HashSet, VecDeque};
 

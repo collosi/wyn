@@ -7,7 +7,7 @@
 
 use crate::ast::*;
 use crate::error::Result;
-use crate::types::UniqueTypeExt;
+use crate::types::TypeExt;
 use crate::visitor::{self, Visitor};
 use crate::{NodeId, TypeTable};
 use polytype::TypeScheme;
@@ -64,6 +64,15 @@ impl AliasInfo {
     }
 }
 
+/// Liveness information for an expression
+#[derive(Debug, Clone, Default)]
+pub struct ExprLivenessInfo {
+    /// True if no other live variable references the same backing store(s)
+    pub alias_free: bool,
+    /// True if this is the last use of the value (not needed after)
+    pub released: bool,
+}
+
 /// An alias-related error
 #[derive(Debug, Clone)]
 pub struct AliasError {
@@ -87,12 +96,18 @@ pub struct AliasChecker<'a> {
     stores: HashMap<BackingStoreId, StoreState>,
     /// Stack of scopes, each mapping variable names to their backing stores
     scopes: Vec<HashMap<String, HashSet<BackingStoreId>>>,
+    /// Reverse mapping: backing store -> variables that reference it
+    store_to_vars: HashMap<BackingStoreId, HashSet<String>>,
     /// Counter for generating unique store IDs
     next_store_id: u32,
     /// Computed AliasInfo for each expression node
     results: HashMap<NodeId, AliasInfo>,
     /// Collected errors
     errors: Vec<AliasError>,
+    /// Liveness info for expressions at function call sites
+    liveness: HashMap<NodeId, ExprLivenessInfo>,
+    /// Pre-computed variable uses for determining "last use" (ordered by program order)
+    var_uses: HashMap<String, Vec<NodeId>>,
 }
 
 impl<'a> AliasChecker<'a> {
@@ -101,9 +116,12 @@ impl<'a> AliasChecker<'a> {
             type_table,
             stores: HashMap::new(),
             scopes: vec![HashMap::new()],
+            store_to_vars: HashMap::new(),
             next_store_id: 0,
             results: HashMap::new(),
             errors: Vec::new(),
+            liveness: HashMap::new(),
+            var_uses: HashMap::new(),
         }
     }
 
@@ -120,18 +138,35 @@ impl<'a> AliasChecker<'a> {
         self.scopes.push(HashMap::new());
     }
 
-    /// Pop the current scope
+    /// Pop the current scope and clean up reverse mapping
     fn pop_scope(&mut self) {
         if self.scopes.len() > 1 {
-            self.scopes.pop();
+            if let Some(scope) = self.scopes.pop() {
+                // Clean up reverse mapping for variables going out of scope
+                for (name, stores) in scope {
+                    for store_id in stores {
+                        if let Some(vars) = self.store_to_vars.get_mut(&store_id) {
+                            vars.remove(&name);
+                        }
+                    }
+                }
+            }
         }
     }
 
     /// Bind a variable to backing stores in the current scope
     fn bind_variable(&mut self, name: &str, info: &AliasInfo) {
         if !info.stores.is_empty() {
+            // Update forward mapping (variable -> stores)
             if let Some(scope) = self.scopes.last_mut() {
                 scope.insert(name.to_string(), info.stores.clone());
+            }
+            // Update reverse mapping (store -> variables)
+            for store_id in &info.stores {
+                self.store_to_vars
+                    .entry(*store_id)
+                    .or_default()
+                    .insert(name.to_string());
             }
         }
     }
@@ -181,6 +216,16 @@ impl<'a> AliasChecker<'a> {
 
     /// Check a program for alias errors
     pub fn check_program(mut self, program: &Program) -> Result<AliasCheckResult> {
+        // Pass 1: Collect all variable uses in program order
+        for decl in &program.declarations {
+            match decl {
+                Declaration::Decl(d) => collect_variable_uses_in_expr(&d.body, &mut self.var_uses),
+                Declaration::Entry(e) => collect_variable_uses_in_expr(&e.body, &mut self.var_uses),
+                _ => {}
+            }
+        }
+
+        // Pass 2: Main alias checking with liveness computation
         for decl in &program.declarations {
             match decl {
                 Declaration::Decl(d) => self.check_decl(d),
@@ -189,7 +234,10 @@ impl<'a> AliasChecker<'a> {
             }
         }
 
-        Ok(AliasCheckResult { errors: self.errors })
+        Ok(AliasCheckResult {
+            errors: self.errors,
+            liveness: self.liveness,
+        })
     }
 
     fn check_decl(&mut self, decl: &Decl) {
@@ -256,6 +304,104 @@ impl<'a> AliasChecker<'a> {
         } else {
             false
         }
+    }
+
+    /// Check if an expression has no aliases (only one variable references its backing stores)
+    fn is_alias_free(&self, info: &AliasInfo) -> bool {
+        info.stores.iter().all(|store_id| {
+            self.store_to_vars
+                .get(store_id)
+                .map(|vars| vars.len() <= 1)
+                .unwrap_or(true)
+        })
+    }
+
+    /// Check if a node's type is an array type
+    fn is_array_type(&self, node_id: NodeId) -> bool {
+        if let Some(scheme) = self.type_table.get(&node_id) {
+            let ty = unwrap_scheme(scheme);
+            ty.is_array()
+        } else {
+            false
+        }
+    }
+
+    /// Collect all array-typed variable names used in an expression
+    fn collect_array_vars_in_expr(&self, expr: &Expression) -> HashSet<String> {
+        let mut vars = HashSet::new();
+        self.collect_array_vars_recursive(expr, &mut vars);
+        vars
+    }
+
+    fn collect_array_vars_recursive(&self, expr: &Expression, vars: &mut HashSet<String>) {
+        match &expr.kind {
+            ExprKind::Identifier(quals, name) => {
+                if quals.is_empty() && self.is_array_type(expr.h.id) {
+                    vars.insert(name.clone());
+                }
+            }
+            ExprKind::ArrayLiteral(elems) => {
+                for elem in elems {
+                    self.collect_array_vars_recursive(elem, vars);
+                }
+            }
+            ExprKind::ArrayIndex(arr, idx) => {
+                self.collect_array_vars_recursive(arr, vars);
+                self.collect_array_vars_recursive(idx, vars);
+            }
+            ExprKind::BinaryOp(_, left, right) => {
+                self.collect_array_vars_recursive(left, vars);
+                self.collect_array_vars_recursive(right, vars);
+            }
+            ExprKind::UnaryOp(_, operand) => {
+                self.collect_array_vars_recursive(operand, vars);
+            }
+            ExprKind::Tuple(elems) => {
+                for elem in elems {
+                    self.collect_array_vars_recursive(elem, vars);
+                }
+            }
+            ExprKind::Application(func, args) => {
+                self.collect_array_vars_recursive(func, vars);
+                for arg in args {
+                    self.collect_array_vars_recursive(arg, vars);
+                }
+            }
+            ExprKind::LetIn(let_in) => {
+                self.collect_array_vars_recursive(&let_in.value, vars);
+                self.collect_array_vars_recursive(&let_in.body, vars);
+            }
+            ExprKind::If(if_expr) => {
+                self.collect_array_vars_recursive(&if_expr.condition, vars);
+                self.collect_array_vars_recursive(&if_expr.then_branch, vars);
+                self.collect_array_vars_recursive(&if_expr.else_branch, vars);
+            }
+            ExprKind::Lambda(lambda) => {
+                self.collect_array_vars_recursive(&lambda.body, vars);
+            }
+            ExprKind::FieldAccess(expr, _) => {
+                self.collect_array_vars_recursive(expr, vars);
+            }
+            _ => {}
+        }
+    }
+
+    /// Check if all array variables in an expression are at their last use
+    fn expr_is_released(&self, expr: &Expression) -> bool {
+        let array_vars = self.collect_array_vars_in_expr(expr);
+        array_vars.iter().all(|var| {
+            if let Some(uses) = self.var_uses.get(var) {
+                // Find the current use position
+                if let Some(pos) = uses.iter().position(|&id| id == expr.h.id) {
+                    pos == uses.len() - 1
+                } else {
+                    // This expression ID not found in uses - conservative: not released
+                    false
+                }
+            } else {
+                false // No tracked uses - conservative: not released
+            }
+        })
     }
 }
 
@@ -434,6 +580,19 @@ impl<'a> Visitor for AliasChecker<'a> {
             self.visit_expression(arg)?;
             let arg_info = self.get_result(arg.h.id);
 
+            // Compute liveness info for array-typed arguments
+            if self.is_array_type(arg.h.id) {
+                let alias_free = self.is_alias_free(&arg_info);
+                let released = self.expr_is_released(arg);
+                self.liveness.insert(
+                    arg.h.id,
+                    ExprLivenessInfo {
+                        alias_free,
+                        released,
+                    },
+                );
+            }
+
             // Check if this parameter is consuming (*T)
             let param_is_consuming = self.is_param_consuming(func.h.id, i);
 
@@ -529,6 +688,112 @@ fn is_copy_type(ty: &polytype::Type<TypeName>) -> bool {
     }
 }
 
+
+/// Collect all variable uses in an expression, recording them in program order.
+/// This is used to determine which use of a variable is the "last use".
+fn collect_variable_uses_in_expr(expr: &Expression, uses: &mut HashMap<String, Vec<NodeId>>) {
+    match &expr.kind {
+        ExprKind::Identifier(quals, name) => {
+            if quals.is_empty() {
+                uses.entry(name.clone()).or_default().push(expr.h.id);
+            }
+        }
+        ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::StringLiteral(_) => {}
+        ExprKind::ArrayLiteral(elems) => {
+            for elem in elems {
+                collect_variable_uses_in_expr(elem, uses);
+            }
+        }
+        ExprKind::ArrayIndex(arr, idx) => {
+            collect_variable_uses_in_expr(arr, uses);
+            collect_variable_uses_in_expr(idx, uses);
+        }
+        ExprKind::BinaryOp(_, left, right) => {
+            collect_variable_uses_in_expr(left, uses);
+            collect_variable_uses_in_expr(right, uses);
+        }
+        ExprKind::UnaryOp(_, operand) => {
+            collect_variable_uses_in_expr(operand, uses);
+        }
+        ExprKind::Tuple(elems) => {
+            for elem in elems {
+                collect_variable_uses_in_expr(elem, uses);
+            }
+        }
+        ExprKind::Application(func, args) => {
+            collect_variable_uses_in_expr(func, uses);
+            for arg in args {
+                collect_variable_uses_in_expr(arg, uses);
+            }
+        }
+        ExprKind::LetIn(let_in) => {
+            collect_variable_uses_in_expr(&let_in.value, uses);
+            collect_variable_uses_in_expr(&let_in.body, uses);
+        }
+        ExprKind::If(if_expr) => {
+            collect_variable_uses_in_expr(&if_expr.condition, uses);
+            collect_variable_uses_in_expr(&if_expr.then_branch, uses);
+            collect_variable_uses_in_expr(&if_expr.else_branch, uses);
+        }
+        ExprKind::Lambda(lambda) => {
+            collect_variable_uses_in_expr(&lambda.body, uses);
+        }
+        ExprKind::FieldAccess(expr, _) => {
+            collect_variable_uses_in_expr(expr, uses);
+        }
+        ExprKind::RecordLiteral(fields) => {
+            for (_, value) in fields {
+                collect_variable_uses_in_expr(value, uses);
+            }
+        }
+        ExprKind::Match(match_expr) => {
+            collect_variable_uses_in_expr(&match_expr.scrutinee, uses);
+            for case in &match_expr.cases {
+                collect_variable_uses_in_expr(&case.body, uses);
+            }
+        }
+        ExprKind::Loop(loop_expr) => {
+            if let Some(init) = &loop_expr.init {
+                collect_variable_uses_in_expr(init, uses);
+            }
+            match &loop_expr.form {
+                LoopForm::For(_, bound) | LoopForm::ForIn(_, bound) => {
+                    collect_variable_uses_in_expr(bound, uses);
+                }
+                LoopForm::While(cond) => {
+                    collect_variable_uses_in_expr(cond, uses);
+                }
+            }
+            collect_variable_uses_in_expr(&loop_expr.body, uses);
+        }
+        ExprKind::ArrayWith { array, index, value } => {
+            collect_variable_uses_in_expr(array, uses);
+            collect_variable_uses_in_expr(index, uses);
+            collect_variable_uses_in_expr(value, uses);
+        }
+        ExprKind::Range(range) => {
+            collect_variable_uses_in_expr(&range.start, uses);
+            collect_variable_uses_in_expr(&range.end, uses);
+        }
+        ExprKind::TypeAscription(expr, _) | ExprKind::TypeCoercion(expr, _) => {
+            collect_variable_uses_in_expr(expr, uses);
+        }
+        ExprKind::Assert(cond, expr) => {
+            collect_variable_uses_in_expr(cond, uses);
+            collect_variable_uses_in_expr(expr, uses);
+        }
+        ExprKind::VecMatLiteral(elems) => {
+            for elem in elems {
+                collect_variable_uses_in_expr(elem, uses);
+            }
+        }
+        ExprKind::Unit | ExprKind::TypeHole => {}
+    }
+}
+
 fn is_copy_type_scheme(scheme: &TypeScheme<TypeName>) -> bool {
     is_copy_type(unwrap_scheme(scheme))
 }
@@ -570,6 +835,8 @@ fn get_return_type_is_fresh(ty: &polytype::Type<TypeName>) -> bool {
 #[derive(Debug)]
 pub struct AliasCheckResult {
     pub errors: Vec<AliasError>,
+    /// Liveness info for array-typed expressions at function call sites
+    pub liveness: HashMap<NodeId, ExprLivenessInfo>,
 }
 
 impl AliasCheckResult {

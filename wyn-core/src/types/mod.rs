@@ -252,11 +252,11 @@ impl From<&'static str> for TypeName {
 // Type extension traits
 // =============================================================================
 
-/// Extension trait for uniqueness-related operations on Type.
+/// Extension trait for common type operations.
 ///
-/// Centralizes all uniqueness handling so passes don't need to pattern-match
-/// on TypeName::Unique directly.
-pub trait UniqueTypeExt {
+/// Centralizes type queries so passes don't need to pattern-match
+/// on TypeName variants directly.
+pub trait TypeExt {
     /// Create a unique (consuming/alias-free) type: *T
     fn unique(inner: Type) -> Type;
 
@@ -268,9 +268,12 @@ pub trait UniqueTypeExt {
 
     /// Strip the uniqueness marker if present, otherwise return self
     fn strip_unique(&self) -> &Type;
+
+    /// Check if this type is an array type
+    fn is_array(&self) -> bool;
 }
 
-impl UniqueTypeExt for Type {
+impl TypeExt for Type {
     fn unique(inner: Type) -> Type {
         Type::Constructed(TypeName::Unique, vec![inner])
     }
@@ -290,6 +293,10 @@ impl UniqueTypeExt for Type {
 
     fn strip_unique(&self) -> &Type {
         self.as_unique_inner().unwrap_or(self)
+    }
+
+    fn is_array(&self) -> bool {
+        matches!(self, Type::Constructed(TypeName::Array, _))
     }
 }
 

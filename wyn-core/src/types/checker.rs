@@ -1,4 +1,4 @@
-use super::{Type, TypeName, TypeScheme, UniqueTypeExt};
+use super::{Type, TypeName, TypeScheme, TypeExt};
 use crate::ast::*;
 use crate::error::Result;
 use crate::scope::ScopeStack;
