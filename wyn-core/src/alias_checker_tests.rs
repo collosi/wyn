@@ -26,16 +26,16 @@ fn alias_check_pipeline(source: &str) -> crate::AliasChecked {
 
 #[test]
 fn test_no_error_simple() {
-    let result = check_alias(r#"def main(x: i32): i32 = x + 1"#);
+    let result = check_alias(r#"def main(x: i32) -> i32 = x + 1"#);
     assert!(!result.has_errors());
 }
 
 #[test]
 fn test_use_after_move() {
     let source = r#"
-def consume(arr: *[4]i32): i32 = arr[0]
+def consume(arr: *[4]i32) -> i32 = arr[0]
 
-def main(arr: [4]i32): i32 =
+def main(arr: [4]i32) -> i32 =
     let _ = consume(arr) in
     arr[0]
 "#;
@@ -46,9 +46,9 @@ def main(arr: [4]i32): i32 =
 #[test]
 fn test_alias_through_let() {
     let source = r#"
-def consume(arr: *[4]i32): i32 = arr[0]
+def consume(arr: *[4]i32) -> i32 = arr[0]
 
-def main(arr: [4]i32): i32 =
+def main(arr: [4]i32) -> i32 =
     let alias = arr in
     let _ = consume(arr) in
     alias[0]
@@ -61,7 +61,7 @@ def main(arr: [4]i32): i32 =
 fn test_copy_type_no_tracking() {
     // i32 is copy, should work fine
     let source = r#"
-def main(x: i32): i32 =
+def main(x: i32) -> i32 =
     let y = x in
     let z = x in
     y + z
@@ -76,9 +76,9 @@ def main(x: i32): i32 =
 fn test_transitive_aliasing() {
     // a -> b -> c, consume c, use a should error
     let source = r#"
-def consume(arr: *[4]i32): i32 = arr[0]
+def consume(arr: *[4]i32) -> i32 = arr[0]
 
-def main(arr: [4]i32): i32 =
+def main(arr: [4]i32) -> i32 =
     let a = arr in
     let b = a in
     let c = b in
@@ -96,9 +96,9 @@ def main(arr: [4]i32): i32 =
 fn test_consume_alias_use_original() {
     // Consume the alias, then try to use the original - should error
     let source = r#"
-def consume(arr: *[4]i32): i32 = arr[0]
+def consume(arr: *[4]i32) -> i32 = arr[0]
 
-def main(arr: [4]i32): i32 =
+def main(arr: [4]i32) -> i32 =
     let alias = arr in
     let _ = consume(alias) in
     arr[0]
@@ -115,9 +115,9 @@ fn test_shadowing_does_not_affect_outer() {
     // Inner variable shadows outer with same name, consume inner, use outer
     // This should be OK because they're different backing stores
     let source = r#"
-def consume(arr: *[4]i32): i32 = arr[0]
+def consume(arr: *[4]i32) -> i32 = arr[0]
 
-def main(arr: [4]i32): i32 =
+def main(arr: [4]i32) -> i32 =
     let x = arr in
     let result =
         let x = [1, 2, 3, 4] in
@@ -138,9 +138,9 @@ fn test_if_branches_independent() {
     // Consume in one branch shouldn't affect use in other branch
     // (they're mutually exclusive execution paths)
     let source = r#"
-def consume(arr: *[4]i32): i32 = arr[0]
+def consume(arr: *[4]i32) -> i32 = arr[0]
 
-def main(t: (bool, [4]i32)): i32 =
+def main(t: (bool, [4]i32)) -> i32 =
     let (cond, arr) = t in
     if cond then consume(arr) else arr[0]
 "#;
@@ -157,9 +157,9 @@ def main(t: (bool, [4]i32)): i32 =
 fn test_use_after_if_that_consumes() {
     // Use after an if expression where one branch consumed - should error
     let source = r#"
-def consume(arr: *[4]i32): i32 = arr[0]
+def consume(arr: *[4]i32) -> i32 = arr[0]
 
-def main(t: (bool, [4]i32)): i32 =
+def main(t: (bool, [4]i32)) -> i32 =
     let (cond, arr) = t in
     let _ = if cond then consume(arr) else 0 in
     arr[0]
@@ -179,13 +179,13 @@ fn test_return_aliases_non_consumed_params() {
     // Use separate array literals so each has its own backing store
 
     let base = r#"
-def id3 (a: *[4]i32) (b: [4]i32) (c: [4]i32) : [4]i32 = c
-def consume(arr: *[4]i32): i32 = arr[0]
-def main(): i32 =
+def id3(a: *[4]i32, b: [4]i32, c: [4]i32) -> [4]i32 = c
+def consume(arr: *[4]i32) -> i32 = arr[0]
+def main() -> i32 =
     let x = [1, 2, 3, 4] in
     let y = [5, 6, 7, 8] in
     let z = [9, 10, 11, 12] in
-    let result = id3(x)(y)(z) in
+    let result = id3 x y z in
 "#;
 
     // Try consuming x - should error (x was already consumed by id3)
@@ -221,11 +221,11 @@ fn test_return_aliases_shared_backing_store() {
     // reference each backing store.
 
     let base = r#"
-def id3 (a: *[4]i32) (b: [4]i32) (c: [4]i32) : [4]i32 = c
-def consume(arr: *[4]i32): i32 = arr[0]
-def main(t: ([4]i32, [4]i32, [4]i32)): i32 =
+def id3(a: *[4]i32, b: [4]i32, c: [4]i32) -> [4]i32 = c
+def consume(arr: *[4]i32) -> i32 = arr[0]
+def main(t: ([4]i32, [4]i32, [4]i32)) -> i32 =
     let (x, y, z) = t in
-    let result = id3(x)(y)(z) in
+    let result = id3 x y z in
 "#;
 
     // All three should error because they share a backing store with x,
@@ -269,9 +269,9 @@ fn analyze_inplace_map(source: &str) -> InPlaceMapInfo {
 fn test_inplace_map_simple_dead_after() {
     // arr is not used after the map call - should be eligible for in-place
     let source = r#"
-def double(x: i32): i32 = x * 2
+def double(x: i32) -> i32 = x * 2
 
-def main(arr: [4]i32): [4]i32 =
+def main(arr: [4]i32) -> [4]i32 =
     map double arr
 "#;
     let info = analyze_inplace_map(source);
@@ -285,9 +285,9 @@ def main(arr: [4]i32): [4]i32 =
 fn test_inplace_map_used_after() {
     // arr is used after the map call - should NOT be eligible for in-place
     let source = r#"
-def double(x: i32): i32 = x * 2
+def double(x: i32) -> i32 = x * 2
 
-def main(arr: [4]i32): (i32, [4]i32) =
+def main(arr: [4]i32) -> (i32, [4]i32) =
     let result = map double arr in
     (arr[0], result)
 "#;
@@ -303,9 +303,9 @@ fn test_inplace_map_alias_used_after() {
     // arr2 aliases arr, and arr2 is used after the map call
     // Should NOT be eligible for in-place
     let source = r#"
-def double(x: i32): i32 = x * 2
+def double(x: i32) -> i32 = x * 2
 
-def main(arr: [4]i32): (i32, [4]i32) =
+def main(arr: [4]i32) -> (i32, [4]i32) =
     let arr2 = arr in
     let result = map double arr in
     (arr2[0], result)
@@ -322,9 +322,9 @@ fn test_inplace_map_nested() {
     // Nested maps - inner map result is used by outer map
     // The inner map on arr is dead after (only used by outer map)
     let source = r#"
-def double(x: i32): i32 = x * 2
+def double(x: i32) -> i32 = x * 2
 
-def main(arr: [4]i32): [4]i32 =
+def main(arr: [4]i32) -> [4]i32 =
     map double (map double arr)
 "#;
     let info = analyze_inplace_map(source);
@@ -340,9 +340,9 @@ def main(arr: [4]i32): [4]i32 =
 fn test_inplace_map_in_let() {
     // Map result bound to name, original array dead
     let source = r#"
-def double(x: i32): i32 = x * 2
+def double(x: i32) -> i32 = x * 2
 
-def main(arr: [4]i32): [4]i32 =
+def main(arr: [4]i32) -> [4]i32 =
     let result = map double arr in
     result
 "#;
@@ -362,9 +362,9 @@ def main(arr: [4]i32): [4]i32 =
 fn test_pipeline_has_alias_errors_true() {
     let alias_checked = alias_check_pipeline(
         r#"
-def consume(arr: *[4]i32): i32 = arr[0]
+def consume(arr: *[4]i32) -> i32 = arr[0]
 
-def main(arr: [4]i32): i32 =
+def main(arr: [4]i32) -> i32 =
     let _ = consume(arr) in
     arr[0]
 "#,
@@ -378,7 +378,7 @@ def main(arr: [4]i32): i32 =
 /// Test that has_alias_errors() returns false when no alias errors exist
 #[test]
 fn test_pipeline_has_alias_errors_false() {
-    let alias_checked = alias_check_pipeline(r#"def main(x: i32): i32 = x + 1"#);
+    let alias_checked = alias_check_pipeline(r#"def main(x: i32) -> i32 = x + 1"#);
     assert!(
         !alias_checked.has_alias_errors(),
         "Expected has_alias_errors() to return false for valid code"
@@ -393,9 +393,9 @@ fn test_pipeline_has_alias_errors_false() {
 fn test_liveness_simple_last_use() {
     // Array passed to function, not used after - should be alias_free=true, released=true
     let source = r#"
-def f(arr: [4]i32): i32 = arr[0]
+def f(arr: [4]i32) -> i32 = arr[0]
 
-def main(): i32 =
+def main() -> i32 =
     let x = [1, 2, 3, 4] in
     f(x)
 "#;
@@ -419,9 +419,9 @@ def main(): i32 =
 fn test_liveness_aliased_array() {
     // Array aliased by another variable - should be alias_free=false
     let source = r#"
-def f(arr: [4]i32): i32 = arr[0]
+def f(arr: [4]i32) -> i32 = arr[0]
 
-def main(): i32 =
+def main() -> i32 =
     let x = [1, 2, 3, 4] in
     let y = x in
     f(x)
@@ -445,9 +445,9 @@ def main(): i32 =
 fn test_liveness_multiple_uses() {
     // Array used twice - first use should have released=false
     let source = r#"
-def f(arr: [4]i32): i32 = arr[0]
+def f(arr: [4]i32) -> i32 = arr[0]
 
-def main(): i32 =
+def main() -> i32 =
     let x = [1, 2, 3, 4] in
     f(x) + f(x)
 "#;
@@ -473,9 +473,9 @@ def main(): i32 =
 fn test_liveness_fresh_array_literal() {
     // Array literal passed directly - should be alias_free=true, released=true
     let source = r#"
-def f(arr: [4]i32): i32 = arr[0]
+def f(arr: [4]i32) -> i32 = arr[0]
 
-def main(): i32 =
+def main() -> i32 =
     f([1, 2, 3, 4])
 "#;
     let result = check_alias(source);
@@ -498,9 +498,9 @@ def main(): i32 =
 fn test_liveness_no_info_for_non_array() {
     // Non-array arguments should not have liveness info
     let source = r#"
-def f(x: i32): i32 = x + 1
+def f(x: i32) -> i32 = x + 1
 
-def main(): i32 =
+def main() -> i32 =
     f(42)
 "#;
     let result = check_alias(source);

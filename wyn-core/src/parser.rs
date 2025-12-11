@@ -203,18 +203,15 @@ impl Parser {
 
             let name = self.expect_identifier()?;
 
-            // Parse parameters
-            let mut params = Vec::new();
-            while !self.check(&Token::Colon) && !self.check(&Token::Assign) && !self.is_at_end() {
-                params.push(self.parse_function_parameter()?);
+            // Parse parameters in Rust-style: (x: type, y: type)
+            let params = self.parse_comma_separated_params()?;
+
+            // Entry points must have an explicit return type with ->
+            if !self.check(&Token::Arrow) {
+                bail_parse!("Entry point declarations must have an explicit return type (use ->)");
             }
 
-            // Entry points must have an explicit return type
-            if !self.check(&Token::Colon) {
-                bail_parse!("Entry point declarations must have an explicit return type");
-            }
-
-            self.advance(); // consume ':'
+            self.advance(); // consume '->'
 
             // Parse return type (which may have optional attributes)
             let (return_types, return_attributes) =
@@ -260,51 +257,35 @@ impl Parser {
                 self.expect_identifier()?
             };
 
-            // Parse size parameters: [n] [m] ...
-            let mut size_params = Vec::new();
-            while self.check(&Token::LeftBracket) || self.check(&Token::LeftBracketSpaced) {
-                self.advance(); // consume '[' or '[ '
-                let size_param = self.expect_identifier()?;
-                size_params.push(size_param);
-                self.expect(Token::RightBracket)?;
-            }
-
-            // Parse type parameters: 'a 'b ...
-            let mut type_params = Vec::new();
-            while self.check_type_variable() {
-                let type_param = self.parse_type_variable()?;
-                type_params.push(type_param);
-            }
-
-            // Parse patterns until we hit : (return type) or = (body)
-            let mut params = Vec::new();
-            while !self.check(&Token::Colon) && !self.check(&Token::Assign) && !self.is_at_end() {
-                params.push(self.parse_function_parameter()?);
-            }
-
-            // Determine function return type
-            let (params, ty) = if self.check(&Token::Colon) {
-                // Explicit function return type: def f x : type = ...
-                self.advance();
-                let return_ty = Some(self.parse_type()?);
-                (params, return_ty)
-            } else if let Some(last_param) = params.last() {
-                // Check if last parameter is typed: def f x:type = ...
-                // If so, extract the type as function return type
-                if let PatternKind::Typed(inner_pattern, return_ty) = &last_param.kind {
-                    let inner_pattern_clone = (**inner_pattern).clone();
-                    let return_ty_clone = return_ty.clone();
-                    let mut actual_params = params;
-                    actual_params.pop();
-                    actual_params.push(inner_pattern_clone);
-                    (actual_params, Some(return_ty_clone))
-                } else {
-                    // No return type specified
-                    (params, None)
-                }
+            // Rust-style generics: <[n], A, B> (optional, only for def)
+            let (size_params, type_params) = if keyword == "def" && self.check_binop("<") {
+                self.parse_generic_params()?
             } else {
-                // No parameters and no return type
-                (params, None)
+                (vec![], vec![])
+            };
+
+            // For def: Rust-style comma-separated params: (x: T, y: U) - required
+            // For let: type annotation with colon: let x: type = expr - no params
+            let (params, ty) = if keyword == "def" {
+                // def declarations require parentheses for parameters
+                let params = self.parse_comma_separated_params()?;
+                // Rust-style return type: -> T (optional)
+                let ty = if self.check(&Token::Arrow) {
+                    self.advance();
+                    Some(self.parse_type_application()?)
+                } else {
+                    None
+                };
+                (params, ty)
+            } else {
+                // let declarations don't have params, just optional type annotation
+                let ty = if self.check(&Token::Colon) {
+                    self.advance();
+                    Some(self.parse_type()?)
+                } else {
+                    None
+                };
+                (vec![], ty)
             };
 
             self.expect(Token::Assign)?;
@@ -334,22 +315,12 @@ impl Parser {
             self.expect_identifier()?
         };
 
-        // Parse size parameters: [n] [m] ...
-        let mut size_params = Vec::new();
-        while self.check(&Token::LeftBracket) || self.check(&Token::LeftBracketSpaced) {
-            self.advance(); // consume '[' or '[ '
-            let size_param = self.expect_identifier()?;
-            size_params.push(size_param);
-            self.expect(Token::RightBracket)?;
-        }
-
-        // Parse type parameters: 'a 'b ...
-        let mut type_params = Vec::new();
-        while self.check_type_variable() {
-            // Expect apostrophe followed by identifier
-            let type_param = self.parse_type_variable()?;
-            type_params.push(type_param);
-        }
+        // Rust-style generics: <[n], A, B> (optional)
+        let (size_params, type_params) = if self.check_binop("<") {
+            self.parse_generic_params()?
+        } else {
+            (vec![], vec![])
+        };
 
         self.expect(Token::Colon)?;
         let ty = self.parse_type()?;
@@ -648,20 +619,62 @@ impl Parser {
         Ok(attributes)
     }
 
-    fn check_type_variable(&self) -> bool {
-        // Check if current token is an apostrophe (we'll need to add this to lexer)
-        // For now, we'll use a simplified approach
-        matches!(self.peek(), Some(Token::Identifier(name)) if name.starts_with('\''))
+    /// Parse generic parameters: <[n], [m], A, B>
+    /// Returns (size_params, type_params)
+    fn parse_generic_params(&mut self) -> Result<(Vec<String>, Vec<String>)> {
+        trace!("parse_generic_params: next token = {:?}", self.peek());
+        self.expect_binop("<")?;
+        let mut size_params = Vec::new();
+        let mut type_params = Vec::new();
+
+        if !self.check_binop(">") {
+            loop {
+                if self.check(&Token::LeftBracket) || self.check(&Token::LeftBracketSpaced) {
+                    // Size param: [n]
+                    self.advance();
+                    size_params.push(self.expect_identifier()?);
+                    self.expect(Token::RightBracket)?;
+                } else if let Some(Token::Identifier(name)) = self.peek() {
+                    // Type param: must be uppercase
+                    let name = name.clone();
+                    if !name.chars().next().map_or(false, |c| c.is_uppercase()) {
+                        bail_parse!("Type parameters must be uppercase (got '{}')", name);
+                    }
+                    self.advance();
+                    type_params.push(name);
+                } else {
+                    bail_parse!("Expected size parameter [n] or type parameter in generics");
+                }
+
+                if !self.check(&Token::Comma) {
+                    break;
+                }
+                self.advance(); // consume comma
+            }
+        }
+
+        self.expect_binop(">")?;
+        Ok((size_params, type_params))
     }
 
-    fn parse_type_variable(&mut self) -> Result<String> {
-        trace!("parse_type_variable: next token = {:?}", self.peek());
-        match self.advance() {
-            Some(Token::Identifier(name)) if name.starts_with('\'') => {
-                Ok(name[1..].to_string()) // Remove the apostrophe
+    /// Parse comma-separated function parameters: (x: T, y: U)
+    fn parse_comma_separated_params(&mut self) -> Result<Vec<Pattern>> {
+        trace!("parse_comma_separated_params: next token = {:?}", self.peek());
+        self.expect(Token::LeftParen)?;
+        let mut params = Vec::new();
+
+        if !self.check(&Token::RightParen) {
+            loop {
+                params.push(self.parse_pattern()?);
+                if !self.check(&Token::Comma) {
+                    break;
+                }
+                self.advance(); // consume comma
             }
-            _ => Err(err_parse!("Expected type variable (e.g., 'a)")),
         }
+
+        self.expect(Token::RightParen)?;
+        Ok(params)
     }
 
     fn parse_type(&mut self) -> Result<Type> {
@@ -908,12 +921,6 @@ impl Parser {
                 self.advance();
                 Ok(types::f32())
             }
-            Some(Token::Identifier(name)) if name.starts_with('\'') => {
-                // Type variable like 't, 'a, 'b
-                let type_var = self.parse_type_variable()?;
-                // Store as UserVar - type checker will bind to actual TypeVariables
-                Ok(Type::Constructed(TypeName::UserVar(type_var), vec![]))
-            }
             Some(Token::Identifier(name)) if name.chars().next().unwrap().is_lowercase() => {
                 let type_name = name.clone();
                 self.advance();
@@ -972,8 +979,21 @@ impl Parser {
                 self.parse_record_type()
             }
             Some(Token::Identifier(name)) if name.chars().next().unwrap().is_uppercase() => {
-                // Sum type: Constructor type* | Constructor type*
-                self.parse_sum_type()
+                let name = name.clone();
+                // Distinguish between type variable (A, B, T) and sum type (Some, None)
+                // Type variables are single uppercase letters or all-uppercase identifiers
+                // Sum types have CamelCase names (first letter upper, rest mixed)
+                let is_type_var = name.len() == 1
+                    || (name.chars().all(|c| c.is_uppercase() || c.is_ascii_digit()));
+
+                if is_type_var {
+                    // Type variable like T, A, B, UV
+                    self.advance();
+                    Ok(Type::Constructed(TypeName::UserVar(name), vec![]))
+                } else {
+                    // Sum type: Constructor type* | Constructor type*
+                    self.parse_sum_type()
+                }
             }
             _ => {
                 let span = self.current_span();
@@ -1307,8 +1327,8 @@ impl Parser {
         // Keep collecting arguments while we see primary expressions
         // Stop at operators, commas, closing delimiters, etc.
         while self.peek().is_some() && self.can_start_primary_expression() {
-            // Don't consume binary operators
-            if matches!(self.peek(), Some(Token::BinOp(_))) {
+            // Don't consume binary operators (including | and |>)
+            if matches!(self.peek(), Some(Token::BinOp(_)) | Some(Token::Pipe) | Some(Token::PipeOp)) {
                 break;
             }
             // Don't consume expression terminators
@@ -1359,7 +1379,7 @@ impl Parser {
             Some(Token::LeftBracketSpaced) |  // array literal (with space)
             Some(Token::AtBracket) |    // vector/matrix literal
             Some(Token::LeftParen) |    // parenthesized expression
-            Some(Token::Backslash) |    // lambda
+            Some(Token::Pipe) |         // lambda |x| ...
             Some(Token::Let) |          // let..in
             Some(Token::TypeHole) // type hole
         )
@@ -1572,7 +1592,7 @@ impl Parser {
                 }
             }
             Some(Token::LeftBrace) => self.parse_record_literal(),
-            Some(Token::Backslash) => self.parse_lambda(),
+            Some(Token::Pipe) => self.parse_lambda(),
             Some(Token::Let) => self.parse_let_in(),
             Some(Token::If) => self.parse_if_then_else(),
             Some(Token::Loop) => self.parse_loop(),
@@ -1698,38 +1718,33 @@ impl Parser {
         Ok(self.node_counter.mk_node(ExprKind::RecordLiteral(fields), span))
     }
 
+    /// Parse lambda: |x, y| body or |x: i32| -> i32 body
     fn parse_lambda(&mut self) -> Result<Expression> {
         trace!("parse_lambda: next token = {:?}", self.peek());
         let start_span = self.current_span();
-        self.expect(Token::Backslash)?;
+        self.expect(Token::Pipe)?; // Opening |
 
-        // Parse parameter patterns: \pat1 pat2 ... [: type] -> exp
-        // Use parse_function_parameter() to avoid consuming ':' as pattern type annotation
-        // The ':' after all parameters is the lambda's return type, not a parameter type
         let mut params = Vec::new();
-
-        // Parse patterns until we hit : or ->
-        while !self.check(&Token::Colon) && !self.check(&Token::Arrow) && !self.is_at_end() {
-            params.push(self.parse_function_parameter()?);
+        if !self.check(&Token::Pipe) {
+            loop {
+                params.push(self.parse_pattern()?);
+                if !self.check(&Token::Comma) {
+                    break;
+                }
+                self.advance(); // consume comma
+            }
         }
 
-        if params.is_empty() {
-            let span = self.current_span();
-            bail_parse!("Lambda must have at least one parameter at {}", span);
-        }
+        self.expect(Token::Pipe)?; // Closing |
 
-        // Parse optional return type annotation: \pat1 pat2: t ->
-        let return_type = if self.check(&Token::Colon) {
-            self.advance(); // consume ':'
-            // Use parse_type_application() instead of parse_type() to avoid consuming the lambda's ->
-            // parse_type() would try to parse "i32 -> ..." as a function type
-            Some(self.parse_type_application()?)
+        // Parse optional return type: -> type
+        // Use parse_array_or_base_type to avoid consuming the body expression as a type arg
+        let return_type = if self.check(&Token::Arrow) {
+            self.advance();
+            Some(self.parse_array_or_base_type()?)
         } else {
             None
         };
-
-        // Parse arrow
-        self.expect(Token::Arrow)?;
 
         // Parse body expression
         let body = Box::new(self.parse_expression()?);
@@ -1929,6 +1944,25 @@ impl Parser {
             std::mem::discriminant(t) == std::mem::discriminant(token)
         } else {
             false
+        }
+    }
+
+    fn check_binop(&self, op: &str) -> bool {
+        matches!(self.peek(), Some(Token::BinOp(s)) if s == op)
+    }
+
+    fn expect_binop(&mut self, op: &str) -> Result<()> {
+        if self.check_binop(op) {
+            self.advance();
+            Ok(())
+        } else {
+            let span = self.current_span();
+            Err(err_parse!(
+                "Expected '{}', got {:?} at {}",
+                op,
+                self.peek(),
+                span
+            ))
         }
     }
 
